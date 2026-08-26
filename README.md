@@ -17,6 +17,7 @@ This project is built on the Midnight Network.
 - [What's next](#whats-next)
 - [Protocol constants (key figures)](#protocol-constants-key-figures)
 - [Domain + social](#domain--social)
+- [Built with](#built-with)
 - [License](#license)
 
 ---
@@ -122,6 +123,21 @@ Full constants in [CLAUDE.md](CLAUDE.md).
 - **GitHub:** [github.com/NoctisZone/Noctis](https://github.com/NoctisZone/Noctis)
 - **Twitter/X:** [@Noctis_Zone](https://x.com/Noctis_Zone)
 - **Discord:** [discord.gg/FkFwHFN6Aq](https://discord.gg/FkFwHFN6Aq)
+
+---
+
+## Built with
+
+Noctis is put together out of open-source work by other people:
+
+- **[Compact and the Midnight SDK](https://docs.midnight.network)** — the DarkVeil private phase: the contracts themselves, ZK proof generation, and the wallet and proof-server plumbing behind them
+- **[Aiken](https://aiken-lang.org)** — every Cardano validator
+- **[Lucid Evolution](https://github.com/Anastasia-Labs/lucid-evolution)** (Anastasia Labs) — most of the Cardano transaction building and submission
+- **[Mesh](https://meshjs.dev)** — reference-script publishing and reclaiming, and the custom-redeemer curve spends that read those scripts
+- **[Blockfrost](https://blockfrost.io)** and **[Koios](https://koios.rest)** — Cardano chain data
+- **[noble-hashes](https://github.com/paulmillr/noble-hashes)** — the Blake2b hashing under the Merkle trees and proof-bundle anchors
+
+Thank you to all of them.
 
 ---
 
