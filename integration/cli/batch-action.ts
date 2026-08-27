@@ -51,6 +51,12 @@ interface Input {
   curveReferenceScript: { txHash: string; outputIndex: number; scriptHash: string };
   /** Required for `submit` — the key the batch redeemer names as its batcher. */
   batcherMnemonic?: string;
+  /** The scheduled batcher's way in: the platform's custody stores an
+   *  encrypted extended key per role, never a mnemonic. Both must be given
+   *  together; the submitter refuses a key that does not sign for the
+   *  address. */
+  batcherSkeyExtendedHex?: string;
+  batcherAddress?: string;
   /** Lovelace kept from each fill's change. Bounded by that change. */
   batcherFeeLovelace?: string;
   maxOrders?: number;
@@ -166,12 +172,23 @@ async function main() {
     return;
   }
 
-  const result = await batcher.submitBatch(requireField(input, 'batcherMnemonic', 'submit'), {
+  const submitParams = {
     curveUtxo: found.utxo,
     orderUtxos: open.map((o) => o.utxo),
     plan,
     ...(input.batcherFeeLovelace ? { batcherFeeLovelace: BigInt(input.batcherFeeLovelace) } : {}),
-  });
+  };
+  // Two ways to sign, one batch. The key pair is how the platform's scheduled
+  // batcher runs (custody stores extended keys, not mnemonics); the mnemonic
+  // stays for harness and hand-driven use.
+  const result =
+    input.batcherSkeyExtendedHex || input.batcherAddress
+      ? await batcher.submitBatchWithKey(
+          requireField(input, 'batcherSkeyExtendedHex', 'submit'),
+          requireField(input, 'batcherAddress', 'submit'),
+          submitParams,
+        )
+      : await batcher.submitBatch(requireField(input, 'batcherMnemonic', 'submit'), submitParams);
 
   process.stdout.write(JSON.stringify(jsonSafe({ ...summary, ...result })));
 }

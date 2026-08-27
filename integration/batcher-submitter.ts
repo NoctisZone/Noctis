@@ -35,6 +35,7 @@ import type { Assets, LucidEvolution, Network as LucidNetwork, UTxO } from '@luc
 import { Blockfrost, Constr, Data, getAddressDetails, Lucid, toUnit, validatorToAddress } from '@lucid-evolution/lucid';
 import { BlockfrostProvider, MeshWallet } from '@meshsdk/core';
 import type { BatchPlan, PlannedFill } from './batch-planner.js';
+import { KeyCurveSpendWallet } from './key-curve-spend-wallet.js';
 import { type CurveBatchPlan, type CurveNetwork, type CurveSpendWallet, MeshCurveSpender } from './mesh-curve-spend.js';
 import { ownerAddressFrom } from './order-submitter.js';
 import { BONDING_CURVE_REDEEMER, BONDING_CURVE_TIER_B_REDEEMER, CURVE_ORDER_REDEEMER } from './redeemer-indices.js';
@@ -181,6 +182,39 @@ export class BatcherSubmitter {
    * fails for reasons naming neither.
    */
   async submitBatch(batcherMnemonic: string, params: SubmitBatchParams): Promise<BatchResult> {
+    const lucid = await this.lucidPromise;
+    lucid.selectWallet.fromSeed(batcherMnemonic);
+    const batcherAddress = await lucid.wallet().address();
+    return this.submitBatchCore(batcherAddress, this.meshWallet(batcherMnemonic), params);
+  }
+
+  /**
+   * The same batch, signed from an extended private key instead of a mnemonic.
+   *
+   * The platform's wallet custody never persists a mnemonic — a role stores an
+   * encrypted extended key and decrypts it for one process (see
+   * key-curve-spend-wallet.ts) — so the scheduled batcher signs this way.
+   * forAddress refuses a key that does not sign for the address, which turns a
+   * mispaired config into a readable error instead of a rejected transaction.
+   */
+  async submitBatchWithKey(
+    batcherPrivateKeyExtendedHex: string,
+    batcherAddress: string,
+    params: SubmitBatchParams,
+  ): Promise<BatchResult> {
+    const wallet = await KeyCurveSpendWallet.forAddress({
+      address: batcherAddress,
+      privateKeyExtendedHex: batcherPrivateKeyExtendedHex,
+      provider: new BlockfrostProvider(this.config.blockfrostProjectId),
+    });
+    return this.submitBatchCore(batcherAddress, wallet, params);
+  }
+
+  private async submitBatchCore(
+    batcherAddress: string,
+    batcherWallet: CurveSpendWallet,
+    params: SubmitBatchParams,
+  ): Promise<BatchResult> {
     const { plan, curveUtxo } = params;
     const fee = params.batcherFeeLovelace ?? 0n;
 
@@ -188,9 +222,6 @@ export class BatcherSubmitter {
       throw new Error('Nothing to batch: the plan filled no orders. An empty batch moves the curve for nothing.');
     }
 
-    const lucid = await this.lucidPromise;
-    lucid.selectWallet.fromSeed(batcherMnemonic);
-    const batcherAddress = await lucid.wallet().address();
     const batcherKeyHash = keyHashOf(batcherAddress);
 
     const currentDatum = this.decodeCurve(curveUtxo);
@@ -266,7 +297,7 @@ export class BatcherSubmitter {
       requiredSignerHashes: [batcherKeyHash],
     };
 
-    const txHash = await this.spender.submitBatch(batchPlan, this.meshWallet(batcherMnemonic));
+    const txHash = await this.spender.submitBatch(batchPlan, batcherWallet);
     return { txHash, ordersFilled: plan.fills.length, batcherFeeTotal };
   }
 
