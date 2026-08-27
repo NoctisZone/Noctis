@@ -142,6 +142,49 @@ module.exports = [
 		devtool,
 	},
 	{
+		// Tier B order widget (2026-08-27) — placing an order is an
+		// ordinary payment, so unlike the three spend widgets this needs no
+		// Mesh alias block: its whole import graph is Lucid Evolution plus
+		// pure local modules. Same webpack requirement as the others (Lucid's
+		// CML/WASM dependency).
+		name: "curve-order-widget",
+		entry: path.resolve(__dirname, "widget/curve-order-widget-entry.ts"),
+		output: {
+			path: THEME_JS_DIR,
+			filename: "curve-order-widget.bundle.js",
+			webassemblyModuleFilename: "[hash].wasm",
+			clean: false,
+		},
+		mode: "production",
+		target: "web",
+		experiments: { asyncWebAssembly: true },
+		resolve: {
+			extensionAlias: { ".js": [".ts", ".js"] },
+			extensions: [".ts", ".js"],
+		},
+		plugins: [providePlugin],
+		module: {
+			rules: [
+				{
+					test: /\.ts$/,
+					use: {
+						loader: "ts-loader",
+						options: {
+							transpileOnly: true,
+							compilerOptions: {
+								module: "esnext",
+								target: "es2020",
+								moduleResolution: "bundler",
+							},
+						},
+					},
+					exclude: /node_modules/,
+				},
+			],
+		},
+		devtool,
+	},
+	{
 		name: "tier-a-buy-widget",
 		entry: path.resolve(__dirname, "widget/tier-a-buy-widget-entry.ts"),
 		output: {
