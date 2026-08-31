@@ -25,6 +25,12 @@ Notable changes to the Noctis Zone, by release. Internal development history pre
 
 ### Changed
 
+- A public trade reaches a Cardano Launch curve as an order, applied against it in a
+  batch, and the curve settles nothing else: it refuses a direct spend whatever shape it
+  arrives in. A batch is built against one curve output, so a direct spend consumed that
+  output out from under the batch being assembled and destroyed it. Selling is unaffected
+  as a capability — a sell is an order like a buy, priced in the same batch. Claiming a
+  DarkVeil allocation and claiming a buyback are separate paths and are unchanged.
 - A forfeited challenge bond is paid whole to a single address named in the challenge's
   own datum, rather than divided between two. Which address that is stays a value written
   at launch creation, so it can be a dedicated one without changing a contract.

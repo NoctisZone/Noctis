@@ -175,19 +175,12 @@ async function main() {
       result = await submitter().openDvClaim(key, addr, count, ts);
       break;
     }
+    // 'buy' and 'sell' are kept as named actions so a caller that asks for one
+    // is told where the path went, rather than getting "unknown action" and
+    // being left to guess. The curve settles a public trade only as an order
+    // applied in a batch, so the submitter refuses both.
     case 'buy': {
-      const mnemonic = requireField(input, 'buyerMnemonic', input.action);
-      const amount = BigInt(requireField(input, 'tokenAmount', input.action));
-      // The cumulative cap's accumulator — on Cardano Launch this spans the DarkVeil
-      // claim window as well as public buys. Omit it only for a curve nothing
-      // has been taken from yet; the submitter refuses to build a transaction
-      // if what it is handed does not derive the datum's own cap_root.
-      result = await submitter().buyTokens(
-        mnemonic,
-        amount,
-        capAccumulatorFromHex(input.capState ?? []),
-        input.skipClientCapCheck ?? false,
-      );
+      result = await submitter().buyTokens();
       break;
     }
     case 'claim-darkveil': {
@@ -210,9 +203,7 @@ async function main() {
       break;
     }
     case 'sell': {
-      const mnemonic = requireField(input, 'sellerMnemonic', input.action);
-      const amount = BigInt(requireField(input, 'tokenAmount', input.action));
-      result = await submitter().sellTokens(mnemonic, amount, capAccumulatorFromHex(input.capState ?? []));
+      result = await submitter().sellTokens();
       break;
     }
     case 'claim-creator-fees': {

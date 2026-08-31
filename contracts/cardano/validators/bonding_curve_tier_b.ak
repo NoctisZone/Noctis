@@ -925,26 +925,6 @@ fn curve_token_balance_decreased(
   ) + token_amount
 }
 
-/// Reverse of curve_token_balance_decreased — verify the curve's own
-/// reserve actually GREW by token_amount on a sell (the seller's tokens
-/// really arrived, not just claimed). Same mechanism as the linear curve's
-/// bonding_curve.ak tokens_returned_to_curve.
-fn tokens_returned_to_curve(
-  self: Transaction,
-  own_ref: OutputReference,
-  datum: BondingCurveTierBDatum,
-  token_amount: Int,
-) -> Bool {
-  let own_input = own_input_of(self, own_ref)
-  let own_address = own_input.output.address
-  let own_output = own_output_required(self, own_address)
-  assets.quantity_of(own_output.value, datum.token_policy_id, datum.token_asset_name) == assets.quantity_of(
-    own_input.output.value,
-    datum.token_policy_id,
-    datum.token_asset_name,
-  ) + token_amount
-}
-
 /// Fix: same fix, same reasoning, as the linear curve's bonding_curve.ak — see that
 /// file's comment on output_value_clean for the full rationale (MeshJS's
 /// escrow.ak names this the "unbounded value vulnerability").
@@ -1647,87 +1627,29 @@ validator bonding_curve_tier_b {
         }
       }
 
-      BuyTokens {
-        token_amount,
-        buyer_key_hash,
-        cap_committed_before,
-        cap_proof,
-      } -> {
-        let remaining = datum.curve_supply - datum.tokens_sold
-        // The range being ADDED starts at the current `tokens_sold`.
-        let gross_payment = buy_cost(datum, datum.tokens_sold, token_amount)
-        let creator_fee = fee_slice(gross_payment, creator_bps)
-        let platform_fee = fee_slice(gross_payment, platform_bps)
-        let fee_total = creator_fee + platform_fee
-        let net_payment = gross_payment - fee_total
-        // May already be non-zero here — this buyer could have already
-        // claimed a DarkVeil allocation via ClaimDarkVeilTokens, not
-        // starting fresh (see file header).
-        let new_tokens_sold = datum.tokens_sold + token_amount
-        let next_state = if new_tokens_sold == datum.curve_supply {
-          Graduated
-        } else {
-          datum.curve_state
-        }
-        let cap_after = cap_committed_before + token_amount
-        let (cap_ok, next_cap_root) =
-          cap_transition(
-            datum.cap_root,
-            buyer_key_hash,
-            cap_committed_before,
-            cap_after,
-            cap_proof,
-          )
-        let expected_datum =
-          BondingCurveTierBDatum {
-            ..datum,
-            tokens_sold: new_tokens_sold,
-            total_raised: datum.total_raised + net_payment,
-            creator_fees_accrued: datum.creator_fees_accrued + creator_fee,
-            platform_fees_accrued: datum.platform_fees_accrued + platform_fee,
-            curve_state: next_state,
-            cap_root: next_cap_root,
-          }
-        let new_datum = own_continuing_datum(self, own_ref)
-
-        and {
-          datum.curve_state == Active,
-          token_amount > 0,
-          token_amount <= remaining,
-          // A buy always moves real lovelace: the curve's own constants put
-          // every position at a positive price, and this makes that a rule
-          // the contract enforces rather than a property it assumes.
-          gross_payment > 0,
-          // The cumulative cap. `cap_ok` is what makes `cap_committed_before`
-          // this buyer's REAL total — it has to reach `cap_root` from their
-          // own slot — so the sum below is a running total across DarkVeil and
-          // every earlier public buy, not just this one transaction.
-          cap_ok,
-          cap_after <= datum.wallet_cap,
-          // `buyer_key_hash` is the accumulator's key as well as the delivery
-          // address, and it signs here — so a buyer cannot spend anyone else's
-          // headroom, and cannot dodge their own by naming a stranger.
-          list.has(self.extra_signatories, buyer_key_hash),
-          // The creator MAY buy on the public curve. They may never sell
-          // (see SellTokens), so ADA they put in can only ever stay in —
-          // which is what makes this safe: wash-trading requires a round
-          // trip, and there is no way out. Their buys are flagged to the
-          // community off-chain by matching this hash.
-          //
-          // This is also the only enforceable reading of "a creator cannot
-          // dump vested allocation": tokens are fungible, so once a creator
-          // holds both vested and publicly-bought tokens nothing on chain
-          // can tell them apart. Blocking the sell side blocks both.
-          new_datum == expected_datum,
-          token_delivered(self, own_ref, datum, token_amount),
-          payment_received(self, own_ref, gross_payment),
-          // Bonus fix (found while designing Graduate): the curve's own reserve
-          // must actually shrink by token_amount.
-          curve_token_balance_decreased(self, own_ref, datum, token_amount),
-          // The curve's own continuing output can't be padded.
-          curve_own_output_clean(self, own_ref),
-        }
-      }
+      // A public trade reaches this curve as an ORDER, batched against it by
+      // an allowlisted batcher — never as a direct spend. Both arms below
+      // therefore refuse, unconditionally and whatever they are handed, the
+      // same way `QueryState` does.
+      //
+      // The reason is the batch itself. A batch is built against one curve
+      // UTXO, and a direct spend consumes that UTXO out from under it, so a
+      // batch in flight is destroyed and has to be rebuilt against the new
+      // state. One party willing to keep doing that can keep the queue from
+      // ever settling, and there is real money in being the trade that lands
+      // before a batch rather than inside one — which is exactly what pricing
+      // a batch uniformly set out to make worthless.
+      //
+      // Refusing rather than deleting the variants keeps every constructor
+      // index where it is, so a reader decoding the history of a launch
+      // deployed before this change still finds each action under its own
+      // name.
+      //
+      // Selling is unaffected as a capability: a sell is an order with
+      // `is_buy = False`, priced and settled in the same batch as a buy.
+      // `ClaimDarkVeilTokens` and `ClaimBuyback` are not public trades and are
+      // untouched.
+      BuyTokens { .. } -> False
 
       ClaimDarkVeilTokens {
         dv_amount,
@@ -1844,94 +1766,7 @@ validator bonding_curve_tier_b {
         }
       }
 
-      SellTokens {
-        token_amount,
-        seller_key_hash,
-        cap_committed_before,
-        cap_proof,
-      } -> {
-        let new_sold = datum.tokens_sold - token_amount
-        // `new_sold` is the LOW edge of the range being REMOVED: selling `n`
-        // at `tokens_sold = s` vacates the positions `[s-n, s)`, so that is
-        // the range priced — the same one a buy of `n` at `new_sold` pays for.
-        let gross_proceeds = sell_proceeds(datum, new_sold, token_amount)
-        let creator_fee = fee_slice(gross_proceeds, creator_bps)
-        let platform_fee = fee_slice(gross_proceeds, platform_bps)
-        let fee_total = creator_fee + platform_fee
-        let net_proceeds = gross_proceeds - fee_total
-        // Floors at zero rather than going negative: a seller may hold tokens
-        // they never bought here, and their slot is empty in that case.
-        let cap_after =
-          if cap_committed_before > token_amount {
-            cap_committed_before - token_amount
-          } else {
-            0
-          }
-        let (cap_ok, next_cap_root) =
-          cap_transition(
-            datum.cap_root,
-            seller_key_hash,
-            cap_committed_before,
-            cap_after,
-            cap_proof,
-          )
-        let expected_datum =
-          BondingCurveTierBDatum {
-            ..datum,
-            tokens_sold: new_sold,
-            // Subtract the FULL gross_proceeds, not net_proceeds — see this
-            // redeemer's own doc comment (SellTokens, in the type
-            // definition above) and the linear curve's identical reasoning for
-            // the invariant this preserves.
-            total_raised: datum.total_raised - gross_proceeds,
-            creator_fees_accrued: datum.creator_fees_accrued + creator_fee,
-            platform_fees_accrued: datum.platform_fees_accrued + platform_fee,
-            cap_root: next_cap_root,
-          }
-        let new_datum = own_continuing_datum(self, own_ref)
-
-        and {
-          datum.curve_state == Active,
-          token_amount > 0,
-          new_sold >= 0,
-          // Can only sell back what this wallet is tracked as having
-          // acquired via THIS contract (public buy or DarkVeil claim) — see
-          // the redeemer's own doc comment above.
-          // Entitlement is possession — the seller returns real tokens to the
-          // curve below. The creator block is explicit now; it used to fall
-          // out of a creator's tracked purchase total always being zero.
-          seller_key_hash != datum.creator_pub_key_hash,
-          // Still per-transaction on this side: a cumulative bound is not the
-          // useful one for a sell (it only ever falls), so what is worth
-          // holding is that no single transaction dumps more than the cap
-          // into the curve at once.
-          token_amount <= datum.wallet_cap,
-          // Releasing headroom is exactly as much a state change as taking it,
-          // so a sell carries a proof too — without one, a wallet could sell
-          // its position and still be barred from re-entering the launch.
-          cap_ok,
-          // Deliberately no `gross_proceeds <= datum.total_raised` guard —
-          // same reasoning as the linear curve's SellTokens: a symmetric
-          // buy-then-sell round-trip legitimately drives total_raised
-          // negative by exactly the original buy's fee_total, and the sum
-          // invariant (total_raised + 3 fee accumulators == curve's real
-          // lovelace above its base) holds regardless of total_raised's
-          // individual sign. Graduate's own graduation_funds_left_curve
-          // check (real value movement, not this field) is what actually
-          // gates graduation — never a fund-safety issue either way, since
-          // lovelace_paid_from_curve already makes it physically
-          // impossible to pay out more real ADA than the curve holds.
-          // A sale always returns real lovelace to the seller — the mirror of
-          // BuyTokens' `gross_payment > 0`, enforced rather than assumed for
-          // the same reason.
-          gross_proceeds > fee_total,
-          list.has(self.extra_signatories, seller_key_hash),
-          new_datum == expected_datum,
-          tokens_returned_to_curve(self, own_ref, datum, token_amount),
-          lovelace_paid_from_curve(self, own_ref, seller_key_hash, net_proceeds),
-          curve_own_output_clean(self, own_ref),
-        }
-      }
+      SellTokens { .. } -> False
 
       ClaimCreatorFees { amount, platform_claim_fee } -> {
         let new_datum = own_continuing_datum(self, own_ref)
@@ -2593,285 +2428,6 @@ test fee_slices_floor_and_leave_the_remainder_with_the_curve() {
   }
 }
 
-test buy_tokens_succeeds_for_buyer_who_already_claimed_darkveil() {
-  // A wallet that already claimed a DarkVeil allocation buys publicly. The
-  // curve keeps no per-wallet history, so this is priced and capped exactly
-  // like any other buy — which is the point: a prior claim neither blocks
-  // nor discounts a later public purchase.
-  let datum = mock_datum(Active, 0)
-  let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
-  let own_address = from_verification_key(#"cc")
-  let buyer_address = from_verification_key(#"dd")
-  let base_lovelace = 5_000_000
-  let own_input =
-    Input {
-      output_reference: own_ref,
-      output: Output {
-        address: own_address,
-        value: assets.merge(mock_curve_nft(), assets.merge(
-          assets.from_lovelace(base_lovelace),
-          assets.from_asset(#"33", "tok", 1000),
-        )),
-        datum: InlineDatum(datum),
-        reference_script: None,
-      },
-    }
-  let new_datum =
-    BondingCurveTierBDatum {
-      ..datum,
-      tokens_sold: 10,
-      total_raised: 986,
-      creator_fees_accrued: 5,
-      platform_fees_accrued: 10,
-      // The buy fills this buyer's own slot, and only theirs.
-      cap_root: cap_root([(#"dd", 10)]),
-      }
-  let continuing_output =
-    Output {
-      address: own_address,
-      value: assets.merge(mock_curve_nft(), assets.merge(
-        assets.from_lovelace(base_lovelace + 1001),
-        assets.from_asset(#"33", "tok", 990),
-      )),
-      datum: InlineDatum(new_datum),
-      reference_script: None,
-    }
-  let delivery_output =
-    Output {
-      address: buyer_address,
-      value: assets.from_asset(#"33", "tok", 10),
-      datum: InlineDatum(own_ref),
-      reference_script: None,
-    }
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      outputs: [continuing_output, delivery_output],
-      extra_signatories: [#"dd"],
-    }
-  let redeemer =
-    BuyTokens {
-      token_amount: 10,
-      buyer_key_hash: #"dd",
-      cap_committed_before: 0,
-      cap_proof: cap_proof(#"dd", []),
-    }
-
-  bonding_curve_tier_b.spend(Some(datum), redeemer, own_ref, self)
-}
-
-test buy_tokens_rejects_padded_continuing_output() {
-  // Identical to a normal successful buy, except the curve's own
-  // continuing output carries one extra, unrelated junk asset. Before the
-  // fix, output_value_clean didn't exist and this would have been
-  // accepted — any buyer could pad the curve's reused UTXO with spam
-  // assets, degrading every subsequent buyer for the launch's whole life.
-  let datum = mock_datum(Active, 0)
-  let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
-  let own_address = from_verification_key(#"cc")
-  let buyer_address = from_verification_key(#"dd")
-  let base_lovelace = 5_000_000
-  let own_input =
-    Input {
-      output_reference: own_ref,
-      output: Output {
-        address: own_address,
-        value: assets.merge(mock_curve_nft(), assets.merge(
-          assets.from_lovelace(base_lovelace),
-          assets.from_asset(#"33", "tok", 1000),
-        )),
-        datum: InlineDatum(datum),
-        reference_script: None,
-      },
-    }
-  let new_datum =
-    BondingCurveTierBDatum {
-      ..datum,
-      tokens_sold: 10,
-      total_raised: 986,
-      creator_fees_accrued: 5,
-      platform_fees_accrued: 10,
-      }
-  let continuing_output =
-    Output {
-      address: own_address,
-      value: assets.merge(mock_curve_nft(), assets.merge(
-        assets.merge(
-          assets.from_lovelace(base_lovelace + 1001),
-          assets.from_asset(#"33", "tok", 990),
-        ),
-        // Junk asset from an unrelated policy — the padding attack.
-        assets.from_asset(#"deadbeef", "spam", 1),
-      )),
-      datum: InlineDatum(new_datum),
-      reference_script: None,
-    }
-  let delivery_output =
-    Output {
-      address: buyer_address,
-      value: assets.from_asset(#"33", "tok", 10),
-      datum: InlineDatum(own_ref),
-      reference_script: None,
-    }
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      outputs: [continuing_output, delivery_output],
-      extra_signatories: [#"dd"],
-    }
-  let redeemer =
-    BuyTokens {
-      token_amount: 10,
-      buyer_key_hash: #"dd",
-      cap_committed_before: 0,
-      cap_proof: cap_proof(#"dd", []),
-    }
-
-  !bonding_curve_tier_b.spend(Some(datum), redeemer, own_ref, self)
-}
-
-test buy_tokens_rejects_tokens_not_sourced_from_curve_reserve() {
-  // Bonus fix regression test (found while designing Graduate) — same as Tier
-  // A: the buyer's delivery output is present, but the curve's own token
-  // balance never shrinks. Before this fix, this would have been accepted.
-  let datum = mock_datum(Active, 0)
-  let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
-  let own_address = from_verification_key(#"cc")
-  let buyer_address = from_verification_key(#"dd")
-  let base_lovelace = 5_000_000
-  let own_input =
-    Input {
-      output_reference: own_ref,
-      output: Output {
-        address: own_address,
-        value: assets.merge(mock_curve_nft(), assets.merge(
-          assets.from_lovelace(base_lovelace),
-          assets.from_asset(#"33", "tok", 1000),
-        )),
-        datum: InlineDatum(datum),
-        reference_script: None,
-      },
-    }
-  let new_datum =
-    BondingCurveTierBDatum {
-      ..datum,
-      tokens_sold: 10,
-      total_raised: 986,
-      creator_fees_accrued: 5,
-      platform_fees_accrued: 10,
-      }
-  let continuing_output =
-    Output {
-      address: own_address,
-      // Curve's token balance unchanged (still 1000) — not the required 990.
-      value: assets.merge(mock_curve_nft(), assets.merge(
-        assets.from_lovelace(base_lovelace + 1001),
-        assets.from_asset(#"33", "tok", 1000),
-      )),
-      datum: InlineDatum(new_datum),
-      reference_script: None,
-    }
-  let delivery_output =
-    Output {
-      address: buyer_address,
-      value: assets.from_asset(#"33", "tok", 10),
-      datum: InlineDatum(own_ref),
-      reference_script: None,
-    }
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      outputs: [continuing_output, delivery_output],
-      extra_signatories: [#"dd"],
-    }
-  let redeemer =
-    BuyTokens {
-      token_amount: 10,
-      buyer_key_hash: #"dd",
-      cap_committed_before: 0,
-      cap_proof: cap_proof(#"dd", []),
-    }
-
-  !bonding_curve_tier_b.spend(Some(datum), redeemer, own_ref, self)
-}
-
-test buy_tokens_allows_creator_buying_own_curve() {
-  // The creator may buy publicly. They can never sell (SellTokens blocks
-  // them outright), so ADA they commit here can only stay in the curve —
-  // there is no round trip to wash-trade with. Their buys are flagged to
-  // the community off-chain by matching the buyer hash against
-  // `creator_pub_key_hash`. The DarkVeil path stays closed to them, since
-  // the Fair Launch Certificate publishes that they bought none.
-  // Same protection as the linear curve's bonding_curve.ak — creator cannot
-  // wash-trade their own public curve to force last-mile 100% sell-through.
-  let datum = mock_datum(Active, 0)
-  let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
-  let own_address = from_verification_key(#"cc")
-  let creator_address = from_verification_key(#"11")
-  let base_lovelace = 5_000_000
-  let own_input =
-    Input {
-      output_reference: own_ref,
-      output: Output {
-        address: own_address,
-        value: assets.merge(mock_curve_nft(), assets.merge(
-          assets.from_lovelace(base_lovelace),
-          assets.from_asset(#"33", "tok", 1000),
-        )),
-        datum: InlineDatum(datum),
-        reference_script: None,
-      },
-    }
-  let new_datum =
-    BondingCurveTierBDatum {
-      ..datum,
-      tokens_sold: 10,
-      total_raised: 986,
-      creator_fees_accrued: 5,
-      platform_fees_accrued: 10,
-      // mock_datum's creator_pub_key_hash is #"11"
-      cap_root: cap_root([(#"11", 10)]),
-      }
-  let continuing_output =
-    Output {
-      address: own_address,
-      value: assets.merge(mock_curve_nft(), assets.merge(
-        assets.from_lovelace(base_lovelace + 1001),
-        assets.from_asset(#"33", "tok", 990),
-      )),
-      datum: InlineDatum(new_datum),
-      reference_script: None,
-    }
-  let delivery_output =
-    Output {
-      address: creator_address,
-      value: assets.from_asset(#"33", "tok", 10),
-      datum: InlineDatum(own_ref),
-      reference_script: None,
-    }
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      outputs: [continuing_output, delivery_output],
-      // creator DOES sign as themselves — proves the rejection is the
-      // creator-identity check, not the pre-existing signature check.
-      extra_signatories: [#"11"],
-    }
-  let redeemer =
-    BuyTokens {
-      token_amount: 10,
-      buyer_key_hash: #"11",
-      cap_committed_before: 0,
-      cap_proof: cap_proof(#"11", []),
-    }
-
-  bonding_curve_tier_b.spend(Some(datum), redeemer, own_ref, self)
-}
-
 // ----------------------------------------------------------------------------
 // The CUMULATIVE cap
 //
@@ -2882,13 +2438,17 @@ test buy_tokens_allows_creator_buying_own_curve() {
 // everything.
 // ----------------------------------------------------------------------------
 
-/// A fully-formed public buy — correct price, payment, delivery and datum —
-/// so the only thing left to reject it is the cap.
+/// A fully-formed public buy — correct price, payment, delivery, datum and
+/// signature. Nothing about this transaction is wrong.
+///
+/// It is kept precisely because it USED to be accepted. A direct public trade
+/// is now refused whatever it looks like, and the only way to show that
+/// honestly is to hand the validator a transaction that would have passed on
+/// every other count.
 ///
 /// `held` is the accumulator's real contents (and, so the fixture is coherent,
-/// the curve's position too). `declared_before` is what the buyer PUTS IN THE
-/// REDEEMER, which the understatement test needs to be able to differ from the
-/// truth.
+/// the curve's position too). `declared_before` is what the buyer puts in the
+/// redeemer.
 fn run_cap_buy(
   buyer: VerificationKeyHash,
   amount: Int,
@@ -2963,103 +2523,6 @@ fn run_cap_buy(
     own_ref,
     self,
   )
-}
-
-/// The property the whole design rests on. Under a per-transaction cap BOTH
-/// of these are accepted, because each buy is under 500 on its own.
-test buy_tokens_caps_a_wallet_across_separate_transactions() {
-  and {
-    // 495 already taken, 5 more lands exactly on the 500 cap.
-    run_cap_buy(#"dd", 5, 495, [(#"dd", 495)]),
-    // 495 already taken, 10 more would be 505. Identical in every other way.
-    !run_cap_buy(#"dd", 10, 495, [(#"dd", 495)]),
-  }
-}
-
-/// A wallet cannot buy its way past the cap by declaring a smaller history
-/// than it has: the proof is taken against the root, and an understated total
-/// does not reach it.
-test buy_tokens_rejects_an_understated_committed_total() {
-  and {
-    run_cap_buy(#"dd", 5, 495, [(#"dd", 495)]),
-    // Same buyer, same real 495 in the tree, claiming to hold nothing.
-    !run_cap_buy(#"dd", 5, 0, [(#"dd", 495)]),
-  }
-}
-
-/// One wallet filling its cap leaves every other wallet's untouched — the
-/// property that makes a single root a substitute for a per-wallet list.
-test buy_tokens_caps_each_wallet_separately() {
-  and {
-    run_cap_buy(#"de", 400, 0, [(#"dd", 500)]),
-    !run_cap_buy(#"dd", 400, 500, [(#"dd", 500)]),
-  }
-}
-
-test buy_tokens_rejects_a_single_purchase_over_the_cap() {
-  // The cap is per transaction. Everything about this buy is otherwise
-  // valid — price, payment, delivery, datum — and the 10-token amount
-  // exceeds a deliberately lowered 5-token cap, so the cap check is the
-  // only thing that can reject it.
-  let datum = BondingCurveTierBDatum { ..mock_datum(Active, 0), wallet_cap: 5 }
-  let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
-  let own_address = from_verification_key(#"cc")
-  let buyer_address = from_verification_key(#"dd")
-  let base_lovelace = 5_000_000
-  let own_input =
-    Input {
-      output_reference: own_ref,
-      output: Output {
-        address: own_address,
-        value: assets.merge(mock_curve_nft(), assets.merge(
-          assets.from_lovelace(base_lovelace),
-          assets.from_asset(#"33", "tok", 1000),
-        )),
-        datum: InlineDatum(datum),
-        reference_script: None,
-      },
-    }
-  let new_datum =
-    BondingCurveTierBDatum {
-      ..datum,
-      tokens_sold: 10,
-      total_raised: 986,
-      creator_fees_accrued: 5,
-      platform_fees_accrued: 10,
-      }
-  let continuing_output =
-    Output {
-      address: own_address,
-      value: assets.merge(mock_curve_nft(), assets.merge(
-        assets.from_lovelace(base_lovelace + 1001),
-        assets.from_asset(#"33", "tok", 990),
-      )),
-      datum: InlineDatum(new_datum),
-      reference_script: None,
-    }
-  let delivery_output =
-    Output {
-      address: buyer_address,
-      value: assets.from_asset(#"33", "tok", 10),
-      datum: InlineDatum(own_ref),
-      reference_script: None,
-    }
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      outputs: [continuing_output, delivery_output],
-      extra_signatories: [#"dd"],
-    }
-  let redeemer =
-    BuyTokens {
-      token_amount: 10,
-      buyer_key_hash: #"dd",
-      cap_committed_before: 0,
-      cap_proof: cap_proof(#"dd", []),
-    }
-
-  !bonding_curve_tier_b.spend(Some(datum), redeemer, own_ref, self)
 }
 
 // ----------------------------------------------------------------------------
@@ -4210,6 +3673,79 @@ fn two_buy_orders() -> List<BatchOrder> {
 /// THE CURVE RECEIVES 172,681 EITHER WAY. That is the additivity property the
 /// decision rests on, and it is why uniform pricing costs the protocol
 /// nothing — asserted here against literals so it stays a measured fact.
+/// A direct sell, with a real curve input and continuing output so the
+/// validator reaches its redeemer at all. `own_input_of` runs before the
+/// match and aborts without one, which fails a test for the wrong reason —
+/// the same trap `run_buy_batch_signed` documents above.
+fn run_direct_sell(datum: BondingCurveTierBDatum, amount: Int) -> Bool {
+  let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
+  let own_address = from_verification_key(#"cc")
+  let value =
+    assets.merge(mock_curve_nft(), assets.merge(
+      assets.from_lovelace(5_000_000),
+      assets.from_asset(#"33", "tok", 1000),
+    ))
+  let own_input =
+    Input {
+      output_reference: own_ref,
+      output: Output {
+        address: own_address,
+        value: value,
+        datum: InlineDatum(datum),
+        reference_script: None,
+      },
+    }
+  let self =
+    Transaction {
+      ..transaction.placeholder,
+      inputs: [own_input],
+      outputs: [
+        Output {
+          address: own_address,
+          value: value,
+          datum: InlineDatum(datum),
+          reference_script: None,
+        },
+      ],
+      extra_signatories: [#"dd"],
+    }
+  bonding_curve_tier_b.spend(
+    Some(datum),
+    SellTokens {
+      token_amount: amount,
+      seller_key_hash: #"dd",
+      cap_committed_before: 500,
+      cap_proof: cap_proof(#"dd", [(#"dd", 500)]),
+    },
+    own_ref,
+    self,
+  )
+}
+
+/// A public trade reaches this curve as an order in a batch, never as a direct
+/// spend, and the two direct arms refuse unconditionally.
+///
+/// The buy half carries the weight of this test. `run_cap_buy` builds a
+/// transaction that was accepted before this change — right price, right
+/// payment, right delivery, right datum, buyer's own signature, inside the
+/// wallet cap — so its refusal cannot be blamed on anything else being wrong
+/// with it. Restore the arm and this test fails.
+///
+/// The sell half is weaker, and worth saying so rather than dressing up: every
+/// well-formed sell fixture went with the arm it exercised, so this one reaches
+/// the redeemer and asserts the refusal without claiming the rest of the
+/// transaction would otherwise have satisfied it.
+test direct_public_trades_are_refused() {
+  and {
+    // Exactly the arguments that passed before: 495 already taken, 5 more
+    // lands on the 500 cap.
+    !run_cap_buy(#"dd", 5, 495, [(#"dd", 495)]),
+    // And a wallet with real headroom, well inside every bound.
+    !run_cap_buy(#"de", 100, 0, []),
+    !run_direct_sell(mock_datum(Active, 500), 10),
+  }
+}
+
 test batch_prices_every_order_at_the_batch_average() {
   let d = mock_datum(Active, 0)
   and {
@@ -4505,826 +4041,6 @@ test batch_rejects_one_payment_for_two_of_one_owners_orders() {
     // One output large enough for both, but naming only one of them.
     !run_buy_batch(d, two, [tok_out(0, #"de", 400)], gross),
   }
-}
-
-/// A sell has to RELEASE headroom, or a trader who buys their full 5% and
-/// exits is barred from the launch for the rest of its life. Same numbers as
-/// the round-trip test below, with the accumulator actually carrying the
-/// buyer's 10 beforehand.
-test sell_tokens_returns_the_wallets_headroom() {
-  let datum =
-    BondingCurveTierBDatum {
-      ..mock_datum(Active, 10),
-      cap_root: cap_root([(#"dd", 10)]),
-    }
-  let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
-  let own_address = from_verification_key(#"cc")
-  let base_lovelace = 5_000_000
-  let own_input =
-    Input {
-      output_reference: own_ref,
-      output: Output {
-        address: own_address,
-        value: assets.merge(mock_curve_nft(), assets.merge(
-          assets.from_lovelace(base_lovelace + 1000),
-          assets.from_asset(#"33", "tok", 990),
-        )),
-        datum: InlineDatum(datum),
-        reference_script: None,
-      },
-    }
-  let new_datum =
-    BondingCurveTierBDatum {
-      ..datum,
-      tokens_sold: 0,
-      total_raised: -1000,
-      creator_fees_accrued: 5,
-      platform_fees_accrued: 10,
-      // Back to the genesis root — the slot is free, so this wallet can buy
-      // its full cap again.
-      cap_root: cap_root([]),
-    }
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      outputs: [
-        Output {
-          address: own_address,
-          value: assets.merge(mock_curve_nft(), assets.merge(
-            assets.from_lovelace(base_lovelace + 1000 - 985),
-            assets.from_asset(#"33", "tok", 1000),
-          )),
-          datum: InlineDatum(new_datum),
-          reference_script: None,
-        },
-        Output {
-          address: from_verification_key(#"dd"),
-          value: assets.from_lovelace(985),
-          datum: InlineDatum(own_ref),
-          reference_script: None,
-        },
-      ],
-      extra_signatories: [#"dd"],
-    }
-  and {
-    bonding_curve_tier_b.spend(
-      Some(datum),
-      SellTokens {
-        token_amount: 10,
-        seller_key_hash: #"dd",
-        cap_committed_before: 10,
-        cap_proof: cap_proof(#"dd", [(#"dd", 10)]),
-      },
-      own_ref,
-      self,
-    ),
-    // The same sell claiming the slot was empty cannot reach the root, so a
-    // seller cannot leave their headroom spent by understating it either.
-    !bonding_curve_tier_b.spend(
-      Some(datum),
-      SellTokens {
-        token_amount: 10,
-        seller_key_hash: #"dd",
-        cap_committed_before: 0,
-        cap_proof: cap_proof(#"dd", [(#"dd", 10)]),
-      },
-      own_ref,
-      self,
-    ),
-  }
-}
-
-test sell_tokens_succeeds_symmetric_round_trip() {
-  // Wallet #"dd" previously bought 10 tokens (tokens_sold 0->10, same
-  // numbers as buy_tokens_succeeds_for_buyer_who_already_claimed_darkveil's
-  // base case). Selling all 10 back vacates positions 0..9 — the SAME range
-  // the original buy paid for, by design (see this redeemer's own doc comment
-  // in the type definition above). That range is worth 1000.2565 lovelace,
-  // rounded DOWN to 1000 for a seller against the buyer's 1001, so the round
-  // trip costs one lovelace before fees. fee_total = 15 (creator 5 + platform 10),
-  // net_proceeds = 980 paid to the seller.
-  let datum = mock_datum(Active, 10)
-  let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
-  let own_address = from_verification_key(#"cc")
-  let seller_address = from_verification_key(#"dd")
-  let base_lovelace = 5_000_000
-  let own_input =
-    Input {
-      output_reference: own_ref,
-      output: Output {
-        address: own_address,
-        value: assets.merge(mock_curve_nft(), assets.merge(
-          assets.from_lovelace(base_lovelace + 1000),
-          assets.from_asset(#"33", "tok", 990),
-        )),
-        datum: InlineDatum(datum),
-        reference_script: None,
-      },
-    }
-  let new_datum =
-    BondingCurveTierBDatum {
-      ..datum,
-      tokens_sold: 0,
-      // 0 - 1000 = -1000 (this fixture starts total_raised at 0, unlike
-      // The linear curve's sold_state_datum() which pre-seeds it at 980) — the sign
-      // itself is what this test demonstrates: legitimately negative after
-      // a round trip, per the redeemer's own doc comment, never a
-      // fund-safety issue since lovelace_paid_from_curve already bounds
-      // real payouts to the curve's actual balance.
-      total_raised: -1000,
-      creator_fees_accrued: 5,
-      platform_fees_accrued: 10,
-      }
-  let continuing_output =
-    Output {
-      address: own_address,
-      value: assets.merge(mock_curve_nft(), assets.merge(
-        assets.from_lovelace(base_lovelace + 1000 - 985),
-        assets.from_asset(#"33", "tok", 1000),
-      )),
-      datum: InlineDatum(new_datum),
-      reference_script: None,
-    }
-  let proceeds_output =
-    Output {
-      address: seller_address,
-      value: assets.from_lovelace(985),
-      datum: InlineDatum(own_ref),
-      reference_script: None,
-    }
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      outputs: [continuing_output, proceeds_output],
-      extra_signatories: [#"dd"],
-    }
-  let redeemer =
-    SellTokens {
-      token_amount: 10,
-      seller_key_hash: #"dd",
-      cap_committed_before: 0,
-      cap_proof: cap_proof(#"dd", []),
-    }
-
-  bonding_curve_tier_b.spend(Some(datum), redeemer, own_ref, self)
-}
-
-test sell_tokens_succeeds_for_a_darkveil_claimed_amount() {
-  // Wallet #"dd" never bought publicly — their tracked total came entirely
-  // from a prior ClaimDarkVeilTokens call (seeded
-  // directly, same as this file's own claim_darkveil-then-buy tests do it
-  // the other way around). Confirms SellTokens doesn't distinguish DV-
-  // sourced vs public-sourced tracked purchases — see the redeemer's own
-  // doc comment for why that's deliberate, not an oversight.
-  let datum = mock_datum(Active, 10)
-  let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
-  let own_address = from_verification_key(#"cc")
-  let seller_address = from_verification_key(#"dd")
-  let base_lovelace = 5_000_000
-  let own_input =
-    Input {
-      output_reference: own_ref,
-      output: Output {
-        address: own_address,
-        value: assets.merge(mock_curve_nft(), assets.merge(
-          assets.from_lovelace(base_lovelace),
-          assets.from_asset(#"33", "tok", 990),
-        )),
-        datum: InlineDatum(datum),
-        reference_script: None,
-      },
-    }
-  let new_datum =
-    BondingCurveTierBDatum {
-      ..datum,
-      tokens_sold: 0,
-      total_raised: -1000,
-      creator_fees_accrued: 5,
-      platform_fees_accrued: 10,
-      }
-  let continuing_output =
-    Output {
-      address: own_address,
-      value: assets.merge(mock_curve_nft(), assets.merge(
-        assets.from_lovelace(base_lovelace - 985),
-        assets.from_asset(#"33", "tok", 1000),
-      )),
-      datum: InlineDatum(new_datum),
-      reference_script: None,
-    }
-  let proceeds_output =
-    Output {
-      address: seller_address,
-      value: assets.from_lovelace(985),
-      datum: InlineDatum(own_ref),
-      reference_script: None,
-    }
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      outputs: [continuing_output, proceeds_output],
-      extra_signatories: [#"dd"],
-    }
-  let redeemer =
-    SellTokens {
-      token_amount: 10,
-      seller_key_hash: #"dd",
-      cap_committed_before: 0,
-      cap_proof: cap_proof(#"dd", []),
-    }
-
-  bonding_curve_tier_b.spend(Some(datum), redeemer, own_ref, self)
-}
-
-test sell_tokens_rejects_selling_more_than_ever_bought() {
-  // Wallet #"dd" only ever bought/claimed 10 — attempting to sell 11 (as
-  // though tokens were topped up via a secondary transfer) must be
-  // rejected, per this redeemer's own documented scope limit.
-  let datum = mock_datum(Active, 10)
-  let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
-  let own_address = from_verification_key(#"cc")
-  let seller_address = from_verification_key(#"dd")
-  let base_lovelace = 5_000_000
-  let own_input =
-    Input {
-      output_reference: own_ref,
-      output: Output {
-        address: own_address,
-        value: assets.merge(mock_curve_nft(), assets.merge(
-          assets.from_lovelace(base_lovelace + 1000),
-          assets.from_asset(#"33", "tok", 990),
-        )),
-        datum: InlineDatum(datum),
-        reference_script: None,
-      },
-    }
-  let new_datum =
-    BondingCurveTierBDatum {
-      ..datum,
-      tokens_sold: -1,
-      total_raised: -1210,
-      creator_fees_accrued: 13,
-      platform_fees_accrued: 12,
-      }
-  let continuing_output =
-    Output {
-      address: own_address,
-      value: assets.merge(mock_curve_nft(), assets.merge(
-        assets.from_lovelace(base_lovelace + 1000 - 1185),
-        assets.from_asset(#"33", "tok", 1001),
-      )),
-      datum: InlineDatum(new_datum),
-      reference_script: None,
-    }
-  let proceeds_output =
-    Output {
-      address: seller_address,
-      value: assets.from_lovelace(1185),
-      datum: InlineDatum(own_ref),
-      reference_script: None,
-    }
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      outputs: [continuing_output, proceeds_output],
-      extra_signatories: [#"dd"],
-    }
-  let redeemer =
-    SellTokens {
-      token_amount: 11,
-      seller_key_hash: #"dd",
-      cap_committed_before: 0,
-      cap_proof: cap_proof(#"dd", []),
-    }
-
-  !bonding_curve_tier_b.spend(Some(datum), redeemer, own_ref, self)
-}
-
-test sell_tokens_rejects_creator_selling_own_curve() {
-  // The creator is permanently blocked from BuyTokens/ClaimDarkVeilTokens,
-  // sell_tokens_rejects_selling_more_than_ever_bought's own logic
-  // the explicit creator check covers this with no separate
-  // check needed. This test confirms that fallout is real, not just
-  // theorized, same as the linear curve's identical test.
-  let datum = mock_datum(Active, 10)
-  let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
-  let own_address = from_verification_key(#"cc")
-  let creator_address = from_verification_key(#"11")
-  let own_input =
-    Input {
-      output_reference: own_ref,
-      output: Output {
-        address: own_address,
-        value: assets.merge(mock_curve_nft(), assets.merge(
-          assets.from_lovelace(5_000_000),
-          assets.from_asset(#"33", "tok", 990),
-        )),
-        datum: InlineDatum(datum),
-        reference_script: None,
-      },
-    }
-  let new_datum = BondingCurveTierBDatum { ..datum, tokens_sold: 0 }
-  let continuing_output =
-    Output {
-      address: own_address,
-      value: assets.merge(mock_curve_nft(), assets.merge(
-        assets.from_lovelace(5_000_000 - 980),
-        assets.from_asset(#"33", "tok", 1000),
-      )),
-      datum: InlineDatum(new_datum),
-      reference_script: None,
-    }
-  let proceeds_output =
-    Output {
-      address: creator_address,
-      value: assets.from_lovelace(980),
-      datum: InlineDatum(own_ref),
-      reference_script: None,
-    }
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      outputs: [continuing_output, proceeds_output],
-      extra_signatories: [#"11"],
-    }
-  let redeemer =
-    SellTokens {
-      token_amount: 10,
-      seller_key_hash: #"11",
-      cap_committed_before: 0,
-      cap_proof: cap_proof(#"11", []),
-    }
-
-  !bonding_curve_tier_b.spend(Some(datum), redeemer, own_ref, self)
-}
-
-test sell_tokens_rejects_unauthenticated_seller_key_hash() {
-  let datum = mock_datum(Active, 10)
-  let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
-  let own_address = from_verification_key(#"cc")
-  let seller_address = from_verification_key(#"dd")
-  let base_lovelace = 5_000_000
-  let own_input =
-    Input {
-      output_reference: own_ref,
-      output: Output {
-        address: own_address,
-        value: assets.merge(mock_curve_nft(), assets.merge(
-          assets.from_lovelace(base_lovelace + 1000),
-          assets.from_asset(#"33", "tok", 990),
-        )),
-        datum: InlineDatum(datum),
-        reference_script: None,
-      },
-    }
-  let new_datum =
-    BondingCurveTierBDatum {
-      ..datum,
-      tokens_sold: 0,
-      total_raised: -1000,
-      creator_fees_accrued: 10,
-      platform_fees_accrued: 10,
-      }
-  let continuing_output =
-    Output {
-      address: own_address,
-      value: assets.merge(mock_curve_nft(), assets.merge(
-        assets.from_lovelace(base_lovelace + 20),
-        assets.from_asset(#"33", "tok", 1000),
-      )),
-      datum: InlineDatum(new_datum),
-      reference_script: None,
-    }
-  let proceeds_output =
-    Output {
-      address: seller_address,
-      value: assets.from_lovelace(980),
-      datum: InlineDatum(own_ref),
-      reference_script: None,
-    }
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      outputs: [continuing_output, proceeds_output],
-      // No extra_signatories at all — #"dd" never actually signed.
-    }
-  let redeemer =
-    SellTokens {
-      token_amount: 10,
-      seller_key_hash: #"dd",
-      cap_committed_before: 0,
-      cap_proof: cap_proof(#"dd", []),
-    }
-
-  !bonding_curve_tier_b.spend(Some(datum), redeemer, own_ref, self)
-}
-
-test sell_tokens_rejects_a_payout_larger_than_the_range_is_worth() {
-  let datum = mock_datum(Active, 10)
-  let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
-  let own_address = from_verification_key(#"cc")
-  let seller_address = from_verification_key(#"dd")
-  let base_lovelace = 5_000_000
-  let own_input =
-    Input {
-      output_reference: own_ref,
-      output: Output {
-        address: own_address,
-        value: assets.merge(mock_curve_nft(), assets.merge(
-          assets.from_lovelace(base_lovelace + 1000),
-          assets.from_asset(#"33", "tok", 990),
-        )),
-        datum: InlineDatum(datum),
-        reference_script: None,
-      },
-    }
-  // Attempts to draw the proceeds of the top of the curve (price 1000, the
-  // sold=1000 spot) for a range that actually sits at the bottom.
-  let new_datum =
-    BondingCurveTierBDatum {
-      ..datum,
-      tokens_sold: 0,
-      total_raised: -10000,
-      creator_fees_accrued: 100,
-      platform_fees_accrued: 100,
-      }
-  let continuing_output =
-    Output {
-      address: own_address,
-      value: assets.merge(mock_curve_nft(), assets.merge(
-        assets.from_lovelace(base_lovelace + 1000 - 9800),
-        assets.from_asset(#"33", "tok", 1000),
-      )),
-      datum: InlineDatum(new_datum),
-      reference_script: None,
-    }
-  let proceeds_output =
-    Output {
-      address: seller_address,
-      value: assets.from_lovelace(9800),
-      datum: InlineDatum(own_ref),
-      reference_script: None,
-    }
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      outputs: [continuing_output, proceeds_output],
-      extra_signatories: [#"dd"],
-    }
-  let redeemer =
-    SellTokens {
-      token_amount: 10,
-      seller_key_hash: #"dd",
-      cap_committed_before: 0,
-      cap_proof: cap_proof(#"dd", []),
-    }
-
-  !bonding_curve_tier_b.spend(Some(datum), redeemer, own_ref, self)
-}
-
-test sell_tokens_rejects_padded_continuing_output() {
-  // Sell direction: identical to a normal successful sell, except the
-  // curve's own continuing output carries one extra, unrelated junk asset.
-  // curve_own_output_clean must reject this exactly as it already does for
-  // BuyTokens (buy_tokens_rejects_padded_continuing_output) — no dedicated
-  // test previously proved this redeemer branch actually wires that check
-  // in, only that the shared helper itself works.
-  let datum = mock_datum(Active, 10)
-  let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
-  let own_address = from_verification_key(#"cc")
-  let seller_address = from_verification_key(#"dd")
-  let base_lovelace = 5_000_000
-  let own_input =
-    Input {
-      output_reference: own_ref,
-      output: Output {
-        address: own_address,
-        value: assets.merge(mock_curve_nft(), assets.merge(
-          assets.from_lovelace(base_lovelace + 1000),
-          assets.from_asset(#"33", "tok", 990),
-        )),
-        datum: InlineDatum(datum),
-        reference_script: None,
-      },
-    }
-  let new_datum =
-    BondingCurveTierBDatum {
-      ..datum,
-      tokens_sold: 0,
-      total_raised: -1000,
-      creator_fees_accrued: 10,
-      platform_fees_accrued: 10,
-      }
-  let continuing_output =
-    Output {
-      address: own_address,
-      value: assets.merge(mock_curve_nft(), assets.merge(
-        assets.merge(
-          assets.from_lovelace(base_lovelace + 1000 - 980),
-          assets.from_asset(#"33", "tok", 1000),
-        ),
-        // Junk asset from an unrelated policy — the padding attack.
-        assets.from_asset(#"deadbeef", "spam", 1),
-      )),
-      datum: InlineDatum(new_datum),
-      reference_script: None,
-    }
-  let proceeds_output =
-    Output {
-      address: seller_address,
-      value: assets.from_lovelace(980),
-      datum: InlineDatum(own_ref),
-      reference_script: None,
-    }
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      outputs: [continuing_output, proceeds_output],
-      extra_signatories: [#"dd"],
-    }
-  let redeemer =
-    SellTokens {
-      token_amount: 10,
-      seller_key_hash: #"dd",
-      cap_committed_before: 0,
-      cap_proof: cap_proof(#"dd", []),
-    }
-
-  !bonding_curve_tier_b.spend(Some(datum), redeemer, own_ref, self)
-}
-
-test sell_tokens_rejects_proceeds_not_actually_paid() {
-  // Datum and delivered tokens look exactly like a valid sell, but the
-  // curve's own lovelace balance never actually decreases — the seller is
-  // never really paid. lovelace_paid_from_curve must reject this; no
-  // dedicated test previously proved SellTokens wires that check in.
-  let datum = mock_datum(Active, 10)
-  let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
-  let own_address = from_verification_key(#"cc")
-  let seller_address = from_verification_key(#"dd")
-  let base_lovelace = 5_000_000
-  let own_input =
-    Input {
-      output_reference: own_ref,
-      output: Output {
-        address: own_address,
-        value: assets.merge(mock_curve_nft(), assets.merge(
-          assets.from_lovelace(base_lovelace + 1000),
-          assets.from_asset(#"33", "tok", 990),
-        )),
-        datum: InlineDatum(datum),
-        reference_script: None,
-      },
-    }
-  let new_datum =
-    BondingCurveTierBDatum {
-      ..datum,
-      tokens_sold: 0,
-      total_raised: -1000,
-      creator_fees_accrued: 10,
-      platform_fees_accrued: 10,
-      }
-  let continuing_output =
-    Output {
-      address: own_address,
-      // No decrease — claims 980 net_proceeds were paid out but weren't.
-      value: assets.merge(mock_curve_nft(), assets.merge(
-        assets.from_lovelace(base_lovelace + 1000),
-        assets.from_asset(#"33", "tok", 1000),
-      )),
-      datum: InlineDatum(new_datum),
-      reference_script: None,
-    }
-  let proceeds_output =
-    Output {
-      address: seller_address,
-      // Seller receives nothing, despite the redeemer claiming 980.
-      value: assets.from_lovelace(0),
-      datum: InlineDatum(own_ref),
-      reference_script: None,
-    }
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      outputs: [continuing_output, proceeds_output],
-      extra_signatories: [#"dd"],
-    }
-  let redeemer =
-    SellTokens {
-      token_amount: 10,
-      seller_key_hash: #"dd",
-      cap_committed_before: 0,
-      cap_proof: cap_proof(#"dd", []),
-    }
-
-  !bonding_curve_tier_b.spend(Some(datum), redeemer, own_ref, self)
-}
-
-test sell_tokens_rejects_tokens_not_actually_returned() {
-  // Datum and lovelace payout look exactly like a valid sell, but the
-  // curve's own token reserve never actually grows — the seller's tokens
-  // never really arrived. tokens_returned_to_curve must reject this; no
-  // dedicated test previously proved SellTokens wires that check in
-  // (mirrors buy_tokens_rejects_tokens_not_sourced_from_curve_reserve's
-  // coverage, in the opposite direction).
-  let datum = mock_datum(Active, 10)
-  let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
-  let own_address = from_verification_key(#"cc")
-  let seller_address = from_verification_key(#"dd")
-  let base_lovelace = 5_000_000
-  let own_input =
-    Input {
-      output_reference: own_ref,
-      output: Output {
-        address: own_address,
-        value: assets.merge(mock_curve_nft(), assets.merge(
-          assets.from_lovelace(base_lovelace + 1000),
-          assets.from_asset(#"33", "tok", 990),
-        )),
-        datum: InlineDatum(datum),
-        reference_script: None,
-      },
-    }
-  let new_datum =
-    BondingCurveTierBDatum {
-      ..datum,
-      tokens_sold: 0,
-      total_raised: -1000,
-      creator_fees_accrued: 10,
-      platform_fees_accrued: 10,
-      }
-  let continuing_output =
-    Output {
-      address: own_address,
-      // Token balance stays at 990 — claims 10 tokens were returned but
-      // weren't. Lovelace side pays out correctly, isolating this check.
-      value: assets.merge(mock_curve_nft(), assets.merge(
-        assets.from_lovelace(base_lovelace + 1000 - 980),
-        assets.from_asset(#"33", "tok", 990),
-      )),
-      datum: InlineDatum(new_datum),
-      reference_script: None,
-    }
-  let proceeds_output =
-    Output {
-      address: seller_address,
-      value: assets.from_lovelace(980),
-      datum: InlineDatum(own_ref),
-      reference_script: None,
-    }
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      outputs: [continuing_output, proceeds_output],
-      extra_signatories: [#"dd"],
-    }
-  let redeemer =
-    SellTokens {
-      token_amount: 10,
-      seller_key_hash: #"dd",
-      cap_committed_before: 0,
-      cap_proof: cap_proof(#"dd", []),
-    }
-
-  !bonding_curve_tier_b.spend(Some(datum), redeemer, own_ref, self)
-}
-
-test buy_tokens_rejects_without_buyer_signature() {
-  // Same as a valid buy, but the buyer never signed — proves cap
-  // enforcement is bound to a real signature, not just a claimed key hash
-  // in the redeemer.
-  let datum = mock_datum(Active, 0)
-  let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
-  let own_address = from_verification_key(#"cc")
-  let buyer_address = from_verification_key(#"dd")
-  let base_lovelace = 5_000_000
-  let own_input =
-    Input {
-      output_reference: own_ref,
-      output: Output {
-        address: own_address,
-        value: assets.merge(mock_curve_nft(), assets.merge(
-          assets.from_lovelace(base_lovelace),
-          assets.from_asset(#"33", "tok", 1000),
-        )),
-        datum: InlineDatum(datum),
-        reference_script: None,
-      },
-    }
-  let new_datum =
-    BondingCurveTierBDatum {
-      ..datum,
-      tokens_sold: 10,
-      total_raised: 986,
-      creator_fees_accrued: 5,
-      platform_fees_accrued: 10,
-      }
-  let continuing_output =
-    Output {
-      address: own_address,
-      value: assets.merge(mock_curve_nft(), assets.merge(
-        assets.from_lovelace(base_lovelace + 1001),
-        assets.from_asset(#"33", "tok", 990),
-      )),
-      datum: InlineDatum(new_datum),
-      reference_script: None,
-    }
-  let delivery_output =
-    Output {
-      address: buyer_address,
-      value: assets.from_asset(#"33", "tok", 10),
-      datum: InlineDatum(own_ref),
-      reference_script: None,
-    }
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      outputs: [continuing_output, delivery_output],
-      // no extra_signatories — buyer never signed
-    }
-  let redeemer =
-    BuyTokens {
-      token_amount: 10,
-      buyer_key_hash: #"dd",
-      cap_committed_before: 0,
-      cap_proof: cap_proof(#"dd", []),
-    }
-
-  !bonding_curve_tier_b.spend(Some(datum), redeemer, own_ref, self)
-}
-
-test buy_tokens_rejects_payment_not_actually_received() {
-  let datum = mock_datum(Active, 0)
-  let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
-  let own_address = from_verification_key(#"cc")
-  let buyer_address = from_verification_key(#"dd")
-  let base_lovelace = 5_000_000
-  let own_input =
-    Input {
-      output_reference: own_ref,
-      output: Output {
-        address: own_address,
-        value: assets.merge(mock_curve_nft(), assets.merge(
-          assets.from_lovelace(base_lovelace),
-          assets.from_asset(#"33", "tok", 1000),
-        )),
-        datum: InlineDatum(datum),
-        reference_script: None,
-      },
-    }
-  let new_datum =
-    BondingCurveTierBDatum {
-      ..datum,
-      tokens_sold: 10,
-      total_raised: 986,
-      creator_fees_accrued: 5,
-      platform_fees_accrued: 10,
-      }
-  let continuing_output =
-    Output {
-      address: own_address,
-      // No increase — claimed 1000 lovelace but didn't pay it.
-      value: assets.merge(mock_curve_nft(), assets.merge(
-        assets.from_lovelace(base_lovelace),
-        assets.from_asset(#"33", "tok", 990),
-      )),
-      datum: InlineDatum(new_datum),
-      reference_script: None,
-    }
-  let delivery_output =
-    Output {
-      address: buyer_address,
-      value: assets.from_asset(#"33", "tok", 10),
-      datum: InlineDatum(own_ref),
-      reference_script: None,
-    }
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      outputs: [continuing_output, delivery_output],
-      extra_signatories: [#"dd"],
-    }
-  let redeemer =
-    BuyTokens {
-      token_amount: 10,
-      buyer_key_hash: #"dd",
-      cap_committed_before: 0,
-      cap_proof: cap_proof(#"dd", []),
-    }
-
-  !bonding_curve_tier_b.spend(Some(datum), redeemer, own_ref, self)
 }
 
 /// End of the claim window, and end of the dead window that follows it, for a

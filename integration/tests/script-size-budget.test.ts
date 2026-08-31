@@ -195,10 +195,12 @@ for (const v of blueprint.validators) {
  * CtoGovernanceDatum as a reference input, so narrowing that type narrowed their
  * decoding too. The same shared-datum effect as the widenings above, in reverse.
  *
- * READ THIS BEFORE PUBLISHING A REFERENCE SCRIPT FOR THE QUADRATIC CURVE.
- * 15,994 against MAX_PUBLISHABLE_SCRIPT_BYTES (16,052) leaves 58 B. That is
- * inside the limit and outside any sensible margin — the next shared-datum
- * field, which moves six validators at a stroke, would not fit.
+ * Moved again, and this is the one that bought the room back: the quadratic
+ * curve no longer settles a direct public trade, which is -1,038. A trade
+ * reaches it as an order applied in a batch, so the two arms refuse rather than
+ * price, and all the arithmetic behind them went with them. 14,956 against
+ * MAX_PUBLISHABLE_SCRIPT_BYTES (16,052) leaves 1,096 B — a real margin, where
+ * the two changes before it had left 58.
  *
  * Two measurements taken while landing it, both worth keeping:
  *
@@ -215,7 +217,7 @@ for (const v of blueprint.validators) {
  */
 const RECORDED: Record<string, number> = {
   bonding_curve: 12_877,
-  bonding_curve_tier_b: 15_994,
+  bonding_curve_tier_b: 14_956,
   cto_governance: 7_962,
   cto_sybil_challenge: 2_123,
   curve_order: 1_775,

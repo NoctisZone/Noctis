@@ -12,11 +12,14 @@
 // payouts and their tags, the signer, and the validity range. A drift on
 // either path fails it, without anyone having to remember to update a fixture.
 //
-// It runs over EVERY action the curve has, not just a trade. On this tier that
-// is not thoroughness for its own sake: the validator is most of the
-// transaction cap on its own, so an action that still embeds it cannot be
-// submitted at all, and an action missing from this table is one nobody would
-// notice was missing.
+// It runs over EVERY action the curve has. On this tier that is not
+// thoroughness for its own sake: the validator is most of the transaction cap
+// on its own, so an action that still embeds it cannot be submitted at all, and
+// an action missing from this table is one nobody would notice was missing.
+//
+// A public trade is not in the table because it is no longer one of the curve's
+// actions — it reaches the curve as an order, applied in a batch. A DarkVeil
+// claim stands in as the buyer-signed, payout-bearing exemplar above.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -236,7 +239,17 @@ describe('reference mode is off unless asked for', () => {
 
   it('builds through Lucid and never reaches the spender', async () => {
     const { builder, calls } = makeFakeTxBuilder();
-    const result = await makeSubmitter(builder).buyTokens(WALLET_KEY_PLACEHOLDER, 100n, new CapAccumulator());
+    const result = await makeSubmitter(builder, { datum: dvClaimDatum() }).claimDarkVeilTokens(
+      WALLET_KEY_PLACEHOLDER,
+      {
+        dvAmount: 100n,
+        salt: new Uint8Array(32).fill(3),
+        merkleProof: [{ sibling: new Uint8Array(32).fill(4), goesLeft: true }],
+        buyerKeyHash: hexToBytes(BUYER_KEY_HASH),
+        leafIndex: 0,
+      },
+      new CapAccumulator(),
+    );
     expect(result.txHash).toBe('lucid-tx');
     expect(submitSpy).not.toHaveBeenCalled();
     expect(calls.collectFrom).toBeDefined();
@@ -250,9 +263,15 @@ describe('reference mode', () => {
 
   it('submits through the spender rather than Lucid', async () => {
     const { builder, calls } = makeFakeTxBuilder();
-    const result = await makeSubmitter(builder, { referenced: true }).buyTokens(
+    const result = await makeSubmitter(builder, { referenced: true, datum: dvClaimDatum() }).claimDarkVeilTokens(
       WALLET_KEY_PLACEHOLDER,
-      100n,
+      {
+        dvAmount: 100n,
+        salt: new Uint8Array(32).fill(3),
+        merkleProof: [{ sibling: new Uint8Array(32).fill(4), goesLeft: true }],
+        buyerKeyHash: hexToBytes(BUYER_KEY_HASH),
+        leafIndex: 0,
+      },
       new CapAccumulator(),
     );
     expect(result.txHash).toBe('referenced-tx-hash');
@@ -263,7 +282,17 @@ describe('reference mode', () => {
 
   it('spends the same UTXO the authenticated lookup found', async () => {
     const { builder } = makeFakeTxBuilder();
-    await makeSubmitter(builder, { referenced: true }).buyTokens(WALLET_KEY_PLACEHOLDER, 100n, new CapAccumulator());
+    await makeSubmitter(builder, { referenced: true, datum: dvClaimDatum() }).claimDarkVeilTokens(
+      WALLET_KEY_PLACEHOLDER,
+      {
+        dvAmount: 100n,
+        salt: new Uint8Array(32).fill(3),
+        merkleProof: [{ sibling: new Uint8Array(32).fill(4), goesLeft: true }],
+        buyerKeyHash: hexToBytes(BUYER_KEY_HASH),
+        leafIndex: 0,
+      },
+      new CapAccumulator(),
+    );
     const [plan] = submitSpy.mock.calls[0] as [CurveSpendPlan];
     expect(plan.scriptUtxo.txHash).toBe(CURVE_TX);
     expect(plan.scriptUtxo.outputIndex).toBe(0);
@@ -273,27 +302,43 @@ describe('reference mode', () => {
   // The one that matters: the two paths must not drift
   // ==========================================================================
 
-  it('builds the same trade Lucid would have', async () => {
+  it('builds the same action Lucid would have', async () => {
+    // The two builds happen milliseconds apart and this action stamps its own
+    // validity range from the clock, so without pinning it the redeemers
+    // differ by a couple of milliseconds and the comparison fails for a reason
+    // that has nothing to do with the two paths agreeing.
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(NOW);
     const embedded = makeFakeTxBuilder();
-    const viaLucid = await makeSubmitter(embedded.builder).buyTokens(
+    await makeSubmitter(embedded.builder, { datum: dvClaimDatum() }).claimDarkVeilTokens(
       WALLET_KEY_PLACEHOLDER,
-      100n,
+      {
+        dvAmount: 100n,
+        salt: new Uint8Array(32).fill(3),
+        merkleProof: [{ sibling: new Uint8Array(32).fill(4), goesLeft: true }],
+        buyerKeyHash: hexToBytes(BUYER_KEY_HASH),
+        leafIndex: 0,
+      },
       new CapAccumulator(),
     );
 
     const referenced = makeFakeTxBuilder();
-    const viaMesh = await makeSubmitter(referenced.builder, { referenced: true }).buyTokens(
+    await makeSubmitter(referenced.builder, { referenced: true, datum: dvClaimDatum() }).claimDarkVeilTokens(
       WALLET_KEY_PLACEHOLDER,
-      100n,
+      {
+        dvAmount: 100n,
+        salt: new Uint8Array(32).fill(3),
+        merkleProof: [{ sibling: new Uint8Array(32).fill(4), goesLeft: true }],
+        buyerKeyHash: hexToBytes(BUYER_KEY_HASH),
+        leafIndex: 0,
+      },
       new CapAccumulator(),
     );
 
     const [plan] = submitSpy.mock.calls[0] as [CurveSpendPlan];
 
-    // What the buyer is told, and therefore charged.
-    expect(viaMesh.grossPayment).toBe(viaLucid.grossPayment);
-    expect(viaMesh.avgPrice).toBe(viaLucid.avgPrice);
-
+    // The two results differ by construction — each carries the tx hash its
+    // own submission path returned — so what they must agree on is everything
+    // that goes INTO the transaction, checked below.
     // The redeemer — the cap proof included.
     const [, lucidRedeemer] = embedded.calls.collectFrom as [unknown, unknown];
     expect(plan.redeemerCbor).toEqual(lucidRedeemer);
@@ -322,37 +367,54 @@ describe('reference mode', () => {
     // hash directly. Same signer, said two ways.
     expect(embedded.calls.addSigner).toEqual([BUYER_ADDRESS]);
     expect(plan.requiredSignerHashes).toEqual([BUYER_KEY_HASH]);
+    clock.mockRestore();
   });
 
   it('still refuses a trade the curve would reject, before building anything', async () => {
     const { builder } = makeFakeTxBuilder();
-    const submitter = makeSubmitter(builder, { referenced: true });
+    // The claim datum matters: without it the curve is Active and the claim is
+    // refused for being outside the window, which would pass this test without
+    // the cap ever being consulted.
+    const submitter = makeSubmitter(builder, { referenced: true, datum: dvClaimDatum() });
     // Over the wallet cap of 500.
-    await expect(submitter.buyTokens(WALLET_KEY_PLACEHOLDER, 600n, new CapAccumulator())).rejects.toThrow(
-      /cap exceeded/i,
-    );
+    await expect(
+      submitter.claimDarkVeilTokens(
+        WALLET_KEY_PLACEHOLDER,
+        {
+          dvAmount: 600n,
+          salt: new Uint8Array(32).fill(3),
+          merkleProof: [{ sibling: new Uint8Array(32).fill(4), goesLeft: true }],
+          buyerKeyHash: hexToBytes(BUYER_KEY_HASH),
+          leafIndex: 0,
+        },
+        new CapAccumulator(),
+      ),
+    ).rejects.toThrow(/cap exceeded/i);
     expect(submitSpy).not.toHaveBeenCalled();
   });
 
   it('says plainly that a browser wallet cannot use it yet', async () => {
     const { builder } = makeFakeTxBuilder();
-    const submitter = makeSubmitter(builder, { referenced: true });
-    await expect(submitter.buyTokensWithWallet({} as never, 100n, new CapAccumulator())).rejects.toThrow(
-      /Launch Wizard wallet task/,
-    );
+    const submitter = makeSubmitter(builder, { referenced: true, datum: dvClaimDatum() });
+    await expect(
+      submitter.claimDarkVeilTokensWithWallet(
+        {} as never,
+        {
+          dvAmount: 100n,
+          salt: new Uint8Array(32).fill(3),
+          merkleProof: [{ sibling: new Uint8Array(32).fill(4), goesLeft: true }],
+          buyerKeyHash: hexToBytes(BUYER_KEY_HASH),
+          leafIndex: 0,
+        },
+        new CapAccumulator(),
+      ),
+    ).rejects.toThrow(/Launch Wizard wallet task/);
   });
 });
 
 // ============================================================================
 // Every action, both ways
 // ============================================================================
-
-/** An accumulator holding one wallet's running total, and the root it implies. */
-function capWith(keyHashHex: string, total: bigint) {
-  const acc = new CapAccumulator();
-  acc.set(hexToBytes(keyHashHex), total);
-  return { acc, rootHex: bytesToHex(acc.root) };
-}
 
 type Submitter = LucidTierBCurveSubmitter;
 
@@ -424,20 +486,6 @@ const ACTIONS: Action[] = [
       ),
     signer: BUYER_ADDRESS,
     timed: true,
-    payouts: 1,
-  },
-  {
-    name: 'buy',
-    datum: activeDatum(),
-    run: (s) => s.buyTokens(WALLET_KEY_PLACEHOLDER, 100n, new CapAccumulator()),
-    signer: BUYER_ADDRESS,
-    payouts: 1,
-  },
-  {
-    name: 'sell',
-    datum: { ...activeDatum(), tokens_sold: 300n, cap_root: capWith(BUYER_KEY_HASH, 300n).rootHex },
-    run: (s) => s.sellTokens(WALLET_KEY_PLACEHOLDER, 100n, capWith(BUYER_KEY_HASH, 300n).acc),
-    signer: BUYER_ADDRESS,
     payouts: 1,
   },
   {

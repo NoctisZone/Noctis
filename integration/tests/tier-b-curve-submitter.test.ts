@@ -25,7 +25,7 @@ vi.mock('@lucid-evolution/lucid', async (importOriginal) => {
 });
 
 import { CML, credentialToAddress, Lucid } from '@lucid-evolution/lucid';
-import { bytesToHex, CAP_EMPTY_ROOT, CapAccumulator } from '../cap-accumulator-tree.js';
+import { bytesToHex, CAP_EMPTY_ROOT } from '../cap-accumulator-tree.js';
 import type { BondingCurveTierBDatumData } from '../tier-a-schemas.js';
 import { threadNftAssetName } from '../tier-a-schemas.js';
 
@@ -33,10 +33,6 @@ import { threadNftAssetName } from '../tier-a-schemas.js';
 /// accumulator is empty and each buyer proves their own empty slot — the same
 /// state genesis writes. A fresh instance per call, since a submitter that
 /// mutated a shared one would make the tests order-dependent.
-function emptyCapState(): CapAccumulator {
-  return new CapAccumulator();
-}
-
 import {
   buyCostQuadratic,
   curvePriceAtQuadratic,
@@ -458,151 +454,26 @@ describe('LucidTierBCurveSubmitter.openDvClaim', () => {
   });
 });
 
-describe('LucidTierBCurveSubmitter.buyTokens', () => {
-  it('rejects when the curve is not Active', async () => {
+describe('LucidTierBCurveSubmitter — direct public trades', () => {
+  // The curve settles a public trade only as an order applied in a batch, so
+  // these two builders refuse locally rather than producing a transaction the
+  // chain rejects with nothing but "failed script execution" to go on.
+  //
+  // The cases that used to live here — pricing at the pre-trade position,
+  // floor-rounded fees, graduation on full sell-through, a negative
+  // total_raised after a round trip — moved with the arithmetic they
+  // exercised. The batch path computes those now, and batch-planner.test.ts
+  // and both curve validators' own pinned figures cover them there.
+  it('refuses to build a direct buy, naming the path that does work', async () => {
     const { builder } = makeFakeTxBuilder();
-    const submitter = makeSubmitter(builder, [{ datum: baseDatum({ curve_state: 'Inactive' }), assets: {} }]);
-    await expect(submitter.buyTokens('mnemonic', 100n, emptyCapState())).rejects.toThrow(/Curve is not Active/);
+    const submitter = makeSubmitter(builder, [{ datum: baseDatum(), assets: {} }]);
+    await expect(submitter.buyTokens()).rejects.toThrow(/does not settle direct public trades[\s\S]*placeOrder/);
   });
 
-  it('rejects a tokenAmount of 0 or exceeding remaining supply', async () => {
+  it('refuses to build a direct sell the same way', async () => {
     const { builder } = makeFakeTxBuilder();
-    const submitter = makeSubmitter(builder, [
-      {
-        datum: baseDatum({
-          curve_state: 'Active',
-          curve_supply: 100n,
-          tokens_sold: 90n,
-        }),
-        assets: {},
-      },
-    ]);
-    await expect(submitter.buyTokens('mnemonic', 0n, emptyCapState())).rejects.toThrow(/token_amount out of range/);
-    await expect(submitter.buyTokens('mnemonic', 11n, emptyCapState())).rejects.toThrow(/token_amount out of range/);
-  });
-
-  it('allows the creator to buy their own curve, and blocks them from selling', async () => {
-    const { builder } = makeFakeTxBuilder();
-    const submitter = makeSubmitter(
-      builder,
-      [{ datum: baseDatum({ curve_state: 'Active', tokens_sold: 500n }), assets: { lovelace: 10_000_000n } }],
-      addrFor(CREATOR_KEY_HASH),
-    );
-    // A creator may put ADA in. They can never take it out, so there is no
-    // round trip to wash-trade with, and their buys are flagged to the
-    // community by the trade-history reader.
-    await expect(submitter.buyTokens('mnemonic', 100n, emptyCapState())).resolves.toBeTruthy();
-    await expect(submitter.sellTokens('mnemonic', 100n, emptyCapState())).rejects.toThrow(/creator cannot sell/i);
-  });
-
-  it('prices via the REAL quadratic formula at the pre-buy tokens_sold, using floor-rounded (not exact) fees', async () => {
-    const { builder, calls } = makeFakeTxBuilder();
-    const submitter = makeSubmitter(builder, [
-      {
-        datum: baseDatum({
-          curve_state: 'Active',
-          base_price: 10n,
-          max_price: 1010n,
-          curve_supply: 1000n,
-          tokens_sold: 0n,
-        }),
-        assets: {},
-      },
-    ]);
-
-    // Three tokens from a standing start: P(0)+P(1)+P(2) = 30.005 lovelace,
-    // rounded up to 31. A gross this small floors every fee slice to zero and
-    // the whole amount stays with the curve.
-    const result = await submitter.buyTokens('mnemonic', 3n, emptyCapState());
-    expect(result.grossPayment).toBe(31n);
-    expect(result.avgPrice).toBe(10n);
-
-    const redeemer = calls.collectFrom![1] as {
-      index: number;
-      fields: unknown[];
-    };
-    expect(redeemer.index).toBe(1);
-    // The redeemer carries only the amount and the buyer — price and fees are
-    // the contract's own computation, not a caller's claim.
-    // token_amount, buyer_key_hash, then the two cumulative-cap fields.
-    expect(redeemer.fields).toHaveLength(4);
-    expect(redeemer.fields[0]).toBe(3n);
-  });
-
-  it('transitions curve_state to Graduated on full sell-through', async () => {
-    const { builder, calls } = makeFakeTxBuilder();
-    const submitter = makeSubmitter(builder, [
-      {
-        datum: baseDatum({
-          curve_state: 'Active',
-          curve_supply: 100n,
-          tokens_sold: 90n,
-          wallet_cap: 1000n,
-        }),
-        assets: {},
-      },
-    ]);
-    await submitter.buyTokens('mnemonic', 10n, emptyCapState());
-    const payload = calls.payToContract![1] as {
-      value: Record<string, unknown>;
-    };
-    expect(payload.value.tokens_sold).toBe(100n);
-    expect(payload.value.curve_state).toBe('Graduated');
-  });
-});
-
-describe('LucidTierBCurveSubmitter.sellTokens', () => {
-  it('builds the SellTokens redeemer at its deliberately-non-adjacent constructor index 13', async () => {
-    const { builder, calls } = makeFakeTxBuilder();
-    const sellerHash = fakeKeyHash(0x77);
-    const submitter = makeSubmitter(
-      builder,
-      [
-        {
-          datum: baseDatum({
-            curve_state: 'Active',
-            base_price: 10n,
-            max_price: 10n,
-            curve_supply: 1000n,
-            tokens_sold: 100n,
-          }),
-          assets: { lovelace: 10_000_000n },
-        },
-      ],
-      addrFor(sellerHash),
-    );
-
-    await submitter.sellTokens('mnemonic', 100n, emptyCapState());
-    const redeemer = calls.collectFrom![1] as { index: number };
-    expect(redeemer.index).toBe(13);
-  });
-
-  it('allows total_raised to go negative on a round-trip sell (no floor)', async () => {
-    const { builder, calls } = makeFakeTxBuilder();
-    const sellerHash = fakeKeyHash(0x88);
-    const submitter = makeSubmitter(
-      builder,
-      [
-        {
-          datum: baseDatum({
-            curve_state: 'Active',
-            base_price: 100n,
-            max_price: 100n,
-            curve_supply: 1000n,
-            tokens_sold: 10n,
-            total_raised: 50n,
-          }),
-          assets: { lovelace: 10_000_000n },
-        },
-      ],
-      addrFor(sellerHash),
-    );
-
-    await submitter.sellTokens('mnemonic', 10n, emptyCapState());
-    const payload = calls.payToContract![1] as {
-      value: Record<string, unknown>;
-    };
-    expect(payload.value.total_raised).toBe(-950n); // 50 - (100*10)
+    const submitter = makeSubmitter(builder, [{ datum: baseDatum({ tokens_sold: 300n }), assets: {} }]);
+    await expect(submitter.sellTokens()).rejects.toThrow(/does not settle direct public trades[\s\S]*placeOrder/);
   });
 });
 

@@ -886,255 +886,44 @@ export class LucidTierBCurveSubmitter {
   }
 
   // --------------------------------------------------------------------------
-  // BuyTokens — buyer-signed.
+  // Direct public trades.
+  //
+  // The curve does not settle one. A public trade reaches it as an ORDER,
+  // applied against it in a batch by an allowlisted batcher, so both builders
+  // below refuse rather than build.
+  //
+  // They refuse HERE rather than leaving it to the chain, because a
+  // transaction that builds and then fails validation reports only "failed
+  // script execution" — which names neither the cause nor what to do instead.
+  //
+  // The pricing, fee and datum construction that used to fill these methods
+  // went with the validator arms they fed. Keeping any of it behind the throw
+  // would have left a hundred lines reading as the live path when they were
+  // not; the batch path computes those figures now.
+  //
+  // The methods are kept, rather than deleted, so a caller still finds the
+  // name it was reaching for and is told where the path went.
   // --------------------------------------------------------------------------
 
-  /** Same skipClientCapCheck escape hatch as the linear curve's — never pass true from a real buy flow. */
-  async buyTokens(
-    buyerMnemonic: string,
-    tokenAmount: bigint,
-    capState: CapAccumulator,
-    skipClientCapCheck = false,
-  ): Promise<{ txHash: string; grossPayment: bigint; avgPrice: bigint }> {
-    const lucid = await this.lucidPromise;
-    lucid.selectWallet.fromSeed(buyerMnemonic);
-    const buyerAddress = await lucid.wallet().address();
-    this.prepareReferencedFromMnemonic(buyerMnemonic);
-    return this.buyTokensCore(lucid, buyerAddress, tokenAmount, capState, skipClientCapCheck);
+  private static readonly DIRECT_TRADE_REFUSAL =
+    'This curve does not settle direct public trades. Place an order with placeOrder() in ' +
+    'order-submitter.ts; the batcher applies it against the curve. ClaimDarkVeilTokens and ' +
+    'ClaimBuyback are separate paths and are unaffected.';
+
+  async buyTokens(): Promise<never> {
+    throw new Error(LucidTierBCurveSubmitter.DIRECT_TRADE_REFUSAL);
   }
 
-  async buyTokensWithWallet(
-    walletApi: WalletApi,
-    tokenAmount: bigint,
-    capState: CapAccumulator,
-    skipClientCapCheck = false,
-  ): Promise<{ txHash: string; grossPayment: bigint; avgPrice: bigint }> {
-    this.refuseBrowserWalletWhenReferenced('buy');
-    const lucid = await this.lucidPromise;
-    lucid.selectWallet.fromAPI(walletApi);
-    const buyerAddress = await lucid.wallet().address();
-    return this.buyTokensCore(lucid, buyerAddress, tokenAmount, capState, skipClientCapCheck);
+  async buyTokensWithWallet(): Promise<never> {
+    throw new Error(LucidTierBCurveSubmitter.DIRECT_TRADE_REFUSAL);
   }
 
-  private async buyTokensCore(
-    lucid: LucidEvolution,
-    buyerAddress: string,
-    tokenAmount: bigint,
-    capState: CapAccumulator,
-    skipClientCapCheck: boolean,
-  ): Promise<{ txHash: string; grossPayment: bigint; avgPrice: bigint }> {
-    const curveUtxo = await this.findCurveUtxo(lucid);
-    const currentDatum = Data.from<BondingCurveTierBDatumData>(
-      this.requireDatum(curveUtxo),
-      BondingCurveTierBDatumSchema,
-    );
-
-    if (currentDatum.curve_state !== 'Active') {
-      throw new Error(`Curve is not Active (state: ${currentDatum.curve_state}) — cannot buy.`);
-    }
-
-    const remaining = currentDatum.curve_supply - currentDatum.tokens_sold;
-    if (tokenAmount <= 0n || tokenAmount > remaining) {
-      throw new Error(`token_amount out of range (remaining: ${remaining}).`);
-    }
-
-    // The range being ADDED starts at the current tokens_sold.
-    const grossPayment = buyCostQuadratic(currentDatum, currentDatum.tokens_sold, tokenAmount);
-    const creatorFee = floorFeeSlice(grossPayment, CREATOR_BPS);
-    const platformFee = floorFeeSlice(grossPayment, PLATFORM_BPS);
-    const feeTotal = creatorFee + platformFee;
-    const netPayment = grossPayment - feeTotal;
-
-    const buyerKeyHashHex = buyerKeyHashFromAddress(buyerAddress);
-
-    // The cap is CUMULATIVE, and on Cardano Launch it spans the DarkVeil claim window
-    // too: a registrant who claimed an allocation has that much less public
-    // headroom. `cap` carries the proof that makes the prior total real rather
-    // than self-reported — the validator re-walks it against `cap_root`.
-    const cap = buildCapTradeFields(capState, currentDatum.cap_root, buyerKeyHashHex, tokenAmount);
-    if (cap.committedAfter > currentDatum.wallet_cap && !skipClientCapCheck) {
-      throw new Error(
-        `Cumulative cap exceeded: ${cap.committedBefore} already taken (DarkVeil claim + public buys) + ` +
-          `${tokenAmount} = ${cap.committedAfter} > ${currentDatum.wallet_cap}. ` +
-          'Sell some of the position to free headroom.',
-      );
-    }
-
-    const newTokensSold = currentDatum.tokens_sold + tokenAmount;
-    const nextState: BondingCurveTierBDatumData['curve_state'] =
-      newTokensSold === currentDatum.curve_supply ? 'Graduated' : currentDatum.curve_state;
-
-    const newDatum: BondingCurveTierBDatumData = {
-      ...currentDatum,
-      tokens_sold: newTokensSold,
-      total_raised: currentDatum.total_raised + netPayment,
-      creator_fees_accrued: currentDatum.creator_fees_accrued + creatorFee,
-      platform_fees_accrued: currentDatum.platform_fees_accrued + platformFee,
-      curve_state: nextState,
-      cap_root: cap.nextRootHex,
-    };
-
-    const redeemer = new Constr(BONDING_CURVE_TIER_B_REDEEMER.BuyTokens, [
-      tokenAmount,
-      buyerKeyHashHex,
-      cap.committedBefore,
-      capProofToPlutus(cap.proof),
-    ]);
-
-    const tokenUnit = toUnit(currentDatum.token_policy_id, currentDatum.token_asset_name);
-    const continuingAssets = { ...curveUtxo.assets };
-    continuingAssets.lovelace = (continuingAssets.lovelace ?? 0n) + grossPayment;
-    continuingAssets[tokenUnit] = (continuingAssets[tokenUnit] ?? 0n) - tokenAmount;
-
-    const txHash = await this.executeSpend(
-      lucid,
-      curveUtxo,
-      {
-        redeemerCbor: Data.to(redeemer),
-        newDatumCbor: Data.to<BondingCurveTierBDatumData>(newDatum, BondingCurveTierBDatumSchema),
-        continuingAssets,
-        payouts: [{ address: buyerAddress, assets: { [tokenUnit]: tokenAmount } }],
-        signerAddress: buyerAddress,
-      },
-      { kind: 'wallet' },
-    );
-    // Average lovelace per token across the batch. Every token is priced
-    // at its own position, so this is not the price of any one of them.
-    return { txHash, grossPayment, avgPrice: grossPayment / tokenAmount };
+  async sellTokens(): Promise<never> {
+    throw new Error(LucidTierBCurveSubmitter.DIRECT_TRADE_REFUSAL);
   }
 
-  // --------------------------------------------------------------------------
-  // SellTokens — the reverse of BuyTokens. Seller-signed, same two-signing-
-  // shape pattern as buyTokens above. Same mechanism as the linear curve's SellTokens
-  // — see bonding_curve_tier_b.ak's own SellTokens doc comment for
-  // the full pricing-symmetry/value-conservation reasoning. Differs from
-  // The linear curve's copy exactly the same way buyTokensCore already does: quadratic
-  // pricing (curvePriceAtQuadratic, not curvePriceAt), FLOOR-rounded fees
-  // (floorFeeSlice, shared with the linear curve's feeSlice).
-  // Constructor index 14 — deliberately the LAST variant declared in
-  // bonding_curve_tier_b.ak's redeemer type (not grouped next to BuyTokens
-  // where it reads most naturally), specifically so every other already-
-  // deployed index above (ClaimCreatorFees=3, ExpireCurve=7, ClaimBuyback=8,
-  // etc.) stays unchanged — see that file's own comment on SellTokens for
-  // why an insertion anywhere else would have silently shifted them.
-  // --------------------------------------------------------------------------
-
-  /** CLI-driven verification path — see class-level comment above. */
-  async sellTokens(
-    sellerMnemonic: string,
-    tokenAmount: bigint,
-    capState: CapAccumulator,
-  ): Promise<{ txHash: string; netProceeds: bigint; avgPrice: bigint }> {
-    const lucid = await this.lucidPromise;
-    lucid.selectWallet.fromSeed(sellerMnemonic);
-    const sellerAddress = await lucid.wallet().address();
-    this.prepareReferencedFromMnemonic(sellerMnemonic);
-    return this.sellTokensCore(lucid, sellerAddress, tokenAmount, capState);
-  }
-
-  /** Real production path — see class-level comment above. */
-  async sellTokensWithWallet(
-    walletApi: WalletApi,
-    tokenAmount: bigint,
-    capState: CapAccumulator,
-  ): Promise<{ txHash: string; netProceeds: bigint; avgPrice: bigint }> {
-    this.refuseBrowserWalletWhenReferenced('sell');
-    const lucid = await this.lucidPromise;
-    lucid.selectWallet.fromAPI(walletApi);
-    const sellerAddress = await lucid.wallet().address();
-    return this.sellTokensCore(lucid, sellerAddress, tokenAmount, capState);
-  }
-
-  private async sellTokensCore(
-    lucid: LucidEvolution,
-    sellerAddress: string,
-    tokenAmount: bigint,
-    capState: CapAccumulator,
-  ): Promise<{ txHash: string; netProceeds: bigint; avgPrice: bigint }> {
-    const curveUtxo = await this.findCurveUtxo(lucid);
-    const currentDatum = Data.from<BondingCurveTierBDatumData>(
-      this.requireDatum(curveUtxo),
-      BondingCurveTierBDatumSchema,
-    );
-
-    if (currentDatum.curve_state !== 'Active') {
-      throw new Error(`Curve is not Active (state: ${currentDatum.curve_state}) — cannot sell.`);
-    }
-    if (tokenAmount <= 0n) {
-      throw new Error('token_amount must be positive.');
-    }
-
-    const sellerKeyHashHex = buyerKeyHashFromAddress(sellerAddress);
-    if (sellerKeyHashHex === currentDatum.creator_pub_key_hash) {
-      throw new Error('The creator cannot sell into their own curve.');
-    }
-    // Entitlement is possession — the tokens are handed back to the curve in
-    // this transaction, so nothing is looked up to decide WHETHER they may
-    // sell. The per-transaction bound still applies on this side: a cumulative
-    // one only ever falls on a sell.
-    if (tokenAmount > currentDatum.wallet_cap) {
-      throw new Error(
-        `Per-transaction cap exceeded: ${tokenAmount} > ${currentDatum.wallet_cap}. Split the sell across transactions.`,
-      );
-    }
-    // A sell RELEASES headroom, so it rewrites the accumulator too — without
-    // this a trader who bought their full cap and exited could never re-enter.
-    const cap = buildCapTradeFields(capState, currentDatum.cap_root, sellerKeyHashHex, -tokenAmount);
-
-    const newSold = currentDatum.tokens_sold - tokenAmount;
-    if (newSold < 0n) {
-      throw new Error(`new_sold would go negative (${newSold}) — this shouldn't happen given the prior check.`);
-    }
-
-    // Prices the range being REMOVED, whose low edge is the POST-sell
-    // tokens_sold — the same range a buy of this size at `newSold` pays for.
-    // See bonding_curve_tier_b.ak's own SellTokens doc comment.
-    const grossProceeds = sellProceedsQuadratic(currentDatum, newSold, tokenAmount);
-    const creatorFee = floorFeeSlice(grossProceeds, CREATOR_BPS);
-    const platformFee = floorFeeSlice(grossProceeds, PLATFORM_BPS);
-    const feeTotal = creatorFee + platformFee;
-    const netProceeds = grossProceeds - feeTotal;
-
-    const newDatum: BondingCurveTierBDatumData = {
-      ...currentDatum,
-      tokens_sold: newSold,
-      // Subtract the FULL grossProceeds, not netProceeds — see bonding_
-      // curve_tier_b.ak's own SellTokens doc comment for the invariant
-      // this preserves (total_raised can legitimately go negative on a
-      // round-trip sell; that's correct, not a bug — same as the linear curve).
-      total_raised: currentDatum.total_raised - grossProceeds,
-      creator_fees_accrued: currentDatum.creator_fees_accrued + creatorFee,
-      platform_fees_accrued: currentDatum.platform_fees_accrued + platformFee,
-      cap_root: cap.nextRootHex,
-    };
-
-    const redeemer = new Constr(BONDING_CURVE_TIER_B_REDEEMER.SellTokens, [
-      tokenAmount,
-      sellerKeyHashHex,
-      cap.committedBefore,
-      capProofToPlutus(cap.proof),
-    ]);
-
-    const tokenUnit = toUnit(currentDatum.token_policy_id, currentDatum.token_asset_name);
-    const continuingAssets = { ...curveUtxo.assets };
-    continuingAssets.lovelace = (continuingAssets.lovelace ?? 0n) - netProceeds;
-    continuingAssets[tokenUnit] = (continuingAssets[tokenUnit] ?? 0n) + tokenAmount;
-
-    const txHash = await this.executeSpend(
-      lucid,
-      curveUtxo,
-      {
-        redeemerCbor: Data.to(redeemer),
-        newDatumCbor: Data.to<BondingCurveTierBDatumData>(newDatum, BondingCurveTierBDatumSchema),
-        continuingAssets,
-        payouts: [{ address: sellerAddress, assets: { lovelace: netProceeds } }],
-        signerAddress: sellerAddress,
-      },
-      { kind: 'wallet' },
-    );
-    // Average lovelace per token across the batch. Every token is priced
-    // at its own position, so this is not the price of any one of them.
-    return { txHash, netProceeds, avgPrice: grossProceeds / tokenAmount };
+  async sellTokensWithWallet(): Promise<never> {
+    throw new Error(LucidTierBCurveSubmitter.DIRECT_TRADE_REFUSAL);
   }
 
   // --------------------------------------------------------------------------
