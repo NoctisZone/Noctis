@@ -231,10 +231,19 @@ export interface BuildGenesisDatumsInput {
   // SCRIPT HASH was embedded into the other 3 datums as a reference
   // credential; no actual governance UTXO was ever created). Real keyhashes,
   // not placeholders — governor is the same governorPubKeyHashHex already
-  // required above; treasury/ops are the platform's own fee-recipient
-  // wallets (same ones the mint tx already pays the launch fee split to).
-  treasuryPubKeyHashHex: string;
-  opsPubKeyHashHex: string;
+  // required above.
+  /**
+   * Where a forfeited challenge bond goes. ONE address: the treasury/ops pair
+   * this replaced divided a penalty by a revenue ratio that no longer exists,
+   * and left a second address to provision, hold keys for and disclose for
+   * money that only ever arrives when a challenge is rejected.
+   *
+   * WHICH address is a deployment choice, not a contract one. A forfeited bond
+   * is arguably not platform revenue, and pointing this at a dedicated address
+   * rather than the platform wallet is a matter of what the datum is written
+   * with.
+   */
+  bondPayoutPubKeyHashHex: string;
   /**
    * Ballot window width in seconds (CLAUDE.md CTO_VOTE_WINDOW_HRS = 72).
    * Defaults to 259200. An anchored vote result must describe a window
@@ -311,8 +320,7 @@ export async function buildGenesisDatums(input: BuildGenesisDatumsInput) {
     'maxPrice',
     'vestDays',
     'threadNftPolicyIdHex',
-    'treasuryPubKeyHashHex',
-    'opsPubKeyHashHex',
+    'bondPayoutPubKeyHashHex',
   ]);
 
   const tier = input.tier ?? 'A';
@@ -625,8 +633,7 @@ export async function buildGenesisDatums(input: BuildGenesisDatumsInput) {
     last_executed_proposal: null,
     pending_relayer_bond: 0n,
     pending_relayer_key_hash: '',
-    treasury_pub_key_hash: input.treasuryPubKeyHashHex,
-    ops_pub_key_hash: input.opsPubKeyHashHex,
+    payout_pub_key_hash: input.bondPayoutPubKeyHashHex,
     thread_nft_policy: threadNftPolicyId,
     ballot_duration: BigInt(ballotDurationSeconds),
     // No ballot has run at genesis, so there is nothing to cool down from and

@@ -139,8 +139,7 @@ function baseDatum(overrides: Record<string, unknown> = {}) {
     last_executed_proposal: null,
     pending_relayer_bond: 0n,
     pending_relayer_key_hash: toHex(fakeBytes(3)),
-    treasury_pub_key_hash: toHex(fakeBytes(4)),
-    ops_pub_key_hash: toHex(fakeBytes(5)),
+    payout_pub_key_hash: toHex(fakeBytes(4)),
     thread_nft_policy: THREAD_POLICY,
     ...overrides,
   };

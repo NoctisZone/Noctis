@@ -1,7 +1,7 @@
 // Tests for cardano-cto-void-proposal-submitter.ts's
 // CardanoCtoVoidProposalSubmitter — governor voids a fraudulent anchored
 // proposal within the 24h challenge window and slashes the relayer's bond
-// 60/40 treasury/ops. Same importOriginal partial-mock strategy as the
+// the whole bond to one payee. Same importOriginal partial-mock strategy as the
 // other Lucid submitter tests.
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -108,8 +108,7 @@ const withThreadNft = <T extends { assets?: Record<string, bigint> }>(list: T[])
 
 const ANCHOR_TS = 1_000_000n;
 const CHALLENGE_WINDOW_MS = 86_400_000n;
-const TREASURY_HASH = fakeKeyHash(4);
-const OPS_HASH = fakeKeyHash(5);
+const PAYOUT_HASH = fakeKeyHash(4);
 
 function baseProposal(overrides: Record<string, unknown> = {}) {
   return {
@@ -149,8 +148,7 @@ function baseDatum(overrides: Record<string, unknown> = {}) {
     last_executed_proposal: null,
     pending_relayer_bond: 25_000_000n,
     pending_relayer_key_hash: toHex(fakeBytes(3)),
-    treasury_pub_key_hash: TREASURY_HASH,
-    ops_pub_key_hash: OPS_HASH,
+    payout_pub_key_hash: PAYOUT_HASH,
     thread_nft_policy: THREAD_POLICY,
     ...overrides,
   };
@@ -218,54 +216,33 @@ describe('CardanoCtoVoidProposalSubmitter.voidPendingProposal — guard rails', 
 });
 
 describe('CardanoCtoVoidProposalSubmitter.voidPendingProposal — happy path', () => {
-  it('splits the bond 60/40 treasury/ops using floor division, exactly matching cto_governance.ak', async () => {
+  it('pays the WHOLE bond to the one address the datum names', async () => {
     const { builder, payToAddressCalls } = makeFakeTxBuilder();
-    // 25_000_000 * 60 / 100 = 15_000_000 exactly (no rounding edge case)
     const submitter = makeSubmitter(builder, [
       { datum: baseDatum({ pending_relayer_bond: 25_000_000n }), assets: { lovelace: 25_000_000n } },
     ]);
 
     await submitter.voidPendingProposal(WITHIN_WINDOW_TS, GOVERNOR_ADDR);
 
-    expect(payToAddressCalls).toHaveLength(2);
-    const [treasuryCall, opsCall] = payToAddressCalls as [
-      [string, unknown, { lovelace: bigint }],
-      [string, unknown, { lovelace: bigint }],
-    ];
-    expect(treasuryCall[2].lovelace).toBe(15_000_000n);
-    expect(opsCall[2].lovelace).toBe(10_000_000n);
-    expect(treasuryCall[2].lovelace + opsCall[2].lovelace).toBe(25_000_000n);
+    expect(payToAddressCalls).toHaveLength(1);
+    const [payoutCall] = payToAddressCalls as [[string, unknown, { lovelace: bigint }]];
+    expect(payoutCall[0]).toBe(credentialToAddress('Preprod', { type: 'Key', hash: PAYOUT_HASH }));
+    expect(payoutCall[2].lovelace).toBe(25_000_000n);
   });
 
-  it('floors the treasury share on a bond that does not divide evenly, matching on-chain integer division', async () => {
+  it('pays a bond that does not divide evenly in full, with nothing left behind', async () => {
     const { builder, payToAddressCalls } = makeFakeTxBuilder();
-    // 25_000_007 * 60 / 100 = 15_000_004.2 -> floors to 15_000_004; ops = 10_000_003
+    // The figure that used to floor a share and hand the remainder to a second
+    // address. Nothing rounds now, so the whole odd amount goes to one payee.
     const submitter = makeSubmitter(builder, [
       { datum: baseDatum({ pending_relayer_bond: 25_000_007n }), assets: { lovelace: 25_000_007n } },
     ]);
 
     await submitter.voidPendingProposal(WITHIN_WINDOW_TS, GOVERNOR_ADDR);
 
-    const [treasuryCall, opsCall] = payToAddressCalls as [
-      [string, unknown, { lovelace: bigint }],
-      [string, unknown, { lovelace: bigint }],
-    ];
-    expect(treasuryCall[2].lovelace).toBe(15_000_004n);
-    expect(opsCall[2].lovelace).toBe(10_000_003n);
-    expect(treasuryCall[2].lovelace + opsCall[2].lovelace).toBe(25_000_007n);
-  });
-
-  it('pays to the real treasury/ops addresses derived from the datum key hashes', async () => {
-    const { builder, payToAddressCalls } = makeFakeTxBuilder();
-    const submitter = makeSubmitter(builder, [{ datum: baseDatum(), assets: { lovelace: 25_000_000n } }]);
-
-    await submitter.voidPendingProposal(WITHIN_WINDOW_TS, GOVERNOR_ADDR);
-
-    const expectedTreasuryAddr = credentialToAddress('Preprod', { type: 'Key', hash: TREASURY_HASH });
-    const expectedOpsAddr = credentialToAddress('Preprod', { type: 'Key', hash: OPS_HASH });
-    const [treasuryCall, opsCall] = payToAddressCalls as [[string, unknown, unknown], [string, unknown, unknown]];
-    expect(treasuryCall[0]).toBe(expectedTreasuryAddr);
-    expect(opsCall[0]).toBe(expectedOpsAddr);
+    expect(payToAddressCalls).toHaveLength(1);
+    const [payoutCall] = payToAddressCalls as [[string, unknown, { lovelace: bigint }]];
+    expect(payoutCall[2].lovelace).toBe(25_000_007n);
   });
 
   it('decreases the continuing lovelace by exactly the full bond amount', async () => {

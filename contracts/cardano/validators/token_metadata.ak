@@ -612,8 +612,7 @@ fn mock_cto_governance_datum(
     last_executed_proposal: last_executed_proposal,
     pending_relayer_bond: 0,
     pending_relayer_key_hash: #"",
-    treasury_pub_key_hash: #"55",
-    ops_pub_key_hash: #"66",
+    payout_pub_key_hash: #"55",
     thread_nft_policy: #"c0ffee",
     ballot_duration: 500,
     // These fixtures read a governance UTXO as a REFERENCE input; none of them

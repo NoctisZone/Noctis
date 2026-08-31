@@ -557,8 +557,8 @@ export const CtoGovernanceDatumShape = Data.Object({
   last_executed_proposal: Data.Nullable(Data.Any()),
   pending_relayer_bond: Data.Integer(),
   pending_relayer_key_hash: Data.Bytes(),
-  treasury_pub_key_hash: Data.Bytes(),
-  ops_pub_key_hash: Data.Bytes(),
+  /** Where a forfeited challenge bond goes — one address, not a split. */
+  payout_pub_key_hash: Data.Bytes(),
   thread_nft_policy: Data.Bytes(),
   // The ballot's own width, so an anchored result has to describe a ballot
   // that could really have run. AnchorVoteResult is open-relay by design, so

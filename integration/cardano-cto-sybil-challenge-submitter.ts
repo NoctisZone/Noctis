@@ -80,8 +80,7 @@ const CtoSybilChallengeDatumShape = Data.Object({
   bond_amount: Data.Integer(),
   submitted_at: Data.Integer(),
   evidence_hash: Data.Bytes(),
-  treasury_pub_key_hash: Data.Bytes(),
-  ops_pub_key_hash: Data.Bytes(),
+  payout_pub_key_hash: Data.Bytes(),
 });
 type CtoSybilChallengeDatumData = Data.Static<typeof CtoSybilChallengeDatumShape>;
 const CtoSybilChallengeDatumSchema = CtoSybilChallengeDatumShape as unknown as CtoSybilChallengeDatumData;
@@ -297,8 +296,7 @@ export class CardanoCtoSybilChallengeSubmitter {
       bond_amount: params.bondAmountLovelace,
       submitted_at: submittedAt,
       evidence_hash: toHex(params.evidenceHash),
-      treasury_pub_key_hash: toHex(params.treasuryPubKeyHash),
-      ops_pub_key_hash: toHex(params.opsPubKeyHash),
+      payout_pub_key_hash: toHex(params.treasuryPubKeyHash),
     };
 
     const tx = await lucid
@@ -383,19 +381,12 @@ export class CardanoCtoSybilChallengeSubmitter {
         lovelace: datum.bond_amount,
       });
     } else {
-      const treasuryShare = (datum.bond_amount * 60n) / 100n;
-      const opsShare = datum.bond_amount - treasuryShare;
-      const treasuryAddress = credentialToAddress(this.config.network, {
+      // The whole bond, to the one address the challenge's own datum names.
+      const payoutAddress = credentialToAddress(this.config.network, {
         type: 'Key',
-        hash: datum.treasury_pub_key_hash,
+        hash: datum.payout_pub_key_hash,
       });
-      const opsAddress = credentialToAddress(this.config.network, {
-        type: 'Key',
-        hash: datum.ops_pub_key_hash,
-      });
-      txBuilder = txBuilder.pay
-        .ToAddress(treasuryAddress, { lovelace: treasuryShare })
-        .pay.ToAddress(opsAddress, { lovelace: opsShare });
+      txBuilder = txBuilder.pay.ToAddress(payoutAddress, { lovelace: datum.bond_amount });
     }
 
     const tx = await txBuilder.addSigner(datum.governor_pub_key_hash).complete();

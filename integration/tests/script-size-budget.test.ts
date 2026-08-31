@@ -187,8 +187,16 @@ for (const v of blueprint.validators) {
  * datum as a reference input, so widening that type widened its decoding too.
  * Three hashes moved here, not two.
  *
+ * Moved again, DOWNWARD, by collapsing a forfeited challenge bond onto one
+ * payout address instead of a treasury/ops pair: cto_governance −98,
+ * nhop_challenge −64, cto_sybil_challenge −78 for the arithmetic and the second
+ * payout, and −10 to −12 each on bonding_curve, bonding_curve_tier_b, lp_escrow,
+ * token_metadata and vesting, none of which changed a line — they decode a
+ * CtoGovernanceDatum as a reference input, so narrowing that type narrowed their
+ * decoding too. The same shared-datum effect as the widenings above, in reverse.
+ *
  * READ THIS BEFORE PUBLISHING A REFERENCE SCRIPT FOR THE QUADRATIC CURVE.
- * 16,006 against MAX_PUBLISHABLE_SCRIPT_BYTES (16,052) leaves 46 B. That is
+ * 15,994 against MAX_PUBLISHABLE_SCRIPT_BYTES (16,052) leaves 58 B. That is
  * inside the limit and outside any sensible margin — the next shared-datum
  * field, which moves six validators at a stroke, would not fit.
  *
@@ -206,17 +214,17 @@ for (const v of blueprint.validators) {
  *    is what costs; the list on top of it is nearly free.
  */
 const RECORDED: Record<string, number> = {
-  bonding_curve: 12_887,
-  bonding_curve_tier_b: 16_006,
-  cto_governance: 8_060,
-  cto_sybil_challenge: 2_201,
+  bonding_curve: 12_877,
+  bonding_curve_tier_b: 15_994,
+  cto_governance: 7_962,
+  cto_sybil_challenge: 2_123,
   curve_order: 1_775,
   launch_token_policy: 419,
-  lp_escrow: 7_649,
-  nhop_challenge: 2_157,
+  lp_escrow: 7_638,
+  nhop_challenge: 2_093,
   staking_pool: 5_153,
-  token_metadata: 4_631,
-  vesting: 5_773,
+  token_metadata: 4_621,
+  vesting: 5_762,
   zk_anchor: 2_634,
 };
 

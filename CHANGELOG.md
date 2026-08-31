@@ -25,6 +25,9 @@ Notable changes to the Noctis Zone, by release. Internal development history pre
 
 ### Changed
 
+- A forfeited challenge bond is paid whole to a single address named in the challenge's
+  own datum, rather than divided between two. Which address that is stays a value written
+  at launch creation, so it can be a dedicated one without changing a contract.
 - A batch is applied to a bonding curve only by a key the curve's own datum names,
   alongside that key's real signature on the transaction. The set of keys is written at
   genesis and rewritten afterwards by a governor-signed action that moves no funds and

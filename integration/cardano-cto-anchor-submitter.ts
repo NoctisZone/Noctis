@@ -123,8 +123,7 @@ export const CtoGovernanceDatumShape = Data.Object({
   last_executed_proposal: Data.Nullable(ProposalAnchorShape),
   pending_relayer_bond: Data.Integer(),
   pending_relayer_key_hash: Data.Bytes(),
-  treasury_pub_key_hash: Data.Bytes(),
-  ops_pub_key_hash: Data.Bytes(),
+  payout_pub_key_hash: Data.Bytes(),
   thread_nft_policy: Data.Bytes(),
   // The deployed ballot width an anchored result's window must match exactly.
   // Carried through untouched by the spread below — no redeemer writes it.

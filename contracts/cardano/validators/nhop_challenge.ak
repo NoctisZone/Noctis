@@ -149,8 +149,18 @@ pub type NHopChallengeDatum {
   // the challenger's claimed tx-hash sequence). Not independently
   // verified on-chain — see file header.
   evidence_hash: ByteArray,
-  treasury_pub_key_hash: VerificationKeyHash,
-  ops_pub_key_hash: VerificationKeyHash,
+  /// Where a forfeited bond goes. ONE address, not the retired
+  /// treasury/ops pair: the 60/40 ratio this used to apply borrowed its
+  /// justification from a revenue split that no longer exists, so it was
+  /// dividing a penalty by a rule nothing else on the platform follows —
+  /// and it left two addresses to provision, hold keys for and disclose for
+  /// money that arrives only when a challenge is rejected.
+  ///
+  /// WHICH address stays a deployment choice. A forfeited bond is arguably
+  /// not platform revenue, and pointing this at a dedicated address instead
+  /// of the platform wallet is a matter of what the datum is written with,
+  /// not a contract change.
+  payout_pub_key_hash: VerificationKeyHash,
 }
 
 pub type NHopChallengeRedeemer {
@@ -193,15 +203,6 @@ pub type NHopMintRedeemer {
 /// class found in other files' timestamp constants; see
 /// `submitted_at`'s doc comment above for the full explanation.
 const nhop_defence_ms = 86_400_000
-
-/// Forfeited-bond split on a Rejected challenge — same 60/40 treasury/ops
-/// ratio as the forfeited-NIGHT-bond split, chosen for consistency, not
-/// because CLAUDE.md specifies a ratio for this mechanism specifically.
-const treasury_bps = 60
-
-const ops_bps = 40
-
-const bps_denominator = 100
 
 // ============================================================================
 // HELPERS
@@ -258,8 +259,8 @@ fn paid_to(
 /// check (`list.any`, not scoped to a specific input) means resolving TWO
 /// challenges in one transaction lets a SINGLE combined output satisfy
 /// BOTH challenges' payout checks simultaneously — most concretely via
-/// `treasury_pub_key_hash`/`ops_pub_key_hash`, which are the same real
-/// platform addresses across every challenge, so two `Rejected`
+/// `payout_pub_key_hash`, which is the same real platform address across
+/// every challenge, so two `Rejected`
 /// resolutions in one tx could real-pay only one challenge's forfeited
 /// bond while both validators independently accept. Requires the governor
 /// to construct (or be tricked into signing) a batching transaction — not
@@ -389,12 +390,9 @@ validator nhop_challenge {
         paid_to(self, own_ref, datum.challenger_key_hash, datum.bond_amount),
       }
     } else {
-      let treasury_share = datum.bond_amount * treasury_bps / bps_denominator
-      let ops_share = datum.bond_amount - treasury_share
       and {
         base_checks,
-        paid_to(self, own_ref, datum.treasury_pub_key_hash, treasury_share),
-        paid_to(self, own_ref, datum.ops_pub_key_hash, ops_share),
+        paid_to(self, own_ref, datum.payout_pub_key_hash, datum.bond_amount),
       }
     }
   }
@@ -417,8 +415,7 @@ fn mock_datum() -> NHopChallengeDatum {
     bond_amount: 25_000_000,
     submitted_at: 1_000_000,
     evidence_hash: #"11",
-    treasury_pub_key_hash: #"22",
-    ops_pub_key_hash: #"33",
+    payout_pub_key_hash: #"22",
   }
 }
 
@@ -487,19 +484,11 @@ test resolve_rejected_splits_bond_treasury_ops() {
   let datum = mock_datum()
   let (own_ref, own_input) = mock_input(datum)
   let resolve_time = datum.submitted_at + nhop_defence_ms
-  let treasury_payout =
+  // The WHOLE bond, to the one address the datum names.
+  let bond_payout =
     Output {
-      address: from_verification_key(datum.treasury_pub_key_hash),
-      value: assets.from_lovelace(15_000_000),
-      // 60% of 25 ADA
-      datum: InlineDatum(own_ref),
-      reference_script: None,
-    }
-  let ops_payout =
-    Output {
-      address: from_verification_key(datum.ops_pub_key_hash),
-      value: assets.from_lovelace(10_000_000),
-      // remaining 40%
+      address: from_verification_key(datum.payout_pub_key_hash),
+      value: assets.from_lovelace(25_000_000),
       datum: InlineDatum(own_ref),
       reference_script: None,
     }
@@ -507,7 +496,7 @@ test resolve_rejected_splits_bond_treasury_ops() {
     Transaction {
       ..transaction.placeholder,
       inputs: [own_input],
-      outputs: [treasury_payout, ops_payout],
+      outputs: [bond_payout],
       extra_signatories: [datum.governor_pub_key_hash],
       mint: mock_challenge_burn(),
       validity_range: interval.between(resolve_time - 10, resolve_time + 10),
@@ -607,23 +596,31 @@ test resolve_upheld_rejects_underpaid_challenger() {
   )
 }
 
-test resolve_rejected_rejects_missing_ops_share() {
+test resolve_rejected_rejects_a_short_payout() {
   let datum = mock_datum()
   let (own_ref, own_input) = mock_input(datum)
   let resolve_time = datum.submitted_at + nhop_defence_ms
-  let treasury_payout =
+  // 15 of the 25 ADA bond. Right payee, real payment, and the same
+  // input-ref datum tag the accepted resolution carries — the amount is the
+  // ONE delta from it.
+  //
+  // It was not always. This fixture used to pay 15 ADA with NO datum on the
+  // output, and the missing tag rejected it on its own: the test passed
+  // without the amount ever mattering, and would have gone on passing had
+  // the payout check been removed outright. Verified the other way before
+  // this comment was written — at 25 ADA the spend now really succeeds.
+  let short_payout =
     Output {
-      address: from_verification_key(datum.treasury_pub_key_hash),
+      address: from_verification_key(datum.payout_pub_key_hash),
       value: assets.from_lovelace(15_000_000),
-      datum: transaction.NoDatum,
+      datum: InlineDatum(own_ref),
       reference_script: None,
     }
   let self =
     Transaction {
       ..transaction.placeholder,
       inputs: [own_input],
-      // Missing the ops payout entirely.
-      outputs: [treasury_payout],
+      outputs: [short_payout],
       extra_signatories: [datum.governor_pub_key_hash],
       mint: mock_challenge_burn(),
       validity_range: interval.between(resolve_time - 10, resolve_time + 10),
@@ -670,17 +667,11 @@ test resolve_rejects_when_batched_with_a_second_challenge_input() {
   let resolve_time = datum_a.submitted_at + nhop_defence_ms
   // Only ONE real payout, sized for a single challenge's forfeiture —
   // both challenges' own paid_to checks would independently accept it.
-  let treasury_payout =
+  // The WHOLE bond, to the one address the datum names.
+  let bond_payout =
     Output {
-      address: from_verification_key(datum_a.treasury_pub_key_hash),
-      value: assets.from_lovelace(15_000_000),
-      datum: transaction.NoDatum,
-      reference_script: None,
-    }
-  let ops_payout =
-    Output {
-      address: from_verification_key(datum_a.ops_pub_key_hash),
-      value: assets.from_lovelace(10_000_000),
+      address: from_verification_key(datum_a.payout_pub_key_hash),
+      value: assets.from_lovelace(25_000_000),
       datum: transaction.NoDatum,
       reference_script: None,
     }
@@ -688,7 +679,7 @@ test resolve_rejects_when_batched_with_a_second_challenge_input() {
     Transaction {
       ..transaction.placeholder,
       inputs: [input_a, input_b],
-      outputs: [treasury_payout, ops_payout],
+      outputs: [bond_payout],
       extra_signatories: [datum_a.governor_pub_key_hash],
       validity_range: interval.between(resolve_time - 10, resolve_time + 10),
     }

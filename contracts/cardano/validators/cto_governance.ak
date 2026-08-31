@@ -220,8 +220,18 @@ pub type CtoGovernanceDatum {
   // Genesis-fixed payout destinations for a slashed relayer bond — same
   // "no new payout address invented, real fixed destinations" discipline
   // as every other bonded mechanism in this codebase.
-  treasury_pub_key_hash: VerificationKeyHash,
-  ops_pub_key_hash: VerificationKeyHash,
+  /// Where a forfeited bond goes. ONE address, not the retired
+  /// treasury/ops pair: the 60/40 ratio this used to apply borrowed its
+  /// justification from a revenue split that no longer exists, so it was
+  /// dividing a penalty by a rule nothing else on the platform follows —
+  /// and it left two addresses to provision, hold keys for and disclose for
+  /// money that arrives only when a challenge is rejected.
+  ///
+  /// WHICH address stays a deployment choice. A forfeited bond is arguably
+  /// not platform revenue, and pointing this at a dedicated address instead
+  /// of the platform wallet is a matter of what the datum is written with,
+  /// not a contract change.
+  payout_pub_key_hash: VerificationKeyHash,
   // Fix (2026-07-23 security audit): this governance UTXO's own thread
   // NFT policy id. Downstream validators (bonding_curve, bonding_curve_tier_b,
   // lp_escrow, vesting) read this UTXO as a REFERENCE input to decide whether
@@ -379,12 +389,6 @@ const challenge_window = 86_400_000
 /// NHOP_CHALLENGE_BOND, reused for consistency (this mechanism's purpose
 /// — deter a costless forged anchor — is the same underlying concern).
 const min_relayer_bond = 25_000_000
-
-const treasury_bps = 60
-
-const ops_bps = 40
-
-const bps_denominator = 100
 
 // ============================================================================
 // HELPERS
@@ -974,8 +978,6 @@ validator cto_governance {
         let voided_proposal =
           ProposalAnchor { ..proposal, execution_status: Expired }
         let new_datum = own_continuing_datum(self, own_ref)
-        let treasury_share = datum.pending_relayer_bond * treasury_bps / bps_denominator
-        let ops_share = datum.pending_relayer_bond - treasury_share
 
         and {
           single_own_utxo(self, own_input.output.address),
@@ -984,8 +986,7 @@ validator cto_governance {
           interval.contains(self.validity_range, current_timestamp),
           validity_range_is_narrow(self.validity_range, max_validity_range_width),
           current_timestamp < proposal.anchor_timestamp + challenge_window,
-          paid_to(self, own_ref, datum.treasury_pub_key_hash, treasury_share),
-          paid_to(self, own_ref, datum.ops_pub_key_hash, ops_share),
+          paid_to(self, own_ref, datum.payout_pub_key_hash, datum.pending_relayer_bond),
           bond_paid_out(self, own_ref, datum.pending_relayer_bond),
           new_datum == CtoGovernanceDatum {
             ..datum,
@@ -1131,8 +1132,7 @@ fn mock_datum(active_proposal: Option<ProposalAnchor>) -> CtoGovernanceDatum {
     last_executed_proposal: None,
     pending_relayer_bond: 0,
     pending_relayer_key_hash: #"",
-    treasury_pub_key_hash: #"55",
-    ops_pub_key_hash: #"66",
+    payout_pub_key_hash: #"55",
     thread_nft_policy: mock_cto_nft_policy(),
     ballot_duration: 500,
     // 0 = this launch has never held a ballot, so the cooldown does not
@@ -2867,18 +2867,11 @@ test void_pending_proposal_succeeds_and_slashes_bond() {
       datum: InlineDatum(new_datum),
       reference_script: None,
     }
-  // treasury_bps=60, ops_bps=40 of the 25 ADA bond
-  let treasury_output =
+  // The whole 25 ADA bond, to the one address the datum names.
+  let bond_output =
     Output {
       address: from_verification_key(#"55"),
-      value: assets.from_lovelace(15_000_000),
-      datum: InlineDatum(own_ref),
-      reference_script: None,
-    }
-  let ops_output =
-    Output {
-      address: from_verification_key(#"66"),
-      value: assets.from_lovelace(10_000_000),
+      value: assets.from_lovelace(25_000_000),
       datum: InlineDatum(own_ref),
       reference_script: None,
     }
@@ -2889,7 +2882,7 @@ test void_pending_proposal_succeeds_and_slashes_bond() {
       ..transaction.placeholder,
       inputs: [own_input],
       reference_inputs: [mock_lp_ref_input(mock_grad_ts)],
-      outputs: [continuing_output, treasury_output, ops_output],
+      outputs: [continuing_output, bond_output],
       validity_range: interval.between(current_timestamp - 100, current_timestamp + 100),
       extra_signatories: [#"22"],
     }
@@ -2932,17 +2925,10 @@ test void_pending_proposal_rejects_for_non_governor() {
       datum: InlineDatum(new_datum),
       reference_script: None,
     }
-  let treasury_output =
+  let bond_output =
     Output {
       address: from_verification_key(#"55"),
-      value: assets.from_lovelace(15_000_000),
-      datum: InlineDatum(own_ref),
-      reference_script: None,
-    }
-  let ops_output =
-    Output {
-      address: from_verification_key(#"66"),
-      value: assets.from_lovelace(10_000_000),
+      value: assets.from_lovelace(25_000_000),
       datum: InlineDatum(own_ref),
       reference_script: None,
     }
@@ -2952,7 +2938,7 @@ test void_pending_proposal_rejects_for_non_governor() {
       ..transaction.placeholder,
       inputs: [own_input],
       reference_inputs: [mock_lp_ref_input(mock_grad_ts)],
-      outputs: [continuing_output, treasury_output, ops_output],
+      outputs: [continuing_output, bond_output],
       validity_range: interval.between(current_timestamp - 100, current_timestamp + 100),
       // not the governor
       extra_signatories: [#"99"],
@@ -2996,17 +2982,10 @@ test void_pending_proposal_rejects_after_challenge_window_elapsed() {
       datum: InlineDatum(new_datum),
       reference_script: None,
     }
-  let treasury_output =
+  let bond_output =
     Output {
       address: from_verification_key(#"55"),
-      value: assets.from_lovelace(15_000_000),
-      datum: InlineDatum(own_ref),
-      reference_script: None,
-    }
-  let ops_output =
-    Output {
-      address: from_verification_key(#"66"),
-      value: assets.from_lovelace(10_000_000),
+      value: assets.from_lovelace(25_000_000),
       datum: InlineDatum(own_ref),
       reference_script: None,
     }
@@ -3017,7 +2996,7 @@ test void_pending_proposal_rejects_after_challenge_window_elapsed() {
       ..transaction.placeholder,
       inputs: [own_input],
       reference_inputs: [mock_lp_ref_input(mock_grad_ts)],
-      outputs: [continuing_output, treasury_output, ops_output],
+      outputs: [continuing_output, bond_output],
       validity_range: interval.between(current_timestamp - 100, current_timestamp + 100),
       extra_signatories: [#"22"],
     }

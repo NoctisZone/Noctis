@@ -286,8 +286,7 @@ describe('CardanoCtoSybilChallengeSubmitter.submitChallenge', () => {
 
 describe('CardanoCtoSybilChallengeSubmitter.resolveChallenge', () => {
   const challengerKeyHash = fakeKeyHash(0xcc);
-  const treasuryKeyHash = fakeKeyHash(0xdd);
-  const opsKeyHash = fakeKeyHash(0xee);
+  const payoutKeyHash = fakeKeyHash(0xdd);
 
   function challengeDatum(overrides: Record<string, unknown> = {}) {
     return {
@@ -299,8 +298,7 @@ describe('CardanoCtoSybilChallengeSubmitter.resolveChallenge', () => {
       bond_amount: 25_000_000n,
       submitted_at: 1000n,
       evidence_hash: toHex(fakeBytes(5)),
-      treasury_pub_key_hash: treasuryKeyHash,
-      ops_pub_key_hash: opsKeyHash,
+      payout_pub_key_hash: payoutKeyHash,
       ...overrides,
     };
   }
@@ -358,23 +356,22 @@ describe('CardanoCtoSybilChallengeSubmitter.resolveChallenge', () => {
     expect(assets.lovelace).toBe(25_000_000n);
   });
 
-  it('Rejected: splits the bond 60% treasury / 40% ops, exact remainder to ops (not a second floor)', async () => {
+  it('Rejected: pays the WHOLE bond to the one address the datum names', async () => {
     const { builder, payToAddressCalls } = makeFakeTxBuilder();
     const { submitter } = makeSubmitter(builder, {
       governorPrivateKey: 'ed25519_sk1fake',
-      utxos: [{ datum: challengeDatum({ bond_amount: 999n }), assets: {} }], // odd amount to test remainder handling
+      // An odd amount, because the arithmetic this replaced floored a share
+      // and handed the remainder to a second address. Nothing rounds now, and
+      // an amount that does not divide by 100 is where that would show.
+      utxos: [{ datum: challengeDatum({ bond_amount: 999n }), assets: {} }],
     });
 
     await submitter.resolveChallenge(baseResolveParams({ upheld: false }));
 
-    expect(payToAddressCalls).toHaveLength(2);
-    const [treasuryAddr, treasuryAssets] = payToAddressCalls[0] as [string, Record<string, bigint>];
-    const [opsAddr, opsAssets] = payToAddressCalls[1] as [string, Record<string, bigint>];
-    expect(treasuryAddr).toBe(addrFor(treasuryKeyHash));
-    expect(treasuryAssets.lovelace).toBe(599n); // floor(999 * 60 / 100)
-    expect(opsAddr).toBe(addrFor(opsKeyHash));
-    expect(opsAssets.lovelace).toBe(400n); // exact remainder, 999 - 599
-    expect((treasuryAssets.lovelace as bigint) + (opsAssets.lovelace as bigint)).toBe(999n); // conserves the full bond
+    expect(payToAddressCalls).toHaveLength(1);
+    const [payoutAddr, payoutAssets] = payToAddressCalls[0] as [string, Record<string, bigint>];
+    expect(payoutAddr).toBe(addrFor(payoutKeyHash));
+    expect(payoutAssets.lovelace).toBe(999n);
   });
 
   it('builds the ResolveChallenge redeemer with upheld/current_timestamp and requires the governor as signer', async () => {

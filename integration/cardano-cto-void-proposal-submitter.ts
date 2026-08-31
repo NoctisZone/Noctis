@@ -34,10 +34,8 @@ import {
 import { CTO_GOVERNANCE_REDEEMER } from './redeemer-indices.js';
 import { settlementDatum } from './tier-a-schemas.js';
 
-/** Same fixed figures as cto_governance.ak's own constants. */
+/** Same fixed figure as cto_governance.ak's own constant. */
 const CHALLENGE_WINDOW_MS = 86_400_000n;
-const TREASURY_BPS = 60n;
-const BPS_DENOMINATOR = 100n;
 
 /**
  * VoidPendingProposal, by name — see `redeemer-indices.ts`, whose table a test
@@ -138,8 +136,6 @@ export class CardanoCtoVoidProposalSubmitter {
     // treasury_share/ops_share computation — must match precisely, since
     // paid_to() requires each output's real lovelace to be >= its share.
     const bond = currentDatum.pending_relayer_bond;
-    const treasuryShare = (bond * TREASURY_BPS) / BPS_DENOMINATOR;
-    const opsShare = bond - treasuryShare;
 
     const voidedProposal: ProposalAnchorData = { ...proposal, execution_status: 'Expired' };
     const newDatum: CtoGovernanceDatumData = {
@@ -154,8 +150,8 @@ export class CardanoCtoVoidProposalSubmitter {
       lovelace: (anchorUtxo.assets.lovelace ?? 0n) - bond,
     };
 
-    const treasuryAddress = pubKeyHashToAddress(this.config.network, currentDatum.treasury_pub_key_hash);
-    const opsAddress = pubKeyHashToAddress(this.config.network, currentDatum.ops_pub_key_hash);
+    // The whole bond, to the one address the governance datum names.
+    const payoutAddress = pubKeyHashToAddress(this.config.network, currentDatum.payout_pub_key_hash);
 
     const validFrom = Number(currentTimestampMs) - 60_000;
     const validTo = Number(currentTimestampMs) + 60_000;
@@ -172,12 +168,7 @@ export class CardanoCtoVoidProposalSubmitter {
         },
         continuingAssets,
       )
-      .pay.ToAddressWithData(
-        treasuryAddress,
-        { kind: 'inline', value: settlementDatum(anchorUtxo) },
-        { lovelace: treasuryShare },
-      )
-      .pay.ToAddressWithData(opsAddress, { kind: 'inline', value: settlementDatum(anchorUtxo) }, { lovelace: opsShare })
+      .pay.ToAddressWithData(payoutAddress, { kind: 'inline', value: settlementDatum(anchorUtxo) }, { lovelace: bond })
       .addSigner(governorAddress)
       .validFrom(validFrom)
       .validTo(validTo)

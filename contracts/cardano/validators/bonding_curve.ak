@@ -3612,8 +3612,7 @@ fn mock_cto_governance_datum(
     last_executed_proposal: last_executed_proposal,
     pending_relayer_bond: 0,
     pending_relayer_key_hash: #"",
-    treasury_pub_key_hash: #"55",
-    ops_pub_key_hash: #"66",
+    payout_pub_key_hash: #"55",
     // Fix: must match both the curve datum's thread_nft_policy and the
     // NFT placed in this reference UTXO's value in the CTO-vote tests below.
     thread_nft_policy: #"c0ffee",
