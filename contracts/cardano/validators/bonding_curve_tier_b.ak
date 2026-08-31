@@ -166,6 +166,27 @@ pub type BondingCurveTierBDatum {
   creator_fees_accrued: Int,
   total_raised: Int,
   tokens_sold: Int,
+  /// The keys allowed to apply a batch against this curve. `BatchTrades`
+  /// requires the named batcher to appear HERE as well as in the
+  /// transaction's real signatures, so naming a key in the redeemer and
+  /// signing with it is no longer enough on its own.
+  ///
+  /// It sits in the datum rather than in the script so the set can change
+  /// without moving the launch's address, and `SetBatcherAllowlist` is the
+  /// only thing that may rewrite it. Capped at `max_batcher_allowlist`
+  /// entries there: this datum rides in every trade transaction, so an
+  /// unbounded list would let the set grow until a trade no longer fits.
+  ///
+  /// Declared near the FRONT because `SetBatcherAllowlist` rewrites it, per
+  /// this datum's ordering rule — a record update walks the field list to
+  /// reach what it replaces, so a rewritten field at the back is paid for in
+  /// script bytes. At the back this cost the Cardano Launch curve enough to
+  /// put it over the size a publishing transaction can carry.
+  ///
+  /// An empty list means no batch can be applied. That is a real state a
+  /// governor can choose, and it strands nothing — an order UTXO is spendable
+  /// by its own owner at any time, with no batcher and no deadline involved.
+  batcher_allowlist: List<VerificationKeyHash>,
   // The cumulative wallet cap, as ONE root over `cap_key -> tokens taken from
   // this curve`. Declared near the front because every trade rewrites it —
   // see the ordering note above this type.
@@ -461,12 +482,21 @@ pub type BondingCurveTierBRedeemer {
   /// `SellTokens` above — this is the newest variant, so it takes the newest
   /// index and shifts nothing already deployed.
   OpenDvClaim { claimed_bits: ByteArray, current_timestamp: Int }
-  /// Applies N orders against the curve in one transaction. Each order prices
-  /// at ITS OWN position: order k starts where order k-1 finished, which is
-  /// exactly what `gross_range`'s additivity gives for free.
+  /// Applies N orders against the curve in one transaction. Every order on a
+  /// side pays that side's batch average: one `gross_range` per side, split
+  /// pro-rata, so a position inside the batch is worth nothing. The curve
+  /// takes the same total either way — that is `gross_range`'s additivity.
+  ///
+  /// `batcher_key_hash` must appear in `batcher_allowlist` and in the
+  /// transaction's own signatures.
   ///
   /// Appended LAST, same constructor-index reason as every variant above.
   BatchTrades { orders: List<BatchOrder>, batcher_key_hash: VerificationKeyHash }
+  /// Rewrites `batcher_allowlist`. Governor-signed, bounded at
+  /// `max_batcher_allowlist`, and moves no value.
+  ///
+  /// Appended LAST, same constructor-index reason as every variant above.
+  SetBatcherAllowlist { batchers: List<VerificationKeyHash> }
 }
 
 // ============================================================================
@@ -481,6 +511,13 @@ const creator_bps = 50
 const platform_bps = 100
 
 const bps_denominator = 10_000
+
+/// The most keys `SetBatcherAllowlist` will write into the datum.
+///
+/// The datum is carried by every trade, so this list competes for the same
+/// transaction budget the orders themselves need. Eight is far more batchers
+/// than a launch has any use for and costs a couple of hundred bytes at worst.
+const max_batcher_allowlist = 8
 
 /// Fix (2026-07-21): ported verbatim from the linear curve's bonding_curve.ak —
 /// deliberately conservative SANITY FLOOR for ClaimCreatorFees's
@@ -1520,13 +1557,13 @@ validator bonding_curve_tier_b {
           // the anchored range would start below zero.
           sell_range_real,
           !list.is_empty(orders),
-          // Whitelisted batcher, same trust boundary as Minswap's.
+          // Two separate facts, and the batch needs both: the curve's own
+          // datum names this key as a batcher, and the transaction really
+          // carries its signature. The signature alone proves only that
+          // whoever built the batch controls the key they named.
+          list.has(datum.batcher_allowlist, batcher_key_hash),
           list.has(self.extra_signatories, batcher_key_hash),
           new_datum == expected_datum,
-          // The datum above is a record of what the batch claims; this is the
-          // curve's own UTXO actually moving by it. Fees stay in the curve
-          // until claimed, so the lovelace it keeps is everything taken in
-          // less everything paid out.
           // The datum above is a record of what the batch claims; these are
           // the curve's own UTXO actually moving by it, through the same two
           // helpers a single trade uses. Fees stay in the curve until claimed,
@@ -1540,6 +1577,30 @@ validator bonding_curve_tier_b {
             final_sold - datum.tokens_sold,
           ),
           curve_own_output_clean(self, own_ref),
+        }
+      }
+
+      // Who may batch is a running operational decision — a batcher key is
+      // rotated, a second one added for redundancy — so it belongs to the
+      // governor and to the datum, not to the script. Sealing it at genesis
+      // would mean a new address for every such change, and putting it in the
+      // redeemer would mean no gate at all.
+      //
+      // The batch arm is where this is enforced; everything this arm does is
+      // hand the batch arm a different list to check against.
+      SetBatcherAllowlist { batchers } -> {
+        let new_datum = own_continuing_datum(self, own_ref)
+        and {
+          list.has(self.extra_signatories, datum.governor_pub_key_hash),
+          // Bounded because this datum rides in every trade. Without a cap
+          // the governor could write a list long enough that no trade fits.
+          list.length(batchers) <= max_batcher_allowlist,
+          new_datum == BondingCurveTierBDatum {
+            ..datum,
+            batcher_allowlist: batchers,
+          },
+          // Naming who may batch later moves nothing now.
+          curve_value_unchanged(self, own_ref),
         }
       }
 
@@ -2305,6 +2366,9 @@ fn mock_datum(
     // windows exercises the values a real launch is expected to carry.
     dv_claim_window: 86_400_000,
     dv_settlement_window: 1_800_000,
+    // The one key every batch fixture below signs with, so a fixture that
+    // wants to test the allowlist changes exactly this line and nothing else.
+    batcher_allowlist: [#"ba"],
   }
 }
 
@@ -4273,6 +4337,116 @@ test batch_rejects_an_unsigned_batcher_and_an_empty_batch() {
     !run_buy_batch(d, [], [], 0),
     // A batcher key nobody signed for.
     !run_buy_batch_signed(d, orders, [tok_out(0, #"de", 10)], gross, #"ff"),
+  }
+}
+
+/// The signature and the allowlist are two separate gates and a batch needs
+/// both. Same orders, same signature, same everything as the accepted batch —
+/// the only delta is which keys the curve's own datum names.
+test batch_rejects_a_batcher_the_datum_does_not_name() {
+  let d = mock_datum(Active, 0)
+  let orders = batch_orders([(#"de", True, 10, 10)])
+  let gross = buy_cost(d, 0, 10)
+  let outs = [tok_out(0, #"de", 10)]
+  let elsewhere =
+    BondingCurveTierBDatum { ..d, batcher_allowlist: [#"b0", #"b1"] }
+  let nobody = BondingCurveTierBDatum { ..d, batcher_allowlist: [] }
+  and {
+    run_buy_batch(d, orders, outs, gross),
+    // Signed by #"ba", which the datum no longer names.
+    !run_buy_batch(elsewhere, orders, outs, gross),
+    // An empty list stops every batch. That is the state a governor reaches to
+    // stand a batcher down, and it strands nothing: an order UTXO is spendable
+    // by its own owner whenever they like.
+    !run_buy_batch(nobody, orders, outs, gross),
+  }
+}
+
+/// Drives `SetBatcherAllowlist`. `lovelace_kept` is what the continuing output
+/// carries, so a caller can vary exactly that and nothing else.
+fn run_set_batchers_keeping(
+  datum: BondingCurveTierBDatum,
+  batchers: List<VerificationKeyHash>,
+  signer: VerificationKeyHash,
+  lovelace_kept: Int,
+) -> Bool {
+  let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
+  let own_address = from_verification_key(#"cc")
+  let tokens = assets.from_asset(#"33", "tok", 1000)
+  let own_input =
+    Input {
+      output_reference: own_ref,
+      output: Output {
+        address: own_address,
+        value: assets.merge(mock_curve_nft(), assets.merge(
+          assets.from_lovelace(5_000_000),
+          tokens,
+        )),
+        datum: InlineDatum(datum),
+        reference_script: None,
+      },
+    }
+  let continuing =
+    Output {
+      address: own_address,
+      value: assets.merge(mock_curve_nft(), assets.merge(
+        assets.from_lovelace(lovelace_kept),
+        tokens,
+      )),
+      datum: InlineDatum(
+        BondingCurveTierBDatum { ..datum, batcher_allowlist: batchers },
+      ),
+      reference_script: None,
+    }
+  let self =
+    Transaction {
+      ..transaction.placeholder,
+      inputs: [own_input],
+      outputs: [continuing],
+      extra_signatories: [signer],
+    }
+  bonding_curve_tier_b.spend(
+    Some(datum),
+    SetBatcherAllowlist { batchers: batchers },
+    own_ref,
+    self,
+  )
+}
+
+fn run_set_batchers(
+  datum: BondingCurveTierBDatum,
+  batchers: List<VerificationKeyHash>,
+  signer: VerificationKeyHash,
+) -> Bool {
+  run_set_batchers_keeping(datum, batchers, signer, 5_000_000)
+}
+
+test set_batcher_allowlist_is_the_governors_and_is_bounded() {
+  let d = mock_datum(Active, 0)
+  let eight =
+    [#"b0", #"b1", #"b2", #"b3", #"b4", #"b5", #"b6", #"b7"]
+  let nine = list.concat(eight, [#"b8"])
+  and {
+    // #"22" is the fixture governor.
+    run_set_batchers(d, [#"b0", #"b1"], #"22"),
+    run_set_batchers(d, [], #"22"),
+    // Nobody appoints themselves: not the batcher the datum already names,
+    // and not the creator.
+    !run_set_batchers(d, [#"ba"], #"ba"),
+    !run_set_batchers(d, [#"ba"], #"11"),
+    // The list rides in every trade, so it is capped rather than unbounded.
+    run_set_batchers(d, eight, #"22"),
+    !run_set_batchers(d, nine, #"22"),
+  }
+}
+
+/// Naming who may batch later must move nothing now — otherwise the governor
+/// has a signed path to the raise that reads as an administrative change.
+test set_batcher_allowlist_cannot_take_the_curve_with_it() {
+  let d = mock_datum(Active, 0)
+  and {
+    run_set_batchers_keeping(d, [#"b0"], #"22", 5_000_000),
+    !run_set_batchers_keeping(d, [#"b0"], #"22", 1_000_000),
   }
 }
 

@@ -195,6 +195,19 @@ export interface BuildGenesisDatumsInput {
   /** Overrides the pool's opening timestamp. Real POSIX ms; defaults to now. */
   mintedAtMs?: number;
 
+  /**
+   * The payment key hashes allowed to apply a batch against this curve, as
+   * 28-byte hex. The batch arm requires the batcher to be named here AND to
+   * have signed, so a launch minted without one accepts no batches until the
+   * governor sets the list — orders still stand and stay spendable by their
+   * own owners, so nothing is stranded meanwhile.
+   *
+   * Defaults to empty deliberately rather than to some ambient platform key:
+   * whoever mints a launch should say who may batch it, and a wrong default
+   * would be a silent grant.
+   */
+  batcherAllowlistHex?: readonly string[];
+
   basePrice: number; // lovelace/token at sold=0
   maxPrice: number; // lovelace/token at sold=curve_supply
   vestDays: number; // 90-365, no default (CLAUDE.md: forced active selection)
@@ -355,6 +368,25 @@ export async function buildGenesisDatums(input: BuildGenesisDatumsInput) {
   }
   const lpLockDurationMs = input.lpLockDurationMs ?? 31_536_000_000;
 
+  // Bounded here as well as on chain. The validator's cap is what actually
+  // holds, but a genesis datum is whatever its author wrote — paying to a
+  // script address runs no code — so a list too long to trade against would
+  // otherwise only be discovered by the first batch that failed.
+  const batcherAllowlistHex = input.batcherAllowlistHex ?? [];
+  if (batcherAllowlistHex.length > 8) {
+    throw new Error(
+      `batcherAllowlistHex holds ${batcherAllowlistHex.length} keys, over the 8 the curve accepts. ` +
+        'The list rides in the datum every trade carries, which is why it is capped.',
+    );
+  }
+  for (const keyHash of batcherAllowlistHex) {
+    if (!/^[0-9a-f]{56}$/i.test(keyHash)) {
+      throw new Error(
+        `batcherAllowlistHex entries must be 28-byte payment key hashes as hex, got ${JSON.stringify(keyHash)}.`,
+      );
+    }
+  }
+
   if (input.vestDays < 90 || input.vestDays > 365) {
     throw new Error(`vestDays must be 90-365 (VESTING_MIN_DAYS/VESTING_MAX_DAYS), got ${input.vestDays}`);
   }
@@ -466,6 +498,11 @@ export async function buildGenesisDatums(input: BuildGenesisDatumsInput) {
     // governor ever activated it.
     phase_started_at: BigInt(input.genesisTimestampMs ?? Date.now()),
     tokens_sold: 0n,
+    // Who may batch this curve. Sits with the written fields at the front
+    // because SetBatcherAllowlist rewrites it; see the validator's own field
+    // comment for why a rewritten field at the back is paid for in script
+    // bytes.
+    batcher_allowlist: batcherAllowlistHex.map((k) => k.toLowerCase()),
     total_raised: 0n,
     creator_fees_accrued: 0n,
     platform_fees_accrued: 0n,

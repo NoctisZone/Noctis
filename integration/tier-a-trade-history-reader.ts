@@ -205,6 +205,7 @@ export const CURVE_FIELDS: Record<string, string[]> = {
   AnchorDvAllocationRoot: ['dv_allocation_root'],
   OpenDvClaim: ['claimed_bits', 'current_timestamp'],
   BatchTrades: ['orders', 'batcher_key_hash'],
+  SetBatcherAllowlist: ['batchers'],
 };
 
 export const VESTING_FIELDS: Record<string, string[]> = {

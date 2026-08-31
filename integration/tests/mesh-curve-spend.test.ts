@@ -202,20 +202,23 @@ describe('MeshCurveSpender', () => {
   // The comparison the whole module exists for, stated as a measurement
   // rather than left implicit.
   //
-  // This test used to assert that an embedded Cardano Launch trade could not be built
-  // at ANY size. Reordering the curve datum so the fields a redeemer rewrites
-  // sit at the front took the validator from 15,952 bytes to 13,699, and that
-  // is no longer true: a single embedded trade fits again, with room for the
-  // cap proof it really carries. The claim is therefore weakened to what the
-  // measurement still supports.
+  // This claim has moved twice with the validator's size, and the history is
+  // the point. It began as "an embedded Cardano Launch trade cannot be built at
+  // ANY size". Reordering the curve datum so the fields a redeemer rewrites sit
+  // at the front took the validator from 15,952 bytes to 13,699, and a single
+  // embedded trade fitted again, so the claim was weakened to a headroom one.
+  // The batcher allowlist has now taken it back over: at 16,006 bytes of script
+  // the embedded form is 16,525 and does not fit at all, before any cap proof.
   //
-  // What has NOT changed is why the reference script exists. A batch spends
-  // the same curve once but carries a proof PER ORDER, and the embedded script
-  // is charged against the same 16,384 bytes those proofs need. The second
-  // assertion below is the one that matters: embedding leaves less room than a
-  // full batch of proofs needs, so batching stays impossible without the
-  // reference. Referencing is a headroom decision, not a fits/does-not-fit one.
-  it('leaves room for a batch of proofs only when the script is referenced', async () => {
+  // What has never changed is why the reference script exists. A batch spends
+  // the same curve once but carries a proof PER ORDER, and an embedded script
+  // is charged against the same 16,384 bytes those proofs need.
+  //
+  // Both bounds are asserted rather than just the one that currently binds. If
+  // a later change shrinks the validator enough for the embedded form to fit
+  // again, the first assertion fails and this comment gets corrected — which is
+  // how it stayed accurate through the last two moves.
+  it('leaves no room to embed the script, let alone a batch of proofs', async () => {
     const s = spender(TIER_B);
     const referenced = (await s.build(buyPlan(s.scriptAddress), fakeWallet())).length / 2;
     const embedded = referenced + rawScriptSize(TIER_B.compiledCode);
@@ -227,7 +230,9 @@ describe('MeshCurveSpender', () => {
     const batchProofs = proofBytes * MAX_ORDERS_PER_BATCH;
 
     expect(referenced).toBeLessThan(MAX_TX_BYTES);
-    expect(embedded).toBeLessThan(MAX_TX_BYTES);
+    // Not a headroom decision any more: referencing is the only way to spend
+    // this curve at all.
+    expect(embedded).toBeGreaterThan(MAX_TX_BYTES);
     expect(referenced + batchProofs).toBeLessThan(MAX_TX_BYTES);
     expect(embedded + batchProofs).toBeGreaterThan(MAX_TX_BYTES);
   });

@@ -34,6 +34,7 @@ export const BONDING_CURVE_REDEEMER = {
   DissolveCTO: 10,
   QueryState: 11,
   BatchTrades: 12,
+  SetBatcherAllowlist: 13,
 } as const;
 
 /** `contracts/cardano/validators/bonding_curve_tier_b.ak` — Cardano Launch. */
@@ -54,6 +55,7 @@ export const BONDING_CURVE_TIER_B_REDEEMER = {
   SellTokens: 13,
   OpenDvClaim: 14,
   BatchTrades: 15,
+  SetBatcherAllowlist: 16,
 } as const;
 
 /** `contracts/cardano/validators/curve_order.ak`. */

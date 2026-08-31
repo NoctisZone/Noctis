@@ -53,6 +53,12 @@ export const BondingCurveDatumShape = Data.Object({
   creator_fees_accrued: Data.Integer(),
   total_raised: Data.Integer(),
   tokens_sold: Data.Integer(),
+  /** The keys allowed to apply a batch against this curve — checked by the
+   *  batch arm alongside the transaction's real signatures, so naming a key in
+   *  the redeemer is no longer enough on its own. Rewritten only by
+   *  SetBatcherAllowlist, which is why it sits with the written fields at the
+   *  front rather than with the read-only ones at the back. */
+  batcher_allowlist: Data.Array(Data.Bytes()),
   // The cumulative wallet cap, as one root over `key -> tokens taken from this
   // curve`. Genesis writes CAP_EMPTY_ROOT (see cap-accumulator-tree.ts); every
   // trade rewrites it. Appended last on both tiers because a datum is
@@ -101,6 +107,12 @@ export const BondingCurveTierBDatumShape = Data.Object({
   creator_fees_accrued: Data.Integer(),
   total_raised: Data.Integer(),
   tokens_sold: Data.Integer(),
+  /** The keys allowed to apply a batch against this curve — checked by the
+   *  batch arm alongside the transaction's real signatures, so naming a key in
+   *  the redeemer is no longer enough on its own. Rewritten only by
+   *  SetBatcherAllowlist, which is why it sits with the written fields at the
+   *  front rather than with the read-only ones at the back. */
+  batcher_allowlist: Data.Array(Data.Bytes()),
   // Same field, same tree, same position as the linear curve's — one accumulator
   // definition serves both curves. On Cardano Launch it additionally spans the
   // DarkVeil claim window, so a claim and a public buy draw on one 5%.

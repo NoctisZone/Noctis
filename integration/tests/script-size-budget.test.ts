@@ -180,10 +180,34 @@ for (const v of blueprint.validators) {
  * script, which cannot be split across transactions. It has been over that
  * line before. Anything that would merge the two curves into one validator has
  * to fit inside what is left, and this change made that harder, not easier.
+ *
+ * Moved again by the batcher allowlist: +387 on the linear curve, +455 on the
+ * quadratic one, for one datum field and the arm that rewrites it — and +39 on
+ * token_metadata, which changed by not one line. It decodes the linear curve's
+ * datum as a reference input, so widening that type widened its decoding too.
+ * Three hashes moved here, not two.
+ *
+ * READ THIS BEFORE PUBLISHING A REFERENCE SCRIPT FOR THE QUADRATIC CURVE.
+ * 16,006 against MAX_PUBLISHABLE_SCRIPT_BYTES (16,052) leaves 46 B. That is
+ * inside the limit and outside any sensible margin — the next shared-datum
+ * field, which moves six validators at a stroke, would not fit.
+ *
+ * Two measurements taken while landing it, both worth keeping:
+ *
+ *  - Position in the datum is most of the cost. At the BACK of the record the
+ *    same field cost +706 and put the curve at 16,257 — 205 B OVER the publish
+ *    limit, so it could not have been published at all. Declared at the FRONT,
+ *    with the fields redeemers rewrite, it costs +455. A record update walks
+ *    the field list to reach what it replaces; this datum's own ordering rule
+ *    says so, and this is what ignoring it costs.
+ *  - The list is not the expense. A single `VerificationKeyHash` in place of
+ *    the list measures 15,915 — 91 B cheaper for a strictly weaker mechanism
+ *    (no second batcher, no rotation without a gap). Widening the datum type
+ *    is what costs; the list on top of it is nearly free.
  */
 const RECORDED: Record<string, number> = {
-  bonding_curve: 12_500,
-  bonding_curve_tier_b: 15_551,
+  bonding_curve: 12_887,
+  bonding_curve_tier_b: 16_006,
   cto_governance: 8_060,
   cto_sybil_challenge: 2_201,
   curve_order: 1_775,
@@ -191,7 +215,7 @@ const RECORDED: Record<string, number> = {
   lp_escrow: 7_649,
   nhop_challenge: 2_157,
   staking_pool: 5_153,
-  token_metadata: 4_592,
+  token_metadata: 4_631,
   vesting: 5_773,
   zk_anchor: 2_634,
 };

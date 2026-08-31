@@ -25,6 +25,12 @@ Notable changes to the Noctis Zone, by release. Internal development history pre
 
 ### Changed
 
+- A batch is applied to a bonding curve only by a key the curve's own datum names,
+  alongside that key's real signature on the transaction. The set of keys is written at
+  genesis and rewritten afterwards by a governor-signed action that moves no funds and
+  is capped in length, so batchers can be added or rotated without moving the launch's
+  address. An empty set means no batch can be applied; an order still stands and stays
+  spendable by its own owner, with no batcher and no deadline involved.
 - Bonding curve trades on both Cardano curves are priced by summing the price of each
   token a trade moves through, so a trade costs the same whether it is made in one
   transaction or several. A buyer pays the range rounded up and a seller receives it

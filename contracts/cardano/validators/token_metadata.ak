@@ -484,8 +484,10 @@ fn mock_curve_datum(launch_id: ByteArray, creator_pub_key_hash: VerificationKeyH
     staking_seeded: False,
     cto_governance_credential: from_verification_key(#"dd").payment_credential,
     thread_nft_policy: #"c0ffee",
-    // This fixture never trades, so the cap accumulator stays at genesis.
+    // This fixture never trades, so the cap accumulator stays at genesis and
+    // nothing here ever batches.
     cap_root: cap_accumulator.root_of([]),
+    batcher_allowlist: [],
   }
 }
 
