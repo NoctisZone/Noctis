@@ -23,6 +23,10 @@
   --bg-blue-rgb:1,43,231;
   --violet:#8844dd; --violet-text:#b07ee0;
   --green:#5fb51b; --alarm:#ff6b6f;
+  /* The brand logo, supplied as artwork. Defined once here and drawn by
+     both the title lockup and the per-slide corner mark, so the data URI
+     is not repeated nine times. */
+  --logo:url("logo.png");
   --head:'Montserrat',system-ui,-apple-system,'Segoe UI',sans-serif;
   --body:'Inter',system-ui,-apple-system,'Segoe UI',sans-serif;
 }
@@ -44,10 +48,7 @@ body{background:var(--bg);color:var(--text);font-family:var(--body);font-size:16
 .slide::after{background:radial-gradient(circle,rgba(var(--bg-blue-rgb),.32),transparent 62%);bottom:-42vw;right:-25vw}
 
 /* Furniture */
-.mark{position:absolute;top:clamp(20px,3vh,34px);left:clamp(24px,5vw,80px);font-family:var(--head);font-weight:300;color:#fff;text-decoration:none;line-height:1;z-index:3}
-.mark-word{position:relative;display:block;font-size:19px;letter-spacing:.34em;padding-right:.34em}
-.mark-word::after{content:"";position:absolute;left:-6%;right:-2%;top:52%;height:1px;background:linear-gradient(90deg,transparent,#fff 12%,#fff 88%,transparent)}
-.mark-sub{display:block;font-size:8.5px;letter-spacing:.62em;color:var(--text-2);margin-top:7px;padding-right:.62em}
+.mark{position:absolute;top:clamp(20px,3vh,34px);left:clamp(24px,5vw,80px);display:block;width:clamp(118px,11vw,168px);aspect-ratio:1000/228;background:var(--logo) no-repeat left center/contain;z-index:3}
 .handle{position:absolute;top:clamp(20px,3vh,34px);right:clamp(24px,5vw,80px);display:flex;align-items:center;gap:12px;font-size:12px;color:var(--text-3);z-index:3}
 .handle a{color:var(--text-2);text-decoration:none;border:1px solid var(--border-2);border-radius:999px;padding:6px 15px;transition:border-color .2s,color .2s}
 .handle a:hover,.handle a:focus-visible{border-color:var(--blue-text);color:#fff}
@@ -89,10 +90,7 @@ h2{font-family:var(--head);font-weight:800;letter-spacing:-.02em;line-height:.98
 .title-slide{align-items:center;text-align:center}
 .title-slide::before,#s9::before{background:radial-gradient(circle,rgba(var(--bg-blue-rgb),.92),transparent 62%);width:80vw;height:80vw;top:-44vw;left:-30vw;filter:blur(94px)}
 .title-slide::after,#s9::after{background:radial-gradient(circle,rgba(var(--bg-blue-rgb),.8),transparent 62%);width:80vw;height:80vw;bottom:-44vw;right:-27vw;filter:blur(94px)}
-.wordmark{font-family:var(--head);font-weight:300;color:#fff;line-height:1;display:inline-block}
-.wordmark .w{position:relative;display:block;font-size:clamp(46px,10.5vw,132px);letter-spacing:.19em;padding-right:.19em}
-.wordmark .w::after{content:"";position:absolute;left:-5%;right:-2%;top:52%;height:clamp(2px,.32vw,4px);background:linear-gradient(90deg,transparent,#fff 9%,#fff 91%,transparent)}
-.wordmark .z{display:block;font-size:clamp(16px,3.5vw,44px);letter-spacing:.56em;margin-top:clamp(14px,2vw,26px);padding-right:.56em;color:#eaeaea}
+.wordmark{display:block;width:min(80vw,680px);aspect-ratio:1000/228;background:var(--logo) no-repeat center/contain;margin:0 auto}
 .title-tag{margin-top:clamp(30px,4.5vh,54px);font-size:clamp(15px,1.9vw,25px);font-style:italic;color:#fff}
 .title-desc{margin-top:16px;font-size:clamp(13.5px,1.25vw,17px);color:var(--text-2);max-width:70ch;margin-inline:auto;text-wrap:balance}
 .title-meta{margin-top:clamp(26px,4vh,44px);font-family:var(--head);font-size:11px;letter-spacing:.2em;text-transform:uppercase;color:var(--text-4)}
@@ -149,6 +147,7 @@ h2{font-family:var(--head);font-weight:800;letter-spacing:-.02em;line-height:.98
   .handle{position:static;justify-content:flex-end;margin-bottom:26px}
   .mark{position:static;margin-bottom:22px}
   .title-slide{text-align:left;align-items:flex-start}
+  .wordmark{margin-left:0;width:min(88vw,420px)}
 }
 @media print{
   .deck{height:auto;overflow:visible}
@@ -172,7 +171,7 @@ h2{font-family:var(--head);font-weight:800;letter-spacing:-.02em;line-height:.98
 <!-- 1 - Title -->
 <section class="slide title-slide" id="s1">
   <div class="slide-inner title-inner">
-    <div class="wordmark"><span class="w">NOCTIS</span><span class="z">ZONE</span></div>
+    <div class="wordmark" role="img" aria-label="Noctis Zone"></div>
     <p class="title-tag">They can't front-run what they can't see.</p>
     <p class="title-desc">A token launchpad built on Midnight Network. The private buying phase runs on Midnight for every launch &mdash; whichever chain the token settles on.</p>
     <p class="title-meta">noctis.zone &middot; @noctis_zone</p>
@@ -181,7 +180,7 @@ h2{font-family:var(--head);font-weight:800;letter-spacing:-.02em;line-height:.98
 
 <!-- 2 - Why this exists -->
 <section class="slide" id="s2">
-  <a class="mark" href="#s1"><span class="mark-word">NOCTIS</span><span class="mark-sub">ZONE</span></a>
+  <a class="mark" href="#s1" aria-label="Noctis Zone"></a>
   <div class="handle"><span>Follow on X</span><a href="https://x.com/Noctis_Zone">@noctis_zone</a></div>
   <div class="slide-inner">
     <div class="head"><h2>Why this exists</h2></div>
@@ -214,7 +213,7 @@ h2{font-family:var(--head);font-weight:800;letter-spacing:-.02em;line-height:.98
 
 <!-- 3 - Why this needs Midnight -->
 <section class="slide" id="s3">
-  <a class="mark" href="#s1"><span class="mark-word">NOCTIS</span><span class="mark-sub">ZONE</span></a>
+  <a class="mark" href="#s1" aria-label="Noctis Zone"></a>
   <div class="handle"><span>Follow on X</span><a href="https://x.com/Noctis_Zone">@noctis_zone</a></div>
   <div class="slide-inner">
     <div class="head">
@@ -246,7 +245,7 @@ h2{font-family:var(--head);font-weight:800;letter-spacing:-.02em;line-height:.98
 
 <!-- 4 - What you actually get -->
 <section class="slide" id="s4">
-  <a class="mark" href="#s1"><span class="mark-word">NOCTIS</span><span class="mark-sub">ZONE</span></a>
+  <a class="mark" href="#s1" aria-label="Noctis Zone"></a>
   <div class="handle"><span>Follow on X</span><a href="https://x.com/Noctis_Zone">@noctis_zone</a></div>
   <div class="slide-inner">
     <div class="head">
@@ -282,7 +281,7 @@ h2{font-family:var(--head);font-weight:800;letter-spacing:-.02em;line-height:.98
 
 <!-- 5 - Where it settles -->
 <section class="slide" id="s5">
-  <a class="mark" href="#s1"><span class="mark-word">NOCTIS</span><span class="mark-sub">ZONE</span></a>
+  <a class="mark" href="#s1" aria-label="Noctis Zone"></a>
   <div class="handle"><span>Follow on X</span><a href="https://x.com/Noctis_Zone">@noctis_zone</a></div>
   <div class="slide-inner">
     <div class="head">
@@ -317,7 +316,7 @@ h2{font-family:var(--head);font-weight:800;letter-spacing:-.02em;line-height:.98
 
 <!-- 6 - What is built -->
 <section class="slide" id="s6">
-  <a class="mark" href="#s1"><span class="mark-word">NOCTIS</span><span class="mark-sub">ZONE</span></a>
+  <a class="mark" href="#s1" aria-label="Noctis Zone"></a>
   <div class="handle"><span>Follow on X</span><a href="https://x.com/Noctis_Zone">@noctis_zone</a></div>
   <div class="slide-inner">
     <div class="head">
@@ -350,7 +349,7 @@ h2{font-family:var(--head);font-weight:800;letter-spacing:-.02em;line-height:.98
 
 <!-- 7 - Team -->
 <section class="slide" id="s7">
-  <a class="mark" href="#s1"><span class="mark-word">NOCTIS</span><span class="mark-sub">ZONE</span></a>
+  <a class="mark" href="#s1" aria-label="Noctis Zone"></a>
   <div class="handle"><span>Follow on X</span><a href="https://x.com/Noctis_Zone">@noctis_zone</a></div>
   <div class="slide-inner">
     <div class="head">
@@ -388,7 +387,7 @@ h2{font-family:var(--head);font-weight:800;letter-spacing:-.02em;line-height:.98
 
 <!-- 8 - How we get used -->
 <section class="slide" id="s8">
-  <a class="mark" href="#s1"><span class="mark-word">NOCTIS</span><span class="mark-sub">ZONE</span></a>
+  <a class="mark" href="#s1" aria-label="Noctis Zone"></a>
   <div class="handle"><span>Follow on X</span><a href="https://x.com/Noctis_Zone">@noctis_zone</a></div>
   <div class="slide-inner">
     <div class="head">
@@ -419,7 +418,7 @@ h2{font-family:var(--head);font-weight:800;letter-spacing:-.02em;line-height:.98
 
 <!-- 9 - Contact -->
 <section class="slide" id="s9">
-  <a class="mark" href="#s1"><span class="mark-word">NOCTIS</span><span class="mark-sub">ZONE</span></a>
+  <a class="mark" href="#s1" aria-label="Noctis Zone"></a>
   <div class="handle"><span>Follow on X</span><a href="https://x.com/Noctis_Zone">@noctis_zone</a></div>
   <div class="slide-inner">
     <p class="thanks">Thank You</p>
