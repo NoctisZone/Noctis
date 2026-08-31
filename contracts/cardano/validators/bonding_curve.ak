@@ -19,14 +19,14 @@
 // At sold=0:             price = base_price
 // At sold=curve_supply:  price = max_price
 //
-// Fee structure (2.0% total, same split as both launch types):
-//   1.0% -> creator fee accumulator (claimed by creator; mirrors the
+// Fee structure (1.5% total, same split as both launch types):
+//   0.5% -> creator fee accumulator (claimed by creator; mirrors the
 //           "Stream A" Bonding Curve Escrow pattern from CLAUDE.md — the linear curve
 //           has no separate Cardano Creator Fee Escrow contract in the
 //           architecture table, so this curve contract accrues and gates
 //           the claim directly instead of handing off to another PSM)
-//   0.6% -> treasury accumulator (governor-claimed)
-//   0.4% -> ops accumulator (governor-claimed)
+//   1.0% -> platform fee accumulator (governor-claimed). ONE accrual for
+//           ONE wallet — not a treasury slice plus an ops slice.
 //
 // Graduation: 100% sell-through only (CLAUDE.md — no partial graduation).
 // On graduation this contract stops accepting buys and marks Graduated.
@@ -171,7 +171,8 @@ pub type BondingCurveDatum {
   // ops slice is a single accrual, claimed once.
   platform_fees_accrued: Int,
   // net of fees, lovelace
-  // Fee accumulators (2.0% total: 1.0/0.6/0.4 split, same as both launch types)
+  // Fee accumulators (1.5% total: 0.5 creator / 1.0 platform, same as both
+  // launch types)
   creator_fees_accrued: Int,
   total_raised: Int,
   tokens_sold: Int,
@@ -379,7 +380,7 @@ pub type BondingCurveRedeemer {
   /// range being added, and a sell of `n` at `tokens_sold = s` prices
   /// `[s-n, s)`, the range being removed. A buy and an immediate sell of the
   /// same size therefore quote the SAME range, and net to zero before fees —
-  /// the 2.0% round-trip fee is the only friction. Because a sum is additive
+  /// the 1.5% fee charged on each leg is the only friction. Because a sum is additive
   /// over adjacent ranges (see `gross_range`), that holds however the exit is
   /// sized or split: proceeds depend on which positions are vacated, not on
   /// the shape of the trades that vacate them.
@@ -2180,7 +2181,7 @@ test chunked_exit_never_beats_a_single_lot() {
 
 /// A buy and a sell of the same size at the same curve position quote the
 /// same range, so a round trip returns no more than it cost — before the
-/// 2.0% fee is applied on both legs.
+/// 1.5% fee is applied on both legs.
 test a_round_trip_returns_no_more_than_it_cost() {
   let d = mock_datum(Active, 400)
   buy_cost(d, 400, 100) >= sell_proceeds(d, 400, 100)

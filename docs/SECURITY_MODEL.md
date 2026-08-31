@@ -294,8 +294,8 @@ This is the same trust model already used for `cto_governance.compact`'s balance
 
 ### Fee Structure
 
-- **Total:** 2.0% per trade
-- **Split:** 1.0% creator / 0.6% treasury / 0.4% ops
+- **Total:** 1.5% per trade
+- **Split:** 0.5% creator / 1.0% platform — one wallet, no treasury/ops split
 - **Real accrual location (per tier, not the originally-designed Midnight PSMs — see 2):** The linear curve — `bonding_curve.ak`. Cardano Launch — `bonding_curve_tier_b.ak` (Cardano, both public-phase and DarkVeil-claim fees). Midnight Launch — `bonding_curve.compact`'s inline ledger fields.
 - **Withdrawal:** gated to the active fee recipient (creator, or the community wallet once a CTO vote has passed — see 5), amounts limited to accumulated balances, real value movement enforced by audit
 

@@ -43,7 +43,7 @@ Notable changes to the Noctis Zone, by release. Internal development history pre
 - Bonding curve trades on both Cardano curves are priced by summing the price of each
   token a trade moves through, so a trade costs the same whether it is made in one
   transaction or several. A buyer pays the range rounded up and a seller receives it
-  rounded down. The validator computes both the price and the 2.0% fee split from its
+  rounded down. The validator computes both the price and the 1.5% fee split from its
   own state, so a trade names only an amount and a wallet.
 - Any token amount can be traded. Fee slices floor independently and the remainder
   stays with the curve.

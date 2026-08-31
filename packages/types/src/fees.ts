@@ -1,22 +1,25 @@
 /**
- * The 2.0% total trade fee split, in basis points of {@link FEE_DENOMINATOR_BPS}.
- * Matches bonding_curve.compact's `FeeConfig` literal (creatorBps: 100,
- * treasuryBps: 60, opsBps: 40, totalBps: 200) and CLAUDE.md's "FEE SPLIT"
- * table. Identical across all three tiers — only the currency differs
- * (ADA for A/B, NIGHT for C, see {@link TradeCurrency}).
+ * The 1.5% total trade fee split, in basis points of {@link FEE_DENOMINATOR_BPS}.
+ * Matches `bonding_curve.compact`'s `FeeConfig` literal (`creatorBps: 50`,
+ * `platformBps: 100`) and both Cardano curves' `creator_bps`/`platform_bps`
+ * constants. Identical across every launch type — only the currency differs
+ * (ADA for a Cardano Launch, NIGHT for a Midnight Launch, see
+ * {@link TradeCurrency}).
+ *
+ * The platform runs ONE wallet, so the platform share is one slice. There is
+ * no treasury slice and no ops slice to divide it between.
  */
 export const FEE_SPLIT_BPS = {
-  creator: 100,
-  treasury: 60,
-  ops: 40,
-  total: 200,
+  creator: 50,
+  platform: 100,
+  total: 150,
 } as const;
 
 /**
  * `bonding_curve.compact`'s `verifyFeeSlice` checks
  * `claimedFee * FEE_DENOMINATOR_BPS == grossAmount * bps` — any caller
- * constructing a `claimedCreatorFee`/`claimedTreasuryFee`/`claimedOpsFee`
- * argument for `buyTokens` must use this exact denominator.
+ * constructing a `claimedCreatorFee`/`claimedPlatformFee` argument for
+ * `buyTokens` must use this exact denominator.
  */
 export const FEE_DENOMINATOR_BPS = 10_000;
 

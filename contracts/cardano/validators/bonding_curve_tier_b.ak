@@ -2367,7 +2367,7 @@ test chunked_exit_never_beats_a_single_lot() {
 
 /// A buy and a sell of the same size at the same curve position quote the
 /// same range, so a round trip returns no more than it cost — before the
-/// 2.0% fee is applied on both legs.
+/// 1.5% fee is applied on both legs.
 test a_round_trip_returns_no_more_than_it_cost() {
   let d = mock_datum(Active, 400)
   buy_cost(d, 400, 100) >= sell_proceeds(d, 400, 100)

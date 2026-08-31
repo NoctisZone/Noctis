@@ -58,10 +58,10 @@ Human sign-off gate. Three stages: website live, preprod contracts, mainnet.
 
 ### Content
 
-- [ ] Fee split figures correct on all pages (1.0% + 0.6% + 0.4% = 2.0%)
-- [ ] Launch fees match CLAUDE.md's current `TIER_A/B/C_FEE_USD` constants on every page (USD-denominated, paid in ADA or NIGHT equivalent) — do not hardcode figures here, they're subject to change
+- [ ] Fee split figures correct on all pages (0.5% creator + 1.0% platform = 1.5%)
+- [ ] Launch fees match CLAUDE.md's current `LAUNCH_FEE_USD` constant on every page (one flat fee, every launch type; USD-denominated, paid in ADA or NIGHT equivalent) — do not hardcode figures here, they're subject to change
 - [ ] NIGHT bond amount correct ($50 USD)
-- [ ] Wallet cap correct (5% per ZK identity)
+- [ ] Wallet cap correct (5% per wallet key, cumulative across DarkVeil and public)
 - [ ] LP lock duration correct (365 days)
 - [ ] No references to deprecated/removed reward mechanisms
 - [ ] Launch types correctly described (Cardano Launch, Midnight Launch; Solana and XRP marked as announced, not available)

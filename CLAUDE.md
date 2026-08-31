@@ -176,7 +176,7 @@ The fee split percentage is the same across all tiers. The **denomination differ
 
 | Recipient | % of Trade | Cardano currency | Midnight Launch currency | Notes |
 |-----------|-----------|-------------------|-----------------|-------|
-| Creator Fee Escrow | 1.0% | ADA | NIGHT | Monthly release via Midnight PSM |
+| Creator Fee Escrow | 0.5% | ADA | NIGHT | Monthly release via Midnight PSM |
 | Platform | 1.0% | ADA | NIGHT | ONE wallet. Funds the reserve, operations, and the NIGHT bought for DUST. Midnight Launch: arrives as NIGHT, which is what ops already needs — see the Midnight Launch Trade Fee Currency and Conversion open issue for the stablecoin leg |
 | **TOTAL** | **1.5%** | | | |
 
