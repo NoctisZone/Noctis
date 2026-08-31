@@ -1343,11 +1343,70 @@ validator bonding_curve_tier_b {
       }
 
       BatchTrades { orders, batcher_key_hash } -> {
+        // UNIFORM CLEARING PRICE.
+        //
+        // Every order on a side pays that side's batch average, not the price
+        // its own position in the batch would have given. Position in a batch
+        // is therefore worth nothing, which is the point: the batcher's
+        // ordering choice stops being a thing to police or be accused of.
+        //
+        // The curve is unaffected. A range cost is additive over adjacent
+        // ranges, so pricing [s0, s0+n) once yields exactly what pricing it in
+        // n pieces yields — the same total, differently distributed. What
+        // changes is only who inside the batch pays what.
+        //
+        // BOTH SIDES ARE ANCHORED AT THE PRE-BATCH POSITION, s0. Buys price
+        // the range above it and sells the range below it. Anchoring is what
+        // makes the result independent of the order the batch is listed in: a
+        // sell priced after the batch's buys would depend on those buys, and
+        // ordering would matter again through the back door. It also keeps a
+        // single-order batch identical to the same trade made directly, since
+        // that is exactly the range a lone buy or lone sell already uses.
+        let sides =
+          list.foldl(
+            orders,
+            (0, 0),
+            fn(order, acc) {
+              let (buys, sells) = acc
+              if order.is_buy {
+                (buys + order.amount, sells)
+              } else {
+                (buys, sells + order.amount)
+              }
+            },
+          )
+        let (batch_buy_amount, batch_sell_amount) = sides
+
+        // A batch cannot sell back more than the curve has ever sold. The
+        // sequential fold got this only incidentally, from each sell leaving
+        // tokens_sold non-negative; that misses a batch which dips and is
+        // lifted again by a later buy, and whose sell range would then start
+        // below zero. Anchoring makes the aggregate the thing to check.
+        let sell_range_real = batch_sell_amount <= datum.tokens_sold
+
+        let batch_buy_gross =
+          if batch_buy_amount > 0 {
+            buy_cost(datum, datum.tokens_sold, batch_buy_amount)
+          } else {
+            0
+          }
+        let batch_sell_gross =
+          if and { batch_sell_amount > 0, sell_range_real } {
+            sell_proceeds(
+              datum,
+              datum.tokens_sold - batch_sell_amount,
+              batch_sell_amount,
+            )
+          } else {
+            0
+          }
+
         // Fold the batch: thread tokens_sold AND cap_root through, accumulate
         // what the curve owes and is owed, and require every order to be
-        // satisfiable. Both are running state — order k prices at the position
-        // order k-1 left, and proves its cap against the root order k-1 left —
-        // so a batch is exactly the sequence of single trades it stands in for.
+        // satisfiable. tokens_sold no longer sets any price — it is threaded
+        // for the supply and floor checks, and to land the final position —
+        // while the cap root still advances per order, so each proof is taken
+        // against the root the preceding order left.
         let folded =
           list.foldl(
             orders,
@@ -1356,7 +1415,11 @@ validator bonding_curve_tier_b {
               let (sold, ada_in, ada_out, creator_acc, platform_acc, root, ok) =
                 acc
               if order.is_buy {
-                let gross = buy_cost(datum, sold, order.amount)
+                // This order's share of the one batch range, rounded UP so
+                // the remainder resolves in the curve's favour — the same
+                // direction `buy_cost` rounds a range it prices directly.
+                let gross =
+                  ( batch_buy_gross * order.amount + batch_buy_amount - 1 ) / batch_buy_amount
                 let creator_fee = fee_slice(gross, creator_bps)
                 let platform_fee = fee_slice(gross, platform_bps)
                 let cap_after = order.cap_committed_before + order.amount
@@ -1385,7 +1448,9 @@ validator bonding_curve_tier_b {
                 )
               } else {
                 let new_sold = sold - order.amount
-                let gross = sell_proceeds(datum, new_sold, order.amount)
+                // Rounded DOWN, mirroring `sell_proceeds`, so the curve never
+                // pays out above the range it is settling.
+                let gross = batch_sell_gross * order.amount / batch_sell_amount
                 let creator_fee = fee_slice(gross, creator_bps)
                 let platform_fee = fee_slice(gross, platform_bps)
                 let net = gross - creator_fee - platform_fee
@@ -1450,6 +1515,10 @@ validator bonding_curve_tier_b {
         and {
           datum.curve_state == Active,
           orders_ok,
+          // The batch's sells price from below the pre-batch position, so it
+          // cannot sell back more than the curve has ever sold. Without this
+          // the anchored range would start below zero.
+          sell_range_real,
           !list.is_empty(orders),
           // Whitelisted batcher, same trust boundary as Minswap's.
           list.has(self.extra_signatories, batcher_key_hash),
@@ -3845,21 +3914,19 @@ fn run_buy_batch_signed(
   let creator_total =
     list.foldl(
       orders,
-      (datum.tokens_sold, 0),
-      fn(o, acc) {
-        let (sold, fees) = acc
-        (sold + o.amount, fees + fee_slice(buy_cost(datum, sold, o.amount), creator_bps))
+      0,
+      fn(o, fees) {
+        fees + fee_slice(uniform_buy_share(datum, orders, o.amount), creator_bps)
       },
-    ).2nd
+    )
   let platform_total =
     list.foldl(
       orders,
-      (datum.tokens_sold, 0),
-      fn(o, acc) {
-        let (sold, fees) = acc
-        (sold + o.amount, fees + fee_slice(buy_cost(datum, sold, o.amount), platform_bps))
+      0,
+      fn(o, fees) {
+        fees + fee_slice(uniform_buy_share(datum, orders, o.amount), platform_bps)
       },
-    ).2nd
+    )
   let own_input =
     Input {
       output_reference: own_ref,
@@ -3910,6 +3977,28 @@ fn run_buy_batch_signed(
 /// The accepted batch with its continuing value varied by one delta. A datum
 /// is a record of what a batch claims; these are the curve's own UTXO failing
 /// to move by it.
+/// What one buy order of `amount` pays under uniform pricing: its pro-rata
+/// slice of the batch's single range, rounded UP exactly as the validator
+/// rounds it. Defined once so a fixture cannot quietly price differently from
+/// the redeemer it is meant to be checking.
+fn two_buy_uniform_total(datum: BondingCurveTierBDatum) -> Int {
+  uniform_buy_share(datum, two_buy_orders(), 400) + uniform_buy_share(
+    datum,
+    two_buy_orders(),
+    300,
+  )
+}
+
+fn uniform_buy_share(
+  datum: BondingCurveTierBDatum,
+  orders: List<BatchOrder>,
+  amount: Int,
+) -> Int {
+  let batch_amount = list.foldl(orders, 0, fn(o, acc) { acc + o.amount })
+  let batch_gross = buy_cost(datum, datum.tokens_sold, batch_amount)
+  ( batch_gross * amount + batch_amount - 1 ) / batch_amount
+}
+
 fn run_buy_batch_drained(
   datum: BondingCurveTierBDatum,
   orders: List<BatchOrder>,
@@ -3926,21 +4015,19 @@ fn run_buy_batch_drained(
   let creator_total =
     list.foldl(
       orders,
-      (datum.tokens_sold, 0),
-      fn(o, acc) {
-        let (sold, fees) = acc
-        (sold + o.amount, fees + fee_slice(buy_cost(datum, sold, o.amount), creator_bps))
+      0,
+      fn(o, fees) {
+        fees + fee_slice(uniform_buy_share(datum, orders, o.amount), creator_bps)
       },
-    ).2nd
+    )
   let platform_total =
     list.foldl(
       orders,
-      (datum.tokens_sold, 0),
-      fn(o, acc) {
-        let (sold, fees) = acc
-        (sold + o.amount, fees + fee_slice(buy_cost(datum, sold, o.amount), platform_bps))
+      0,
+      fn(o, fees) {
+        fees + fee_slice(uniform_buy_share(datum, orders, o.amount), platform_bps)
       },
-    ).2nd
+    )
   let own_input =
     Input {
       output_reference: own_ref,
@@ -3994,7 +4081,7 @@ test batch_accepts_the_shape_the_rejections_vary() {
     d,
     two_buy_orders(),
     [tok_out(0, #"de", 400), tok_out(1, #"df", 300)],
-    buy_cost(d, 0, 400) + buy_cost(d, 400, 300),
+    two_buy_uniform_total(d),
     0,
     0,
   )
@@ -4002,7 +4089,7 @@ test batch_accepts_the_shape_the_rejections_vary() {
 
 test batch_rejects_keeping_the_payment() {
   let d = mock_datum(Active, 0)
-  let gross = buy_cost(d, 0, 400) + buy_cost(d, 400, 300)
+  let gross = two_buy_uniform_total(d)
   !run_buy_batch_drained(
     d,
     two_buy_orders(),
@@ -4015,7 +4102,7 @@ test batch_rejects_keeping_the_payment() {
 
 test batch_rejects_leaving_the_reserve_intact() {
   let d = mock_datum(Active, 0)
-  let gross = buy_cost(d, 0, 400) + buy_cost(d, 400, 300)
+  let gross = two_buy_uniform_total(d)
   !run_buy_batch_drained(
     d,
     two_buy_orders(),
@@ -4039,10 +4126,8 @@ fn tok_out(index: Int, owner: VerificationKeyHash, amount: Int) -> Output {
   }
 }
 
-/// The property the whole design rests on: order 2 prices from where order 1
-/// finished, not from the batch's starting position. If the fold failed to
-/// thread tokens_sold, both orders would price at 0 and this total would be
-/// too low.
+/// The property the whole design rests on: every order in a batch pays the
+/// batch average, so position within the batch is worth nothing.
 /// 400 then 300 rather than 10 then 5, deliberately. On this fixture's curve
 /// a 5-token order costs exactly 500 at position 0 AND at position 10 — the
 /// quadratic term floors away — so small amounts make the position test
@@ -4052,15 +4137,56 @@ fn two_buy_orders() -> List<BatchOrder> {
   batch_orders([(#"de", True, 400, 400), (#"df", True, 300, 300)])
 }
 
-/// POSITIVE half: order 2 priced from where order 1 finished.
-test batch_prices_each_order_at_its_own_curve_position() {
+/// POSITIVE half, with the figures pinned rather than recomputed.
+///
+/// 400 tokens then 300, on this fixture's curve from position 0. Sequentially
+/// they pay 59,129 and 113,552 — 147.82 and 378.51 per token, a 156% spread
+/// bought purely by being first. Uniformly they pay 98,675 and 74,006, which
+/// is 246.69 per token for both.
+///
+/// THE CURVE RECEIVES 172,681 EITHER WAY. That is the additivity property the
+/// decision rests on, and it is why uniform pricing costs the protocol
+/// nothing — asserted here against literals so it stays a measured fact.
+test batch_prices_every_order_at_the_batch_average() {
   let d = mock_datum(Active, 0)
-  run_buy_batch(
-    d,
-    two_buy_orders(),
-    [tok_out(0, #"de", 400), tok_out(1, #"df", 300)],
-    buy_cost(d, 0, 400) + buy_cost(d, 400, 300),
-  )
+  and {
+    uniform_buy_share(d, two_buy_orders(), 400) == 98_675,
+    uniform_buy_share(d, two_buy_orders(), 300) == 74_006,
+    // Identical totals, so the total alone cannot tell the two models apart.
+    two_buy_uniform_total(d) == 172_681,
+    buy_cost(d, 0, 400) + buy_cost(d, 400, 300) == 172_681,
+    run_buy_batch(
+      d,
+      two_buy_orders(),
+      [tok_out(0, #"de", 400), tok_out(1, #"df", 300)],
+      two_buy_uniform_total(d),
+    ),
+  }
+}
+
+/// What actually separates the two models, and therefore what would catch a
+/// silent regression to sequential: the FEE. Each order is charged its own
+/// floored slice, so a different split of the same total yields a different
+/// creator fee — 863 under uniform against 862 under sequential. The curve
+/// total is identical, so without this the fixtures above would pass under
+/// either model.
+test batch_fee_total_distinguishes_uniform_from_sequential() {
+  let d = mock_datum(Active, 0)
+  let uniform_creator =
+    fee_slice(uniform_buy_share(d, two_buy_orders(), 400), creator_bps) + fee_slice(
+      uniform_buy_share(d, two_buy_orders(), 300),
+      creator_bps,
+    )
+  let sequential_creator =
+    fee_slice(buy_cost(d, 0, 400), creator_bps) + fee_slice(
+      buy_cost(d, 400, 300),
+      creator_bps,
+    )
+  and {
+    uniform_creator == 863,
+    sequential_creator == 862,
+    uniform_creator != sequential_creator,
+  }
 }
 
 /// NEGATIVE half: pricing BOTH orders from position 0 is strictly cheaper, so
@@ -4081,7 +4207,7 @@ test batch_rejects_pricing_every_order_from_the_batch_start() {
 test batch_requires_each_owner_to_be_paid_individually() {
   let d = mock_datum(Active, 0)
   let orders = two_buy_orders()
-  let gross = buy_cost(d, 0, 400) + buy_cost(d, 400, 300)
+  let gross = two_buy_uniform_total(d)
   and {
     // Both owners paid — accepted.
     run_buy_batch(d, orders, [tok_out(0, #"de", 400), tok_out(1, #"df", 300)], gross),
@@ -4093,6 +4219,37 @@ test batch_requires_each_owner_to_be_paid_individually() {
   }
 }
 
+/// Ten orders, the batch size the pricing decision was argued about at. Kept as a
+/// measurement fixture: `aiken check -m batch_ten_order_cost` reports the
+/// ExUnits the redeemer really uses at that size, which is the only way to
+/// compare the two pricing models honestly rather than by argument.
+test batch_ten_order_cost() {
+  let d = mock_datum(Active, 0)
+  let orders =
+    batch_orders(
+      [
+        (#"aa00", True, 40, 40), (#"aa01", True, 40, 40), (#"aa02", True, 40, 40),
+        (#"aa03", True, 40, 40), (#"aa04", True, 40, 40), (#"aa05", True, 40, 40),
+        (#"aa06", True, 40, 40), (#"aa07", True, 40, 40), (#"aa08", True, 40, 40),
+        (#"aa09", True, 40, 40),
+      ],
+    )
+  let outs =
+    [
+      tok_out(0, #"aa00", 40), tok_out(1, #"aa01", 40), tok_out(2, #"aa02", 40),
+      tok_out(3, #"aa03", 40), tok_out(4, #"aa04", 40), tok_out(5, #"aa05", 40),
+      tok_out(6, #"aa06", 40), tok_out(7, #"aa07", 40), tok_out(8, #"aa08", 40),
+      tok_out(9, #"aa09", 40),
+    ]
+  let total =
+    list.foldl(
+      orders,
+      0,
+      fn(o, acc) { acc + uniform_buy_share(d, orders, o.amount) },
+    )
+  run_buy_batch(d, orders, outs, total)
+}
+
 test batch_enforces_each_orders_own_min_received() {
   let d = mock_datum(Active, 0)
   let orders =
@@ -4102,7 +4259,7 @@ test batch_enforces_each_orders_own_min_received() {
     d,
     orders,
     [tok_out(0, #"de", 400), tok_out(1, #"df", 300)],
-    buy_cost(d, 0, 400) + buy_cost(d, 400, 300),
+    two_buy_uniform_total(d),
   )
 }
 

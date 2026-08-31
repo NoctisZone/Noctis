@@ -163,13 +163,27 @@ for (const v of blueprint.validators) {
  * (+~1,090 B each) — the check that stops a permissionless graduation opening
  * a pool already crediting its author with the whole reserve.
  *
- * Cardano Launch is the one to watch: 15,332 against a 16,384 cap leaves ~1 KB, and
- * the binding limit is PUBLISHING it as a reference script, which cannot be
- * split across transactions. It has been over that line before.
+ * Moved again by uniform batch clearing price: +219 on the quadratic curve,
+ * +220 on the linear one.
+ * The pricing decision predicted this would make the script SMALLER, on the reasoning
+ * that `gross_range` runs once per batch instead of once per order. Measured,
+ * it does not: the range function is one piece of code either way, called a
+ * different number of times, and the pre-pass that totals each side is new
+ * code that was not there before. ExUnits were measured too, on a real
+ * 10-order batch: 134.22 M mem / 42.40 B cpu sequential against 135.22 M /
+ * 42.79 B uniform — within a percent, and on the wrong side. The decision
+ * stands on its other three reasons; the size argument was simply wrong and
+ * should not be repeated.
+ *
+ * Cardano Launch is the one to watch: 15,551 against a 16,384 cap leaves 833 B,
+ * DOWN from 1,052, and the binding limit is PUBLISHING it as a reference
+ * script, which cannot be split across transactions. It has been over that
+ * line before. Anything that would merge the two curves into one validator has
+ * to fit inside what is left, and this change made that harder, not easier.
  */
 const RECORDED: Record<string, number> = {
-  bonding_curve: 12_280,
-  bonding_curve_tier_b: 15_332,
+  bonding_curve: 12_500,
+  bonding_curve_tier_b: 15_551,
   cto_governance: 8_060,
   cto_sybil_challenge: 2_201,
   curve_order: 1_775,

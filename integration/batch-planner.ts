@@ -189,17 +189,73 @@ export interface PlanBatchOptions {
  * would fail on chain. Everything else is reported as a skip.
  */
 export function planBatch(options: PlanBatchOptions): BatchPlan {
+  const derivedRoot = bytesToHex(options.capState.root);
+  if (derivedRoot !== options.curve.cap_root) {
+    throw new Error(
+      `Cap accumulator is stale: it derives ${derivedRoot} but the curve datum carries ${options.curve.cap_root}. ` +
+        'Rebuild it from the launch’s trade history before planning a batch.',
+    );
+  }
+
+  // UNIFORM PRICING MAKES ADMISSION CIRCULAR, so this converges rather than
+  // deciding in one pass.
+  //
+  // Every order on a side pays that side's batch average, so an order's price
+  // depends on which other orders are in the batch — while whether it can be
+  // admitted at all depends on its price, through max_spend and min_received.
+  // Removing one order therefore reprices the rest.
+  //
+  // Start optimistic (price as if everything fills), then re-price over
+  // whatever actually filled, until the two agree. It converges because the
+  // fill set can only shrink: an order that fitted at one price still fits
+  // once others are removed, since dropping a buy shortens the range above the
+  // starting position and lowers what every remaining buyer pays, and dropping
+  // a sell shortens the range below it and raises what every remaining seller
+  // receives. At most N passes, and normally one.
+  const identify = (o: CandidateOrder): string => `${o.txHash}#${o.outputIndex}`;
+  let pricingSet: readonly CandidateOrder[] = options.orders;
+  for (let pass = 0; ; pass++) {
+    const plan = planOnce(options, pricingSet);
+    const filled = plan.fills.map((f) => f.order);
+    const same =
+      filled.length === pricingSet.length &&
+      filled.every((o, i) => identify(o) === identify(pricingSet[i] as CandidateOrder));
+    // The guard is belt and braces: the shrinking argument above already bounds
+    // this, and a pass that somehow neither settled nor shrank would spin.
+    if (same || filled.length === 0 || pass >= options.orders.length) return plan;
+    pricingSet = filled;
+  }
+}
+
+/**
+ * One admission pass. Every order is considered and reported on, while prices
+ * come from `pricingSet` — the orders this pass assumes will fill.
+ */
+function planOnce(options: PlanBatchOptions, pricingSet: readonly CandidateOrder[]): BatchPlan {
   const { shape, curve, capState, orders, nowMs } = options;
   const maxOrders = options.maxOrders ?? MAX_ORDERS_PER_BATCH;
   const minPayout = options.minPayoutLovelace ?? DEFAULT_MIN_PAYOUT_LOVELACE;
 
-  const derivedRoot = bytesToHex(capState.root);
-  if (derivedRoot !== curve.cap_root) {
-    throw new Error(
-      `Cap accumulator is stale: it derives ${derivedRoot} but the curve datum carries ${curve.cap_root}. ` +
-        'Rebuild it from the launch’s trade history before planning a batch.',
-    );
-  }
+  // Both sides price from the position the curve held BEFORE the batch, so
+  // neither depends on the order the batch happens to be listed in. This
+  // mirrors the validator exactly; if the two ever disagree the batch simply
+  // fails on chain, which is why the arithmetic is written the same way here.
+  const batchBuyAmount = pricingSet.filter((o) => o.isBuy).reduce((a, o) => a + o.amount, 0n);
+  const batchSellAmount = pricingSet.filter((o) => !o.isBuy).reduce((a, o) => a + o.amount, 0n);
+  const batchBuyGross = batchBuyAmount > 0n ? buyCost(shape, curve, curve.tokens_sold, batchBuyAmount) : 0n;
+  const batchSellGross =
+    batchSellAmount > 0n && batchSellAmount <= curve.tokens_sold
+      ? sellProceeds(shape, curve, curve.tokens_sold - batchSellAmount, batchSellAmount)
+      : 0n;
+  /** This order's slice of its side's single range, rounded as the validator rounds it. */
+  const shareOf = (order: CandidateOrder): bigint =>
+    order.isBuy
+      ? batchBuyAmount > 0n
+        ? (batchBuyGross * order.amount + batchBuyAmount - 1n) / batchBuyAmount
+        : 0n
+      : batchSellAmount > 0n
+        ? (batchSellGross * order.amount) / batchSellAmount
+        : 0n;
 
   const fills: PlannedFill[] = [];
   const skipped: SkippedOrder[] = [];
@@ -261,9 +317,9 @@ export function planBatch(options: PlanBatchOptions): BatchPlan {
         skip('below-min-received', `${order.amount} < ${order.minReceived}`);
         continue;
       }
-      const gross = buyCost(shape, curve, sold, order.amount);
+      const gross = shareOf(order);
       if (gross > order.maxSpend) {
-        skip('exceeds-max-spend', `costs ${gross}, allowed ${order.maxSpend}`);
+        skip('exceeds-max-spend', `costs ${gross} at the batch average, allowed ${order.maxSpend}`);
         continue;
       }
       const creatorFee = feeSlice(gross, CREATOR_BPS);
@@ -304,12 +360,12 @@ export function planBatch(options: PlanBatchOptions): BatchPlan {
         skip('exceeds-max-spend', `selling ${order.amount}, allowed ${order.maxSpend}`);
         continue;
       }
-      const gross = sellProceeds(shape, curve, newSold, order.amount);
+      const gross = shareOf(order);
       const creatorFee = feeSlice(gross, CREATOR_BPS);
       const platformFee = feeSlice(gross, PLATFORM_BPS);
       const net = gross - creatorFee - platformFee;
       if (net < order.minReceived) {
-        skip('below-min-received', `${net} < ${order.minReceived}`);
+        skip('below-min-received', `${net} at the batch average < ${order.minReceived}`);
         continue;
       }
       // The seller is paid in one output and that output must itself satisfy

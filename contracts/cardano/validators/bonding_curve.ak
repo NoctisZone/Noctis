@@ -1688,10 +1688,53 @@ validator bonding_curve {
       // the variant (avoids a wider blast-radius rename across every
       // off-chain caller).
       BatchTrades { orders, batcher_key_hash } -> {
-        // Thread tokens_sold AND cap_root through: order k prices at the
-        // position order k-1 left, and proves its cap against the root order
-        // k-1 left, so a batch is exactly the sequence of single trades it
-        // stands in for — including for the cap.
+        // UNIFORM CLEARING PRICE — the same rule and the same
+        // arithmetic as the quadratic curve; see that file for the reasoning.
+        //
+        // Every order on a side pays that side's batch average, so position
+        // within a batch is worth nothing and the batcher's ordering choice
+        // stops being something to police. Both sides are anchored at the
+        // position the curve held BEFORE the batch, which is what makes the
+        // result independent of the order the batch is listed in.
+        let sides =
+          list.foldl(
+            orders,
+            (0, 0),
+            fn(order, acc) {
+              let (buys, sells) = acc
+              if order.is_buy {
+                (buys + order.amount, sells)
+              } else {
+                (buys, sells + order.amount)
+              }
+            },
+          )
+        let (batch_buy_amount, batch_sell_amount) = sides
+
+        // A batch cannot sell back more than the curve has ever sold; the
+        // anchored sell range would otherwise start below zero.
+        let sell_range_real = batch_sell_amount <= datum.tokens_sold
+
+        let batch_buy_gross =
+          if batch_buy_amount > 0 {
+            buy_cost(datum, datum.tokens_sold, batch_buy_amount)
+          } else {
+            0
+          }
+        let batch_sell_gross =
+          if and { batch_sell_amount > 0, sell_range_real } {
+            sell_proceeds(
+              datum,
+              datum.tokens_sold - batch_sell_amount,
+              batch_sell_amount,
+            )
+          } else {
+            0
+          }
+
+        // tokens_sold is still threaded, for the supply and floor checks and
+        // to land the final position — it just no longer sets any price. The
+        // cap root still advances per order.
         let folded =
           list.foldl(
             orders,
@@ -1700,7 +1743,10 @@ validator bonding_curve {
               let (sold, ada_in, ada_out, creator_acc, platform_acc, root, ok) =
                 acc
               if order.is_buy {
-                let gross = buy_cost(datum, sold, order.amount)
+                // Pro-rata slice of the one batch range, rounded UP so the
+                // remainder stays with the curve.
+                let gross =
+                  ( batch_buy_gross * order.amount + batch_buy_amount - 1 ) / batch_buy_amount
                 let creator_fee = fee_slice(gross, creator_bps)
                 let platform_fee = fee_slice(gross, platform_bps)
                 let cap_after = order.cap_committed_before + order.amount
@@ -1729,7 +1775,8 @@ validator bonding_curve {
                 )
               } else {
                 let new_sold = sold - order.amount
-                let gross = sell_proceeds(datum, new_sold, order.amount)
+                // Rounded DOWN, so the curve never pays above its own range.
+                let gross = batch_sell_gross * order.amount / batch_sell_amount
                 let creator_fee = fee_slice(gross, creator_bps)
                 let platform_fee = fee_slice(gross, platform_bps)
                 let net = gross - creator_fee - platform_fee
@@ -1793,6 +1840,9 @@ validator bonding_curve {
         and {
           datum.curve_state == Active,
           orders_ok,
+          // The batch's sells price from below the pre-batch position, so it
+          // cannot sell back more than the curve has ever sold.
+          sell_range_real,
           !list.is_empty(orders),
           list.has(self.extra_signatories, batcher_key_hash),
           new_datum == expected_datum,
@@ -6190,17 +6240,42 @@ test tier_a_batch_rejects_leaving_the_reserve_intact() {
 }
 
 
-/// The property the design rests on: order 2 prices from where order 1
-/// finished. The linear curve is linear where Cardano Launch is quadratic, so this is a genuinely
-/// separate check, not a copy.
-test tier_a_batch_prices_each_order_at_its_own_position() {
+/// Every order in a batch pays the batch average. The curve is linear where
+/// the other is quadratic, so the arithmetic is genuinely separate, not a copy.
+///
+/// THE AGGREGATE TRANSACTION IS THE SAME UNDER BOTH PRICING MODELS on this
+/// fixture, and that is not a quirk worth hiding: a range cost is additive, so
+/// the curve takes 290,185 either way, and on these particular amounts the
+/// floored fee slices land on the same figures too. The batch a batcher would
+/// submit is therefore byte-identical. What differs is what each ORDER pays —
+/// 279.55 and 594.55 per token sequentially against 414.55 for both here —
+/// and that is enforced by curve_order.ak against each order's own max_spend,
+/// not by this validator.
+///
+/// So the acceptance check below cannot tell the two models apart, and saying
+/// it does would be false. The per-order figures underneath it are what
+/// actually discriminates, pinned as literals so a regression to sequential
+/// pricing fails here rather than passing quietly.
+test tier_a_batch_prices_every_order_at_the_batch_average() {
   let d = mock_datum(Active, 0)
-  a_run_batch(
-    d,
-    a_two_orders(),
-    [a_tok_out(0, #"de", 400), a_tok_out(1, #"df", 300)],
-    buy_cost(d, 0, 400) + buy_cost(d, 400, 300),
-  )
+  let batch = buy_cost(d, 0, 700)
+  and {
+    // Uniform: one range, split pro-rata.
+    ( batch * 400 + 699 ) / 700 == 165_820,
+    ( batch * 300 + 699 ) / 700 == 124_365,
+    // Sequential, for contrast — what this used to charge.
+    buy_cost(d, 0, 400) == 111_820,
+    buy_cost(d, 400, 300) == 178_365,
+    // Identical to the curve, which is why the change is free.
+    batch == 290_185,
+    buy_cost(d, 0, 400) + buy_cost(d, 400, 300) == 290_185,
+    a_run_batch(
+      d,
+      a_two_orders(),
+      [a_tok_out(0, #"de", 400), a_tok_out(1, #"df", 300)],
+      batch,
+    ),
+  }
 }
 
 test tier_a_batch_rejects_pricing_every_order_from_the_batch_start() {

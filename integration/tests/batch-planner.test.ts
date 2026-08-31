@@ -77,7 +77,7 @@ function plan(orders: CandidateOrder[], opts: Partial<Parameters<typeof planBatc
 }
 
 describe('planBatch — pricing', () => {
-  it('prices each order where the one before it finished', () => {
+  it('charges every order in a batch the same price per token', () => {
     const c = curve();
     const result = plan([
       order({ amount: 400n, minReceived: 400n }),
@@ -85,10 +85,35 @@ describe('planBatch — pricing', () => {
     ]);
 
     expect(result.fills).toHaveLength(2);
-    expect(result.fills[0]?.gross).toBe(buyCost('linear', c, 0n, 400n));
-    // The property: from 400, not from 0.
-    expect(result.fills[1]?.gross).toBe(buyCost('linear', c, 400n, 300n));
-    expect(result.fills[1]?.gross).not.toBe(buyCost('linear', c, 0n, 300n));
+    // One range for the side, split pro-rata: the batch average, not the price
+    // each order's own position would have given it.
+    const batch = buyCost('linear', c, 0n, 700n);
+    expect(result.fills[0]?.gross).toBe((batch * 400n + 699n) / 700n);
+    expect(result.fills[1]?.gross).toBe((batch * 300n + 699n) / 700n);
+
+    // The property that makes position in a batch worth nothing. Rounding is
+    // per order, so the two rates can differ by a fraction of a lovelace on
+    // the last digit — they must not differ by more.
+    const rate = (f: { gross: bigint; order: { amount: bigint } }) => (f.gross * 1_000_000n) / f.order.amount;
+    const spread = rate(result.fills[0]!) - rate(result.fills[1]!);
+    expect(spread < 1_000n && spread > -1_000n).toBe(true);
+
+    // And it is emphatically NOT the sequential price it used to be.
+    expect(result.fills[1]?.gross).not.toBe(buyCost('linear', c, 400n, 300n));
+  });
+
+  it('leaves the curve taking exactly what sequential pricing took', () => {
+    const c = curve();
+    const result = plan([
+      order({ amount: 400n, minReceived: 400n }),
+      order({ ownerKeyHashHex: BOB, amount: 300n, minReceived: 300n }),
+    ]);
+    const uniform = (result.fills[0]?.gross ?? 0n) + (result.fills[1]?.gross ?? 0n);
+    const sequential = buyCost('linear', c, 0n, 400n) + buyCost('linear', c, 400n, 300n);
+    // The whole basis of the decision: uniform pricing redistributes inside
+    // the batch and costs the curve nothing. If this ever fails, the change
+    // stopped being free and the reasoning behind it no longer holds.
+    expect(uniform).toBe(sequential);
   });
 
   it('charges a batch exactly what the same trades cost one at a time', () => {
@@ -414,12 +439,16 @@ describe('planBatch — Cardano Launch is a different curve, not a different fol
     expect(quadratic.fills[0]?.gross).not.toBe(linear.fills[0]?.gross);
   });
 
-  it('threads position on Cardano Launch too', () => {
+  it('prices the batch as one range on the quadratic curve too', () => {
     const c = curve();
     const result = plan(
       [order({ amount: 400n, minReceived: 400n }), order({ ownerKeyHashHex: BOB, amount: 300n, minReceived: 300n })],
       { shape: 'quadratic' },
     );
-    expect(result.fills[1]?.gross).toBe(buyCost('quadratic', c, 400n, 300n));
+    const batch = buyCost('quadratic', c, 0n, 700n);
+    expect(result.fills[0]?.gross).toBe((batch * 400n + 699n) / 700n);
+    expect(result.fills[1]?.gross).toBe((batch * 300n + 699n) / 700n);
+    // The shape changes the range's value, not how a batch is split over it.
+    expect(result.fills[1]?.gross).not.toBe(buyCost('quadratic', c, 400n, 300n));
   });
 });
