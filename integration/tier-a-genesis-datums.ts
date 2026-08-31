@@ -98,8 +98,8 @@ import {
   type LpEscrowDatumData,
   LpEscrowDatumSchema,
   loadValidator,
-  type StakingDatumData,
-  StakingDatumSchema,
+  type StakingPoolDatumData,
+  StakingPoolDatumSchema,
   type TokenMetadataDatumData,
   TokenMetadataDatumSchema,
   threadNftAssetNames,
@@ -184,6 +184,16 @@ export interface BuildGenesisDatumsInput {
   walletCapPct?: number; // default 5 (WALLET_CAP_PCT)
   stakingEnabled?: boolean; // default false
   stakingAllocPct?: number; // default 25 (STAKING_ALLOC_PCT), only applied if stakingEnabled
+  /**
+   * The runway the creator commits to, STAKING_DURATION_MIN_DAYS..MAX_DAYS.
+   * Required when staking is enabled and deliberately given no default: it
+   * and the reserve together fix the pool's emission rate for life, and the
+   * curve pins that rate on chain, so a wrong value here cannot be corrected
+   * later.
+   */
+  stakingDurationDays?: number;
+  /** Overrides the pool's opening timestamp. Real POSIX ms; defaults to now. */
+  mintedAtMs?: number;
 
   basePrice: number; // lovelace/token at sold=0
   maxPrice: number; // lovelace/token at sold=curve_supply
@@ -335,6 +345,14 @@ export async function buildGenesisDatums(input: BuildGenesisDatumsInput) {
   const walletCapPct = input.walletCapPct ?? 5;
   const stakingEnabled = input.stakingEnabled ?? false;
   const stakingAllocPct = input.stakingAllocPct ?? 25;
+  const stakingDurationDays = input.stakingDurationDays ?? 0;
+  if (stakingEnabled && (stakingDurationDays < 1095 || stakingDurationDays > 1825)) {
+    throw new Error(
+      `stakingDurationDays must be ${1095}-${1825} (STAKING_DURATION_MIN_DAYS..MAX_DAYS) when staking is enabled; ` +
+        `got ${input.stakingDurationDays ?? 'nothing'}. It fixes the pool's emission rate for life and the curve ` +
+        'pins that rate on chain, so there is no correcting it afterwards.',
+    );
+  }
   const lpLockDurationMs = input.lpLockDurationMs ?? 31_536_000_000;
 
   if (input.vestDays < 90 || input.vestDays > 365) {
@@ -462,6 +480,7 @@ export async function buildGenesisDatums(input: BuildGenesisDatumsInput) {
     staking_enabled: stakingEnabled,
     staking_pool_credential: stakingPoolCredential,
     staking_reserve_tokens: BigInt(stakingReserveTokens),
+    staking_duration_days: BigInt(stakingDurationDays),
     staking_seeded: false,
     cto_governance_credential: ctoGovernanceCredential,
     thread_nft_policy: threadNftPolicyId,
@@ -588,23 +607,29 @@ export async function buildGenesisDatums(input: BuildGenesisDatumsInput) {
   // Wrapped as the Pool variant of StakingDatum (Constr 0 with ONE nested
   // field), not the bare StakingPoolDatum — see StakingDatumShape's own
   // comment in tier-a-schemas.ts.
-  const stakingPoolDatum: StakingDatumData = {
-    Pool: [
-      {
-        launch_id: launchIdHex,
-        governor_pub_key_hash: input.governorPubKeyHashHex,
-        creator_pub_key_hash: input.creatorPubKeyHashHex,
-        token_policy_id: input.tokenPolicyIdHex,
-        token_asset_name: tokenAssetNameHex,
-        // No rewards accrued yet, so no root has been published and nobody
-        // has claimed. Both start empty, same convention as the curve's own
-        // zeroed counters. The first PublishRewardRoot brings the nullifier
-        // sized for the roster it pays.
-        reward_root: '',
-        claimed_bits: '',
-        thread_nft_policy: threadNftPolicyId,
-      },
-    ],
+  const stakingPoolDatum: StakingPoolDatumData = {
+    launch_id: launchIdHex,
+    creator_pub_key_hash: input.creatorPubKeyHashHex,
+    token_policy_id: input.tokenPolicyIdHex,
+    token_asset_name: tokenAssetNameHex,
+    thread_nft_policy: threadNftPolicyId,
+    // The rate the pool keeps for life: the reserve the creator carved out,
+    // spread across the runway they chose. Derived here and pinned on chain
+    // by the curve's own seeding check, so graduation cannot choose it.
+    // Guarded because this datum is constructed whether or not the creator
+    // opted in — it is only EMITTED when they did, and 0/0 is NaN, which
+    // BigInt refuses at a call site nowhere near the cause.
+    emission_per_day: stakingEnabled ? BigInt(Math.floor(stakingReserveTokens / stakingDurationDays)) : 0n,
+    stake_root: capBytesToHex(CAP_EMPTY_ROOT),
+    acc_reward_per_token: 0n,
+    total_staked: 0n,
+    // Nothing to pay out yet. The reserve arrives at graduation, which is
+    // also when the pool starts running — the tokens are still in the curve
+    // until then, and `Stake` refuses a pool with no budget precisely so this
+    // opening state cannot be disturbed before the curve seeds it.
+    unallocated: 0n,
+    last_update_ms: BigInt(input.mintedAtMs ?? Date.now()),
+    exhausted_at: null,
   };
 
   // 2026-08-03: the ZK anchor's own genesis datum — also never authored
@@ -663,7 +688,7 @@ export async function buildGenesisDatums(input: BuildGenesisDatumsInput) {
   const vestingCbor = Data.to(vestingDatum, VestingDatumSchema);
   const lpEscrowCbor = Data.to(lpEscrowDatum, LpEscrowDatumSchema);
   const ctoGovernanceCbor = Data.to(ctoGovernanceDatum, CtoGovernanceDatumSchema);
-  const stakingPoolCbor = stakingEnabled ? Data.to(stakingPoolDatum, StakingDatumSchema) : null;
+  const stakingPoolCbor = stakingEnabled ? Data.to(stakingPoolDatum, StakingPoolDatumSchema) : null;
   const zkAnchorCbor = Data.to(zkAnchorDatum, ZkAnchorDatumSchema);
   const tokenMetadataCbor = Data.to(tokenMetadataDatum, TokenMetadataDatumSchema);
 

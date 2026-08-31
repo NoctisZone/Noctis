@@ -99,6 +99,7 @@ use cto_governance.{
 }
 use noctis/cap_accumulator.{CapProofStep}
 use noctis/settlement
+use noctis/staking_pool_datum
 use noctis/thread_nft
 
 /// A Cardano script only ever sees a transaction's OWN DECLARED
@@ -249,6 +250,12 @@ pub type BondingCurveDatum {
   staking_enabled: Bool,
   staking_pool_credential: Credential,
   staking_reserve_tokens: Int,
+  // The runway the creator commits to at launch creation, and the pool's
+  // whole emission schedule: `staking_reserve_tokens / staking_duration_days`
+  // is the rate the pool opens with and keeps for life. On chain here, rather
+  // than off, because graduation is permissionless — a rate chosen at
+  // graduation would be a rate chosen by whoever submitted it.
+  staking_duration_days: Int,
   // Fix: cto_governance.ak's own fixed script address, set
   // at genesis exactly like lp_escrow_credential/staking_pool_credential
   // above — same "no constructor params, one fixed address shared across
@@ -1119,22 +1126,70 @@ fn lp_seeding_output_ok(
 fn staking_seeding_output_ok(self: Transaction, datum: BondingCurveDatum) -> Bool {
   if !datum.staking_enabled {
     True
+  } else if !staking_pool_datum.terms_are_real(
+    datum.staking_reserve_tokens,
+    datum.staking_duration_days,
+  ) {
+    False
   } else {
     list.any(
       self.outputs,
       fn(output) {
-        output.address.payment_credential == datum.staking_pool_credential && output.address.stake_credential == None && assets.quantity_of(
-          output.value,
-          datum.token_policy_id,
-          datum.token_asset_name,
-        ) == datum.staking_reserve_tokens && assets.quantity_of(
-          output.value,
-          datum.thread_nft_policy,
-          thread_nft.thread_asset_name(
-            thread_nft.role_staking_pool,
-            datum.launch_id,
-          ),
-        ) == 1 && output_value_clean(output, 3)
+        and {
+          output.address.payment_credential == datum.staking_pool_credential,
+          output.address.stake_credential == None,
+          assets.quantity_of(
+            output.value,
+            datum.token_policy_id,
+            datum.token_asset_name,
+          ) == datum.staking_reserve_tokens,
+          assets.quantity_of(
+            output.value,
+            datum.thread_nft_policy,
+            thread_nft.thread_asset_name(
+              thread_nft.role_staking_pool,
+              datum.launch_id,
+            ),
+          ) == 1,
+          output_value_clean(output, 3),
+          // The pool's OPENING DATUM, pinned field for field rather than left
+          // to whoever submits the graduation. Graduate is permissionless, so
+          // an unchecked datum here is an unchecked datum written by a
+          // stranger: an emission rate that empties the pool in an afternoon,
+          // a budget of zero, or — the one that takes the money — a
+          // `stake_root` already crediting its author with the whole reserve,
+          // ready to be unstaked. `genesis` derives every field from terms
+          // fixed at launch creation, including the rate, so there is nothing
+          // left to choose.
+          //
+          // The opening timestamp is the one field a submitter supplies, and
+          // the validity range is what keeps it honest — same
+          // contains-plus-narrow idiom every other timestamp in this file
+          // uses.
+          when output.datum is {
+            InlineDatum(raw) -> {
+              expect opened: staking_pool_datum.StakingPoolDatum = raw
+              and {
+                interval.contains(self.validity_range, opened.last_update_ms),
+                validity_range_is_narrow(
+                  self.validity_range,
+                  max_validity_range_width,
+                ),
+                opened == staking_pool_datum.genesis(
+                  datum.launch_id,
+                  datum.creator_pub_key_hash,
+                  datum.token_policy_id,
+                  datum.token_asset_name,
+                  datum.thread_nft_policy,
+                  datum.staking_reserve_tokens,
+                  datum.staking_duration_days,
+                  opened.last_update_ms,
+                ),
+              }
+            }
+            _ -> False
+          },
+        }
       },
     )
   }
@@ -1944,6 +1999,7 @@ fn mock_datum(curve_state: CurveState, tokens_sold: Int) -> BondingCurveDatum {
     staking_enabled: False,
     staking_pool_credential: from_verification_key(#"aa").payment_credential,
     staking_reserve_tokens: 0,
+    staking_duration_days: 0,
     staking_seeded: False,
     cto_governance_credential: from_verification_key(#"dd").payment_credential,
     // Fix: mock governance thread NFT policy — matches the NFT placed in
@@ -5185,11 +5241,34 @@ test graduate_rejects_underpaid_lp_seeding() {
 
 // Graduate + staking rewards pool seeding
 
+/// The one datum a graduation may open this launch's pool with — derived, not
+/// written, so a fixture cannot quietly disagree with what the validator
+/// derives for itself.
+fn staking_genesis(datum: BondingCurveDatum, opened_at: Int) -> staking_pool_datum.StakingPoolDatum {
+  staking_pool_datum.genesis(
+    datum.launch_id,
+    datum.creator_pub_key_hash,
+    datum.token_policy_id,
+    datum.token_asset_name,
+    datum.thread_nft_policy,
+    datum.staking_reserve_tokens,
+    datum.staking_duration_days,
+    opened_at,
+  )
+}
+
+/// When these graduations happen. Any value works; it only has to sit inside
+/// the transaction's own validity range.
+const graduation_time = 1_700_000_000_000
+
+
 fn staking_graduation_datum() -> BondingCurveDatum {
   BondingCurveDatum {
     ..graduation_datum(),
     staking_enabled: True,
     staking_reserve_tokens: 250,
+    // 250 over 10 days = 25 a day.
+    staking_duration_days: 10,
   }
 }
 
@@ -5246,7 +5325,7 @@ test graduate_succeeds_with_lp_and_staking_seeding() {
     Output {
       address: staking_address,
       value: assets.merge(mock_staking_pool_nft(), assets.from_asset(#"33", "tok", 250)),
-      datum: transaction.NoDatum,
+      datum: InlineDatum(staking_genesis(datum, graduation_time)),
       reference_script: None,
     }
   let self =
@@ -5254,6 +5333,10 @@ test graduate_succeeds_with_lp_and_staking_seeding() {
       ..transaction.placeholder,
       inputs: [own_input],
       outputs: [continuing_output, lp_output, staking_output],
+      validity_range: interval.between(
+        graduation_time - 100,
+        graduation_time + 100,
+      ),
     }
 
   bonding_curve.spend(Some(datum), Graduate, own_ref, self)
@@ -5592,6 +5675,10 @@ test graduate_rejects_lp_output_without_thread_nft() {
       ..transaction.placeholder,
       inputs: [own_input],
       outputs: [continuing_output, lp_output, staking_output],
+      validity_range: interval.between(
+        graduation_time - 100,
+        graduation_time + 100,
+      ),
     }
 
   !bonding_curve.spend(Some(datum), Graduate, own_ref, self)
@@ -5668,6 +5755,10 @@ test graduate_rejects_staking_output_without_thread_nft() {
       ..transaction.placeholder,
       inputs: [own_input],
       outputs: [continuing_output, lp_output, staking_output],
+      validity_range: interval.between(
+        graduation_time - 100,
+        graduation_time + 100,
+      ),
     }
 
   !bonding_curve.spend(Some(datum), Graduate, own_ref, self)

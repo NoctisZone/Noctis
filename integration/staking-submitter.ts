@@ -1,44 +1,35 @@
 // ============================================================================
-// Noctis Zone — Staking Rewards Pool real Cardano submitter
+// Noctis Zone — Staking Rewards Pool submitter
 // ============================================================================
-// contracts/cardano/validators/staking_pool.ak — one shared validator
-// address for Tier A AND Tier B (not tier-specific like bonding_curve vs
-// bonding_curve_tier_b). Two datum shapes share the address: Pool (one per
-// launch, real depleting reward-token UTXO value) and Position (one per
-// stake action). See tier-a-schemas.ts's StakingDatumSchema/
-// StakingPoolDatumSchema/StakingPositionDatumSchema for the verified field
-// order/constructor indices (confirmed against a freshly-regenerated
-// plutus.json, round-tripped through a real Data.to/Data.from encode/
-// decode cycle before use — not assumed from .ak source alone).
+// contracts/cardano/validators/staking_pool.ak — one unparameterized validator
+// at one address, shared by every Cardano launch and told apart only by each
+// pool's thread NFT.
 //
-// Constructor indices, StakingPoolRedeemer (verified against plutus.json):
-//   Unstake=0 (no fields), ClaimRewards=1 (staker_vkh, claimed_cumulative_
-//   amount, merkle_proof), TopUpPool=2 (amount), PublishRewardRoot=3
-//   (new_root), QueryState=4 (hardened to always-False, never
-//   constructed here).
+// EVERY ACTION SPENDS THE POOL
+// Positions are not UTXOs. They live behind a Merkle root in the pool's own
+// datum, so a stake, a claim, an exit and a top-up are all one spend of one
+// UTXO — which means they serialise, and two built against the same pool state
+// cannot both land. A caller that loses the race rebuilds and retries; nothing
+// is lost, because a proof is only valid against the root it was built for.
 //
-// Staking itself (first or additional stake) needs NO redeemer — creating
-// a script UTXO is permissionless on Cardano, same as any deposit. Only
-// spending an existing Position/Pool UTXO needs a redeemer.
+// WHAT THIS FILE OWES THE VALIDATOR
+// Three things, and all three fail loudly rather than quietly:
 //
-// ClaimRewards is deliberately PERMISSIONLESS on-chain (no signature
-// check) — "the proof is the authorization," same idiom as Graduate/
-// ExpireCurve elsewhere in this codebase. The staker's own wallet is the
-// practical caller in every method below, but nothing on-chain requires
-// that; a relayer could submit on a staker's behalf without changing where
-// funds land (the payment-credential-only check guarantees
-// payout always reaches the real staker_vkh's address regardless of who
-// signs/submits the transaction).
+//   1. The arithmetic. Every field of the continuing datum is compared on
+//      chain against what the validator derives for itself, so this file
+//      computes them through staking-math.ts — a line-for-line mirror, pinned
+//      by tests against the validator's own.
+//   2. The position tree. A proof is built off chain and verified on chain, so
+//      the rebuilt tree must derive the root the pool datum actually carries.
+//      Checked before any transaction is built (`loadPool`), so a rebuild that
+//      is subtly wrong fails here with something to point at.
+//   3. The clock. The validator reads the validity range's LOWER bound as
+//      "now" and refuses a range wider than ten minutes.
 //
-// Two signing shapes, same split as every other Tier A/B submitter in
-// this codebase:
-//   - Extended-key signing (topUpPool, publishRewardRoot): the creator/
-//     governor platform-wallet custody scheme only ever persists an
-//     encrypted extended skey, never a mnemonic — see tier-a-claims-
-//     submitter.ts's own header for why.
-//   - WalletApi signing (stakeWithWallet, unstakeWithWallet,
-//     claimRewardsWithWallet): the real holder-facing production path,
-//     lucid.selectWallet.fromAPI(walletApi) + sign.withWallet().
+// Two signing shapes, the same split as every other submitter here:
+//   - WalletApi signing (`*WithWallet`) — the real holder-facing path.
+//   - Extended-key signing — the platform-wallet custody scheme, for the CLI
+//     verification path.
 // ============================================================================
 
 import type {
@@ -50,16 +41,21 @@ import type {
   WalletApi,
 } from '@lucid-evolution/lucid';
 import { Blockfrost, CML, Constr, Data, getAddressDetails, Lucid, validatorToAddress } from '@lucid-evolution/lucid';
-import { clearedBitmapHex, setBit, testBit } from './claim-bitmap.js';
+import { bytesToHex, type CapProofStep, hexToBytes, recomputeCapRoot } from './cap-accumulator-tree.js';
 import { selectStakingPoolUtxo } from './launch-utxo-lookup.js';
 import { STAKING_POOL_REDEEMER } from './redeemer-indices.js';
+import { NO_POSITION, StakeAccumulator, type StakePosition, stakeLeafFor } from './stake-accumulator-tree.js';
 import {
-  type StakingDatumData,
-  StakingDatumSchema,
-  type StakingPoolDatumData,
-  type StakingPositionDatumData,
-  settlementDatum,
-} from './tier-a-schemas.js';
+  advance,
+  currentAprPercent,
+  debtAt,
+  exhaustedAfter,
+  owedAt,
+  runwayDaysRemaining,
+  UNSTAKE_LOCK_MS,
+  validityRangeFor,
+} from './staking-math.js';
+import { type StakingPoolDatumData, StakingPoolDatumSchema, settlementDatum } from './tier-a-schemas.js';
 
 function fromHex(hex: string): Uint8Array {
   return new Uint8Array(Buffer.from(hex, 'hex'));
@@ -73,21 +69,17 @@ function extendedHexToBech32PrivateKey(extendedHex: string): string {
   return CML.PrivateKey.from_extended_bytes(bytes).to_bech32();
 }
 
-/** Same pattern as tier-a-curve-submitter.ts's buyerKeyHashFromAddress. */
 function keyHashFromAddress(address: string): string {
-  const details = getAddressDetails(address);
-  const hash = details.paymentCredential?.hash;
-  if (!hash) {
-    throw new Error(`Could not derive a payment-credential key hash from address ${address}.`);
-  }
+  const hash = getAddressDetails(address).paymentCredential?.hash;
+  if (!hash) throw new Error(`Could not derive a payment-credential key hash from address ${address}.`);
   return hash;
 }
 
-/** Minimum lovelace to include alongside a real launch token in a Position/
- *  Pool UTXO — same conservative floor value this codebase's own
- *  staking_pool.ak tests use throughout (2 ADA), not a computed min-UTxO
- *  (Lucid Evolution's own coin selection tops this up further if the real
- *  protocol parameter requires more for the actual datum size). */
+/**
+ * Minimum lovelace to keep beside the pool's tokens. The pool UTXO is
+ * long-lived and its lovelace never changes, so this is only used when a
+ * builder has to restate the value.
+ */
 const MIN_UTXO_LOVELACE = 2_000_000n;
 
 export interface StakingConfig {
@@ -97,81 +89,54 @@ export interface StakingConfig {
   stakingPoolScriptCbor: string;
   launchIdHex: string;
   /**
-   * The launch's thread-NFT policy id, hex, from the platform's own record of
-   * the launch. Every state UTXO is authenticated against it — reading the
-   * policy off the datum being checked would authenticate that datum against
-   * itself. See launch-utxo-lookup.ts.
+   * The launch's thread-NFT policy id, from the platform's own record of the
+   * launch. The pool UTXO is authenticated against it — reading the policy off
+   * the datum being checked would authenticate that datum against itself.
    */
   threadNftPolicyId: string;
 }
 
-export interface StakingPosition {
+/** One staker's position, as the pool records it. */
+export interface StakerPosition {
+  stakerVkhHex: string;
+  stakedAmount: bigint;
+  /** What they could claim right now. */
+  owed: bigint;
+  /** When the position last grew. The unstake lock runs from here. */
+  sinceMs: bigint;
+  unstakeUnlocksAtMs: bigint;
+}
+
+/** Everything a dashboard needs about one pool, in one read. */
+export interface PoolOverview {
+  launchIdHex: string;
+  tokenUnit: string;
+  /** Reward tokens the pool still holds and has not credited to anyone. */
+  unallocated: bigint;
+  emissionPerDay: bigint;
+  totalStaked: bigint;
+  stakerCount: number;
+  /** The pool's whole token balance: staked tokens plus the reward budget. */
+  poolTokenBalance: bigint;
+  /** Every open position, so a page can show the pool as well as one wallet. */
+  positions: StakerPosition[];
+  /**
+   * What one token staked earns per year at the CURRENT participation. Null
+   * while nothing is staked — the rate is undefined then, not infinite.
+   */
+  currentAprPercent: number | null;
+  /** Days of budget left at the current participation. Null while nothing is staked. */
+  runwayDaysRemaining: number | null;
+  exhaustedAtMs: bigint | null;
+  /** Set once exhausted; a top-up before this clears it and revives the pool. */
+  closesAfterMs: bigint | null;
+}
+
+/** A pool loaded, its position tree rebuilt, and the two checked against each other. */
+interface LoadedPool {
   utxo: UTxO;
-  datum: StakingPositionDatumData;
-}
-
-/** Names one of a staker's positions. Both halves, because an index alone is meaningless and a hash alone is not unique. */
-export interface PositionRef {
-  txHash: string;
-  outputIndex: number;
-}
-
-/**
- * Which of a staker's positions an unstake should close.
- *
- * Unstaking closes one position and returns its stake. Positions differ in
- * `stake_timestamp`, and the bonding period is measured from it, so closing
- * the wrong one is not interchangeable with closing the right one — it can
- * discard seasoning the staker has already served.
- *
- * So the two ambiguous readings are refused rather than resolved:
- *
- *   - a reference naming a transaction but not an output, which would
- *     otherwise fall back to output 0 and match a position the caller never
- *     named;
- *   - no reference at all while the staker holds more than one position,
- *     which would otherwise close whichever the chain query happened to
- *     return first — an order nothing promises and two of our own chain
- *     backends have already disagreed about.
- *
- * The unambiguous convenience is kept: no reference and exactly one position
- * closes that one.
- */
-export function selectPositionToUnstake(
-  positions: readonly StakingPosition[],
-  ref?: Partial<PositionRef>,
-): StakingPosition {
-  if (positions.length === 0) {
-    throw new Error('No staking positions found for this wallet.');
-  }
-
-  const named = (p: StakingPosition) => `${p.utxo.txHash}#${p.utxo.outputIndex}`;
-
-  if (ref?.txHash === undefined && ref?.outputIndex === undefined) {
-    if (positions.length > 1) {
-      throw new Error(
-        `This wallet holds ${positions.length} staking positions, so which one to unstake has to be named: ` +
-          `${positions.map(named).join(', ')}. Pass positionTxHash and positionOutputIndex.`,
-      );
-    }
-    return positions[0] as StakingPosition;
-  }
-
-  if (ref.txHash === undefined || ref.outputIndex === undefined) {
-    throw new Error(
-      'A position is named by BOTH positionTxHash and positionOutputIndex. ' +
-        'One transaction can carry more than one output, so half a reference names no particular position.',
-    );
-  }
-
-  const found = positions.find((p) => p.utxo.txHash === ref.txHash && p.utxo.outputIndex === ref.outputIndex);
-  if (!found) {
-    throw new Error(
-      `No staking position at ${ref.txHash}#${ref.outputIndex} for this wallet. ` +
-        `It holds: ${positions.map(named).join(', ')}.`,
-    );
-  }
-  return found;
+  datum: StakingPoolDatumData;
+  positions: StakeAccumulator;
 }
 
 export class StakingSubmitter {
@@ -183,491 +148,595 @@ export class StakingSubmitter {
     this.validator = { type: 'PlutusV3', script: config.stakingPoolScriptCbor };
     this.address = validatorToAddress(config.network, this.validator);
     this.lucidPromise = Lucid(new Blockfrost(config.blockfrostUrl, config.blockfrostProjectId), config.network);
-    // Nothing awaits this until a method runs, so a caller that constructs the
-    // submitter and then fails before calling one leaves the rejection with no
-    // handler — and Node prints it to stderr after the real answer has already
-    // been written to stdout. Attaching a no-op handler marks it handled
-    // WITHOUT swallowing it: a later `await this.lucidPromise` still rejects
-    // with the same error, which is the whole point (verified, not assumed).
+    // Marks the rejection handled WITHOUT swallowing it: a later await still
+    // rejects with the same error. Without this, a caller that constructs the
+    // submitter and fails before using it leaves Node printing a stack trace
+    // to stderr after the real answer has gone to stdout.
     this.lucidPromise.catch(() => {});
+  }
+
+  get poolAddress(): string {
+    return this.address;
   }
 
   private async allUtxos(lucid: LucidEvolution): Promise<UTxO[]> {
     return lucid.utxosAt(this.address);
   }
 
-  private decodeDatum(utxo: UTxO): StakingDatumData | null {
-    if (!utxo.datum) return null;
-    try {
-      return Data.from<StakingDatumData>(utxo.datum, StakingDatumSchema);
-    } catch {
-      return null;
-    }
-  }
-
   /**
    * The one Pool UTXO for this launch, authenticated by its thread NFT.
    *
-   * staking_pool.ak is unparameterized, so every launch's pool and every
-   * position of every launch share one address. The datum's `launch_id` is a
-   * claim by whoever created the UTXO — paying to a script address runs no
-   * validator — so the pool's role-tagged thread NFT is what distinguishes it,
-   * and a second UTXO answering to the same launch stops the lookup rather
-   * than being silently passed over. Same pair `pool_thread_nft_intact`
-   * checks on-chain. See launch-utxo-lookup.ts.
-   *
-   * Throws if staking was never enabled/seeded (Graduate's staking_seeded
-   * check) — as it did before, though the message now names the missing NFT.
+   * The validator is unparameterized, so every launch's pool shares one
+   * address and the datum's `launch_id` is a claim by whoever created the
+   * UTXO. The role-tagged thread NFT is what distinguishes it, and a second
+   * UTXO answering to the same launch stops the lookup rather than being
+   * silently passed over.
    */
   async findPoolUtxo(lucid: LucidEvolution): Promise<{ utxo: UTxO; datum: StakingPoolDatumData }> {
-    const utxos = await this.allUtxos(lucid);
     return selectStakingPoolUtxo<StakingPoolDatumData>(
-      utxos,
+      await this.allUtxos(lucid),
       this.address,
       this.config.launchIdHex,
-      StakingDatumSchema,
+      StakingPoolDatumSchema,
       this.config.threadNftPolicyId,
     );
   }
 
-  /** Live on-chain pool state — panel calls this directly, same "readCurveDatum()" convention as tier-a-claims-submitter.ts. */
+  /** Live on-chain pool state, without rebuilding the position tree. */
   async readPoolDatum(): Promise<StakingPoolDatumData> {
     const lucid = await this.lucidPromise;
-    const { datum } = await this.findPoolUtxo(lucid);
-    return datum;
+    return (await this.findPoolUtxo(lucid)).datum;
   }
 
   /**
-   * Every real Position UTXO belonging to one staker, for this launch — the
-   * panel's "your stakes" list.
+   * The pool, plus its position tree rebuilt from history and CHECKED against
+   * the root the datum carries.
    *
-   * Deliberately NOT authenticated by a thread NFT the way findPoolUtxo above
-   * is, and the Position datum deliberately carries no policy field to do it
-   * with: a position is created once per stake action, so there is no
-   * singleton for a token to mark. Nothing here needs one either. This returns
-   * every match rather than choosing among them, so there is no first-wins
-   * decision to get wrong, and a forged position gains its author nothing —
-   * `Unstake` pays out the UTXO's own real value, never the `staked_amount`
-   * its datum claims, and the reward tree derives weight from that same real
-   * balance.
+   * The check is the point. A proof built from a tree that disagrees with the
+   * chain by even one position fails script evaluation with a message naming
+   * neither the tree nor the position — so the disagreement is caught here,
+   * where it can say what it is. Same discipline as `rebuildCapAccumulator`.
    */
-  async findPositions(stakerAddress: string): Promise<StakingPosition[]> {
+  async loadPool(positions?: StakeAccumulator): Promise<LoadedPool> {
     const lucid = await this.lucidPromise;
-    const stakerVkh = keyHashFromAddress(stakerAddress);
-    const utxos = await this.allUtxos(lucid);
-    const out: StakingPosition[] = [];
-    for (const utxo of utxos) {
-      const decoded = this.decodeDatum(utxo);
-      if (decoded && 'Position' in decoded) {
-        const pos = decoded.Position[0];
-        if (pos.launch_id === this.config.launchIdHex && pos.staker_vkh === stakerVkh) {
-          out.push({ utxo, datum: pos });
-        }
+    const { utxo, datum } = await this.findPoolUtxo(lucid);
+    const tree = positions ?? (await this.rebuildPositions(datum));
+    const derived = bytesToHex(tree.root());
+    if (derived !== datum.stake_root) {
+      throw new Error(
+        `The rebuilt position tree does not match the pool. It derives ${derived}, ` +
+          `and the pool carries ${datum.stake_root}. Every proof built from it would be refused, ` +
+          'so nothing is submitted. Rebuild from a complete history before retrying.',
+      );
+    }
+    return { utxo, datum, positions: tree };
+  }
+
+  /**
+   * Replay this pool's own spends to recover every open position.
+   *
+   * Positions live behind a root, so the set behind it exists nowhere on
+   * chain in readable form — but every redeemer that ever moved one is public,
+   * and each names the staker and the position it started from. Folding them
+   * in order reproduces the set. Anyone can do this; nothing here is privileged
+   * or private, which is what keeps the pool auditable without a governor.
+   */
+  async rebuildPositions(datum?: StakingPoolDatumData): Promise<StakeAccumulator> {
+    const pool = datum ?? (await this.readPoolDatum());
+    const events = await this.readPoolRedeemers();
+    const tree = new StakeAccumulator();
+    let acc = 0n;
+    let unallocated = 0n;
+    let totalStaked = 0n;
+    let lastUpdate = 0n;
+    let seenGenesis = false;
+
+    for (const event of events) {
+      if (!seenGenesis) {
+        // The first spend acts on the pool as Graduate opened it.
+        acc = 0n;
+        unallocated = event.poolBefore.unallocated;
+        totalStaked = event.poolBefore.total_staked;
+        lastUpdate = event.poolBefore.last_update_ms;
+        seenGenesis = true;
+      }
+      const state = {
+        emission_per_day: pool.emission_per_day,
+        acc_reward_per_token: acc,
+        total_staked: totalStaked,
+        unallocated,
+        last_update_ms: lastUpdate,
+      };
+      const advanced = advance(state, event.nowMs);
+      acc = advanced.acc;
+      unallocated = advanced.unallocated;
+      lastUpdate = event.nowMs;
+
+      if (event.kind === 'topUp') {
+        unallocated += event.amount;
+        continue;
+      }
+      if (event.kind === 'close') break;
+
+      const before = event.before;
+      const owed = owedAt(before, acc);
+      if (event.kind === 'stake') {
+        const amount = before.amount + event.amount + owed;
+        tree.set(hexToBytes(event.stakerVkhHex), { amount, debt: debtAt(amount, acc), since: event.nowMs });
+        totalStaked += event.amount + owed;
+      } else if (event.kind === 'unstake') {
+        tree.set(hexToBytes(event.stakerVkhHex), NO_POSITION);
+        totalStaked -= before.amount;
+      } else {
+        tree.set(hexToBytes(event.stakerVkhHex), {
+          amount: before.amount,
+          debt: debtAt(before.amount, acc),
+          since: before.since,
+        });
+      }
+    }
+    return tree;
+  }
+
+  /**
+   * Every spend of this pool, oldest first, decoded from its redeemer.
+   *
+   * Blockfrost gives a redeemer's DATA HASH rather than its bytes, and indexes
+   * the bytes alongside datums — so this is two lookups per spend, the same
+   * route tier-a-trade-history-reader.ts already established.
+   */
+  private async readPoolRedeemers(): Promise<PoolEvent[]> {
+    const bf = async <T>(path: string): Promise<T> => {
+      const res = await fetch(`${this.config.blockfrostUrl}${path}`, {
+        headers: { project_id: this.config.blockfrostProjectId },
+      });
+      if (!res.ok) throw new Error(`Blockfrost ${path} returned ${res.status}`);
+      return res.json() as Promise<T>;
+    };
+
+    const txs: Array<{ tx_hash: string }> = [];
+    for (let page = 1; ; page++) {
+      const batch = await bf<Array<{ tx_hash: string }>>(
+        `/addresses/${this.address}/transactions?page=${page}&order=asc&count=100`,
+      );
+      txs.push(...batch);
+      if (batch.length < 100) break;
+    }
+
+    const out: PoolEvent[] = [];
+    for (const { tx_hash } of txs) {
+      const utxos = await bf<{
+        inputs: Array<{ tx_hash: string; output_index: number; address: string; inline_datum: string | null }>;
+      }>(`/txs/${tx_hash}/utxos`);
+      // Only a transaction that SPENT this pool carries a redeemer for it.
+      const spentOurs = utxos.inputs.find((i) => i.address === this.address && i.inline_datum);
+      if (!spentOurs?.inline_datum) continue;
+      let poolBefore: StakingPoolDatumData;
+      try {
+        poolBefore = Data.from<StakingPoolDatumData>(spentOurs.inline_datum, StakingPoolDatumSchema);
+      } catch {
+        continue;
+      }
+      if (poolBefore.launch_id !== this.config.launchIdHex) continue;
+
+      const redeemers = await bf<Array<{ purpose: string; redeemer_data_hash: string }>>(`/txs/${tx_hash}/redeemers`);
+      const tx = await bf<{ valid_contract: boolean; block_time: number }>(`/txs/${tx_hash}`);
+      if (!tx.valid_contract) continue;
+
+      for (const r of redeemers) {
+        if (r.purpose !== 'spend') continue;
+        const { cbor } = await bf<{ cbor: string }>(`/scripts/datum/${r.redeemer_data_hash}/cbor`);
+        const event = decodePoolRedeemer(cbor, poolBefore, BigInt(tx.block_time) * 1000n);
+        if (event) out.push(event);
       }
     }
     return out;
   }
 
+  /** Everything a dashboard needs about this pool, in one call. */
+  async overview(): Promise<PoolOverview> {
+    const { utxo, datum, positions } = await this.loadPool();
+    const nowMs = BigInt(Date.now());
+    const { acc } = advance(datum, nowMs);
+    const tokenUnit = datum.token_policy_id + datum.token_asset_name;
+
+    const open = positions.all().map(({ stakerVkhHex, position }) => ({
+      stakerVkhHex,
+      stakedAmount: position.amount,
+      owed: owedAt(position, acc),
+      sinceMs: position.since,
+      unstakeUnlocksAtMs: position.since + UNSTAKE_LOCK_MS,
+    }));
+
+    return {
+      launchIdHex: datum.launch_id,
+      tokenUnit,
+      unallocated: datum.unallocated,
+      emissionPerDay: datum.emission_per_day,
+      totalStaked: datum.total_staked,
+      stakerCount: open.length,
+      poolTokenBalance: utxo.assets[tokenUnit] ?? 0n,
+      positions: open,
+      currentAprPercent: currentAprPercent(datum.emission_per_day, datum.total_staked),
+      runwayDaysRemaining: runwayDaysRemaining(datum.emission_per_day, datum.unallocated, datum.total_staked),
+      exhaustedAtMs: datum.exhausted_at,
+      closesAfterMs: datum.exhausted_at === null ? null : datum.exhausted_at + 7_776_000_000n,
+    };
+  }
+
+  /** One wallet's own position, or null if they have none open. */
+  async positionOf(stakerAddress: string): Promise<StakerPosition | null> {
+    const vkh = keyHashFromAddress(stakerAddress);
+    const { positions } = await this.overview().then(async (o) => ({ positions: o.positions }));
+    return positions.find((p) => p.stakerVkhHex === vkh) ?? null;
+  }
+
   // --------------------------------------------------------------------
-  // Stake — plain deposit, no redeemer, no spend
+  // Builders. Each spends the pool and rewrites one position.
   // --------------------------------------------------------------------
 
-  private async stakeCore(
+  private proofFields(proof: CapProofStep[]): Constr<Data>[] {
+    return proof.map((step) => new Constr(0, [bytesToHex(step.sibling), new Constr(step.goesLeft ? 1 : 0, [])]));
+  }
+
+  private positionFields(pos: StakePosition): Constr<Data> {
+    return new Constr(0, [pos.amount, pos.debt, pos.since]);
+  }
+
+  /**
+   * Everything the four position-moving redeemers share: advance the pool,
+   * rewrite one leaf, and restate the whole continuing datum exactly as the
+   * validator will derive it.
+   */
+  private buildSpend(
     lucid: LucidEvolution,
+    loaded: LoadedPool,
+    stakerVkhHex: string,
+    nowMs: number,
+    plan: (ctx: { acc: bigint; unallocated: bigint; before: StakePosition; owed: bigint }) => {
+      redeemerIndex: number;
+      extraRedeemerFields: Data[];
+      after: StakePosition;
+      totalStakedDelta: bigint;
+      poolTokenDelta: bigint;
+      unallocatedExtra?: bigint;
+      payout?: bigint;
+      signer?: string;
+    },
+  ): { tx: ReturnType<LucidEvolution['newTx']>; payout: bigint } {
+    const { utxo, datum, positions } = loaded;
+    const now = BigInt(nowMs);
+    const { acc, unallocated } = advance(datum, now);
+    const key = hexToBytes(stakerVkhHex);
+    const before = positions.get(key);
+    const owed = owedAt(before, acc);
+    const proof = positions.proofFor(key);
+
+    const step = plan({ acc, unallocated, before, owed });
+
+    // The proof is verified locally against the root the pool actually
+    // carries, before anything is submitted. On chain this failing is a script
+    // error naming nothing; here it names the position.
+    if (bytesToHex(recomputeCapRoot(stakeLeafFor(key, before), proof)) !== datum.stake_root) {
+      throw new Error(
+        `The proof for ${stakerVkhHex} does not reach the pool's own root. The rebuilt position ` +
+          'tree is out of step with the chain; nothing was submitted.',
+      );
+    }
+
+    positions.set(key, step.after);
+    const nextRoot = bytesToHex(positions.root());
+    const nextUnallocated = unallocated + (step.unallocatedExtra ?? 0n);
+
+    const nextDatum: StakingPoolDatumData = {
+      ...datum,
+      stake_root: nextRoot,
+      acc_reward_per_token: acc,
+      total_staked: datum.total_staked + step.totalStakedDelta,
+      unallocated: nextUnallocated,
+      last_update_ms: now,
+      exhausted_at: exhaustedAfter(datum.exhausted_at, nextUnallocated, now),
+    };
+
+    const tokenUnit = datum.token_policy_id + datum.token_asset_name;
+    const poolTokens = (utxo.assets[tokenUnit] ?? 0n) + step.poolTokenDelta;
+    const poolAssets: Record<string, bigint> = {
+      lovelace: utxo.assets.lovelace ?? MIN_UTXO_LOVELACE,
+      [this.config.threadNftPolicyId + threadAssetNameFor(datum.launch_id)]: 1n,
+    };
+    if (poolTokens > 0n) poolAssets[tokenUnit] = poolTokens;
+
+    const { from, to } = validityRangeFor(nowMs);
+    let tx = lucid
+      .newTx()
+      .collectFrom(
+        [utxo],
+        Data.to(
+          new Constr(step.redeemerIndex, [
+            stakerVkhHex,
+            this.positionFields(before),
+            this.proofFields(proof),
+            ...step.extraRedeemerFields,
+          ]),
+        ),
+      )
+      .attach.SpendingValidator(this.validator)
+      .pay.ToContract(
+        this.address,
+        { kind: 'inline', value: Data.to<StakingPoolDatumData>(nextDatum, StakingPoolDatumSchema) },
+        poolAssets,
+      )
+      .validFrom(from)
+      .validTo(to);
+
+    if (step.signer) tx = tx.addSigner(step.signer);
+    return { tx, payout: step.payout ?? 0n };
+  }
+
+  private async payoutTo(
+    lucid: LucidEvolution,
+    loaded: LoadedPool,
     stakerAddress: string,
     amount: bigint,
-    stakeTimestampMsOverride?: number,
-  ): Promise<TxSignBuilder> {
+    tx: ReturnType<LucidEvolution['newTx']>,
+  ): Promise<ReturnType<LucidEvolution['newTx']>> {
+    if (amount <= 0n) return tx;
+    const { datum, utxo } = loaded;
+    const tokenUnit = datum.token_policy_id + datum.token_asset_name;
+    // The output NAMES the input it settles. Without the tag, one payment
+    // could answer this pool and another contract that happened to owe the
+    // same wallet the same amount. See noctis/settlement.
+    return tx.pay.ToAddressWithData(
+      stakerAddress,
+      { kind: 'inline', value: settlementDatum(utxo) },
+      { lovelace: MIN_UTXO_LOVELACE, [tokenUnit]: amount },
+    );
+  }
+
+  /** Open or add to a position. Anything owed is compounded, and the lock restarts. */
+  async stakeCore(lucid: LucidEvolution, stakerAddress: string, amount: bigint, nowMs = Date.now()) {
     if (amount <= 0n) throw new Error('Stake amount must be positive.');
-    const { datum: pool } = await this.findPoolUtxo(lucid);
-    const stakerVkh = keyHashFromAddress(stakerAddress);
-    const tokenUnit = pool.token_policy_id + pool.token_asset_name;
-
-    const positionDatum: StakingDatumData = {
-      Position: [
-        {
-          launch_id: this.config.launchIdHex,
-          staker_vkh: stakerVkh,
-          staked_amount: amount,
-          // Real POSIX ms — matches this codebase's now-consistent
-          // millisecond convention. Not independently
-          // re-verified on-chain (staking_pool.ak's own file header: the
-          // governor's off-chain reward formula is the only consumer,
-          // and it's the staker's OWN wallet signing this deposit — the
-          // same self-attested-timestamp trust boundary CLAUDE.md already
-          // documents for this field), so a caller-supplied override is
-          // safe to accept — unlike backdating a GOVERNOR-trusted action
-          // (ActivateCurve etc.), a staker backdating their own stake
-          // only ever costs THEM real bonding-period eligibility sooner,
-          // never anyone else's funds. Exists so a real Preprod
-          // verification pass can test bonding-period accrual without a
-          // literal 7-day wait, same precedent already established for
-          // ExpireCurve/SealLock/StartVesting.
-          stake_timestamp: BigInt(stakeTimestampMsOverride ?? Date.now()),
-        },
-      ],
-    };
-
-    return lucid
-      .newTx()
-      .pay.ToContract(
-        this.address,
-        {
-          kind: 'inline',
-          value: Data.to<StakingDatumData>(positionDatum, StakingDatumSchema),
-        },
-        { lovelace: MIN_UTXO_LOVELACE, [tokenUnit]: amount },
-      )
-      .addSigner(stakerAddress)
-      .complete();
+    const loaded = await this.loadPool();
+    const vkh = keyHashFromAddress(stakerAddress);
+    const { tx } = this.buildSpend(lucid, loaded, vkh, nowMs, ({ acc, before, owed }) => {
+      const total = before.amount + amount + owed;
+      return {
+        redeemerIndex: STAKING_POOL_REDEEMER.Stake,
+        extraRedeemerFields: [amount],
+        after: { amount: total, debt: debtAt(total, acc), since: BigInt(nowMs) },
+        totalStakedDelta: amount + owed,
+        poolTokenDelta: amount,
+        signer: stakerAddress,
+      };
+    });
+    return tx.complete();
   }
 
-  /** Real production path. */
-  async stakeWithWallet(walletApi: WalletApi, amount: bigint): Promise<{ txHash: string }> {
-    const lucid = await this.lucidPromise;
-    lucid.selectWallet.fromAPI(walletApi);
-    const stakerAddress = await lucid.wallet().address();
-    const tx = await this.stakeCore(lucid, stakerAddress, amount);
-    const signed = await tx.sign.withWallet().complete();
-    const txHash = await signed.submit();
-    return { txHash };
-  }
-
-  /** CLI-driven verification path — mnemonic-based, same pattern as tier-a-curve-submitter.ts's buyTokens() (a test-wallet convenience, not the production signing shape). `stakeTimestampMsOverride` lets a real Preprod verification pass backdate a position's bonding-period clock without a literal 7-day wait — see stakeCore's own comment for why this is safe. */
-  async stake(stakerMnemonic: string, amount: bigint, stakeTimestampMsOverride?: number): Promise<{ txHash: string }> {
-    const lucid = await this.lucidPromise;
-    lucid.selectWallet.fromSeed(stakerMnemonic);
-    const stakerAddress = await lucid.wallet().address();
-    const tx = await this.stakeCore(lucid, stakerAddress, amount, stakeTimestampMsOverride);
-    const signed = await tx.sign.withWallet().complete();
-    const txHash = await signed.submit();
-    return { txHash };
-  }
-
-  // --------------------------------------------------------------------
-  // Unstake — full withdrawal of one position, staker-signed
-  // --------------------------------------------------------------------
-
-  private async unstakeCore(
-    lucid: LucidEvolution,
-    stakerAddress: string,
-    position: StakingPosition,
-  ): Promise<TxSignBuilder> {
-    const stakerVkh = keyHashFromAddress(stakerAddress);
-    if (position.datum.staker_vkh !== stakerVkh) {
-      throw new Error('This position does not belong to the connected wallet.');
-    }
-
-    // Unstake takes no fields.
-    const unstakeRedeemer = new Constr(STAKING_POOL_REDEEMER.Unstake, []);
-
-    return lucid
-      .newTx()
-      .collectFrom([position.utxo], Data.to(unstakeRedeemer))
-      .attach.SpendingValidator(this.validator)
-      .pay.ToAddressWithData(
-        stakerAddress,
-        { kind: 'inline', value: settlementDatum(position.utxo) },
-        position.utxo.assets,
-      )
-      .addSigner(stakerAddress)
-      .complete();
-  }
-
-  /** Real production path. */
-  async unstakeWithWallet(walletApi: WalletApi, position: StakingPosition): Promise<{ txHash: string }> {
-    const lucid = await this.lucidPromise;
-    lucid.selectWallet.fromAPI(walletApi);
-    const stakerAddress = await lucid.wallet().address();
-    const tx = await this.unstakeCore(lucid, stakerAddress, position);
-    const signed = await tx.sign.withWallet().complete();
-    const txHash = await signed.submit();
-    return { txHash };
-  }
-
-  /** CLI-driven verification path — mnemonic-based. */
-  async unstake(stakerMnemonic: string, position: StakingPosition): Promise<{ txHash: string }> {
-    const lucid = await this.lucidPromise;
-    lucid.selectWallet.fromSeed(stakerMnemonic);
-    const stakerAddress = await lucid.wallet().address();
-    const tx = await this.unstakeCore(lucid, stakerAddress, position);
-    const signed = await tx.sign.withWallet().complete();
-    const txHash = await signed.submit();
-    return { txHash };
-  }
-
-  // --------------------------------------------------------------------
-  // ClaimRewards — permissionless, Merkle-proof-of-membership
-  // --------------------------------------------------------------------
-
-  /**
-   * @param payoutAmount  What the CURRENT reward_root pays this staker — a
-   *   delta, not a running total. From the published snapshot's own entry.
-   * @param leafIndex  This staker's bit in the pool's nullifier, from the
-   *   same snapshot. It is hashed into their leaf, so a proof cannot be
-   *   aimed at anybody else's bit.
-   * @param merkleProof  This staker's inclusion proof against the current
-   *   reward_root, from the same snapshot.
-   */
-  private async claimRewardsCore(
-    lucid: LucidEvolution,
-    stakerAddress: string,
-    payoutAmount: bigint,
-    leafIndex: number,
-    merkleProof: Array<{ sibling: string; goesLeft: boolean }>,
-  ): Promise<TxSignBuilder> {
-    const { utxo: poolUtxo, datum: pool } = await this.findPoolUtxo(lucid);
-
-    if (payoutAmount <= 0n) {
-      throw new Error(`payoutAmount must be positive, got ${payoutAmount}.`);
-    }
-    if (!Number.isInteger(leafIndex) || leafIndex < 0) {
-      throw new Error(`leafIndex must be a whole number of at least 0, got ${leafIndex}.`);
-    }
-    const bitCount = (pool.claimed_bits.length / 2) * 8;
-    if (leafIndex >= bitCount) {
+  /** Close a position: the stake and everything owed on it, out. */
+  async unstakeCore(lucid: LucidEvolution, stakerAddress: string, nowMs = Date.now()) {
+    const loaded = await this.loadPool();
+    const vkh = keyHashFromAddress(stakerAddress);
+    const before = loaded.positions.get(hexToBytes(vkh));
+    if (before.amount <= 0n) throw new Error('This wallet has no open staking position in this pool.');
+    const unlocksAt = before.since + UNSTAKE_LOCK_MS;
+    if (BigInt(nowMs) < unlocksAt) {
       throw new Error(
-        `leafIndex ${leafIndex} is outside this root's nullifier, which holds ${bitCount} bit(s). ` +
-          'The proof was most likely built against a different root than the one on chain.',
+        `This position is locked until ${new Date(Number(unlocksAt)).toISOString()}. ` +
+          'Adding to a stake restarts the lock; claiming rewards does not.',
       );
     }
-    if (testBit(pool.claimed_bits, leafIndex)) {
-      throw new Error(
-        `This reward has already been claimed against the current root (bit ${leafIndex} is set). ` +
-          'A staker may claim once per published root.',
-      );
-    }
-
-    const payout = payoutAmount;
-    const tokenUnit = pool.token_policy_id + pool.token_asset_name;
-
-    const newPoolDatum: StakingDatumData = {
-      Pool: [{ ...pool, claimed_bits: setBit(pool.claimed_bits, leafIndex) }],
-    };
-    const newPoolAssets = {
-      ...poolUtxo.assets,
-      [tokenUnit]: (poolUtxo.assets[tokenUnit] ?? 0n) - payout,
-    };
-
-    // ClaimRewards: Constr 1, fields (staker_vkh, payout_amount, leaf_index,
-    // merkle_proof).
-    // MerkleProofStep: Constr 0, fields (sibling, goes_left) — goes_left is
-    // a real Aiken Bool, encoded as Constr 1=True/0=False (no fields
-    // either way), same pattern darkveil-claim-submitter.ts already
-    // established for the structurally identical bonding_curve_tier_b.ak
-    // MerkleProofStep — NOT a raw JS boolean, which Data.to can't encode.
-    const claimRedeemer = new Constr(STAKING_POOL_REDEEMER.ClaimRewards, [
-      keyHashFromAddress(stakerAddress),
-      payoutAmount,
-      BigInt(leafIndex),
-      merkleProof.map((step) => new Constr(0, [step.sibling, new Constr(step.goesLeft ? 1 : 0, [])])),
-    ]);
-
-    return lucid
-      .newTx()
-      .collectFrom([poolUtxo], Data.to(claimRedeemer))
-      .attach.SpendingValidator(this.validator)
-      .pay.ToContract(
-        this.address,
-        {
-          kind: 'inline',
-          value: Data.to<StakingDatumData>(newPoolDatum, StakingDatumSchema),
-        },
-        newPoolAssets,
-      )
-      .pay.ToAddressWithData(
-        stakerAddress,
-        { kind: 'inline', value: settlementDatum(poolUtxo) },
-        { [tokenUnit]: payout },
-      )
-      .complete();
+    const { tx, payout } = this.buildSpend(lucid, loaded, vkh, nowMs, ({ before: pos, owed }) => ({
+      redeemerIndex: STAKING_POOL_REDEEMER.Unstake,
+      extraRedeemerFields: [],
+      after: NO_POSITION,
+      totalStakedDelta: -pos.amount,
+      poolTokenDelta: -(pos.amount + owed),
+      payout: pos.amount + owed,
+      signer: stakerAddress,
+    }));
+    return (await this.payoutTo(lucid, loaded, stakerAddress, payout, tx)).complete();
   }
 
-  /** Real production path — permissionless on-chain, but the connected wallet is the practical caller (see class header). */
-  async claimRewardsWithWallet(
-    walletApi: WalletApi,
-    payoutAmount: bigint,
-    leafIndex: number,
-    merkleProof: Array<{ sibling: string; goesLeft: boolean }>,
-  ): Promise<{ txHash: string; payout: bigint }> {
-    const lucid = await this.lucidPromise;
-    lucid.selectWallet.fromAPI(walletApi);
-    const stakerAddress = await lucid.wallet().address();
+  /** Take what is owed and leave the position open. */
+  async claimCore(lucid: LucidEvolution, stakerAddress: string, nowMs = Date.now()) {
+    const loaded = await this.loadPool();
+    const vkh = keyHashFromAddress(stakerAddress);
+    const { acc } = advance(loaded.datum, BigInt(nowMs));
+    const before = loaded.positions.get(hexToBytes(vkh));
+    if (before.amount <= 0n) throw new Error('This wallet has no open staking position in this pool.');
+    if (owedAt(before, acc) <= 0n) throw new Error('Nothing has accrued on this position yet.');
 
-    const tx = await this.claimRewardsCore(lucid, stakerAddress, payoutAmount, leafIndex, merkleProof);
-    const signed = await tx.sign.withWallet().complete();
-    const txHash = await signed.submit();
-    return { txHash, payout: payoutAmount };
+    const { tx, payout } = this.buildSpend(lucid, loaded, vkh, nowMs, ({ acc: a, before: pos, owed }) => ({
+      redeemerIndex: STAKING_POOL_REDEEMER.ClaimRewards,
+      extraRedeemerFields: [],
+      // `since` is untouched: taking rewards is not a new commitment, so it
+      // neither restarts the unstake lock nor extends it.
+      after: { amount: pos.amount, debt: debtAt(pos.amount, a), since: pos.since },
+      totalStakedDelta: 0n,
+      poolTokenDelta: -owed,
+      payout: owed,
+    }));
+    return (await this.payoutTo(lucid, loaded, stakerAddress, payout, tx)).complete();
   }
 
-  /** CLI-driven verification path — mnemonic-based. */
-  async claimRewards(
-    stakerMnemonic: string,
-    payoutAmount: bigint,
-    leafIndex: number,
-    merkleProof: Array<{ sibling: string; goesLeft: boolean }>,
-  ): Promise<{ txHash: string; payout: bigint }> {
-    const lucid = await this.lucidPromise;
-    lucid.selectWallet.fromSeed(stakerMnemonic);
-    const stakerAddress = await lucid.wallet().address();
-
-    const tx = await this.claimRewardsCore(lucid, stakerAddress, payoutAmount, leafIndex, merkleProof);
-    const signed = await tx.sign.withWallet().complete();
-    const txHash = await signed.submit();
-    return { txHash, payout: payoutAmount };
-  }
-
-  // --------------------------------------------------------------------
-  // TopUpPool — creator-only
-  // --------------------------------------------------------------------
-
-  private async topUpPoolCore(lucid: LucidEvolution, creatorAddress: string, amount: bigint): Promise<TxSignBuilder> {
+  /** Add to the reward budget. Permissionless — anyone may. */
+  async topUpCore(lucid: LucidEvolution, funderAddress: string, amount: bigint, nowMs = Date.now()) {
     if (amount <= 0n) throw new Error('Top-up amount must be positive.');
-    const { utxo: poolUtxo, datum: pool } = await this.findPoolUtxo(lucid);
-    if (keyHashFromAddress(creatorAddress) !== pool.creator_pub_key_hash) {
-      throw new Error('Only the launch creator can top up the staking pool.');
-    }
-    const tokenUnit = pool.token_policy_id + pool.token_asset_name;
-    const newPoolAssets = {
-      ...poolUtxo.assets,
-      [tokenUnit]: (poolUtxo.assets[tokenUnit] ?? 0n) + amount,
+    const { utxo, datum } = await this.findPoolUtxo(lucid);
+    const now = BigInt(nowMs);
+    const { acc, unallocated } = advance(datum, now);
+    const tokenUnit = datum.token_policy_id + datum.token_asset_name;
+    const nextDatum: StakingPoolDatumData = {
+      ...datum,
+      acc_reward_per_token: acc,
+      unallocated: unallocated + amount,
+      last_update_ms: now,
+      // Revived: a top-up clears the exhaustion stamp, so the close cooldown
+      // starts again from scratch if this budget runs out in turn.
+      exhausted_at: null,
     };
-
-    // TopUpPool's one field is the amount.
-    const topUpRedeemer = new Constr(STAKING_POOL_REDEEMER.TopUpPool, [amount]);
-
+    const { from, to } = validityRangeFor(nowMs);
     return lucid
       .newTx()
-      .collectFrom([poolUtxo], Data.to(topUpRedeemer))
+      .collectFrom([utxo], Data.to(new Constr(STAKING_POOL_REDEEMER.TopUpPool, [amount])))
       .attach.SpendingValidator(this.validator)
       .pay.ToContract(
         this.address,
+        { kind: 'inline', value: Data.to<StakingPoolDatumData>(nextDatum, StakingPoolDatumSchema) },
         {
-          kind: 'inline',
-          value: Data.to<StakingDatumData>({ Pool: [pool] }, StakingDatumSchema),
+          lovelace: utxo.assets.lovelace ?? MIN_UTXO_LOVELACE,
+          [this.config.threadNftPolicyId + threadAssetNameFor(datum.launch_id)]: 1n,
+          [tokenUnit]: (utxo.assets[tokenUnit] ?? 0n) + amount,
         },
-        newPoolAssets,
       )
-      .addSigner(creatorAddress)
+      .validFrom(from)
+      .validTo(to)
       .complete();
   }
 
-  /** CLI-driven path — creator platform-wallet custody only ever persists an extended skey, never a mnemonic (same reasoning as tier-a-claims-submitter.ts). */
-  async topUpPool(
-    creatorPrivateKeyExtendedHex: string,
-    creatorAddress: string,
-    amount: bigint,
+  // --------------------------------------------------------------------
+  // Wallet-signed entry points
+  // --------------------------------------------------------------------
+
+  private async withWallet(
+    walletApi: WalletApi,
+    build: (lucid: LucidEvolution, address: string) => Promise<TxSignBuilder>,
   ): Promise<{ txHash: string }> {
-    const lucid = await this.lucidPromise;
-    const bech32Key = extendedHexToBech32PrivateKey(creatorPrivateKeyExtendedHex);
-    const creatorUtxos = await lucid.utxosAt(creatorAddress);
-    lucid.selectWallet.fromAddress(creatorAddress, creatorUtxos);
-
-    const tx = await this.topUpPoolCore(lucid, creatorAddress, amount);
-    const signed = await tx.sign.withPrivateKey(bech32Key).complete();
-    const txHash = await signed.submit();
-    return { txHash };
-  }
-
-  /** Real production path (browser-connected creator wallet). */
-  async topUpPoolWithWallet(walletApi: WalletApi, amount: bigint): Promise<{ txHash: string }> {
     const lucid = await this.lucidPromise;
     lucid.selectWallet.fromAPI(walletApi);
-    const creatorAddress = await lucid.wallet().address();
-    const tx = await this.topUpPoolCore(lucid, creatorAddress, amount);
+    const address = await lucid.wallet().address();
+    const tx = await build(lucid, address);
     const signed = await tx.sign.withWallet().complete();
-    const txHash = await signed.submit();
-    return { txHash };
+    return { txHash: await signed.submit() };
+  }
+
+  stakeWithWallet(walletApi: WalletApi, amount: bigint): Promise<{ txHash: string }> {
+    return this.withWallet(walletApi, (lucid, address) => this.stakeCore(lucid, address, amount));
+  }
+
+  unstakeWithWallet(walletApi: WalletApi): Promise<{ txHash: string }> {
+    return this.withWallet(walletApi, (lucid, address) => this.unstakeCore(lucid, address));
+  }
+
+  claimRewardsWithWallet(walletApi: WalletApi): Promise<{ txHash: string }> {
+    return this.withWallet(walletApi, (lucid, address) => this.claimCore(lucid, address));
+  }
+
+  topUpWithWallet(walletApi: WalletApi, amount: bigint): Promise<{ txHash: string }> {
+    return this.withWallet(walletApi, (lucid, address) => this.topUpCore(lucid, address, amount));
   }
 
   // --------------------------------------------------------------------
-  // PublishRewardRoot — governor-only, automated (WP-Cron)
+  // Extended-key signing — the CLI verification path
   // --------------------------------------------------------------------
 
-  /**
-   * @param entryCount how many stakers the new root pays. It sizes the root's
-   *   own claim nullifier, one bit each — a map too small leaves the highest
-   *   leaf indices with no bit to claim against. Take it from the tree that
-   *   produced the root, never from a separate count.
-   */
-  private async publishRewardRootCore(
-    lucid: LucidEvolution,
-    governorAddress: string,
-    newRootHex: string,
-    entryCount: number,
-    expectedClaimedBitsHex?: string,
-  ): Promise<TxSignBuilder> {
-    const { utxo: poolUtxo, datum: pool } = await this.findPoolUtxo(lucid);
-    if (keyHashFromAddress(governorAddress) !== pool.governor_pub_key_hash) {
-      throw new Error('Only the governor can publish a new reward root.');
-    }
-
-    // Publishing is what CLEARS the nullifier, and the outgoing nullifier is
-    // the only record of who took what under the outgoing root. So whoever
-    // folded that record into the running already-paid totals must have read
-    // the same bits this transaction is about to erase — a claim landing in
-    // between would be erased without ever being counted as paid, and that
-    // staker's amount would be handed to them a second time in this very
-    // root.
-    //
-    // Checked rather than assumed: the caller says which bits it folded, and
-    // a mismatch aborts instead of publishing. The next run reads the fresh
-    // ones and proceeds normally.
-    if (expectedClaimedBitsHex !== undefined && pool.claimed_bits !== expectedClaimedBitsHex) {
-      throw new Error(
-        `The pool's claim record changed while this snapshot was being built ` +
-          `(folded ${expectedClaimedBitsHex}, found ${pool.claimed_bits}). ` +
-          'Publishing now would clear a claim before it was counted as paid. Rebuild and retry.',
-      );
-    }
-
-    // A new root is a new roster, so it brings its own nullifier, every bit
-    // clear. Publishing is also the only thing that clears the map, which is
-    // what lets a staker claim again under the next root.
-    const claimedBits = clearedBitmapHex(entryCount);
-
-    const newPoolDatum: StakingDatumData = {
-      Pool: [{ ...pool, reward_root: newRootHex, claimed_bits: claimedBits }],
-    };
-
-    // PublishRewardRoot's fields are (new_root, claimed_bits).
-    const publishRedeemer = new Constr(STAKING_POOL_REDEEMER.PublishRewardRoot, [newRootHex, claimedBits]);
-
-    return lucid
-      .newTx()
-      .collectFrom([poolUtxo], Data.to(publishRedeemer))
-      .attach.SpendingValidator(this.validator)
-      .pay.ToContract(
-        this.address,
-        {
-          kind: 'inline',
-          value: Data.to<StakingDatumData>(newPoolDatum, StakingDatumSchema),
-        },
-        poolUtxo.assets,
-      )
-      .addSigner(governorAddress)
-      .complete();
-  }
-
-  /** Governor-signed, automated (WP-Cron → CLI → this method). Same extended-key custody reasoning as topUpPool. */
-  async publishRewardRoot(
-    governorPrivateKeyExtendedHex: string,
-    governorAddress: string,
-    newRootHex: string,
-    entryCount: number,
-    /** The nullifier the caller folded into its already-paid totals — see publishRewardRootCore. */
-    expectedClaimedBitsHex?: string,
+  private async withKey(
+    privateKeyExtendedHex: string,
+    address: string,
+    build: (lucid: LucidEvolution) => Promise<TxSignBuilder>,
   ): Promise<{ txHash: string }> {
     const lucid = await this.lucidPromise;
-    const bech32Key = extendedHexToBech32PrivateKey(governorPrivateKeyExtendedHex);
-    const governorUtxos = await lucid.utxosAt(governorAddress);
-    lucid.selectWallet.fromAddress(governorAddress, governorUtxos);
-
-    const tx = await this.publishRewardRootCore(lucid, governorAddress, newRootHex, entryCount, expectedClaimedBitsHex);
+    const bech32Key = extendedHexToBech32PrivateKey(privateKeyExtendedHex);
+    lucid.selectWallet.fromAddress(address, await lucid.utxosAt(address));
+    const tx = await build(lucid);
     const signed = await tx.sign.withPrivateKey(bech32Key).complete();
-    const txHash = await signed.submit();
-    return { txHash };
+    return { txHash: await signed.submit() };
+  }
+
+  stakeWithKey(keyHex: string, address: string, amount: bigint, nowMs?: number) {
+    return this.withKey(keyHex, address, (lucid) => this.stakeCore(lucid, address, amount, nowMs));
+  }
+
+  unstakeWithKey(keyHex: string, address: string, nowMs?: number) {
+    return this.withKey(keyHex, address, (lucid) => this.unstakeCore(lucid, address, nowMs));
+  }
+
+  claimWithKey(keyHex: string, address: string, nowMs?: number) {
+    return this.withKey(keyHex, address, (lucid) => this.claimCore(lucid, address, nowMs));
+  }
+
+  topUpWithKey(keyHex: string, address: string, amount: bigint, nowMs?: number) {
+    return this.withKey(keyHex, address, (lucid) => this.topUpCore(lucid, address, amount, nowMs));
   }
 }
 
-export { extendedHexToBech32PrivateKey, keyHashFromAddress };
+/** noctis/thread_nft's `thread_asset_name`: role byte, then the launch id. */
+function threadAssetNameFor(launchIdHex: string): string {
+  return `05${launchIdHex}`.slice(0, 64);
+}
+
+type PoolEvent =
+  | {
+      kind: 'stake';
+      stakerVkhHex: string;
+      before: StakePosition;
+      amount: bigint;
+      nowMs: bigint;
+      poolBefore: StakingPoolDatumData;
+    }
+  | {
+      kind: 'unstake' | 'claim';
+      stakerVkhHex: string;
+      before: StakePosition;
+      nowMs: bigint;
+      poolBefore: StakingPoolDatumData;
+    }
+  | { kind: 'topUp'; amount: bigint; nowMs: bigint; poolBefore: StakingPoolDatumData }
+  | { kind: 'close'; nowMs: bigint; poolBefore: StakingPoolDatumData };
+
+/**
+ * One pool spend, from its raw redeemer.
+ *
+ * Read positionally from a bare `Constr` rather than through a schema: what is
+ * needed is the constructor INDEX and the fields under it, and the redeemer is
+ * a sum type whose variants differ in arity.
+ */
+function decodePoolRedeemer(cborHex: string, poolBefore: StakingPoolDatumData, nowMs: bigint): PoolEvent | null {
+  let decoded: unknown;
+  try {
+    decoded = Data.from(cborHex);
+  } catch {
+    return null;
+  }
+  if (!(decoded instanceof Constr)) return null;
+  const { index, fields } = decoded;
+
+  const positionAt = (i: number): StakePosition | null => {
+    const raw = fields[i];
+    if (!(raw instanceof Constr) || raw.fields.length !== 3) return null;
+    const [amount, debt, since] = raw.fields;
+    if (typeof amount !== 'bigint' || typeof debt !== 'bigint' || typeof since !== 'bigint') return null;
+    return { amount, debt, since };
+  };
+
+  switch (index) {
+    case STAKING_POOL_REDEEMER.Stake: {
+      const before = positionAt(1);
+      const amount = fields[3];
+      if (typeof fields[0] !== 'string' || !before || typeof amount !== 'bigint') return null;
+      return { kind: 'stake', stakerVkhHex: fields[0], before, amount, nowMs, poolBefore };
+    }
+    case STAKING_POOL_REDEEMER.Unstake:
+    case STAKING_POOL_REDEEMER.ClaimRewards: {
+      const before = positionAt(1);
+      if (typeof fields[0] !== 'string' || !before) return null;
+      return {
+        kind: index === STAKING_POOL_REDEEMER.Unstake ? 'unstake' : 'claim',
+        stakerVkhHex: fields[0],
+        before,
+        nowMs,
+        poolBefore,
+      };
+    }
+    case STAKING_POOL_REDEEMER.TopUpPool: {
+      if (typeof fields[0] !== 'bigint') return null;
+      return { kind: 'topUp', amount: fields[0], nowMs, poolBefore };
+    }
+    case STAKING_POOL_REDEEMER.ClosePool:
+      return { kind: 'close', nowMs, poolBefore };
+    default:
+      return null;
+  }
+}
+
+export { decodePoolRedeemer, extendedHexToBech32PrivateKey, keyHashFromAddress };

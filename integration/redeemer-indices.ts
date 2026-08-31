@@ -91,11 +91,11 @@ export const LP_ESCROW_REDEEMER = {
 
 /** `contracts/cardano/validators/staking_pool.ak`. */
 export const STAKING_POOL_REDEEMER = {
-  Unstake: 0,
-  ClaimRewards: 1,
-  TopUpPool: 2,
-  PublishRewardRoot: 3,
-  QueryState: 4,
+  Stake: 0,
+  Unstake: 1,
+  ClaimRewards: 2,
+  TopUpPool: 3,
+  ClosePool: 4,
 } as const;
 
 /** `contracts/cardano/validators/token_metadata.ak`. */

@@ -8,6 +8,8 @@
 // importOriginal partial-mock Lucid strategy as the other submitter tests.
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { bytesToHex } from '../cap-accumulator-tree.js';
+import { STAKE_EMPTY_ROOT } from '../stake-accumulator-tree.js';
 
 vi.mock('@lucid-evolution/lucid', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@lucid-evolution/lucid')>();
@@ -41,6 +43,8 @@ const LAUNCH_ID_HEX = toHex(new TextEncoder().encode('launch-grad-1'));
 const TOKEN_POLICY = 'aa'.repeat(28);
 const TOKEN_ASSET_NAME = '42'.repeat(4);
 const TOKEN_UNIT = TOKEN_POLICY + TOKEN_ASSET_NAME;
+/** The root every pool opens with: all slots empty, nobody staked. */
+const STAKE_EMPTY_ROOT_HEX = bytesToHex(STAKE_EMPTY_ROOT);
 const GOVERNOR_ADDR = addrFor(fakeKeyHash(0x11));
 const THREAD_POLICY = 'cc'.repeat(28);
 
@@ -146,17 +150,25 @@ function nextTxHash() {
 
 const addressRefs = { curve: '', lp: '', vesting: '', stakingPool: '' };
 
-/** A pool fixture datum, in the Pool-variant wrapping the real datum uses. */
+/**
+ * A pool fixture as the launch's mint leaves it: identified, carrying its
+ * rate, and holding no budget at all. Graduation funds it.
+ */
 function poolDatum(overrides: Record<string, unknown> = {}) {
   return {
-    Pool: [
-      {
-        launch_id: LAUNCH_ID_HEX,
-        creator_pub_key_hash: fakeKeyHash(0x22),
-        thread_nft_policy: THREAD_POLICY,
-        ...overrides,
-      },
-    ],
+    launch_id: LAUNCH_ID_HEX,
+    creator_pub_key_hash: fakeKeyHash(0x22),
+    token_policy_id: TOKEN_POLICY,
+    token_asset_name: TOKEN_ASSET_NAME,
+    thread_nft_policy: THREAD_POLICY,
+    emission_per_day: 25n,
+    stake_root: STAKE_EMPTY_ROOT_HEX,
+    acc_reward_per_token: 0n,
+    total_staked: 0n,
+    unallocated: 0n,
+    last_update_ms: 500n,
+    exhausted_at: null,
+    ...overrides,
   };
 }
 
@@ -544,30 +556,19 @@ describe('TierAGraduationSubmitter — staking-enabled launches', () => {
       creator_pub_key_hash: fakeKeyHash(0x22),
     });
 
-  it('refuses to graduate without the creator signer — the pool seeding spend is creator-signed', async () => {
+  it('funds the pool through TopUpPool, with no signature from anyone', async () => {
+    // TopUpPool is permissionless: giving a pool tokens is not something that
+    // needs authorising, and requiring the creator would mean a creator who
+    // has gone quiet could block a graduation the curve conditions already
+    // permit.
     const { builder } = makeFakeTxBuilder();
-    const { submitter } = makeSubmitter(builder, {
-      curveUtxos: [{ datum: stakingCurve(), assets: { lovelace: 20_000_000n, [TOKEN_UNIT]: 1_000n } }],
-      lpUtxos: [{ datum: lpDatum(), assets: {} }],
-      stakingPoolUtxos: [{ datum: poolDatum(), assets: { lovelace: 1_200_000n } }],
-    });
-
-    await expect(submitter.graduateAndSealLp(REAL_EXTENDED_KEY_HEX, GOVERNOR_ADDR, 1000)).rejects.toThrow(/creator/i);
-  });
-
-  it('seeds the pool through TopUpPool: pool input carried, reserve tokens + NFT in its output, datum verbatim, creator as required signer', async () => {
-    const { builder } = makeFakeTxBuilder();
-    const poolFixtureDatum = poolDatum();
     const { submitter, submitGraduation } = makeSubmitter(builder, {
       curveUtxos: [{ datum: stakingCurve(), assets: { lovelace: 20_000_000n, [TOKEN_UNIT]: 1_000n } }],
       lpUtxos: [{ datum: lpDatum({ lp_token_amount: 100n }), assets: { lovelace: 2_000_000n } }],
-      stakingPoolUtxos: [{ datum: poolFixtureDatum, assets: { lovelace: 1_200_000n } }],
+      stakingPoolUtxos: [{ datum: poolDatum(), assets: { lovelace: 1_200_000n } }],
     });
 
-    const result = await submitter.graduateAndSealLp(REAL_EXTENDED_KEY_HEX, GOVERNOR_ADDR, 1000, {
-      address: addrFor(fakeKeyHash(0x22)),
-      privateKeyExtendedHex: REAL_EXTENDED_KEY_HEX,
-    });
+    const result = await submitter.graduateAndSealLp(REAL_EXTENDED_KEY_HEX, GOVERNOR_ADDR, 1000);
     expect(result.stakingSeeded).toBe(true);
 
     const plan = planOf(submitGraduation);
@@ -576,116 +577,48 @@ describe('TierAGraduationSubmitter — staking-enabled launches', () => {
     const poolInput = plan.companionInputs[1]!;
     expect('embeddedScriptCbor' in poolInput.script).toBe(true);
     const topUp = poolInput.redeemerCbor as unknown as { index: number; fields: unknown[] };
-    expect(topUp.index).toBe(2); // STAKING_POOL_REDEEMER.TopUpPool
+    expect(topUp.index).toBe(3); // STAKING_POOL_REDEEMER.TopUpPool
     expect(topUp.fields).toEqual([250n]);
 
+    // Nobody has to sign for the pool half.
+    expect(plan.requiredSignerHashes).toEqual([]);
+  });
+
+  it("opens the pool on exactly the terms the curve's seeding check derives", async () => {
+    // Every field of this datum is compared on chain against what the curve
+    // derives for itself, so anything off by one refuses the graduation. The
+    // budget arrives, the clock moves to the transaction's own timestamp, and
+    // nothing else may move.
+    const { builder } = makeFakeTxBuilder();
+    const { submitter, submitGraduation } = makeSubmitter(builder, {
+      curveUtxos: [{ datum: stakingCurve(), assets: { lovelace: 20_000_000n, [TOKEN_UNIT]: 1_000n } }],
+      lpUtxos: [{ datum: lpDatum({ lp_token_amount: 100n }), assets: { lovelace: 2_000_000n } }],
+      stakingPoolUtxos: [{ datum: poolDatum(), assets: { lovelace: 1_200_000n } }],
+    });
+
+    await submitter.graduateAndSealLp(REAL_EXTENDED_KEY_HEX, GOVERNOR_ADDR, 1000);
+
+    const plan = planOf(submitGraduation);
     const poolPayout = plan.payouts[1]!;
     expect(poolPayout.assets[TOKEN_UNIT]).toBe(250n); // exactly staking_reserve_tokens
     expect(poolPayout.assets[threadNft('stakingPool')]).toBe(1n);
-    // TopUpPool requires the continuing datum unchanged — the input's own
-    // datum is reused verbatim, never re-encoded.
-    expect(poolPayout.datumCbor).toBe(poolFixtureDatum as never);
     // The pool gains a second asset, which raises its min-ada floor — the
     // output tops the lovelace up rather than risking a below-minimum output.
     expect(poolPayout.assets.lovelace).toBeGreaterThan(1_200_000n);
 
-    expect(plan.requiredSignerHashes).toEqual([fakeKeyHash(0x22)]);
+    const opened = poolPayout.datumCbor as unknown as Record<string, unknown>;
+    expect(opened.unallocated).toBe(250n);
+    expect(opened.last_update_ms).toBe(1000n);
+    // Untouched by the top-up, and that is the point: the rate is fixed at
+    // launch creation, so funding a pool extends its runway rather than
+    // accelerating its payouts.
+    expect(opened.emission_per_day).toBe(25n);
+    expect(opened.acc_reward_per_token).toBe(0n);
+    expect(opened.total_staked).toBe(0n);
+    expect(opened.stake_root).toBe(STAKE_EMPTY_ROOT_HEX);
+    expect(opened.exhausted_at).toBeNull();
 
     // And the curve side still balances: both reserves leave it.
     expect(plan.continuing.assets[TOKEN_UNIT]).toBe(650n); // 1,000 - (100+250)
-  });
-});
-
-describe('TierAGraduationSubmitter.startVesting', () => {
-  it('rejects when vesting is not NotStarted', async () => {
-    const { builder } = makeFakeTxBuilder();
-    const { submitter } = makeSubmitter(builder, {
-      vestingUtxos: [{ datum: vestDatum({ vesting_state: 'Vesting' }), assets: {} }],
-    });
-    await expect(submitter.startVesting(REAL_EXTENDED_KEY_HEX, GOVERNOR_ADDR, 1000)).rejects.toThrow(
-      /StartVesting already ran/,
-    );
-  });
-
-  it('transitions to Vesting and stamps vest_start_timestamp (POSIX seconds)', async () => {
-    const { builder, payToContractCalls } = makeFakeTxBuilder();
-    const { submitter } = makeSubmitter(builder, {
-      vestingUtxos: [{ datum: vestDatum(), assets: {} }],
-    });
-
-    await submitter.startVesting(REAL_EXTENDED_KEY_HEX, GOVERNOR_ADDR, 1_700_000_000);
-
-    const [, payload] = payToContractCalls[0] as [string, { value: Record<string, unknown> }];
-    expect(payload.value.vesting_state).toBe('Vesting');
-    expect(payload.value.vest_start_timestamp).toBe(1_700_000_000n);
-  });
-
-  it("re-locks the vesting UTXO's own assets unchanged (StartVesting has no value-movement check at all)", async () => {
-    const { builder, payToContractCalls } = makeFakeTxBuilder();
-    const existingAssets = { lovelace: 2_000_000n, [TOKEN_UNIT]: 500n };
-    const { submitter } = makeSubmitter(builder, {
-      vestingUtxos: [{ datum: vestDatum(), assets: existingAssets }],
-    });
-
-    await submitter.startVesting(REAL_EXTENDED_KEY_HEX, GOVERNOR_ADDR, 1000);
-    const [, , assetsArg] = payToContractCalls[0] as [string, unknown, Record<string, bigint>];
-    // By value, not identity. The old assertion was `toBe(existingAssets)`,
-    // which held only because the fixture object was handed straight back —
-    // it would have passed just as well against a builder that never read the
-    // UTXO. The thread NFT belongs in the expectation for the same reason it
-    // belongs on the UTXO: re-locking "its own assets" has to carry it, or
-    // the next lookup finds nothing.
-    expect(assetsArg).toStrictEqual({ ...existingAssets, [threadNft('vesting')]: 1n });
-  });
-
-  it('requires the governor as signer', async () => {
-    const { builder, calls } = makeFakeTxBuilder();
-    const { submitter } = makeSubmitter(builder, {
-      vestingUtxos: [{ datum: vestDatum(), assets: {} }],
-    });
-    await submitter.startVesting(REAL_EXTENDED_KEY_HEX, GOVERNOR_ADDR, 1000);
-    expect(calls.addSigner).toEqual([GOVERNOR_ADDR]);
-  });
-});
-
-describe('TierAGraduationSubmitter.graduate (sequencing convenience wrapper)', () => {
-  it("runs graduateAndSealLp then awaits TX1 before starting TX2, returning both hashes and step1's figures", async () => {
-    const { builder } = makeFakeTxBuilder();
-    const { submitter, fakeLucid } = makeSubmitter(builder, {
-      curveUtxos: [
-        {
-          datum: curveDatum({
-            total_raised: 777n,
-            lp_reserve_tokens: 10n,
-            staking_reserve_tokens: 5n,
-          }),
-          assets: {},
-        },
-      ],
-      lpUtxos: [{ datum: lpDatum(), assets: {} }],
-      vestingUtxos: [{ datum: vestDatum(), assets: {} }],
-    });
-
-    const result = await submitter.graduate(REAL_EXTENDED_KEY_HEX, GOVERNOR_ADDR, 1000);
-
-    expect(fakeLucid.awaitTx).toHaveBeenCalledWith('grad-tx-1');
-    expect(result.graduateSealLockTxHash).toBe('grad-tx-1');
-    expect(result.startVestingTxHash).toBe('grad-tx-2');
-    expect(result.lpAda).toBe(777n);
-    expect(result.lpReserveTokens).toBe(10n);
-    expect(result.stakingReserveTokens).toBe(5n);
-  });
-
-  it("wraps a TX2 failure with TX1's hash so a caller can retry only startVesting, not re-run graduate()", async () => {
-    const { builder } = makeFakeTxBuilder();
-    const { submitter } = makeSubmitter(builder, {
-      curveUtxos: [{ datum: curveDatum({ total_raised: 1n }), assets: {} }],
-      lpUtxos: [{ datum: lpDatum(), assets: {} }],
-      vestingUtxos: [{ datum: vestDatum({ vesting_state: 'Vesting' }), assets: {} }], // makes step2 fail
-    });
-
-    await expect(submitter.graduate(REAL_EXTENDED_KEY_HEX, GOVERNOR_ADDR, 1000)).rejects.toThrow(
-      /graduateAndSealLp succeeded \(txHash: grad-tx-1\) but startVesting failed.*Retry with startVesting\(\) directly/s,
-    );
   });
 });

@@ -480,6 +480,7 @@ fn mock_curve_datum(launch_id: ByteArray, creator_pub_key_hash: VerificationKeyH
     staking_enabled: False,
     staking_pool_credential: from_verification_key(#"aa").payment_credential,
     staking_reserve_tokens: 0,
+    staking_duration_days: 0,
     staking_seeded: False,
     cto_governance_credential: from_verification_key(#"dd").payment_credential,
     thread_nft_policy: #"c0ffee",

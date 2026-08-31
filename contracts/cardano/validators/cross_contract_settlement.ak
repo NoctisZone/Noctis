@@ -25,6 +25,8 @@ use cardano/assets
 use cardano/transaction.{
   InlineDatum, Input, NoDatum, Output, OutputReference, Transaction, placeholder,
 }
+use noctis/stake_accumulator
+use noctis/staking_pool_datum
 use noctis/thread_nft
 use staking_pool
 use vesting
@@ -68,18 +70,33 @@ fn vesting_nft() -> assets.Value {
   )
 }
 
-fn pool_datum() -> staking_pool.StakingPoolDatum {
-  staking_pool.StakingPoolDatum {
+/// Chosen so the creator's position is owed exactly `settled_amount`:
+/// `1_000 * acc / acc_scale == 100` with a zero debt.
+const pool_acc = 100_000_000_000
+
+const pool_stake = 1_000
+
+fn creator_position() -> stake_accumulator.Position {
+  stake_accumulator.Position { amount: pool_stake, debt: 0, since: 0 }
+}
+
+/// An EXHAUSTED pool, deliberately: with nothing left to emit, `advance` is a
+/// no-op and the accumulator holds still across the transaction. What is being
+/// tested here is the payout, so the emission arithmetic is kept out of it.
+fn pool_datum() -> staking_pool_datum.StakingPoolDatum {
+  staking_pool_datum.StakingPoolDatum {
     launch_id: launch_id,
-    governor_pub_key_hash: #"22",
     creator_pub_key_hash: creator,
     token_policy_id: token_policy,
     token_asset_name: "tok",
-    // A single-leaf tree, so the creator's own entitlement IS the root and
-    // the proof is empty. Nothing here turns on the tree's shape.
-    reward_root: staking_pool.hash_reward_leaf(creator, settled_amount, 0),
-    claimed_bits: #"00",
     thread_nft_policy: nft_policy,
+    emission_per_day: 3_650,
+    stake_root: stake_accumulator.root_of([(creator, creator_position())]),
+    acc_reward_per_token: pool_acc,
+    total_staked: pool_stake,
+    unallocated: 0,
+    last_update_ms: 0,
+    exhausted_at: Some(0),
   }
 }
 
@@ -133,7 +150,7 @@ fn settlement_tx(payouts: List<Output>) -> Transaction {
             assets.from_asset(token_policy, "tok", 1_000),
           ),
         ),
-        datum: InlineDatum(staking_pool.Pool(pool_datum())),
+        datum: InlineDatum(pool_datum()),
         reference_script: None,
       },
     }
@@ -160,14 +177,7 @@ fn settlement_tx(payouts: List<Output>) -> Transaction {
           assets.from_asset(token_policy, "tok", 1_000 - settled_amount),
         ),
       ),
-      datum: InlineDatum(
-        staking_pool.Pool(
-          staking_pool.StakingPoolDatum {
-            ..pool_datum(),
-            claimed_bits: #"80",
-          },
-        ),
-      ),
+      datum: InlineDatum(pool_after_claim()),
       reference_script: None,
     }
   let vesting_continuing =
@@ -206,12 +216,35 @@ fn payout(settles: Data) -> Output {
   }
 }
 
+/// The pool as this claim leaves it: the position's debt rewritten to the
+/// accumulator it was just settled at, and the clock moved to `now`.
+fn pool_after_claim() -> staking_pool_datum.StakingPoolDatum {
+  let entries = [(creator, creator_position())]
+  let settled =
+    stake_accumulator.Position {
+      ..creator_position(),
+      debt: staking_pool.debt_at(pool_stake, pool_acc),
+    }
+  let (_, stake_root) =
+    stake_accumulator.transition(
+      pool_datum().stake_root,
+      creator,
+      creator_position(),
+      settled,
+      stake_accumulator.proof_in(creator, entries),
+    )
+  staking_pool_datum.StakingPoolDatum {
+    ..pool_datum(),
+    stake_root: stake_root,
+    last_update_ms: claim_time - 100,
+  }
+}
+
 fn claim_rewards() -> staking_pool.StakingPoolRedeemer {
   staking_pool.ClaimRewards {
     staker_vkh: creator,
-    payout_amount: settled_amount,
-    leaf_index: 0,
-    merkle_proof: [],
+    before: creator_position(),
+    proof: stake_accumulator.proof_in(creator, [(creator, creator_position())]),
   }
 }
 
@@ -224,7 +257,7 @@ fn claim_vested() -> vesting.VestingRedeemer {
 
 fn pool_accepts(self: Transaction) -> Bool {
   staking_pool.staking_pool.spend(
-    Some(staking_pool.Pool(pool_datum())),
+    Some(pool_datum()),
     claim_rewards(),
     pool_ref,
     self,

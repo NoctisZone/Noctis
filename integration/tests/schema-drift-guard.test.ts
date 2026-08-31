@@ -54,8 +54,8 @@ import {
   LpEscrowDatumShape,
   OrderDatumShape,
   OutputReferenceShape,
+  StakePositionShape,
   StakingPoolDatumShape,
-  StakingPositionDatumShape,
   VestingDatumShape,
 } from '../tier-a-schemas.js';
 
@@ -242,12 +242,15 @@ const CASES: Array<{ name: string; shape: unknown; definition: string }> = [
     definition: 'cardano/transaction/OutputReference',
   },
   { name: 'LpEscrowDatum', shape: LpEscrowDatumShape, definition: 'noctis/lp_escrow_datum/LpEscrowDatum' },
-  { name: 'StakingPoolDatum', shape: StakingPoolDatumShape, definition: 'staking_pool/StakingPoolDatum' },
   {
-    name: 'StakingPositionDatum',
-    shape: StakingPositionDatumShape,
-    definition: 'staking_pool/StakingPositionDatum',
+    name: 'StakingPoolDatum',
+    shape: StakingPoolDatumShape,
+    // The datum lives in a shared module rather than the validator, because
+    // the curves have to write it at graduation and a validator module may
+    // not import another one.
+    definition: 'noctis/staking_pool_datum/StakingPoolDatum',
   },
+  { name: 'StakePosition', shape: StakePositionShape, definition: 'noctis/stake_accumulator/Position' },
   { name: 'CtoGovernanceDatum', shape: CtoGovernanceDatumShape, definition: 'cto_governance/CtoGovernanceDatum' },
   // The CTO submitters carry their own mirror of the same on-chain datum,
   // because the one above models active_proposal as Data.Any() -- enough for

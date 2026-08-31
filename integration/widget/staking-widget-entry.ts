@@ -2,32 +2,30 @@
 // Noctis Zone — Staking Rewards Pool Widget: browser entry point
 // ============================================================================
 // Webpack browser target (see ../webpack.widgets.config.cjs) — bundled to
-// assets/js/staking-widget.bundle.js in the theme, enqueued on any launch
-// page where staking_enabled is true, same pattern inc/enqueue.php already
-// uses for tier-a-buy-widget.bundle.js/darkveil-widget.bundle.js. On
-// Webpack (not esbuild) for the same reason those two are — this bundle
-// pulls in @lucid-evolution/lucid's CML/WASM dependency, which needs
-// webpack's real native WASM-as-ESM support.
+// assets/js/staking-widget.bundle.js in the theme, enqueued on any launch page
+// where staking_enabled is true, same pattern inc/enqueue.php already uses for
+// tier-a-buy-widget.bundle.js/darkveil-widget.bundle.js. On Webpack (not
+// esbuild) for the same reason those two are — this bundle pulls in
+// @lucid-evolution/lucid's CML/WASM dependency, which needs webpack's real
+// native WASM-as-ESM support.
 //
-// Exposes window.NoctisStaking, same "plain object of async functions the
+// Exposes window.NoctisStaking, the same "plain object of async functions the
 // theme's vanilla JS calls directly" shape as window.NoctisTierABuy.
 //
-// Stake/Unstake/ClaimRewards are all real browser-wallet-signed
-// (staking-submitter.ts's *WithWallet methods) — nothing here ever touches
-// a governor/creator key. TopUpPool and PublishRewardRoot are NOT exposed
-// here at all (server-signed only, via staking-actions.php's REST routes/
-// WP-Cron) — a holder-facing widget has no business holding either key.
+// EVERYTHING HERE IS CLIENT-SIDE, AND NOW GENUINELY SO
+// Stake, unstake and claim are browser-wallet-signed, and the figures behind
+// them are read from the pool's own state rather than served by the platform.
+// There is no reward-proof route to call any more, no snapshot to be published
+// and nothing this widget has to be told: the pool computes what it owes, so
+// the browser can compute the same thing from the same public state and check
+// its work against the chain.
 //
-// getMyRewardProof() is the one method that DOESN'T run entirely client-
-// side — it calls the plugin's own REST route (np/v1/staking/reward-proof/
-// {launch}/{staker}), since the proof is built from the governor's
-// server-cached last-published snapshot (staking-reward-tree-builder.ts's
-// full on-chain history scan is too slow to re-run per page load — see
-// staking-actions.php's own header for why).
+// The one call that used to reach the server — getMyRewardProof — is gone with
+// the mechanism behind it.
 // ============================================================================
 
 import type { Network as LucidNetwork, WalletApi } from '@lucid-evolution/lucid';
-import { type StakingConfig, type StakingPosition, StakingSubmitter } from '../staking-submitter.js';
+import { type PoolOverview, type StakingConfig, StakingSubmitter } from '../staking-submitter.js';
 
 export interface StakingWidgetConfig {
   blockfrostProjectId: string;
@@ -37,45 +35,54 @@ export interface StakingWidgetConfig {
   compiledScriptCbor: string;
   launchIdHex: string;
   /** The launch's thread-NFT policy id, hex, as rendered by the platform for
-   *  this launch. Its state UTXOs are authenticated against it. */
+   *  this launch. The pool UTXO is authenticated against it. */
   threadNftPolicyId: string;
-  /** Same-origin REST base for getMyRewardProof(), e.g. `${site}/wp-json/np/v1/`. */
-  restBaseUrl: string;
 }
 
-export interface StakingPoolStateSummary {
-  rewardRootHex: string;
-  tokenPolicyId: string;
-  tokenAssetName: string;
+/** Everything a page needs about the pool, with bigints stringified for JS. */
+export interface StakingPoolSummary {
+  tokenUnit: string;
+  /** Tokens staked across everyone. */
+  totalStaked: string;
+  /** Reward tokens not yet credited to anyone. */
+  unallocated: string;
+  emissionPerDay: string;
+  stakerCount: number;
+  /** Staked tokens plus the reward budget — the pool's whole balance. */
+  poolTokenBalance: string;
+  /**
+   * What one token staked earns per year at the CURRENT participation. Null
+   * while nothing is staked: the rate is undefined then, not infinite, because
+   * the first staker's return depends on who joins them.
+   */
+  currentAprPercent: number | null;
+  /** Days of budget left at the current participation. Null while nothing is staked. */
+  runwayDaysRemaining: number | null;
+  exhaustedAtMs: string | null;
+  /** When an exhausted pool may be retired. A top-up before then revives it. */
+  closesAfterMs: string | null;
+  positions: StakingPositionSummary[];
 }
 
 export interface StakingPositionSummary {
-  txHash: string;
-  outputIndex: number;
+  stakerVkhHex: string;
   stakedAmount: string;
-  stakeTimestampMs: string;
-  /** Real ms since epoch this position clears the 7-day bonding period (STAKING_BONDING_PERIOD_DAYS) — for the panel's countdown display. */
-  bondingEndsAtMs: string;
+  /** Claimable right now. */
+  owed: string;
+  /** When the position last grew. */
+  sinceMs: string;
+  /** Real ms since epoch this position may be closed — adding to a stake restarts it, claiming does not. */
+  unstakeUnlocksAtMs: string;
 }
 
 let config: StakingWidgetConfig | null = null;
 let submitter: StakingSubmitter | null = null;
-const BONDING_PERIOD_DAYS = 7;
-const MS_PER_DAY = 86_400_000;
 
 function requireSubmitter(): StakingSubmitter {
   if (!config || !submitter) {
     throw new Error('NoctisStaking.configure() must be called before any other method.');
   }
   return submitter;
-}
-
-/** Same guarantee as requireSubmitter(), for call sites that need the raw config object. */
-function requireConfig(): StakingWidgetConfig {
-  if (!config) {
-    throw new Error('NoctisStaking.configure() must be called before any other method.');
-  }
-  return config;
 }
 
 function configure(newConfig: StakingWidgetConfig): void {
@@ -91,100 +98,94 @@ function configure(newConfig: StakingWidgetConfig): void {
   submitter = new StakingSubmitter(submitterConfig);
 }
 
-async function getPoolState(): Promise<StakingPoolStateSummary> {
-  const s = requireSubmitter();
-  const pool = await s.readPoolDatum();
+function summarise(overview: PoolOverview): StakingPoolSummary {
   return {
-    rewardRootHex: pool.reward_root,
-    tokenPolicyId: pool.token_policy_id,
-    tokenAssetName: pool.token_asset_name,
+    tokenUnit: overview.tokenUnit,
+    totalStaked: overview.totalStaked.toString(),
+    unallocated: overview.unallocated.toString(),
+    emissionPerDay: overview.emissionPerDay.toString(),
+    stakerCount: overview.stakerCount,
+    poolTokenBalance: overview.poolTokenBalance.toString(),
+    currentAprPercent: overview.currentAprPercent,
+    runwayDaysRemaining: overview.runwayDaysRemaining,
+    exhaustedAtMs: overview.exhaustedAtMs === null ? null : overview.exhaustedAtMs.toString(),
+    closesAfterMs: overview.closesAfterMs === null ? null : overview.closesAfterMs.toString(),
+    positions: overview.positions.map((p) => ({
+      stakerVkhHex: p.stakerVkhHex,
+      stakedAmount: p.stakedAmount.toString(),
+      owed: p.owed.toString(),
+      sinceMs: p.sinceMs.toString(),
+      unstakeUnlocksAtMs: p.unstakeUnlocksAtMs.toString(),
+    })),
   };
 }
 
-async function getMyPositions(stakerAddress: string): Promise<StakingPositionSummary[]> {
-  const s = requireSubmitter();
-  const positions = await s.findPositions(stakerAddress);
-  return positions.map((p) => ({
-    txHash: p.utxo.txHash,
-    outputIndex: p.utxo.outputIndex,
-    stakedAmount: p.datum.staked_amount.toString(),
-    stakeTimestampMs: p.datum.stake_timestamp.toString(),
-    bondingEndsAtMs: (Number(p.datum.stake_timestamp) + BONDING_PERIOD_DAYS * MS_PER_DAY).toString(),
-  }));
+/**
+ * The whole pool: budget, rate, every open position and what each is owed.
+ *
+ * One read serves both the pool-wide view and any one wallet's own row, so a
+ * page does not need a second call to show a connected wallet its position.
+ */
+async function getPoolState(): Promise<StakingPoolSummary> {
+  return summarise(await requireSubmitter().overview());
 }
 
-async function stake(params: { amount: string; walletApi: WalletApi }): Promise<{ txHash: string }> {
-  const s = requireSubmitter();
-  return s.stakeWithWallet(params.walletApi, BigInt(params.amount));
-}
-
-/** `positionRef` identifies which of the connected wallet's positions to close — from a prior getMyPositions() call. */
-async function unstake(params: {
-  positionTxHash: string;
-  positionOutputIndex: number;
-  walletApi: WalletApi;
-}): Promise<{ txHash: string }> {
-  const s = requireSubmitter();
-  const cfg = requireConfig();
-  const stakerAddress = await (async () => {
-    const { Lucid, Blockfrost } = await import('@lucid-evolution/lucid');
-    const lucid = await Lucid(new Blockfrost(cfg.blockfrostUrl, cfg.blockfrostProjectId), cfg.network);
-    lucid.selectWallet.fromAPI(params.walletApi);
-    return lucid.wallet().address();
-  })();
-  const positions = await s.findPositions(stakerAddress);
-  const position = positions.find(
-    (p) => p.utxo.txHash === params.positionTxHash && p.utxo.outputIndex === params.positionOutputIndex,
-  );
-  if (!position) throw new Error('Position not found for the connected wallet.');
-  return s.unstakeWithWallet(params.walletApi, position as StakingPosition);
-}
-
-/** Fetches this staker's proof from the plugin's own REST route, then submits ClaimRewards with it. */
-async function claimRewards(params: {
-  walletApi: WalletApi;
-  stakerAddress: string;
-}): Promise<{ txHash: string; payout: string }> {
-  const s = requireSubmitter();
+/** One wallet's own position, or null when it has none open. */
+async function getMyPosition(stakerAddress: string): Promise<StakingPositionSummary | null> {
+  const overview = await requireSubmitter().overview();
   const { getAddressDetails } = await import('@lucid-evolution/lucid');
-  const stakerVkhHex = getAddressDetails(params.stakerAddress).paymentCredential?.hash;
-  if (!stakerVkhHex) throw new Error('Could not derive a payment-credential key hash from the connected wallet.');
+  const vkh = getAddressDetails(stakerAddress).paymentCredential?.hash;
+  if (!vkh) throw new Error('Could not derive a payment-credential key hash from the connected wallet.');
+  return summarise(overview).positions.find((p) => p.stakerVkhHex === vkh) ?? null;
+}
 
-  const cfg = requireConfig();
-  const res = await fetch(
-    `${cfg.restBaseUrl}staking/reward-proof/${cfg.launchIdHex}/${stakerVkhHex}?network=${encodeURIComponent(cfg.network.toLowerCase())}`,
-  );
-  if (!res.ok) {
-    const body = await res.json().catch(() => ({}));
-    throw new Error(body?.message || `No claimable reward found (HTTP ${res.status}).`);
-  }
-  // What the CURRENT root pays, plus this staker's bit in the pool's
-  // nullifier. The bit is hashed into their leaf, so the proof only verifies
-  // when presented against that one bit.
-  const { proof, payoutAmount, leafIndex, alreadyClaimed } = (await res.json()) as {
-    proof: Array<{ sibling: string; goesLeft: boolean }>;
-    payoutAmount: string;
-    leafIndex: number;
-    alreadyClaimed: boolean;
-  };
-  // The snapshot still lists a leaf after it has been drawn — only the pool's
-  // nullifier records that. Building the claim anyway would spend fees on a
-  // transaction the validator refuses, and report it as a wallet failure.
-  if (alreadyClaimed) {
-    throw new Error('You have already claimed this reward. The next snapshot will include anything earned since.');
-  }
+/**
+ * Open or add to a position.
+ *
+ * Anything already owed is compounded into the stake rather than paid out —
+ * those tokens are already in the pool, so nothing has to move for it. Adding
+ * restarts the seven-day unstake lock; claiming does not.
+ */
+async function stake(params: { amount: string; walletApi: WalletApi }): Promise<{ txHash: string }> {
+  return requireSubmitter().stakeWithWallet(params.walletApi, BigInt(params.amount));
+}
 
-  const result = await s.claimRewardsWithWallet(params.walletApi, BigInt(payoutAmount), leafIndex, proof);
-  return { txHash: result.txHash, payout: result.payout.toString() };
+/**
+ * Close the connected wallet's position: the stake and everything owed on it.
+ *
+ * No position reference is needed any more. A wallet has at most one position
+ * per pool — they are entries under one root now, not separate UTXOs — so
+ * there is nothing to choose between.
+ */
+async function unstake(params: { walletApi: WalletApi }): Promise<{ txHash: string }> {
+  return requireSubmitter().unstakeWithWallet(params.walletApi);
+}
+
+/** Take what is owed and leave the position open. */
+async function claimRewards(params: { walletApi: WalletApi }): Promise<{ txHash: string }> {
+  return requireSubmitter().claimRewardsWithWallet(params.walletApi);
+}
+
+/**
+ * Add to the pool's reward budget.
+ *
+ * Exposed to the browser because it is genuinely permissionless: anyone may
+ * give a pool tokens, and doing so extends its runway at the same rate rather
+ * than accelerating payouts. The creator is the expected caller; nothing
+ * requires it to be them.
+ */
+async function topUp(params: { amount: string; walletApi: WalletApi }): Promise<{ txHash: string }> {
+  return requireSubmitter().topUpWithWallet(params.walletApi, BigInt(params.amount));
 }
 
 const NoctisStaking = {
   configure,
   getPoolState,
-  getMyPositions,
+  getMyPosition,
   stake,
   unstake,
   claimRewards,
+  topUp,
 };
 
 declare global {

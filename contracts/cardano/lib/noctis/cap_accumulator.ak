@@ -200,15 +200,25 @@ pub fn empty_subtree(h: Int) -> ByteArray {
 
 /// Root of a subtree of height `h` holding exactly `entries`, where every
 /// entry's slot agrees on the `tree_depth - h` bits above it.
-pub fn subtree_root(entries: List<(ByteArray, Int)>, h: Int) -> ByteArray {
+///
+/// Generic over what a slot holds, and over how a leaf is hashed from it, so
+/// `noctis/stake_accumulator` builds its own three-field positions through
+/// this same construction rather than keeping a second copy of it. The tree
+/// shape, the slot derivation and the empty subtree are what must not drift;
+/// only the leaf differs between the two.
+pub fn generic_subtree_root(
+  entries: List<(ByteArray, a)>,
+  h: Int,
+  leaf: fn(ByteArray, a) -> ByteArray,
+) -> ByteArray {
   when entries is {
     [] -> empty_subtree(h)
-    [(key, total)] ->
+    [(key, value)] ->
       // One entry in an otherwise empty subtree: fold its leaf up past `h`
       // empty siblings.
       list.foldl(
         list.range(1, h),
-        leaf_for(key, total),
+        leaf(key, value),
         fn(level, acc) {
           if slot_bit(key, tree_depth - level) {
             hash_node(empty_subtree(level - 1), acc)
@@ -220,23 +230,22 @@ pub fn subtree_root(entries: List<(ByteArray, Int)>, h: Int) -> ByteArray {
     _ -> {
       let bit_ix = tree_depth - h
       let (ones, zeros) = list.partition(entries, fn(e) { slot_bit(e.1st, bit_ix) })
-      hash_node(subtree_root(zeros, h - 1), subtree_root(ones, h - 1))
+      hash_node(
+        generic_subtree_root(zeros, h - 1, leaf),
+        generic_subtree_root(ones, h - 1, leaf),
+      )
     }
   }
 }
 
-/// The root of a whole tree holding `entries` and nothing else.
-pub fn root_of(entries: List<(ByteArray, Int)>) -> ByteArray {
-  subtree_root(entries, tree_depth)
-}
-
-/// `key`'s proof against `root_of(entries)`. `key` need not be in `entries` —
-/// an absent key proves its empty slot, which is what a first-time buyer does.
-pub fn proof_in(
+/// `key`'s proof against `generic_root_of(entries, leaf)`. `key` need not be
+/// in `entries` — an absent key proves its empty slot.
+pub fn generic_proof_in(
   key: ByteArray,
-  entries: List<(ByteArray, Int)>,
+  entries: List<(ByteArray, a)>,
+  leaf: fn(ByteArray, a) -> ByteArray,
 ) -> List<CapProofStep> {
-  proof_walk(key, entries, 0, [])
+  proof_walk(key, entries, 0, [], leaf)
 }
 
 /// Descends from the root taking `key`'s side each level, recording the
@@ -244,9 +253,10 @@ pub fn proof_in(
 /// front, so the list comes out bottom-up — the order `recompute_root` folds.
 fn proof_walk(
   key: ByteArray,
-  entries: List<(ByteArray, Int)>,
+  entries: List<(ByteArray, a)>,
   i: Int,
   acc: List<CapProofStep>,
+  leaf: fn(ByteArray, a) -> ByteArray,
 ) -> List<CapProofStep> {
   if i == tree_depth {
     acc
@@ -261,11 +271,30 @@ fn proof_walk(
       }
     let step =
       CapProofStep {
-        sibling: subtree_root(theirs, tree_depth - i - 1),
+        sibling: generic_subtree_root(theirs, tree_depth - i - 1, leaf),
         goes_left: goes_right,
       }
-    proof_walk(key, mine, i + 1, list.push(acc, step))
+    proof_walk(key, mine, i + 1, list.push(acc, step), leaf)
   }
+}
+
+/// Root of a subtree of height `h` holding exactly `entries`.
+pub fn subtree_root(entries: List<(ByteArray, Int)>, h: Int) -> ByteArray {
+  generic_subtree_root(entries, h, leaf_for)
+}
+
+/// The root of a whole tree holding `entries` and nothing else.
+pub fn root_of(entries: List<(ByteArray, Int)>) -> ByteArray {
+  subtree_root(entries, tree_depth)
+}
+
+/// `key`'s proof against `root_of(entries)`. `key` need not be in `entries` —
+/// an absent key proves its empty slot, which is what a first-time buyer does.
+pub fn proof_in(
+  key: ByteArray,
+  entries: List<(ByteArray, Int)>,
+) -> List<CapProofStep> {
+  generic_proof_in(key, entries, leaf_for)
 }
 
 // ============================================================================

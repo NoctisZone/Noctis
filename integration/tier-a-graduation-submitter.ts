@@ -69,14 +69,15 @@ import {
   VESTING_REDEEMER,
 } from './redeemer-indices.js';
 import type { ReferenceScriptPointer } from './reference-script.js';
+import { advance } from './staking-math.js';
 import {
   type BondingCurveDatumData,
   BondingCurveDatumSchema,
   type LpEscrowDatumData,
   LpEscrowDatumSchema,
   loadValidator,
-  StakingDatumSchema,
   type StakingPoolDatumData,
+  StakingPoolDatumSchema,
   type ThreadNftRole,
   type VestingDatumData,
   VestingDatumSchema,
@@ -373,18 +374,27 @@ export class TierAGraduationSubmitter {
     const requiredSignerHashes: string[] = [];
 
     // ---- staking pool's own seeding spend (TopUpPool), staking launches ----
+    //
+    // The pool UTXO already exists — its thread NFT is minted once, with the
+    // launch — so graduation FUNDS it rather than creating it. TopUpPool is
+    // permissionless and needs no signature from anyone: giving a pool tokens
+    // is not something to be authorised.
+    //
+    // The datum this writes has to be exactly what the curve's own
+    // `staking_seeding_output_ok` derives, field for field, or graduation is
+    // refused. Reaching that is why `Stake` will not touch an unfunded pool:
+    // it keeps `total_staked` and `stake_root` at their opening values until
+    // this lands.
     if (curveDatum.staking_enabled) {
-      if (!creator) {
-        throw new Error(
-          'This launch opted into staking, so graduation seeds the staking pool — and the pool ' +
-            "contract's seeding spend (TopUpPool) is creator-signed. Pass the creator signer.",
-        );
-      }
-      const { utxo: poolUtxo } = await this.findStakingPoolUtxo(lucid);
-      if (!poolUtxo.datum) {
-        throw new Error(`Staking pool UTXO ${poolUtxo.txHash}#${poolUtxo.outputIndex} carries no inline datum.`);
-      }
-      const topUpRedeemer = new Constr(STAKING_POOL_REDEEMER.TopUpPool, [curveDatum.staking_reserve_tokens]);
+      const { utxo: poolUtxo, datum: poolDatum } = await this.findStakingPoolUtxo(lucid);
+      const { acc, unallocated } = advance(poolDatum, BigInt(lockSealTimestampMs));
+      const seededDatum: StakingPoolDatumData = {
+        ...poolDatum,
+        acc_reward_per_token: acc,
+        unallocated: unallocated + curveDatum.staking_reserve_tokens,
+        last_update_ms: BigInt(lockSealTimestampMs),
+        exhausted_at: null,
+      };
       companionInputs.push({
         utxo: {
           txHash: poolUtxo.txHash,
@@ -392,7 +402,7 @@ export class TierAGraduationSubmitter {
           address: poolUtxo.address,
           assets: poolUtxo.assets,
         },
-        redeemerCbor: Data.to(topUpRedeemer),
+        redeemerCbor: Data.to(new Constr(STAKING_POOL_REDEEMER.TopUpPool, [curveDatum.staking_reserve_tokens])),
         script: { embeddedScriptCbor: this.config.stakingPoolScriptCbor },
       });
       payouts.push({
@@ -406,12 +416,8 @@ export class TierAGraduationSubmitter {
           lovelace: (poolUtxo.assets.lovelace ?? 0n) + 300_000n,
           [tokenUnit]: (poolUtxo.assets[tokenUnit] ?? 0n) + curveDatum.staking_reserve_tokens,
         }),
-        // The input's datum bytes, verbatim — TopUpPool requires the
-        // continuing datum unchanged, and re-encoding can only introduce
-        // drift, never remove it.
-        datumCbor: poolUtxo.datum,
+        datumCbor: Data.to<StakingPoolDatumData>(seededDatum, StakingPoolDatumSchema),
       });
-      requiredSignerHashes.push(curveDatum.creator_pub_key_hash);
     }
 
     const plan: GraduationSpendPlan = {
@@ -457,7 +463,7 @@ export class TierAGraduationSubmitter {
       utxos,
       this.stakingPoolAddress,
       this.config.launchIdHex,
-      StakingDatumSchema,
+      StakingPoolDatumSchema,
       this.config.threadNftPolicyId,
     );
   }

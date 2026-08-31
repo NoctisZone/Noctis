@@ -1,292 +1,318 @@
 // ============================================================================
-// Noctis Zone — Staking Rewards Pool (2026-07-14)
+// Noctis Zone — Staking Rewards Pool
 // ============================================================================
-// Optional per-launch feature, Tier A + B. A creator may allocate a fixed
-// 25% of total supply into this pool at launch (contracts/cardano/
-// validators/bonding_curve.ak and bonding_curve_tier_b.ak's `Graduate`
-// redeemer seeds it, alongside LP, once graduated — see those files'
-// `staking_seeding_output_ok` check).
+// Optional per-launch feature on a Cardano launch. A creator allocates a fixed
+// STAKING_ALLOC_PCT of supply at launch creation and commits to a runway;
+// `Graduate` seeds this pool on exactly those terms, alongside LP.
 //
-// Two datum shapes share this one validator address, wrapped in the
-// `StakingDatum` enum below:
-//   - Pool(StakingPoolDatum): ONE per launch. Holds the depleting reward
-//     token balance as real UTXO value (no separate on-chain balance
-//     field — the value IS the balance, same discipline as
-//     bonding_curve.ak's curve_token_balance_decreased). Tracks
-//     who has claimed against the current reward_root as a fixed-size
-//     bitmap (noctis/bitmap), one bit per staker in that root,
-//     mirroring bonding_curve.ak's own per_address_purchases pattern —
-//     an already-accepted tradeoff in this codebase for "many identities,
-//     one shared ledger" tracking, not a new contention risk introduced
-//     here.
-//   - Position(StakingPositionDatum): one per staker per stake action.
-//     Holds a staker's real staked tokens as UTXO value. Deliberately NOT
-//     consolidated across multiple stakes by the same wallet — each stake
-//     action creates its own fresh position UTXO (permissionless output
-//     creation, no validator invocation needed for staking itself, same
-//     as any deposit), avoiding both single-UTXO contention for the
-//     frequent stake/unstake action AND any need to merge/reset bonding
-//     periods across a wallet's multiple positions.
+// ONE POOL, ONE ADDRESS, EVERY CARDANO LAUNCH
+// This validator is unparameterized and takes no per-launch arguments, so
+// every Cardano launch's pool is the same script at the same address, told
+// apart only by its thread NFT. A launch that runs a DarkVeil phase and one
+// that does not stake, claim, exit and close through exactly this code — the
+// private phase changes how a launch sells, not how it rewards.
 //
-// Reward accounting is NOT computed on-chain. Compact has no in-circuit
-// division and no reward-per-share pattern exists anywhere in this
-// codebase (confirmed before designing this) — rather than invent new
-// on-chain division workarounds, this reuses the exact trust model
-// already shipped for cto_governance.compact's balance-snapshot tree and
-// eligibility_gate.compact's DarkVeil allowlist tree: the governor
-// computes each staker's cumulative accrued reward off-chain (from real,
-// publicly observable stake/unstake events — independently
-// re-derivable by anyone, not a hidden computation) and periodically
-// publishes a Merkle root via `PublishRewardRoot`. A claim is a ZK-style
-// proof of membership for the caller's own `(staker_vkh,
-// cumulative_amount)` leaf — verified on-chain, no division anywhere.
-// The bonding period (7 days before a new position earns anything) is
-// enforced entirely by that same off-chain formula, using each
-// position's real on-chain `stake_timestamp` — no separate on-chain
-// check exists for it here.
+// Both curve validators seed it, and that is a fact about the curves rather
+// than about staking: they price differently (see each one's own header), so
+// they are separate scripts, and each calls the same seeding check to open the
+// same shared pool.
 //
-// The on-chain contract's only real invariant is that cumulative claims
-// never exceed the pool's real token balance — this is what makes a
-// pool top-up need no rate-recalculation logic anywhere: there is no
-// stored duration, end-timestamp, or emission-rate field on-chain at
-// all. The "3-5 year runway" is an off-chain governor commitment,
-// auditable via the published root sequence over time.
+// WHAT THIS CONTRACT PROMISES
+// Once seeded, nobody decides anything. There is no governor here, no
+// published snapshot, no privileged signature on any reward path, and no field
+// anybody may set by hand. What a staker is owed is computed by this validator
+// from elapsed time and the stake that was actually present, and the only
+// writer of any state below is this validator's own arithmetic.
+//
+// THE ACCUMULATOR
+// Rewards accrue continuously, not in daily buckets, at a rate fixed when the
+// pool opened. Any spend advances the pool to the present first:
+//
+//   elapsed = now - last_update_ms
+//   emitted = min(emission_per_day * elapsed / ms_per_day, unallocated)
+//   acc     = acc + emitted * acc_scale / total_staked
+//
+// `acc` is "reward per token staked, ever" — monotonic, scaled so integer
+// division does not lose it. A position records that figure when it last
+// moved, as `debt`; what it is owed now is `amount * acc / acc_scale - debt`.
+//
+// Two properties fall out of the shape rather than being enforced separately.
+// With `total_staked == 0` nothing is emitted at all, so a stretch with no
+// stakers costs the budget nothing and moves the end date later — the runway
+// is a budget of emission, not a deadline. And `unallocated` is the only
+// stopping condition, so a top-up buys more days at the same rate rather than
+// a faster rate.
+//
+// WHY POSITIONS ARE NOT UTXOs
+// They used to be, and that was safe only while rewards were computed off
+// chain: the datum was a hint, and the real weight came from tokens the output
+// actually held. Once this validator computes the payout, `debt` is what
+// decides it — and paying a UTXO to a script address runs no validator, so any
+// stranger could author a position with a large stake and a zero debt.
+// Requiring the output to really hold its stake does not help, because `debt`
+// is not a quantity of anything.
+//
+// So positions live behind one 32-byte root in this datum, written only here.
+// See noctis/stake_accumulator. Staked tokens sit in the pool UTXO with the
+// reward budget; `total_staked` says how much of the balance is whose.
+//
+// ONE UTXO, AND WHAT THAT COSTS
+// Every stake, claim, exit and top-up spends the one pool UTXO, so they
+// serialise. That is the same shape the bonding curve has, and it has the same
+// answer: an order/batcher front (see curve_order.ak) folds many actions into
+// one spend without being able to redirect any of them.
 // ============================================================================
 
 use aiken/collection/list
-use aiken/crypto.{VerificationKeyHash, blake2b_256}
-use aiken/primitive/bytearray
-use cardano/address.{Address, from_verification_key, with_delegation_key}
+use aiken/crypto.{VerificationKeyHash}
+use aiken/interval.{Interval, IntervalBoundType}
+use cardano/address.{Address, from_verification_key}
 use cardano/assets.{AssetName, PolicyId}
 use cardano/transaction.{Input, InlineDatum, Output, OutputReference, Transaction}
-use noctis/bitmap
+use noctis/cap_accumulator.{CapProofStep}
 use noctis/settlement
+use noctis/stake_accumulator.{Position, no_position}
+use noctis/staking_pool_datum.{StakingPoolDatum}
 use noctis/thread_nft
+
+// ============================================================================
+// CONSTANTS
+// ============================================================================
+
+/// Fixed-point scale for `acc_reward_per_token`.
+///
+/// `acc` grows by `emitted * acc_scale / total_staked`, and that division is
+/// what would otherwise floor a small emission against a large stake to
+/// nothing at all. At 1e12 an emission is lost only if it is smaller than a
+/// trillionth of the total staked, which a 1B-token supply cannot reach.
+pub const acc_scale = 1_000_000_000_000
+
+pub const ms_per_day = 86_400_000
+
+/// STAKING_BONDING_PERIOD_DAYS, as a lock on LEAVING rather than on earning.
+///
+/// Under a daily snapshot it had to be a gap in earning, because the thing to
+/// prevent was staking just before a snapshot and leaving just after. Accrual
+/// is continuous now — a second staked earns a second's worth — so there is no
+/// snapshot to arrive just before, and that reason is gone. Kept as a real
+/// minimum commitment, which is what it now is: adding to a position restarts
+/// it, claiming does not touch it.
+pub const unstake_lock_ms = 604_800_000
+
+/// How long an exhausted pool waits for a top-up before it can be retired.
+pub const close_cooldown_ms = 7_776_000_000
+
+/// Max validity-range width for any spend here. Every redeemer reads the
+/// clock, so all of them carry it — same bound and same reason as the curve
+/// validators': the range's lower bound is taken as "now", and a transaction
+/// free to declare a wide range is free to declare a favourable one.
+pub const max_validity_range_width = 600_000
 
 // ============================================================================
 // TYPES
 // ============================================================================
 
-/// One step of a Merkle inclusion proof — same `(sibling, direction)` shape
-/// already used by bonding_curve_tier_b.ak's DarkVeil allocation proofs.
-pub type MerkleProofStep {
-  sibling: ByteArray,
-  goes_left: Bool,
-}
+// The datum itself lives in `noctis/staking_pool_datum`, because the bonding
+// curves have to WRITE it: `Graduate` is permissionless, so whoever submits a
+// graduation authors this pool's first datum, and a validator module may not
+// import another validator module. That module's `genesis` is the only shape a
+// graduation may open a pool in, and its doc comment says why each field is
+// pinned. The field-by-field meaning is below.
+//
+//   launch_id, creator_pub_key_hash, token_policy_id, token_asset_name,
+//   thread_nft_policy — this launch's identity. `creator_pub_key_hash` is
+//     where the residue goes when an exhausted pool is finally retired, and is
+//     not an authority over anything: no redeemer here checks its signature.
+//   emission_per_day — set once, at seeding, from the runway the creator
+//     committed to at launch creation. No redeemer changes it, TopUpPool
+//     included, which is exactly what makes a top-up extend the runway rather
+//     than accelerate it.
+//   stake_root — every staker's position, behind one root. See
+//     noctis/stake_accumulator.
+//   acc_reward_per_token — reward per token staked, ever, scaled by
+//     `acc_scale`. Monotonic.
+//   total_staked — sum of every open position's `amount`. The rest of the
+//     token balance is reward budget.
+//   unallocated — reward tokens not yet credited to anyone. The only stopping
+//     condition.
+//   last_update_ms — when the accumulator was last advanced.
+//   exhausted_at — when `unallocated` first reached zero. A top-up clears it.
 
-/// One per launch. Its own UTXO value holds the real, depleting reward
-/// token balance.
-pub type StakingPoolDatum {
-  launch_id: ByteArray,
-  governor_pub_key_hash: VerificationKeyHash,
-  creator_pub_key_hash: VerificationKeyHash,
-  token_policy_id: PolicyId,
-  token_asset_name: AssetName,
-  // Governor-published Merkle root over (staker_vkh, cumulative_amount)
-  // leaves — see file header. Updated only via PublishRewardRoot.
-  reward_root: ByteArray,
-  // Who has already claimed against `reward_root`, one bit each, sized when
-  // that root was published and cleared with it. See noctis/bitmap: a
-  // list-of-claimants grows forever and is compared by structural equality on
-  // every spend, so a pool meant to run three to five years would eventually
-  // become too expensive to spend at all — worst exactly when it has the most
-  // stakers. The bitmap costs the same however many have claimed.
-  //
-  // A staker could already only claim once per root: the old check required
-  // the cumulative amount to EXCEED what they had drawn, so a second claim
-  // against an unchanged root paid nothing. The bit records the same fact in
-  // a fixed number of bytes.
-  claimed_bits: ByteArray,
-  // 2026-08-03 audit: policy id of this launch's thread NFTs. The pool's
-  // own UTXO must carry (thread_nft_policy, role_staking_pool ++
-  // launch_id[..31]) on both the spent input and the continuing output —
-  // see noctis/thread_nft. Position UTXOs deliberately carry no such
-  // token: they are created per stake action, permissionlessly, and are
-  // not singleton state.
-  thread_nft_policy: PolicyId,
-}
-
-/// One per stake action. Its own UTXO value holds the staker's real
-/// staked tokens.
-pub type StakingPositionDatum {
-  launch_id: ByteArray,
-  staker_vkh: VerificationKeyHash,
-  staked_amount: Int,
-  // Posix seconds this position was created — read by the governor's
-  // off-chain snapshot formula to apply the 7-day bonding period. Not
-  // independently re-verified on-chain here (same trust boundary as the
-  // rest of the off-chain reward computation).
-  stake_timestamp: Int,
-}
-
-pub type StakingDatum {
-  Pool(StakingPoolDatum)
-  Position(StakingPositionDatum)
-}
-
-/// Redeemer actions. Staking itself (first stake, or an additional stake
-/// by the same wallet) needs no redeemer at all — creating a new Position
-/// output at this validator's address is permissionless, same as any
-/// deposit; only spending an existing UTXO here needs validator approval.
 pub type StakingPoolRedeemer {
-  /// Full withdrawal of one position — staker-signed. No partial unstake;
-  /// an additional stake or a partial exit is just a second position
-  /// created/unstaked separately.
-  Unstake
-  /// Permissionless — same "the proof is the authorization" idiom as
-  /// bonding_curve.ak's Graduate/ExpireCurve. A real Merkle proof of
-  /// membership for (staker_vkh, claimed_cumulative_amount), plus a hard
-  /// check that payout can only reach staker_vkh's own address, is the
-  /// full authorization; nobody benefits from submitting someone else's
-  /// claim since the funds can't be redirected.
+  /// Open or add to a position. Anything already owed is COMPOUNDED into the
+  /// stake rather than paid out — those tokens are already in this UTXO, so
+  /// nothing has to move for it. Restarts the unstake lock.
+  Stake {
+    staker_vkh: VerificationKeyHash,
+    before: Position,
+    proof: List<CapProofStep>,
+    add_amount: Int,
+  }
+  /// Close a position: the stake and everything owed on it, out. Staker-signed,
+  /// and only once the lock has elapsed.
+  Unstake {
+    staker_vkh: VerificationKeyHash,
+    before: Position,
+    proof: List<CapProofStep>,
+  }
+  /// Take what is owed and leave the position open. Permissionless — the
+  /// payout can only reach `staker_vkh`'s own address, so submitting somebody
+  /// else's claim gains nothing and costs a fee.
   ClaimRewards {
     staker_vkh: VerificationKeyHash,
-    /// What this leaf pays, not a running total. The governor derives it from
-    /// the same public events it already derives accrual from, and a claim
-    /// nobody made simply reappears in the next root.
-    payout_amount: Int,
-    /// This staker's bit in `claimed_bits`, hashed into their leaf so a proof
-    /// pins them to one bit and cannot be aimed at somebody else's.
-    leaf_index: Int,
-    merkle_proof: List<MerkleProofStep>,
+    before: Position,
+    proof: List<CapProofStep>,
   }
-  /// Creator-only. Adds `amount` of the reward token to the pool's own
-  /// value. No rate recalculation anywhere — see file header.
+  /// Add to the reward budget. Permissionless: a pool anyone may top up is
+  /// strictly better than one only its creator may, and there is nothing to
+  /// gain by giving a pool tokens.
   TopUpPool { amount: Int }
-  /// Governor-only. Updates reward_root; the pool's own token value and
-  /// its nullifier is replaced with a cleared one of the publisher's
-  /// chosen size — this redeemer can publish a new
-  /// snapshot but can never move funds.
-  PublishRewardRoot { new_root: ByteArray, claimed_bits: ByteArray }
-  /// Read-only query, no state change.
-  QueryState
+  /// Retire an exhausted pool nobody topped up. Permissionless — the
+  /// conditions are the authorization, same idiom as the curve's Graduate.
+  ClosePool
 }
 
 // ============================================================================
 // HELPERS
 // ============================================================================
 
-/// Leaf hash for a reward claim: `blake2b_256(staker_vkh ||
-/// cumulative_amount_16be)`. No salt — unlike bonding_curve_tier_b.ak's
-/// DarkVeil allocation leaf, reward amounts carry no privacy requirement
-/// here, so there's nothing a salt would need to protect against
-/// brute-forcing.
-pub fn hash_reward_leaf(
-  staker_vkh: VerificationKeyHash,
-  payout_amount: Int,
-  leaf_index: Int,
-) -> ByteArray {
-  blake2b_256(
-    bytearray.concat(
-      bytearray.concat(
-        staker_vkh,
-        bytearray.from_int_big_endian(payout_amount, 16),
-      ),
-      bytearray.from_int_big_endian(leaf_index, 4),
-    ),
-  )
+/// "Now", as the validity range's lower bound, once the range is narrow enough
+/// for that to mean anything.
+///
+/// The lower bound rather than the upper: accrual grows with elapsed time, so
+/// reading the far end of a range would let a spender accrue against time that
+/// has not passed. Bounding the width then closes the opposite trick, pinning
+/// `last_update_ms` in the past to stall everyone's accrual.
+fn range_now(range: Interval) -> Option<Int> {
+  when (range.lower_bound.bound_type, range.upper_bound.bound_type) is {
+    (IntervalBoundType.Finite(lo), IntervalBoundType.Finite(hi)) ->
+      if hi >= lo && hi - lo <= max_validity_range_width {
+        Some(lo)
+      } else {
+        None
+      }
+    _ -> None
+  }
 }
 
-fn hash_reward_node(left: ByteArray, right: ByteArray) -> ByteArray {
-  blake2b_256(bytearray.concat(left, right))
-}
-
-fn verify_reward_merkle_proof(
-  root: ByteArray,
-  leaf: ByteArray,
-  proof: List<MerkleProofStep>,
-) -> Bool {
-  let computed =
-    list.foldl(
-      proof,
-      leaf,
-      fn(step, acc) {
-        if step.goes_left {
-          hash_reward_node(step.sibling, acc)
-        } else {
-          hash_reward_node(acc, step.sibling)
-        }
-      },
+/// Advance the pool to `now`: what `acc_reward_per_token` and `unallocated`
+/// become. Pure, and the only place emission is ever computed.
+pub fn advance(pool: StakingPoolDatum, now: Int) -> (Int, Int) {
+  let elapsed = now - pool.last_update_ms
+  if or {
+    elapsed <= 0,
+    pool.total_staked <= 0,
+    pool.unallocated <= 0,
+  } {
+    // Nothing to emit, or nobody to emit to. In the second case the budget is
+    // deliberately untouched: a quiet stretch moves the end date later rather
+    // than burning tokens nobody received.
+    (pool.acc_reward_per_token, pool.unallocated)
+  } else {
+    let raw = pool.emission_per_day * elapsed / ms_per_day
+    let emitted =
+      if raw > pool.unallocated {
+        pool.unallocated
+      } else {
+        raw
+      }
+    (
+      pool.acc_reward_per_token + emitted * acc_scale / pool.total_staked,
+      pool.unallocated - emitted,
     )
-  computed == root
+  }
 }
 
-/// Find this validator's own continuing output (same address as the input
-/// being spent) and decode its inline datum — same pattern as
-/// bonding_curve.ak's own_continuing_datum, generalized over the wrapping
-/// StakingDatum enum.
-fn own_continuing_datum(self: Transaction, own_ref: OutputReference) -> StakingDatum {
-  expect Some(own_input) =
-    list.find(self.inputs, fn(input) { input.output_reference == own_ref })
-  let own_address = own_input.output.address
-  expect Some(own_output) =
-    list.find(self.outputs, fn(output) { output.address == own_address })
-  expect InlineDatum(raw_datum) = own_output.datum
-  expect new_datum: StakingDatum = raw_datum
-  new_datum
+/// What a position is owed at `acc`.
+///
+/// Never negative: `acc` only rises, `debt` was this same expression at some
+/// earlier `acc`, and `amount` has not changed since — every change to
+/// `amount` rewrites `debt` in the same breath.
+pub fn owed_at(pos: Position, acc: Int) -> Int {
+  pos.amount * acc / acc_scale - pos.debt
 }
 
-/// Fix (2026-07-19, full-suite security audit): CRITICAL finding —
-/// combining an Unstake (spending a Position) and a ClaimRewards (spending
-/// the Pool) in the SAME transaction let a single output satisfy BOTH
-/// checks at once, since Unstake's exact-match payment check and
-/// ClaimRewards' >= threshold check both independently search
-/// self.outputs by address alone, with no exclusivity between them.
-/// Concretely: staking a real 500-token position plus a real pending
-/// 100-token reward claim, a single 500-token output to the staker
-/// satisfies Unstake's exact-match requirement AND (being >= 100)
-/// ClaimRewards' threshold — letting the real 100-token reward be diverted
-/// to a third party in the same transaction while the staker's own signed
-/// Unstake half looks, from their perspective, like an ordinary unstake.
-/// Requiring at most one input (and one output) at this shared address per
-/// transaction closes this by construction — a staker can still unstake
-/// multiple positions or claim rewards, just not combined with a DIFFERENT
-/// staking_pool.ak UTXO in the same transaction. Same fix pattern already
-/// applied to bonding_curve.ak/lp_escrow.ak/vesting.ak for the identical
-/// shared-unparameterized-address root cause.
-fn single_own_utxo(self: Transaction, own_address: Address) -> Bool {
-  // Compared by PAYMENT credential, never by the full Address. The staking
-  // part of an address is chosen freely by whoever builds the output, so two
-  // UTXOs at this same script can carry different delegation keys while being
-  // equally "ours". Matching on the whole Address would let those two stop
-  // counting as one another's company, which is exactly what this check
-  // exists to prevent.
-  let own_payment = own_address.payment_credential
-  list.length(
-    list.filter(
-      self.inputs,
-      fn(input) { input.output.address.payment_credential == own_payment },
-    ),
-  ) <= 1 && list.length(
-    list.filter(
-      self.outputs,
-      fn(output) { output.address.payment_credential == own_payment },
-    ),
-  ) <= 1
+/// The debt a position of `amount` carries from `acc` onward.
+pub fn debt_at(amount: Int, acc: Int) -> Int {
+  amount * acc / acc_scale
 }
 
-/// State authentication (2026-08-03 audit) — the pool's own thread NFT must
-/// be present on the UTXO being spent AND on the continuing output. See
-/// noctis/thread_nft, and bonding_curve.ak's thread_nft_intact, for the full
-/// reasoning: this validator is unparameterized, so every launch's pool
-/// shares one address and a pool UTXO's legitimacy would otherwise rest on a
-/// datum anyone can author.
-fn pool_thread_nft_intact(
+/// `exhausted_at` after this spend: stamped the first time the budget empties,
+/// and never re-stamped while it stays empty.
+fn exhausted_after(
+  pool: StakingPoolDatum,
+  unallocated: Int,
+  now: Int,
+) -> Option<Int> {
+  when (unallocated, pool.exhausted_at) is {
+    (0, None) -> Some(now)
+    _ -> pool.exhausted_at
+  }
+}
+
+/// The pool's thread NFT is on the spent input, and on the continuing output
+/// when there is one.
+fn thread_nft_ok(
+  own_input: Input,
+  own_outputs: List<Output>,
+  pool: StakingPoolDatum,
+) -> Bool {
+  let name =
+    thread_nft.thread_asset_name(thread_nft.role_staking_pool, pool.launch_id)
+  let held =
+    assets.quantity_of(own_input.output.value, pool.thread_nft_policy, name)
+  when own_outputs is {
+    [] -> held == 1
+    [out] -> and {
+        held == 1,
+        assets.quantity_of(out.value, pool.thread_nft_policy, name) == 1,
+      }
+    _ -> False
+  }
+}
+
+/// Lovelace, the launch token, and the thread NFT. Nothing else may be parked
+/// in a long-lived UTXO that permissionless redeemers can spend.
+fn output_value_clean(output: Output) -> Bool {
+  list.length(assets.flatten(output.value)) <= 3
+}
+
+fn tokens_in(value: assets.Value, pool: StakingPoolDatum) -> Int {
+  assets.quantity_of(value, pool.token_policy_id, pool.token_asset_name)
+}
+
+/// Pay `amount` of the launch token to `staker_vkh`, settled against this
+/// input.
+///
+/// Two checks, not one. The tag says WHICH obligation an output discharges, so
+/// one payment cannot answer two. The netting says the staker is genuinely
+/// better off, since an output at their own credential is also what their
+/// CHANGE looks like. See noctis/settlement for both in full.
+fn staker_paid(
   self: Transaction,
   own_ref: OutputReference,
   pool: StakingPoolDatum,
+  staker_vkh: VerificationKeyHash,
+  amount: Int,
 ) -> Bool {
-  expect Some(own_input) =
-    list.find(self.inputs, fn(input) { input.output_reference == own_ref })
-  let own_address = own_input.output.address
-  let name =
-    thread_nft.thread_asset_name(thread_nft.role_staking_pool, pool.launch_id)
-  when list.find(self.outputs, fn(output) { output.address == own_address }) is {
-    None -> False
-    Some(own_output) -> and {
-        assets.quantity_of(own_input.output.value, pool.thread_nft_policy, name) == 1,
-        assets.quantity_of(own_output.value, pool.thread_nft_policy, name) == 1,
-      }
+  let credential = from_verification_key(staker_vkh).payment_credential
+  and {
+    list.any(
+      self.outputs,
+      fn(output) {
+        and {
+          settlement.settles(output, own_ref),
+          output.address.payment_credential == credential,
+          tokens_in(output.value, pool) >= amount,
+        }
+      },
+    ),
+    settlement.net_asset_gain(
+      self,
+      credential,
+      pool.token_policy_id,
+      pool.token_asset_name,
+    ) >= amount,
   }
 }
 
@@ -296,246 +322,252 @@ fn pool_thread_nft_intact(
 
 validator staking_pool {
   spend(
-    datum_opt: Option<StakingDatum>,
+    datum_opt: Option<StakingPoolDatum>,
     redeemer: StakingPoolRedeemer,
     own_ref: OutputReference,
     self: Transaction,
   ) {
-    expect Some(datum) = datum_opt
+    expect Some(pool) = datum_opt
     expect Some(own_input) =
       list.find(self.inputs, fn(input) { input.output_reference == own_ref })
 
-    and {
-      single_own_utxo(self, own_input.output.address),
-      // State authentication (2026-08-03 audit) — see pool_thread_nft_intact.
-      // Gated on Pool rather than applied unconditionally: a Position is
-      // created per stake action and is not singleton state, so requiring a
-      // thread NFT on one would make staking impossible.
-      when datum is {
-        Pool(pool) -> pool_thread_nft_intact(self, own_ref, pool)
-        Position(_) -> True
-      },
-      when (datum, redeemer) is {
-      (Pool(pool), ClaimRewards { staker_vkh, payout_amount, leaf_index, merkle_proof }) -> {
-        // Bound first and branched on, not merely ordered inside `and`: a
-        // `let` is evaluated before the block that would have guarded it, and
-        // both the leaf hash and set_bit abort on an index outside the map.
-        let in_range = bitmap.index_in_range(pool.claimed_bits, leaf_index)
-        let leaf =
-          if in_range {
-            hash_reward_leaf(staker_vkh, payout_amount, leaf_index)
-          } else {
-            #""
-          }
-        let next_bits =
-          if in_range {
-            bitmap.set_bit(pool.claimed_bits, leaf_index)
-          } else {
-            pool.claimed_bits
-          }
-        let payout = payout_amount
+    // Compared by PAYMENT credential, never by the full Address: the staking
+    // part is chosen freely by whoever builds an output, so two UTXOs at this
+    // same script can carry different delegation keys while being equally ours.
+    let own_payment = own_input.output.address.payment_credential
+    let own_inputs =
+      list.filter(
+        self.inputs,
+        fn(input) { input.output.address.payment_credential == own_payment },
+      )
+    let own_outputs =
+      list.filter(
+        self.outputs,
+        fn(output) { output.address.payment_credential == own_payment },
+      )
 
-        expect Some(own_input) =
-          list.find(self.inputs, fn(input) { input.output_reference == own_ref })
-        let own_address = own_input.output.address
-        expect Some(own_output) =
-          list.find(self.outputs, fn(output) { output.address == own_address })
+    when range_now(self.validity_range) is {
+      None -> False
+      Some(now) -> and {
+          // Exactly one pool UTXO in, and never two. Positions are not UTXOs
+          // any more, so there is nothing else of ours a transaction could
+          // legitimately spend — and two state UTXOs in one transaction is the
+          // shape that lets one output satisfy two obligations at once.
+          list.length(own_inputs) == 1,
+          thread_nft_ok(own_input, own_outputs, pool),
+          // Time only moves forward, so no spend can rewind the accumulator.
+          now >= pool.last_update_ms,
+          when redeemer is {
+            Stake { staker_vkh, before, proof, add_amount } -> {
+              let (acc, unallocated) = advance(pool, now)
+              let owed = owed_at(before, acc)
+              let amount = before.amount + add_amount + owed
+              let after =
+                Position { amount, debt: debt_at(amount, acc), since: now }
+              let (proof_ok, stake_root) =
+                stake_accumulator.transition(
+                  pool.stake_root,
+                  staker_vkh,
+                  before,
+                  after,
+                  proof,
+                )
+              let expected =
+                StakingPoolDatum {
+                  ..pool,
+                  stake_root: stake_root,
+                  acc_reward_per_token: acc,
+                  total_staked: pool.total_staked + add_amount + owed,
+                  unallocated: unallocated,
+                  last_update_ms: now,
+                  exhausted_at: exhausted_after(pool, unallocated, now),
+                }
 
-        let pool_decreased_by_payout =
-          assets.quantity_of(own_input.output.value, pool.token_policy_id, pool.token_asset_name) == assets.quantity_of(
-            own_output.value,
-            pool.token_policy_id,
-            pool.token_asset_name,
-          ) + payout
-
-        // Fix (2026-07-22): compare only the payment
-        // credential, not the full address. `from_verification_key`
-        // constructs a bare ENTERPRISE address (no stake credential) — the
-        // same construction found in bonding_curve.ak and
-        // bonding_curve_tier_b.ak, which silently required a payout
-        // destination no real Cardano wallet uses by default. This file
-        // wasn't in scope for either of those fix passes and had the
-        // identical bug, undiscovered until now. See those entries in
-        // internal tracking for the full reasoning — same fix here.
-        let staker_credential = from_verification_key(staker_vkh).payment_credential
-        let staker_paid =
-          list.any(
-            self.outputs,
-            fn(output) {
-              and {
-                // The reward output NAMES this pool input. See
-                // noctis/settlement: paying the staker enough is not on its
-                // own evidence that THIS pool paid it, and a staker owed by
-                // another contract too would otherwise be paid once and
-                // credited twice.
-                settlement.settles(output, own_ref),
-                output.address.payment_credential == staker_credential,
-                assets.quantity_of(
-                  output.value,
-                  pool.token_policy_id,
-                  pool.token_asset_name,
-                ) >= payout,
+              when own_outputs is {
+                [own_output] -> and {
+                    add_amount > 0,
+                    // Nothing to earn, so nothing to stake for — and, before
+                    // graduation tops the pool up, a stake here would move
+                    // `total_staked` and `stake_root` off the opening values
+                    // the curve's seeding check pins. One griefing stake would
+                    // otherwise strand the launch's whole staking reserve.
+                    // After exhaustion it says the same thing for the same
+                    // reason: there is no budget left to earn from.
+                    pool.unallocated > 0,
+                    // The staker's own decision, and the one thing here that
+                    // needs their consent: it restarts their lock.
+                    list.has(self.extra_signatories, staker_vkh),
+                    proof_ok,
+                    // Only the stake arrives. Anything owed was already in
+                    // this UTXO as budget and merely changes which side of
+                    // `total_staked` it sits on, so no reward token moves.
+                    tokens_in(own_output.value, pool) == tokens_in(
+                      own_input.output.value,
+                      pool,
+                    ) + add_amount,
+                    own_output.datum == InlineDatum(expected),
+                    output_value_clean(own_output),
+                  }
+                _ -> False
               }
-            },
-          )
+            }
 
-        // ...and the staker is genuinely better off by it. The check above
-        // asks whether an output at their credential holds the payout, which
-        // their own CHANGE also does. This claim is permissionless, so the
-        // transaction is built for the staker rather than by them; netting
-        // their own inputs out is what stops a builder handing back tokens
-        // the staker already had and sending the pool's payment elsewhere.
-        // See noctis/settlement's net_asset_gain.
-        let staker_gained =
-          settlement.net_asset_gain(
-            self,
-            staker_credential,
-            pool.token_policy_id,
-            pool.token_asset_name,
-          ) >= payout
+            Unstake { staker_vkh, before, proof } -> {
+              let (acc, unallocated) = advance(pool, now)
+              let owed = owed_at(before, acc)
+              let payout = before.amount + owed
+              let (proof_ok, stake_root) =
+                stake_accumulator.transition(
+                  pool.stake_root,
+                  staker_vkh,
+                  before,
+                  no_position,
+                  proof,
+                )
+              let expected =
+                StakingPoolDatum {
+                  ..pool,
+                  stake_root: stake_root,
+                  acc_reward_per_token: acc,
+                  total_staked: pool.total_staked - before.amount,
+                  unallocated: unallocated,
+                  last_update_ms: now,
+                  exhausted_at: exhausted_after(pool, unallocated, now),
+                }
 
-        let new_datum = own_continuing_datum(self, own_ref)
-        let expected_datum =
-          Pool(StakingPoolDatum { ..pool, claimed_bits: next_bits })
+              when own_outputs is {
+                [own_output] -> and {
+                    before.amount > 0,
+                    list.has(self.extra_signatories, staker_vkh),
+                    now >= before.since + unstake_lock_ms,
+                    proof_ok,
+                    tokens_in(own_output.value, pool) == tokens_in(
+                      own_input.output.value,
+                      pool,
+                    ) - payout,
+                    staker_paid(self, own_ref, pool, staker_vkh, payout),
+                    own_output.datum == InlineDatum(expected),
+                    output_value_clean(own_output),
+                  }
+                _ -> False
+              }
+            }
 
-        and {
-          payout_amount > 0,
-          in_range,
-          // One claim per staker per root. The bit is inside the leaf hash,
-          // so a valid proof pins this claimer to this one bit.
-          !bytearray.test_bit(pool.claimed_bits, leaf_index),
-          verify_reward_merkle_proof(pool.reward_root, leaf, merkle_proof),
-          pool_decreased_by_payout,
-          staker_paid,
-          staker_gained,
-          new_datum == expected_datum,
-          // ClaimRewards is permissionless — the pool's own
-          // continuing output can't be padded with junk assets. See
-          // bonding_curve.ak's output_value_clean for the full rationale
-          // (found by comparing against MeshJS's open-source escrow.ak).
-          // 3, not 2, since the thread NFT was added: lovelace + the
-          // reward token + the pool thread NFT.
-          list.length(assets.flatten(own_output.value)) <= 3,
-        }
-      }
+            ClaimRewards { staker_vkh, before, proof } -> {
+              let (acc, unallocated) = advance(pool, now)
+              let owed = owed_at(before, acc)
+              let after =
+                Position {
+                  amount: before.amount,
+                  debt: debt_at(before.amount, acc),
+                  // Untouched: taking rewards is not a new commitment, so it
+                  // neither restarts the lock nor extends it.
+                  since: before.since,
+                }
+              let (proof_ok, stake_root) =
+                stake_accumulator.transition(
+                  pool.stake_root,
+                  staker_vkh,
+                  before,
+                  after,
+                  proof,
+                )
+              let expected =
+                StakingPoolDatum {
+                  ..pool,
+                  stake_root: stake_root,
+                  acc_reward_per_token: acc,
+                  unallocated: unallocated,
+                  last_update_ms: now,
+                  exhausted_at: exhausted_after(pool, unallocated, now),
+                }
 
-      (Pool(pool), TopUpPool { amount }) -> {
-        expect Some(own_input) =
-          list.find(self.inputs, fn(input) { input.output_reference == own_ref })
-        let own_address = own_input.output.address
-        expect Some(own_output) =
-          list.find(self.outputs, fn(output) { output.address == own_address })
+              when own_outputs is {
+                [own_output] -> and {
+                    before.amount > 0,
+                    // Nothing owed is nothing to do. Without this, anyone
+                    // could spend the pool UTXO repeatedly to no effect.
+                    owed > 0,
+                    proof_ok,
+                    tokens_in(own_output.value, pool) == tokens_in(
+                      own_input.output.value,
+                      pool,
+                    ) - owed,
+                    staker_paid(self, own_ref, pool, staker_vkh, owed),
+                    own_output.datum == InlineDatum(expected),
+                    output_value_clean(own_output),
+                  }
+                _ -> False
+              }
+            }
 
-        let pool_increased_by_amount =
-          assets.quantity_of(own_output.value, pool.token_policy_id, pool.token_asset_name) == assets.quantity_of(
-            own_input.output.value,
-            pool.token_policy_id,
-            pool.token_asset_name,
-          ) + amount
+            TopUpPool { amount } -> {
+              // Advanced FIRST, so arriving tokens are not retroactively
+              // emitted across time that passed before they were here.
+              let (acc, unallocated) = advance(pool, now)
+              let expected =
+                StakingPoolDatum {
+                  ..pool,
+                  acc_reward_per_token: acc,
+                  unallocated: unallocated + amount,
+                  last_update_ms: now,
+                  // Revived. If this budget is exhausted in turn, the cooldown
+                  // starts again from scratch.
+                  exhausted_at: None,
+                }
 
-        let new_datum = own_continuing_datum(self, own_ref)
+              when own_outputs is {
+                [own_output] -> and {
+                    amount > 0,
+                    tokens_in(own_output.value, pool) == tokens_in(
+                      own_input.output.value,
+                      pool,
+                    ) + amount,
+                    own_output.datum == InlineDatum(expected),
+                    output_value_clean(own_output),
+                  }
+                _ -> False
+              }
+            }
 
-        and {
-          list.has(self.extra_signatories, pool.creator_pub_key_hash),
-          amount > 0,
-          pool_increased_by_amount,
-          new_datum == Pool(pool),
-          // Same cap as ClaimRewards — even a legitimate top-up
-          // shouldn't be able to leave junk assets in the long-lived pool.
-          // 3, not 2, since the thread NFT was added: lovelace + the
-          // reward token + the pool thread NFT.
-          list.length(assets.flatten(own_output.value)) <= 3,
-        }
-      }
+            ClosePool -> {
+              let cooled_down =
+                when pool.exhausted_at is {
+                  Some(at) -> now >= at + close_cooldown_ms
+                  None -> False
+                }
+              let creator =
+                from_verification_key(pool.creator_pub_key_hash).payment_credential
 
-      (Pool(pool), PublishRewardRoot { new_root, claimed_bits }) -> {
-        expect Some(own_input) =
-          list.find(self.inputs, fn(input) { input.output_reference == own_ref })
-        let own_address = own_input.output.address
-        expect Some(own_output) =
-          list.find(self.outputs, fn(output) { output.address == own_address })
-
-        let value_unchanged =
-          assets.quantity_of(own_output.value, pool.token_policy_id, pool.token_asset_name) == assets.quantity_of(
-            own_input.output.value,
-            pool.token_policy_id,
-            pool.token_asset_name,
-          )
-
-        let new_datum = own_continuing_datum(self, own_ref)
-        let expected_datum =
-          Pool(
-            StakingPoolDatum {
-              ..pool,
-              reward_root: new_root,
-              claimed_bits: claimed_bits,
-            },
-          )
-
-        and {
-          list.has(self.extra_signatories, pool.governor_pub_key_hash),
-          value_unchanged,
-          // A new root is a new roster, so it brings its own nullifier, sized
-          // for it. Publishing one is the only way to clear the map.
-          bytearray.length(claimed_bits) > 0,
-          // Every bit clear. Otherwise whoever publishes the root could burn
-          // a staker's claim before they made it, by handing out a map with
-          // their bit already set.
-          claimed_bits == bitmap.cleared(bytearray.length(claimed_bits)),
-          new_datum == expected_datum,
-        }
-      }
-
-      (Position(pos), Unstake) -> {
-        expect Some(own_input) =
-          list.find(self.inputs, fn(input) { input.output_reference == own_ref })
-
-        // No claim of "no continuing output at this address" is needed or
-        // wanted here — other position UTXOs at this same script address
-        // may legitimately be spent/created in the same transaction (e.g.
-        // a different staker unstaking concurrently). This position's own
-        // safety only depends on ITS specific value reaching the staker,
-        // checked below — not on the address's total output count.
-        // Fix (2026-07-22) — same payment-credential-only
-        // comparison as ClaimRewards above; see that branch's comment.
-        let staker_credential = from_verification_key(pos.staker_vkh).payment_credential
-        // Position UTXOs carry a launch-token policy the pool datum
-        // doesn't record locally — verify by comparing the full
-        // non-lovelace value (in practice exactly the one launch token)
-        // rather than needing a policy id here.
-        let staker_paid =
-          list.any(
-            self.outputs,
-            fn(output) {
               and {
-                // Names THIS position. Two positions holding the same assets
-                // — or a payout owed by another contract entirely — are
-                // otherwise indistinguishable to this check.
-                settlement.settles(output, own_ref),
-                output.address.payment_credential == staker_credential,
-                assets.without_lovelace(output.value) == assets.without_lovelace(
-                  own_input.output.value,
+                cooled_down,
+                // Every position closed, and closing one pays out everything
+                // it was owed — so nothing here belongs to a staker. One who
+                // has not come back simply keeps the pool open, which costs
+                // nobody anything.
+                pool.total_staked == 0,
+                // No reward token left either: the budget is spent and every
+                // credited reward claimed. What remains is the min-ADA and the
+                // thread NFT.
+                tokens_in(own_input.output.value, pool) == 0,
+                // The pool stops existing rather than continuing empty.
+                list.length(own_outputs) == 0,
+                list.any(
+                  self.outputs,
+                  fn(output) {
+                    and {
+                      settlement.settles(output, own_ref),
+                      output.address.payment_credential == creator,
+                      assets.without_lovelace(output.value) == assets.without_lovelace(
+                        own_input.output.value,
+                      ),
+                    }
+                  },
                 ),
               }
-            },
-          )
-
-        and {
-          list.has(self.extra_signatories, pos.staker_vkh),
-          pos.staked_amount > 0,
-          staker_paid,
+            }
+          },
         }
-      }
-
-      // CRITICAL fix (2026-07-19, full-suite security audit) — same
-      // fix as bonding_curve.ak: was an unconditional `True` (zero checks),
-      // an unconditional authorization over the pool's reward tokens or any
-      // staker's locked position. See that file's own comment on this exact
-      // line for the full explanation.
-      (_, QueryState) -> False
-
-      _ -> False
-      },
     }
   }
 }
@@ -544,1193 +576,716 @@ validator staking_pool {
 // TESTS
 // ============================================================================
 
-/// State authentication (2026-08-03 audit) — the thread NFT this launch's
-/// state UTXO must carry, matching the mock datum's launch_id (#"01") and
-/// thread_nft_policy (#"c0ffee"). Derived through thread_asset_name rather
-/// than hard-coded so a scheme change cannot leave these silently passing.
-fn mock_pool_nft() -> assets.Value {
+const staker: VerificationKeyHash = #"dd"
+
+const other: VerificationKeyHash = #"ee"
+
+const creator: VerificationKeyHash = #"11"
+
+const token_policy: PolicyId = #"33"
+
+const token_name: AssetName = "tok"
+
+const nft_policy: PolicyId = #"c0ffee"
+
+const launch: ByteArray = #"01"
+
+const opened_at: Int = 1_700_000_000_000
+
+fn pool_nft() -> assets.Value {
   assets.from_asset(
-    #"c0ffee",
-    thread_nft.thread_asset_name(thread_nft.role_staking_pool, #"01"),
+    nft_policy,
+    thread_nft.thread_asset_name(thread_nft.role_staking_pool, launch),
     1,
   )
 }
 
+/// A pool value holding `tokens` of the launch token, plus min-ADA and the
+/// thread NFT.
+fn pool_value(tokens: Int) -> assets.Value {
+  let base = assets.merge(pool_nft(), assets.from_lovelace(2_000_000))
+  if tokens == 0 {
+    base
+  } else {
+    assets.merge(base, assets.from_asset(token_policy, token_name, tokens))
+  }
+}
 
-fn mock_pool_datum() -> StakingPoolDatum {
+/// A budget of 3,650,000 over 1,000 days — 3,650 a day, so a day of elapsed
+/// time is a round number at every stake size used below.
+/// A stake into a pool with no budget is refused — see the redeemer's own
+/// comment. Before graduation that is what protects the seeding check; after
+/// exhaustion it is simply true.
+test stake_is_refused_while_the_pool_holds_no_budget() {
+  let pool = StakingPoolDatum { ..mock_pool(), unallocated: 0 }
+  !run_stake(pool, 0, no_position, [], 1_000, opened_at, [staker])
+}
+
+fn mock_pool() -> StakingPoolDatum {
   StakingPoolDatum {
-    launch_id: #"01",
-    governor_pub_key_hash: #"22",
-    creator_pub_key_hash: #"11",
-    token_policy_id: #"33",
-    token_asset_name: "tok",
-    reward_root: #"",
-    // Two bytes, so a fixture can address bits either side of a byte
-    // boundary without needing its own map.
-    claimed_bits: #"0000",
-    thread_nft_policy: #"c0ffee",
+    launch_id: launch,
+    creator_pub_key_hash: creator,
+    token_policy_id: token_policy,
+    token_asset_name: token_name,
+    thread_nft_policy: nft_policy,
+    emission_per_day: 3_650,
+    stake_root: stake_accumulator.root_of([]),
+    acc_reward_per_token: 0,
+    total_staked: 0,
+    unallocated: 3_650_000,
+    last_update_ms: opened_at,
+    exhausted_at: None,
   }
 }
 
-fn mock_position_datum() -> StakingPositionDatum {
-  StakingPositionDatum {
-    launch_id: #"01",
-    staker_vkh: #"dd",
-    staked_amount: 500,
-    stake_timestamp: 1000,
+fn pos(amount: Int, debt: Int, since: Int) -> Position {
+  Position { amount, debt, since }
+}
+
+fn own_ref() -> OutputReference {
+  OutputReference { transaction_id: #"00", output_index: 0 }
+}
+
+fn script_address() -> Address {
+  from_verification_key(#"cc")
+}
+
+fn pool_input(pool: StakingPoolDatum, tokens: Int) -> Input {
+  Input {
+    output_reference: own_ref(),
+    output: Output {
+      address: script_address(),
+      value: pool_value(tokens),
+      datum: InlineDatum(pool),
+      reference_script: None,
+    },
   }
 }
 
-/// Literal bytes, so this file and the off-chain tree builder cannot drift
-/// apart quietly. Every other test here is relational — deterministic, differs
-/// by amount — and a matching pair of changes on both sides would satisfy all
-/// of them while producing a root no staker's proof verifies against.
-///
-/// Three-way agreement, matching the convention
-/// `hash_dv_leaf_matches_the_offchain_tree_builder` already follows in
-/// bonding_curve_tier_b.ak: computed independently in Python, asserted by
-/// integration/tests/staking-reward-tree.test.ts, and asserted here. A drift
-/// in any one of the three fails a test rather than silently invalidating
-/// every reward proof this pool will ever issue.
-test hash_reward_leaf_matches_the_offchain_tree_builder() {
-  let leaf0 = hash_reward_leaf(#"aa", 100, 0)
-  let leaf1 = hash_reward_leaf(#"bb", 200, 1)
-  let node = hash_reward_node(leaf0, leaf1)
+fn pool_output(pool: StakingPoolDatum, tokens: Int) -> Output {
+  Output {
+    address: script_address(),
+    value: pool_value(tokens),
+    datum: InlineDatum(pool),
+    reference_script: None,
+  }
+}
 
+/// A payout to `vkh`, tagged as settling the pool input.
+fn payout_output(vkh: VerificationKeyHash, tokens: Int) -> Output {
+  Output {
+    address: from_verification_key(vkh),
+    value: assets.from_asset(token_policy, token_name, tokens),
+    datum: InlineDatum(own_ref()),
+    reference_script: None,
+  }
+}
+
+fn tx(
+  inputs: List<Input>,
+  outputs: List<Output>,
+  signers: List<VerificationKeyHash>,
+  now: Int,
+) -> Transaction {
+  Transaction {
+    ..transaction.placeholder,
+    inputs: inputs,
+    outputs: outputs,
+    extra_signatories: signers,
+    validity_range: interval.between(now, now + 1_000),
+  }
+}
+
+// -- the accumulator ----------------------------------------------------------
+
+/// The property the whole runway rests on: a quiet stretch costs the budget
+/// nothing, so it moves the end date later instead of burning tokens nobody
+/// received.
+test advance_emits_nothing_when_nobody_is_staked() {
+  let (acc, unallocated) = advance(mock_pool(), opened_at + 100 * ms_per_day)
   and {
-    leaf0 == #"0e2108eec355989f4bb37bd237adc7ec31faab5b37a76c1640dead2bcce4e2ae",
-    leaf1 == #"c4dcc65a272337d9ed0a01b1f15d7843dce695ea201ca284e77fe066e4ba80c8",
-    node == #"ad4b68bdf104d08a3822fb303336c6c7239bf3eeb6a19c3c42dacba0fda34a47",
+    acc == 0,
+    unallocated == 3_650_000,
   }
 }
 
-test hash_reward_leaf_is_deterministic() {
-  hash_reward_leaf(#"dd", 100, 0) == hash_reward_leaf(#"dd", 100, 0)
-}
-
-test hash_reward_leaf_differs_by_amount() {
-  hash_reward_leaf(#"dd", 100, 0) != hash_reward_leaf(#"dd", 101, 0)
-}
-
-test verify_reward_merkle_proof_accepts_single_leaf_tree() {
-  let leaf = hash_reward_leaf(#"dd", 100, 0)
-  verify_reward_merkle_proof(leaf, leaf, [])
-}
-
-test verify_reward_merkle_proof_accepts_real_proof_in_two_leaf_tree() {
-  let leaf0 = hash_reward_leaf(#"dd", 100, 0)
-  let leaf1 = hash_reward_leaf(#"ee", 50, 1)
-  let root = hash_reward_node(leaf0, leaf1)
-  let proof0 = [MerkleProofStep { sibling: leaf1, goes_left: False }]
-  let proof1 = [MerkleProofStep { sibling: leaf0, goes_left: True }]
+test advance_emits_a_days_worth_per_day() {
+  let pool = StakingPoolDatum { ..mock_pool(), total_staked: 1_000 }
+  let (acc, unallocated) = advance(pool, opened_at + ms_per_day)
   and {
-    verify_reward_merkle_proof(root, leaf0, proof0),
-    verify_reward_merkle_proof(root, leaf1, proof1),
+    acc == 3_650 * acc_scale / 1_000,
+    unallocated == 3_650_000 - 3_650,
   }
 }
 
-test verify_reward_merkle_proof_rejects_tampered_sibling() {
-  let leaf0 = hash_reward_leaf(#"dd", 100, 0)
-  let leaf1 = hash_reward_leaf(#"ee", 50, 1)
-  let root = hash_reward_node(leaf0, leaf1)
-  let tampered_proof = [MerkleProofStep { sibling: #"ff", goes_left: False }]
-  !verify_reward_merkle_proof(root, leaf0, tampered_proof)
+/// Half a day emits half a day's worth. There is no bucket to sit inside, so
+/// there is no snapshot to arrive just before — which is why the bonding
+/// period became a lock on leaving rather than a gap in earning.
+test advance_is_continuous_not_daily() {
+  let pool = StakingPoolDatum { ..mock_pool(), total_staked: 1_000 }
+  let (acc, _) = advance(pool, opened_at + ms_per_day / 2)
+  acc == 1_825 * acc_scale / 1_000
 }
 
-test claim_rewards_succeeds_with_valid_proof_and_real_payout() {
-  let leaf0 = hash_reward_leaf(#"dd", 100, 0)
-  let leaf1 = hash_reward_leaf(#"ee", 50, 1)
-  let root = hash_reward_node(leaf0, leaf1)
-  let proof0 = [MerkleProofStep { sibling: leaf1, goes_left: False }]
-
-  let pool = StakingPoolDatum { ..mock_pool_datum(), reward_root: root }
-  let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
-  let own_address = from_verification_key(#"cc")
-  let staker_address = from_verification_key(#"dd")
-
-  let own_input =
-    Input {
-      output_reference: own_ref,
-      output: Output {
-        address: own_address,
-        value: assets.merge(mock_pool_nft(), assets.merge(assets.from_lovelace(2_000_000), assets.from_asset(#"33", "tok", 1_000))),
-        datum: InlineDatum(Pool(pool)),
-        reference_script: None,
-      },
-    }
-  let new_pool =
-    Pool(StakingPoolDatum { ..pool, claimed_bits: #"8000" })
-  let continuing_output =
-    Output {
-      address: own_address,
-      value: assets.merge(mock_pool_nft(), assets.merge(assets.from_lovelace(2_000_000), assets.from_asset(#"33", "tok", 900))),
-      datum: InlineDatum(new_pool),
-      reference_script: None,
-    }
-  let payout_output =
-    Output {
-      address: staker_address,
-      value: assets.from_asset(#"33", "tok", 100),
-      datum: InlineDatum(own_ref),
-      reference_script: None,
-    }
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      outputs: [continuing_output, payout_output],
-    }
-
-  staking_pool.spend(
-    Some(Pool(pool)),
-    ClaimRewards { staker_vkh: #"dd", payout_amount: 100, leaf_index: 0, merkle_proof: proof0 },
-    own_ref,
-    self,
-  )
+/// 2,000 days elapsed against a 1,000-day budget. Real time keeps passing; the
+/// budget does not.
+test advance_never_emits_more_than_the_budget_holds() {
+  let pool = StakingPoolDatum { ..mock_pool(), total_staked: 1_000 }
+  let (_, unallocated) = advance(pool, opened_at + 2_000 * ms_per_day)
+  unallocated == 0
 }
 
-test claim_rewards_rejects_padded_pool_output() {
-  // Identical to claim_rewards_succeeds_with_valid_proof_and_real_payout,
-  // except the pool's own continuing output carries one extra, unrelated
-  // junk asset. ClaimRewards is permissionless, so ANYONE could otherwise
-  // pad this long-lived pool UTXO this way before the fix.
-  let leaf0 = hash_reward_leaf(#"dd", 100, 0)
-  let leaf1 = hash_reward_leaf(#"ee", 50, 1)
-  let root = hash_reward_node(leaf0, leaf1)
-  let proof0 = [MerkleProofStep { sibling: leaf1, goes_left: False }]
-
-  let pool = StakingPoolDatum { ..mock_pool_datum(), reward_root: root }
-  let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
-  let own_address = from_verification_key(#"cc")
-  let staker_address = from_verification_key(#"dd")
-
-  let own_input =
-    Input {
-      output_reference: own_ref,
-      output: Output {
-        address: own_address,
-        value: assets.merge(mock_pool_nft(), assets.merge(assets.from_lovelace(2_000_000), assets.from_asset(#"33", "tok", 1_000))),
-        datum: InlineDatum(Pool(pool)),
-        reference_script: None,
-      },
-    }
-  let new_pool =
-    Pool(StakingPoolDatum { ..pool, claimed_bits: #"8000" })
-  let continuing_output =
-    Output {
-      address: own_address,
-      value: assets.merge(
-        assets.merge(mock_pool_nft(), assets.merge(assets.from_lovelace(2_000_000), assets.from_asset(#"33", "tok", 900))),
-        // Junk asset from an unrelated policy — the padding attack.
-        assets.from_asset(#"deadbeef", "spam", 1),
-      ),
-      datum: InlineDatum(new_pool),
-      reference_script: None,
-    }
-  let payout_output =
-    Output {
-      address: staker_address,
-      value: assets.from_asset(#"33", "tok", 100),
-      datum: InlineDatum(own_ref),
-      reference_script: None,
-    }
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      outputs: [continuing_output, payout_output],
-    }
-
-  !staking_pool.spend(
-    Some(Pool(pool)),
-    ClaimRewards { staker_vkh: #"dd", payout_amount: 100, leaf_index: 0, merkle_proof: proof0 },
-    own_ref,
-    self,
-  )
-}
-
-test claim_rewards_fails_with_tampered_proof() {
-  let leaf0 = hash_reward_leaf(#"dd", 100, 0)
-  let leaf1 = hash_reward_leaf(#"ee", 50, 1)
-  let root = hash_reward_node(leaf0, leaf1)
-  let tampered_proof = [MerkleProofStep { sibling: #"ff", goes_left: False }]
-
-  let pool = StakingPoolDatum { ..mock_pool_datum(), reward_root: root }
-  let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
-  let own_address = from_verification_key(#"cc")
-  let staker_address = from_verification_key(#"dd")
-
-  let own_input =
-    Input {
-      output_reference: own_ref,
-      output: Output {
-        address: own_address,
-        value: assets.merge(assets.from_lovelace(2_000_000), assets.from_asset(#"33", "tok", 1_000)),
-        datum: InlineDatum(Pool(pool)),
-        reference_script: None,
-      },
-    }
-  let new_pool =
-    Pool(StakingPoolDatum { ..pool, claimed_bits: #"8000" })
-  let continuing_output =
-    Output {
-      address: own_address,
-      value: assets.merge(assets.from_lovelace(2_000_000), assets.from_asset(#"33", "tok", 900)),
-      datum: InlineDatum(new_pool),
-      reference_script: None,
-    }
-  let payout_output =
-    Output {
-      address: staker_address,
-      value: assets.from_asset(#"33", "tok", 100),
-      datum: InlineDatum(own_ref),
-      reference_script: None,
-    }
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      outputs: [continuing_output, payout_output],
-    }
-
-  !staking_pool.spend(
-    Some(Pool(pool)),
-    ClaimRewards { staker_vkh: #"dd", payout_amount: 100, leaf_index: 0, merkle_proof: tampered_proof },
-    own_ref,
-    self,
-  )
-}
-
-/// A second claim on a bit that is already spent.
-///
-/// Built through run_claim so everything else about the transaction is exactly
-/// what the happy path needs — the pool's thread NFT, a real decrease in its
-/// balance, a real payout to the staker. The ONLY thing wrong is that the bit
-/// was already set, so nothing else can be what refuses it.
-///
-/// It did not always read that way. The fixture this replaces carried no
-/// thread NFT, left the pool balance untouched and paid nobody, so it was
-/// refused three times over before the double-claim check was ever reached —
-/// and the check it was named for could have been deleted without the test
-/// noticing.
-test claim_rewards_rejects_a_second_claim_on_the_same_bit() {
-  let leaf = hash_reward_leaf(#"dd", 100, 0)
+/// Doubling the budget doubles the runway at the SAME rate — a top-up buys
+/// days, it does not accelerate payouts.
+test the_budget_is_the_only_stopping_condition() {
   let pool =
-    StakingPoolDatum { ..mock_pool_datum(), reward_root: leaf, claimed_bits: #"8000" }
-  !run_claim(
-    pool,
-    ClaimRewards { staker_vkh: #"dd", payout_amount: 100, leaf_index: 0, merkle_proof: [] },
-    #"8000",
-    100,
-  )
+    StakingPoolDatum {
+      ..mock_pool(),
+      total_staked: 1_000,
+      unallocated: 7_300_000,
+    }
+  let (acc_1000, un_1000) = advance(pool, opened_at + 1_000 * ms_per_day)
+  let (_, un_2000) = advance(pool, opened_at + 2_000 * ms_per_day)
+  and {
+    acc_1000 == 3_650_000 * acc_scale / 1_000,
+    un_1000 == 3_650_000,
+    un_2000 == 0,
+  }
 }
 
-// Regression test: proves ClaimRewards now accepts a
-// payout to the staker's real BASE address (payment + stake credential),
-// not just the narrow bare-enterprise-address shape from_verification_key
-// alone produces. Before this fix, this exact test would have failed.
-test claim_rewards_succeeds_paying_a_real_base_address_not_just_enterprise() {
-  let leaf0 = hash_reward_leaf(#"dd", 100, 0)
-  let leaf1 = hash_reward_leaf(#"ee", 50, 1)
-  let root = hash_reward_node(leaf0, leaf1)
-  let proof0 = [MerkleProofStep { sibling: leaf1, goes_left: False }]
+test owed_is_zero_for_a_position_that_just_moved() {
+  let acc = 5 * acc_scale
+  owed_at(pos(1_000, debt_at(1_000, acc), opened_at), acc) == 0
+}
 
-  let pool = StakingPoolDatum { ..mock_pool_datum(), reward_root: root }
-  let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
-  let own_address = from_verification_key(#"cc")
-  let staker_base_address = from_verification_key(#"dd") |> with_delegation_key(#"aa")
+// -- Stake --------------------------------------------------------------------
 
-  let own_input =
-    Input {
-      output_reference: own_ref,
-      output: Output {
-        address: own_address,
-        value: assets.merge(mock_pool_nft(), assets.merge(assets.from_lovelace(2_000_000), assets.from_asset(#"33", "tok", 1_000))),
-        datum: InlineDatum(Pool(pool)),
-        reference_script: None,
-      },
+/// A Stake transaction with everything the happy path needs, so a rejection
+/// can only come from what the caller varied.
+fn run_stake(
+  pool: StakingPoolDatum,
+  pool_tokens: Int,
+  before: Position,
+  entries: List<(ByteArray, Position)>,
+  add: Int,
+  now: Int,
+  signers: List<VerificationKeyHash>,
+) -> Bool {
+  let proof = stake_accumulator.proof_in(staker, entries)
+  let (acc, unallocated) = advance(pool, now)
+  let owed = owed_at(before, acc)
+  let amount = before.amount + add + owed
+  let after = Position { amount, debt: debt_at(amount, acc), since: now }
+  let (_, stake_root) =
+    stake_accumulator.transition(pool.stake_root, staker, before, after, proof)
+  let next =
+    StakingPoolDatum {
+      ..pool,
+      stake_root: stake_root,
+      acc_reward_per_token: acc,
+      total_staked: pool.total_staked + add + owed,
+      unallocated: unallocated,
+      last_update_ms: now,
+      exhausted_at: exhausted_after(pool, unallocated, now),
     }
-  let new_pool =
-    Pool(StakingPoolDatum { ..pool, claimed_bits: #"8000" })
-  let continuing_output =
-    Output {
-      address: own_address,
-      value: assets.merge(mock_pool_nft(), assets.merge(assets.from_lovelace(2_000_000), assets.from_asset(#"33", "tok", 900))),
-      datum: InlineDatum(new_pool),
-      reference_script: None,
-    }
-  let payout_output =
-    Output {
-      address: staker_base_address,
-      value: assets.from_asset(#"33", "tok", 100),
-      datum: InlineDatum(own_ref),
-      reference_script: None,
-    }
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      outputs: [continuing_output, payout_output],
-    }
-
   staking_pool.spend(
-    Some(Pool(pool)),
-    ClaimRewards { staker_vkh: #"dd", payout_amount: 100, leaf_index: 0, merkle_proof: proof0 },
-    own_ref,
-    self,
+    Some(pool),
+    Stake { staker_vkh: staker, before, proof, add_amount: add },
+    own_ref(),
+    tx(
+      [pool_input(pool, pool_tokens)],
+      [pool_output(next, pool_tokens + add)],
+      signers,
+      now,
+    ),
   )
 }
 
-test top_up_pool_succeeds_with_creator_signature() {
-  let pool = mock_pool_datum()
-  let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
-  let own_address = from_verification_key(#"cc")
-
-  let own_input =
-    Input {
-      output_reference: own_ref,
-      output: Output {
-        address: own_address,
-        value: assets.merge(mock_pool_nft(), assets.merge(assets.from_lovelace(2_000_000), assets.from_asset(#"33", "tok", 1_000))),
-        datum: InlineDatum(Pool(pool)),
-        reference_script: None,
-      },
-    }
-  let continuing_output =
-    Output {
-      address: own_address,
-      value: assets.merge(mock_pool_nft(), assets.merge(assets.from_lovelace(2_000_000), assets.from_asset(#"33", "tok", 1_500))),
-      datum: InlineDatum(Pool(pool)),
-      reference_script: None,
-    }
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      outputs: [continuing_output],
-      extra_signatories: [#"11"],
-    }
-
-  staking_pool.spend(Some(Pool(pool)), TopUpPool { amount: 500 }, own_ref, self)
+test stake_opens_a_first_position() {
+  run_stake(mock_pool(), 3_650_000, no_position, [], 1_000, opened_at, [staker])
 }
 
-test top_up_pool_rejects_padded_output() {
-  // Identical to top_up_pool_succeeds_with_creator_signature, except
-  // the pool's own continuing output carries one extra, unrelated junk
-  // asset — even a legitimate creator top-up shouldn't be able to leave
-  // junk in the long-lived pool.
-  let pool = mock_pool_datum()
-  let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
-  let own_address = from_verification_key(#"cc")
-
-  let own_input =
-    Input {
-      output_reference: own_ref,
-      output: Output {
-        address: own_address,
-        value: assets.merge(mock_pool_nft(), assets.merge(assets.from_lovelace(2_000_000), assets.from_asset(#"33", "tok", 1_000))),
-        datum: InlineDatum(Pool(pool)),
-        reference_script: None,
-      },
-    }
-  let continuing_output =
-    Output {
-      address: own_address,
-      value: assets.merge(
-        assets.merge(mock_pool_nft(), assets.merge(assets.from_lovelace(2_000_000), assets.from_asset(#"33", "tok", 1_500))),
-        // Junk asset from an unrelated policy — the padding attack.
-        assets.from_asset(#"deadbeef", "spam", 1),
-      ),
-      datum: InlineDatum(Pool(pool)),
-      reference_script: None,
-    }
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      outputs: [continuing_output],
-      extra_signatories: [#"11"],
-    }
-
-  !staking_pool.spend(Some(Pool(pool)), TopUpPool { amount: 500 }, own_ref, self)
+test stake_requires_the_stakers_signature() {
+  !run_stake(mock_pool(), 3_650_000, no_position, [], 1_000, opened_at, [other])
 }
 
-test top_up_pool_fails_without_creator_signature() {
-  let pool = mock_pool_datum()
-  let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
-  let own_address = from_verification_key(#"cc")
-
-  let own_input =
-    Input {
-      output_reference: own_ref,
-      output: Output {
-        address: own_address,
-        value: assets.merge(assets.from_lovelace(2_000_000), assets.from_asset(#"33", "tok", 1_000)),
-        datum: InlineDatum(Pool(pool)),
-        reference_script: None,
-      },
-    }
-  let continuing_output =
-    Output {
-      address: own_address,
-      value: assets.merge(assets.from_lovelace(2_000_000), assets.from_asset(#"33", "tok", 1_500)),
-      datum: InlineDatum(Pool(pool)),
-      reference_script: None,
-    }
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      outputs: [continuing_output],
-    }
-
-  !staking_pool.spend(Some(Pool(pool)), TopUpPool { amount: 500 }, own_ref, self)
+test stake_rejects_a_zero_amount() {
+  !run_stake(mock_pool(), 3_650_000, no_position, [], 0, opened_at, [staker])
 }
 
-test publish_reward_root_succeeds_with_governor_signature() {
-  let pool = mock_pool_datum()
-  let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
-  let own_address = from_verification_key(#"cc")
-
-  let own_input =
-    Input {
-      output_reference: own_ref,
-      output: Output {
-        address: own_address,
-        value: assets.merge(mock_pool_nft(), assets.merge(assets.from_lovelace(2_000_000), assets.from_asset(#"33", "tok", 1_000))),
-        datum: InlineDatum(Pool(pool)),
-        reference_script: None,
-      },
+/// The forgery the position root exists to stop. `debt` is what decides a
+/// payout, so a staker claiming a smaller one than they carry would mint
+/// themselves rewards they already drew — and the first Merkle walk is what
+/// makes the claimed `before` true rather than merely asserted.
+test stake_rejects_an_understated_debt() {
+  let real = pos(1_000, 500, opened_at)
+  let pool =
+    StakingPoolDatum {
+      ..mock_pool(),
+      total_staked: 1_000,
+      stake_root: stake_accumulator.root_of([(staker, real)]),
     }
-  let new_pool = Pool(StakingPoolDatum { ..pool, reward_root: #"aabb" })
-  let continuing_output =
-    Output {
-      address: own_address,
-      value: assets.merge(mock_pool_nft(), assets.merge(assets.from_lovelace(2_000_000), assets.from_asset(#"33", "tok", 1_000))),
-      datum: InlineDatum(new_pool),
-      reference_script: None,
-    }
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      outputs: [continuing_output],
-      extra_signatories: [#"22"],
-    }
-
-  staking_pool.spend(Some(Pool(pool)), PublishRewardRoot { new_root: #"aabb", claimed_bits: #"0000" }, own_ref, self)
+  !run_stake(
+    pool,
+    3_650_000,
+    pos(1_000, 0, opened_at),
+    [(staker, real)],
+    100,
+    opened_at,
+    [staker],
+  )
 }
 
-/// State authentication (2026-08-03 audit): a pool UTXO that does not carry
-/// the launch's thread NFT cannot be spent, however well-formed its datum.
-/// Identical to publish_reward_root_succeeds_with_governor_signature above
-/// except for the missing token.
-test pool_spend_rejects_utxo_without_thread_nft() {
-  let pool = mock_pool_datum()
-  let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
-  let own_address = from_verification_key(#"cc")
-  let value =
-    assets.merge(
-      assets.from_lovelace(2_000_000),
-      assets.from_asset(#"33", "tok", 1_000),
+// -- Unstake ------------------------------------------------------------------
+
+fn run_unstake(
+  pool: StakingPoolDatum,
+  pool_tokens: Int,
+  before: Position,
+  now: Int,
+  signers: List<VerificationKeyHash>,
+  payout_to: VerificationKeyHash,
+) -> Bool {
+  let entries = [(staker, before)]
+  let proof = stake_accumulator.proof_in(staker, entries)
+  let (acc, unallocated) = advance(pool, now)
+  let owed = owed_at(before, acc)
+  let payout = before.amount + owed
+  let (_, stake_root) =
+    stake_accumulator.transition(
+      pool.stake_root,
+      staker,
+      before,
+      no_position,
+      proof,
     )
-  let own_input =
-    Input {
-      output_reference: own_ref,
-      output: Output {
-        address: own_address,
-        value: value,
-        datum: InlineDatum(Pool(pool)),
-        reference_script: None,
-      },
+  let next =
+    StakingPoolDatum {
+      ..pool,
+      stake_root: stake_root,
+      acc_reward_per_token: acc,
+      total_staked: pool.total_staked - before.amount,
+      unallocated: unallocated,
+      last_update_ms: now,
+      exhausted_at: exhausted_after(pool, unallocated, now),
     }
-  let new_pool = Pool(StakingPoolDatum { ..pool, reward_root: #"aabb" })
-  let continuing_output =
-    Output {
-      address: own_address,
-      value: value,
-      datum: InlineDatum(new_pool),
-      reference_script: None,
-    }
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      outputs: [continuing_output],
-      extra_signatories: [#"22"],
-    }
-
-  !staking_pool.spend(
-    Some(Pool(pool)),
-    PublishRewardRoot { new_root: #"aabb", claimed_bits: #"0000" },
-    own_ref,
-    self,
+  staking_pool.spend(
+    Some(pool),
+    Unstake { staker_vkh: staker, before, proof },
+    own_ref(),
+    tx(
+      [pool_input(pool, pool_tokens)],
+      [pool_output(next, pool_tokens - payout), payout_output(payout_to, payout)],
+      signers,
+      now,
+    ),
   )
 }
 
-/// The other half of the same property, and the reason the check is gated on
-/// Pool rather than applied to the whole validator: a Position carries no
-/// thread NFT by design — it is created per stake action, permissionlessly —
-/// so requiring one would make every unstake fail. This asserts the
-/// requirement did NOT leak onto positions.
-test position_spend_unaffected_by_thread_nft_requirement() {
-  let position =
-    StakingPositionDatum {
-      launch_id: #"01",
-      staker_vkh: #"dd",
-      staked_amount: 500,
-      stake_timestamp: 1000,
-    }
-  let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
-  let own_address = from_verification_key(#"cc")
-  let staker_address = from_verification_key(#"dd")
-  let own_input =
-    Input {
-      output_reference: own_ref,
-      output: Output {
-        address: own_address,
-        // No thread NFT anywhere — exactly as a real position looks.
-        value: assets.from_asset(#"33", "tok", 500),
-        datum: InlineDatum(Position(position)),
-        reference_script: None,
-      },
-    }
-  let staker_output =
-    Output {
-      address: staker_address,
-      value: assets.from_asset(#"33", "tok", 500),
-      datum: InlineDatum(own_ref),
-      reference_script: None,
-    }
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      outputs: [staker_output],
-      extra_signatories: [#"dd"],
-    }
-
-  staking_pool.spend(Some(Position(position)), Unstake, own_ref, self)
-}
-
-test publish_reward_root_fails_if_value_changes() {
-  let pool = mock_pool_datum()
-  let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
-  let own_address = from_verification_key(#"cc")
-
-  let own_input =
-    Input {
-      output_reference: own_ref,
-      output: Output {
-        address: own_address,
-        value: assets.merge(assets.from_lovelace(2_000_000), assets.from_asset(#"33", "tok", 1_000)),
-        datum: InlineDatum(Pool(pool)),
-        reference_script: None,
-      },
-    }
-  // Attempted drain disguised as a root update: value decreased.
-  let new_pool = Pool(StakingPoolDatum { ..pool, reward_root: #"aabb" })
-  let continuing_output =
-    Output {
-      address: own_address,
-      value: assets.merge(assets.from_lovelace(2_000_000), assets.from_asset(#"33", "tok", 1)),
-      datum: InlineDatum(new_pool),
-      reference_script: None,
-    }
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      outputs: [continuing_output],
-      extra_signatories: [#"22"],
-    }
-
-  !staking_pool.spend(Some(Pool(pool)), PublishRewardRoot { new_root: #"aabb", claimed_bits: #"0000" }, own_ref, self)
-}
-
-test unstake_succeeds_with_staker_signature_and_real_payout() {
-  let pos = mock_position_datum()
-  let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
-  let own_address = from_verification_key(#"cc")
-  let staker_address = from_verification_key(#"dd")
-
-  let own_input =
-    Input {
-      output_reference: own_ref,
-      output: Output {
-        address: own_address,
-        value: assets.merge(assets.from_lovelace(2_000_000), assets.from_asset(#"33", "tok", 500)),
-        datum: InlineDatum(Position(pos)),
-        reference_script: None,
-      },
-    }
-  let payout_output =
-    Output {
-      address: staker_address,
-      value: assets.merge(assets.from_lovelace(2_000_000), assets.from_asset(#"33", "tok", 500)),
-      datum: InlineDatum(own_ref),
-      reference_script: None,
-    }
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      outputs: [payout_output],
-      extra_signatories: [#"dd"],
-    }
-
-  staking_pool.spend(Some(Position(pos)), Unstake, own_ref, self)
-}
-
-// Regression test: proves Unstake now accepts a payout to
-// the staker's real BASE address, not just a bare enterprise address.
-test unstake_succeeds_paying_a_real_base_address_not_just_enterprise() {
-  let pos = mock_position_datum()
-  let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
-  let own_address = from_verification_key(#"cc")
-  let staker_base_address = from_verification_key(#"dd") |> with_delegation_key(#"aa")
-
-  let own_input =
-    Input {
-      output_reference: own_ref,
-      output: Output {
-        address: own_address,
-        value: assets.merge(assets.from_lovelace(2_000_000), assets.from_asset(#"33", "tok", 500)),
-        datum: InlineDatum(Position(pos)),
-        reference_script: None,
-      },
-    }
-  let payout_output =
-    Output {
-      address: staker_base_address,
-      value: assets.merge(assets.from_lovelace(2_000_000), assets.from_asset(#"33", "tok", 500)),
-      datum: InlineDatum(own_ref),
-      reference_script: None,
-    }
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      outputs: [payout_output],
-      extra_signatories: [#"dd"],
-    }
-
-  staking_pool.spend(Some(Position(pos)), Unstake, own_ref, self)
-}
-
-test unstake_fails_without_staker_signature() {
-  let pos = mock_position_datum()
-  let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
-  let own_address = from_verification_key(#"cc")
-  let staker_address = from_verification_key(#"dd")
-
-  let own_input =
-    Input {
-      output_reference: own_ref,
-      output: Output {
-        address: own_address,
-        value: assets.merge(assets.from_lovelace(2_000_000), assets.from_asset(#"33", "tok", 500)),
-        datum: InlineDatum(Position(pos)),
-        reference_script: None,
-      },
-    }
-  let payout_output =
-    Output {
-      address: staker_address,
-      value: assets.merge(assets.from_lovelace(2_000_000), assets.from_asset(#"33", "tok", 500)),
-      datum: InlineDatum(own_ref),
-      reference_script: None,
-    }
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      outputs: [payout_output],
-    }
-
-  !staking_pool.spend(Some(Position(pos)), Unstake, own_ref, self)
-}
-
-// QueryState previously authorized ANY spend unconditionally
-// (`(_, QueryState) -> True`, zero checks) — a complete, unauthenticated
-// drain of the pool's reward tokens. Proves the fix.
-test query_state_rejects_unauthenticated_pool_drain_attempt() {
-  let pool = mock_pool_datum()
-  let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
-  let own_address = from_verification_key(#"cc")
-  let attacker_address = from_verification_key(#"ee")
-  let own_input =
-    Input {
-      output_reference: own_ref,
-      output: Output {
-        address: own_address,
-        value: assets.merge(
-          assets.from_lovelace(2_000_000),
-          assets.from_asset(#"33", "tok", 10_000),
-        ),
-        datum: InlineDatum(Pool(pool)),
-        reference_script: None,
-      },
-    }
-  let drain_output =
-    Output {
-      address: attacker_address,
-      value: assets.merge(
-        assets.from_lovelace(2_000_000),
-        assets.from_asset(#"33", "tok", 10_000),
-      ),
-      datum: transaction.NoDatum,
-      reference_script: None,
-    }
-  let self =
-    Transaction { ..transaction.placeholder, inputs: [own_input], outputs: [drain_output] }
-
-  !staking_pool.spend(Some(Pool(pool)), QueryState, own_ref, self)
-}
-
-// Regression test: the value-conservation case verified against the full
-// security audit — combining Unstake (Position, 500 tok, staker-signed)
-// and ClaimRewards (Pool, 100 tok pending, permissionless) in ONE
-// transaction, with a single 500-tok output to the staker attempting to
-// satisfy BOTH checks at once (Unstake's exact-match AND ClaimRewards'
-// >=100 threshold), while the real 100-tok reward is diverted to a third
-// party. Proves this is now rejected — two inputs at the shared
-// staking_pool.ak address in one transaction violates single_own_utxo.
-test claim_rewards_rejects_combined_with_unstake_same_tx() {
-  let pos = mock_position_datum()
-  let leaf0 = hash_reward_leaf(#"dd", 100, 0)
-  let leaf1 = hash_reward_leaf(#"ee", 50, 1)
-  let root = hash_reward_node(leaf0, leaf1)
-  let proof0 = [MerkleProofStep { sibling: leaf1, goes_left: False }]
-  let pool = StakingPoolDatum { ..mock_pool_datum(), reward_root: root }
-  let own_address = from_verification_key(#"cc")
-  let staker_address = from_verification_key(#"dd")
-  let attacker_address = from_verification_key(#"ee")
-
-  let position_ref = OutputReference { transaction_id: #"00", output_index: 0 }
-  let position_input =
-    Input {
-      output_reference: position_ref,
-      output: Output {
-        // A delegation key here makes this Position's full Address differ
-        // from the Pool's while the script is identical — the two must still
-        // count as one another's company.
-        address: own_address |> with_delegation_key(#"de1e"),
-        value: assets.merge(assets.from_lovelace(2_000_000), assets.from_asset(#"33", "tok", 500)),
-        datum: InlineDatum(Position(pos)),
-        reference_script: None,
-      },
-    }
-  let pool_ref = OutputReference { transaction_id: #"00", output_index: 1 }
-  let pool_input =
-    Input {
-      output_reference: pool_ref,
-      output: Output {
-        address: own_address,
-        value: assets.merge(mock_pool_nft(), assets.merge(assets.from_lovelace(2_000_000), assets.from_asset(#"33", "tok", 1_000))),
-        datum: InlineDatum(Pool(pool)),
-        reference_script: None,
-      },
-    }
-  let new_pool = Pool(StakingPoolDatum { ..pool, claimed_bits: #"8000" })
-  let pool_continuing_output =
-    Output {
-      address: own_address,
-      value: assets.merge(mock_pool_nft(), assets.merge(assets.from_lovelace(2_000_000), assets.from_asset(#"33", "tok", 900))),
-      datum: InlineDatum(new_pool),
-      reference_script: None,
-    }
-  // Only the staker's own 500-tok unstake payout — no separate output for
-  // the 100-tok reward at all. The real reward goes to the attacker.
-  let combined_payout =
-    Output {
-      address: staker_address,
-      value: assets.merge(assets.from_lovelace(2_000_000), assets.from_asset(#"33", "tok", 500)),
-      // Tagged as settling the pool, so the settlement check ACCEPTS this
-      // output and cannot be what rejects the transaction. What rejects it
-      // is single_own_utxo, which is the check this test is named for.
-      datum: InlineDatum(pool_ref),
-      reference_script: None,
-    }
-  let diverted_reward =
-    Output {
-      address: attacker_address,
-      value: assets.from_asset(#"33", "tok", 100),
-      datum: transaction.NoDatum,
-      reference_script: None,
-    }
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [position_input, pool_input],
-      outputs: [pool_continuing_output, combined_payout, diverted_reward],
-      extra_signatories: [#"dd"],
-    }
-
-  !staking_pool.spend(
-    Some(Pool(pool)),
-    ClaimRewards { staker_vkh: #"dd", payout_amount: 100, leaf_index: 0, merkle_proof: proof0 },
-    pool_ref,
-    self,
-  )
-}
-
-// ---------------------------------------------------------------------------
-// The nullifier. One claim per staker per root, in a fixed number of bytes
-// however many stakers there are.
-// ---------------------------------------------------------------------------
-
-/// A pool whose root is a two-leaf tree: `#"dd"` at index 0 for 100, `#"ee"`
-/// at index 1 for 50. Returns the pool plus `#"dd"`'s proof.
-fn claim_fixture() -> (StakingPoolDatum, List<MerkleProofStep>) {
-  let leaf0 = hash_reward_leaf(#"dd", 100, 0)
-  let leaf1 = hash_reward_leaf(#"ee", 50, 1)
-  let root = hash_reward_node(leaf0, leaf1)
+/// A pool with one staker, in from the start.
+fn staked_pool() -> (StakingPoolDatum, Position) {
+  let before = pos(1_000, 0, opened_at)
   (
-    StakingPoolDatum { ..mock_pool_datum(), reward_root: root },
-    [MerkleProofStep { sibling: leaf1, goes_left: False }],
+    StakingPoolDatum {
+      ..mock_pool(),
+      total_staked: 1_000,
+      stake_root: stake_accumulator.root_of([(staker, before)]),
+    },
+    before,
   )
 }
 
-/// A whole claim transaction, with everything the happy path needs, so that a
-/// rejection can only come from the redeemer fields under test.
+test unstake_returns_the_stake_and_everything_owed() {
+  let (pool, before) = staked_pool()
+  run_unstake(pool, 3_651_000, before, opened_at + 8 * ms_per_day, [staker], staker)
+}
+
+test unstake_is_refused_before_the_lock_elapses() {
+  let (pool, before) = staked_pool()
+  !run_unstake(pool, 3_651_000, before, opened_at + 6 * ms_per_day, [staker], staker)
+}
+
+test unstake_requires_the_stakers_signature() {
+  let (pool, before) = staked_pool()
+  !run_unstake(pool, 3_651_000, before, opened_at + 8 * ms_per_day, [other], staker)
+}
+
+/// The payout may only reach the staker's own address, whoever built the
+/// transaction.
+test unstake_cannot_be_redirected() {
+  let (pool, before) = staked_pool()
+  !run_unstake(pool, 3_651_000, before, opened_at + 8 * ms_per_day, [staker], other)
+}
+
+// -- ClaimRewards -------------------------------------------------------------
+
 fn run_claim(
   pool: StakingPoolDatum,
-  redeemer: StakingPoolRedeemer,
-  next_bits: ByteArray,
-  payout: Int,
+  pool_tokens: Int,
+  before: Position,
+  now: Int,
+  payout_to: VerificationKeyHash,
+  extra_inputs: List<Input>,
+  extra_outputs: List<Output>,
 ) -> Bool {
-  let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
-  let own_address = from_verification_key(#"cc")
-  let own_input =
-    Input {
-      output_reference: own_ref,
-      output: Output {
-        address: own_address,
-        value: assets.merge(
-          mock_pool_nft(),
-          assets.merge(
-            assets.from_lovelace(2_000_000),
-            assets.from_asset(#"33", "tok", 1_000),
-          ),
-        ),
-        datum: InlineDatum(Pool(pool)),
-        reference_script: None,
-      },
+  let entries = [(staker, before)]
+  let proof = stake_accumulator.proof_in(staker, entries)
+  let (acc, unallocated) = advance(pool, now)
+  let owed = owed_at(before, acc)
+  let after =
+    Position {
+      amount: before.amount,
+      debt: debt_at(before.amount, acc),
+      since: before.since,
     }
-  let continuing_output =
-    Output {
-      address: own_address,
-      value: assets.merge(
-        mock_pool_nft(),
-        assets.merge(
-          assets.from_lovelace(2_000_000),
-          assets.from_asset(#"33", "tok", 1_000 - payout),
-        ),
-      ),
-      datum: InlineDatum(Pool(StakingPoolDatum { ..pool, claimed_bits: next_bits })),
-      reference_script: None,
-    }
-  let payout_output =
-    Output {
-      address: from_verification_key(#"dd"),
-      value: assets.from_asset(#"33", "tok", payout),
-      datum: InlineDatum(own_ref),
-      reference_script: None,
-    }
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      outputs: [continuing_output, payout_output],
-    }
-  staking_pool.spend(Some(Pool(pool)), redeemer, own_ref, self)
-}
-
-/// The control for every rejection below: this exact shape is accepted.
-test claim_rewards_accepts_the_shape_the_rejections_vary() {
-  let (pool, proof) = claim_fixture()
-  run_claim(
-    pool,
-    ClaimRewards { staker_vkh: #"dd", payout_amount: 100, leaf_index: 0, merkle_proof: proof },
-    #"8000",
-    100,
-  )
-}
-
-test claim_rewards_rejects_an_index_past_the_end_of_the_map() {
-  let (pool, proof) = claim_fixture()
-  // mock_pool_datum's map is two bytes, so bit 16 does not exist.
-  !run_claim(
-    pool,
-    ClaimRewards { staker_vkh: #"dd", payout_amount: 100, leaf_index: 16, merkle_proof: proof },
-    #"8000",
-    100,
-  )
-}
-
-test claim_rewards_rejects_a_negative_index() {
-  let (pool, proof) = claim_fixture()
-  !run_claim(
-    pool,
-    ClaimRewards { staker_vkh: #"dd", payout_amount: 100, leaf_index: -1, merkle_proof: proof },
-    #"8000",
-    100,
-  )
-}
-
-/// The index is inside the leaf hash, so a proof issued for one bit does not
-/// verify when presented against another. Without that, a staker could spend
-/// somebody else's bit and leave their own free to claim again.
-test claim_rewards_rejects_a_proof_aimed_at_another_bit() {
-  let (pool, proof) = claim_fixture()
-  !run_claim(
-    pool,
-    ClaimRewards { staker_vkh: #"dd", payout_amount: 100, leaf_index: 1, merkle_proof: proof },
-    #"4000",
-    100,
-  )
-}
-
-test claim_rewards_rejects_a_zero_payout() {
-  let leaf = hash_reward_leaf(#"dd", 0, 0)
-  let pool = StakingPoolDatum { ..mock_pool_datum(), reward_root: leaf }
-  !run_claim(
-    pool,
-    ClaimRewards { staker_vkh: #"dd", payout_amount: 0, leaf_index: 0, merkle_proof: [] },
-    #"8000",
-    0,
-  )
-}
-
-/// Bit 8 is the high bit of the second byte — the boundary a byte-indexed map
-/// is most likely to get wrong.
-test claim_rewards_sets_a_bit_in_the_second_byte() {
-  let leaf = hash_reward_leaf(#"dd", 100, 8)
-  let pool = StakingPoolDatum { ..mock_pool_datum(), reward_root: leaf }
-  run_claim(
-    pool,
-    ClaimRewards { staker_vkh: #"dd", payout_amount: 100, leaf_index: 8, merkle_proof: [] },
-    #"0080",
-    100,
-  )
-}
-
-/// A new root is a new roster, and it must arrive with nobody's claim already
-/// spent — otherwise whoever publishes it could burn a staker's entitlement
-/// before that staker ever made a claim.
-test publish_reward_root_rejects_a_pre_set_bit() {
-  let pool = mock_pool_datum()
-  let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
-  let own_address = from_verification_key(#"cc")
-  let value =
-    assets.merge(
-      mock_pool_nft(),
-      assets.merge(assets.from_lovelace(2_000_000), assets.from_asset(#"33", "tok", 1_000)),
-    )
-  let own_input =
-    Input {
-      output_reference: own_ref,
-      output: Output {
-        address: own_address,
-        value: value,
-        datum: InlineDatum(Pool(pool)),
-        reference_script: None,
-      },
-    }
-  let continuing_output =
-    Output {
-      address: own_address,
-      value: value,
-      datum: InlineDatum(
-        Pool(StakingPoolDatum { ..pool, reward_root: #"aabb", claimed_bits: #"8000" }),
-      ),
-      reference_script: None,
-    }
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      outputs: [continuing_output],
-      extra_signatories: [#"22"],
-    }
-  !staking_pool.spend(
-    Some(Pool(pool)),
-    PublishRewardRoot { new_root: #"aabb", claimed_bits: #"8000" },
-    own_ref,
-    self,
-  )
-}
-
-/// A root published with no map is a root nobody could claim against.
-test publish_reward_root_rejects_an_empty_nullifier() {
-  let pool = mock_pool_datum()
-  let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
-  let own_address = from_verification_key(#"cc")
-  let value =
-    assets.merge(
-      mock_pool_nft(),
-      assets.merge(assets.from_lovelace(2_000_000), assets.from_asset(#"33", "tok", 1_000)),
-    )
-  let own_input =
-    Input {
-      output_reference: own_ref,
-      output: Output {
-        address: own_address,
-        value: value,
-        datum: InlineDatum(Pool(pool)),
-        reference_script: None,
-      },
-    }
-  let continuing_output =
-    Output {
-      address: own_address,
-      value: value,
-      datum: InlineDatum(
-        Pool(StakingPoolDatum { ..pool, reward_root: #"aabb", claimed_bits: #"" }),
-      ),
-      reference_script: None,
-    }
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      outputs: [continuing_output],
-      extra_signatories: [#"22"],
-    }
-  !staking_pool.spend(
-    Some(Pool(pool)),
-    PublishRewardRoot { new_root: #"aabb", claimed_bits: #"" },
-    own_ref,
-    self,
-  )
-}
-
-/// Publishing a root is how the map is cleared, so a staker who has claimed
-/// under one root can claim again under the next.
-test publish_reward_root_clears_a_used_nullifier() {
-  let pool = StakingPoolDatum { ..mock_pool_datum(), claimed_bits: #"8000" }
-  let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
-  let own_address = from_verification_key(#"cc")
-  let value =
-    assets.merge(
-      mock_pool_nft(),
-      assets.merge(assets.from_lovelace(2_000_000), assets.from_asset(#"33", "tok", 1_000)),
-    )
-  let own_input =
-    Input {
-      output_reference: own_ref,
-      output: Output {
-        address: own_address,
-        value: value,
-        datum: InlineDatum(Pool(pool)),
-        reference_script: None,
-      },
-    }
-  let continuing_output =
-    Output {
-      address: own_address,
-      value: value,
-      datum: InlineDatum(
-        Pool(StakingPoolDatum { ..pool, reward_root: #"aabb", claimed_bits: #"0000" }),
-      ),
-      reference_script: None,
-    }
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      outputs: [continuing_output],
-      extra_signatories: [#"22"],
+  let (_, stake_root) =
+    stake_accumulator.transition(pool.stake_root, staker, before, after, proof)
+  let next =
+    StakingPoolDatum {
+      ..pool,
+      stake_root: stake_root,
+      acc_reward_per_token: acc,
+      unallocated: unallocated,
+      last_update_ms: now,
+      exhausted_at: exhausted_after(pool, unallocated, now),
     }
   staking_pool.spend(
-    Some(Pool(pool)),
-    PublishRewardRoot { new_root: #"aabb", claimed_bits: #"0000" },
-    own_ref,
-    self,
+    Some(pool),
+    ClaimRewards { staker_vkh: staker, before, proof },
+    own_ref(),
+    tx(
+      list.concat([pool_input(pool, pool_tokens)], extra_inputs),
+      list.concat(
+        [pool_output(next, pool_tokens - owed), payout_output(payout_to, owed)],
+        extra_outputs,
+      ),
+      [],
+      now,
+    ),
   )
 }
 
-/// The staker is paid nothing, and the reward leaves for someone else.
-///
-/// ClaimRewards is permissionless, so the claim transaction is built for the
-/// staker rather than by them. A builder who can get the staker's signature —
-/// the platform's own frontend, or anything that replaces it — can spend a
-/// UTXO the staker already holds, hand those same tokens straight back as
-/// change, and route the pool's actual payout elsewhere. The pool decreases
-/// by the payout, an output at the staker's own credential carries at least
-/// the payout, and the leaf is marked claimed, so the claim cannot be
-/// repeated. Every balance in the transaction is honest; the staker is simply
-/// not the one who ends up better off.
-test claim_rewards_rejects_paying_the_staker_with_their_own_tokens() {
-  let leaf0 = hash_reward_leaf(#"dd", 100, 0)
-  let leaf1 = hash_reward_leaf(#"ee", 50, 1)
-  let root = hash_reward_node(leaf0, leaf1)
-  let proof0 = [MerkleProofStep { sibling: leaf1, goes_left: False }]
+/// Permissionless, and with no signature in the transaction at all — the
+/// payout is pinned to the staker by credential, tag and netting.
+test claim_pays_a_days_rewards_without_any_signature() {
+  let (pool, before) = staked_pool()
+  run_claim(pool, 3_651_000, before, opened_at + ms_per_day, staker, [], [])
+}
 
-  let pool = StakingPoolDatum { ..mock_pool_datum(), reward_root: root }
-  let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
-  let own_address = from_verification_key(#"cc")
-  let staker_address = from_verification_key(#"dd")
-  let attacker_address = from_verification_key(#"ba")
+test claim_cannot_be_redirected() {
+  let (pool, before) = staked_pool()
+  !run_claim(pool, 3_651_000, before, opened_at + ms_per_day, other, [], [])
+}
 
-  let own_input =
-    Input {
-      output_reference: own_ref,
-      output: Output {
-        address: own_address,
-        value: assets.merge(mock_pool_nft(), assets.merge(assets.from_lovelace(2_000_000), assets.from_asset(#"33", "tok", 1_000))),
-        datum: InlineDatum(Pool(pool)),
-        reference_script: None,
-      },
-    }
-  // The staker's own tokens, spent in the same transaction.
+/// The change trick: a builder who can get the staker's signature spends a
+/// UTXO the staker already holds, hands it back tagged, and sends the pool's
+/// real payment elsewhere. Every balance is honest and the staker gains
+/// nothing — which is what netting, rather than tagging alone, refuses.
+test claim_refuses_a_payout_that_is_only_the_stakers_own_change() {
+  let (pool, before) = staked_pool()
+  let now = opened_at + ms_per_day
+  let (acc, _) = advance(pool, now)
+  let owed = owed_at(before, acc)
   let staker_input =
     Input {
-      output_reference: OutputReference { transaction_id: #"77", output_index: 0 },
+      output_reference: OutputReference {
+        transaction_id: #"77",
+        output_index: 0,
+      },
       output: Output {
-        address: staker_address,
-        value: assets.merge(assets.from_lovelace(2_000_000), assets.from_asset(#"33", "tok", 100)),
+        address: from_verification_key(staker),
+        value: assets.from_asset(token_policy, token_name, owed),
         datum: transaction.NoDatum,
         reference_script: None,
       },
     }
-  let new_pool = Pool(StakingPoolDatum { ..pool, claimed_bits: #"8000" })
-  let continuing_output =
+  let diverted =
     Output {
-      address: own_address,
-      value: assets.merge(mock_pool_nft(), assets.merge(assets.from_lovelace(2_000_000), assets.from_asset(#"33", "tok", 900))),
-      datum: InlineDatum(new_pool),
-      reference_script: None,
-    }
-  // Change: the staker's own 100 tokens, returned to the staker, tagged as
-  // though the pool had settled them.
-  let staker_change =
-    Output {
-      address: staker_address,
-      value: assets.merge(assets.from_lovelace(2_000_000), assets.from_asset(#"33", "tok", 100)),
-      datum: InlineDatum(own_ref),
-      reference_script: None,
-    }
-  // The pool's real payout, going somewhere else entirely.
-  let attacker_output =
-    Output {
-      address: attacker_address,
-      value: assets.from_asset(#"33", "tok", 100),
+      address: from_verification_key(other),
+      value: assets.from_asset(token_policy, token_name, owed),
       datum: transaction.NoDatum,
       reference_script: None,
     }
-  let self =
+  !run_claim(
+    pool,
+    3_651_000,
+    before,
+    now,
+    staker,
+    [staker_input],
+    [diverted],
+  )
+}
+
+/// Claiming twice at the same instant owes nothing the second time, because
+/// the first claim rewrote the debt. This is the double-pay the off-chain
+/// ledger used to be responsible for, now closed by arithmetic.
+test a_second_claim_at_the_same_moment_is_owed_nothing() {
+  let (pool, before) = staked_pool()
+  let now = opened_at + ms_per_day
+  let (acc, _) = advance(pool, now)
+  and {
+    run_claim(pool, 3_651_000, before, now, staker, [], []),
+    owed_at(pos(1_000, debt_at(1_000, acc), opened_at), acc) == 0,
+  }
+}
+
+/// Taking rewards is not a new commitment, so `since` is untouched — a staker
+/// who claims on day 3 can still leave on day 7.
+test claim_leaves_the_unstake_lock_alone() {
+  let (pool, before) = staked_pool()
+  let (acc, _) = advance(pool, opened_at + 3 * ms_per_day)
+  let after =
+    Position {
+      amount: before.amount,
+      debt: debt_at(before.amount, acc),
+      since: before.since,
+    }
+  after.since == opened_at
+}
+
+// -- TopUpPool ----------------------------------------------------------------
+
+fn run_top_up(pool: StakingPoolDatum, next: StakingPoolDatum, amount: Int, now: Int) -> Bool {
+  staking_pool.spend(
+    Some(pool),
+    TopUpPool { amount },
+    own_ref(),
+    tx(
+      [pool_input(pool, 3_650_000)],
+      [pool_output(next, 3_650_000 + amount)],
+      [],
+      now,
+    ),
+  )
+}
+
+fn topped_up(pool: StakingPoolDatum, amount: Int, now: Int) -> StakingPoolDatum {
+  let (acc, unallocated) = advance(pool, now)
+  StakingPoolDatum {
+    ..pool,
+    acc_reward_per_token: acc,
+    unallocated: unallocated + amount,
+    last_update_ms: now,
+    exhausted_at: None,
+  }
+}
+
+test top_up_is_permissionless_and_extends_the_budget() {
+  let pool = StakingPoolDatum { ..mock_pool(), total_staked: 1_000 }
+  let now = opened_at + ms_per_day
+  run_top_up(pool, topped_up(pool, 500_000, now), 500_000, now)
+}
+
+/// The field a top-up must not touch. Raising it would turn a top-up into an
+/// acceleration, which is the opposite of what it is for.
+test top_up_cannot_change_the_emission_rate() {
+  let pool = StakingPoolDatum { ..mock_pool(), total_staked: 1_000 }
+  let now = opened_at + ms_per_day
+  let next =
+    StakingPoolDatum { ..topped_up(pool, 500_000, now), emission_per_day: 36_500 }
+  !run_top_up(pool, next, 500_000, now)
+}
+
+// -- ClosePool ----------------------------------------------------------------
+
+fn exhausted_pool() -> StakingPoolDatum {
+  StakingPoolDatum {
+    ..mock_pool(),
+    unallocated: 0,
+    total_staked: 0,
+    exhausted_at: Some(opened_at),
+  }
+}
+
+fn run_close(pool: StakingPoolDatum, pool_tokens: Int, now: Int) -> Bool {
+  staking_pool.spend(
+    Some(pool),
+    ClosePool,
+    own_ref(),
+    tx(
+      [pool_input(pool, pool_tokens)],
+      [
+        Output {
+          address: from_verification_key(creator),
+          value: pool_value(pool_tokens),
+          datum: InlineDatum(own_ref()),
+          reference_script: None,
+        },
+      ],
+      [],
+      now,
+    ),
+  )
+}
+
+test close_retires_an_exhausted_pool_after_the_cooldown() {
+  run_close(exhausted_pool(), 0, opened_at + close_cooldown_ms)
+}
+
+test close_is_refused_during_the_cooldown() {
+  !run_close(exhausted_pool(), 0, opened_at + close_cooldown_ms - 1)
+}
+
+/// A staker who never came back keeps the pool open, and keeps their tokens.
+/// The cooldown is a window for a top-up, not a forfeiture clock.
+test close_is_refused_while_anyone_is_still_staked() {
+  let pool = StakingPoolDatum { ..exhausted_pool(), total_staked: 1_000 }
+  !run_close(pool, 1_000, opened_at + close_cooldown_ms)
+}
+
+/// And refused while any reward token remains, which is what an unclaimed
+/// reward looks like from outside.
+test close_is_refused_while_any_reward_is_unclaimed() {
+  !run_close(exhausted_pool(), 5_000, opened_at + close_cooldown_ms)
+}
+
+test close_is_refused_on_a_pool_that_was_never_exhausted() {
+  !run_close(mock_pool(), 0, opened_at + close_cooldown_ms)
+}
+
+// -- shared guards ------------------------------------------------------------
+
+/// State authentication: a pool UTXO not carrying this launch's thread NFT
+/// cannot be spent, however well-formed its datum. This validator is
+/// unparameterized, so every launch's pool shares one address.
+test a_pool_without_its_thread_nft_cannot_be_spent() {
+  let pool = StakingPoolDatum { ..mock_pool(), total_staked: 1_000 }
+  let now = opened_at + ms_per_day
+  let bare =
+    assets.merge(
+      assets.from_lovelace(2_000_000),
+      assets.from_asset(token_policy, token_name, 3_650_000),
+    )
+  !staking_pool.spend(
+    Some(pool),
+    TopUpPool { amount: 500_000 },
+    own_ref(),
+    tx(
+      [
+        Input {
+          output_reference: own_ref(),
+          output: Output {
+            address: script_address(),
+            value: bare,
+            datum: InlineDatum(pool),
+            reference_script: None,
+          },
+        },
+      ],
+      [
+        Output {
+          address: script_address(),
+          value: assets.merge(
+            bare,
+            assets.from_asset(token_policy, token_name, 500_000),
+          ),
+          datum: InlineDatum(topped_up(pool, 500_000, now)),
+          reference_script: None,
+        },
+      ],
+      [],
+      now,
+    ),
+  )
+}
+
+/// An open-ended validity range would let a spender read whatever "now" suits
+/// them, and every redeemer here reads the clock.
+test an_unbounded_validity_range_is_refused() {
+  let pool = StakingPoolDatum { ..mock_pool(), total_staked: 1_000 }
+  let now = opened_at + ms_per_day
+  !staking_pool.spend(
+    Some(pool),
+    TopUpPool { amount: 500_000 },
+    own_ref(),
     Transaction {
       ..transaction.placeholder,
-      inputs: [own_input, staker_input],
-      outputs: [continuing_output, staker_change, attacker_output],
-    }
+      inputs: [pool_input(pool, 3_650_000)],
+      outputs: [pool_output(topped_up(pool, 500_000, now), 4_150_000)],
+      validity_range: interval.after(now),
+    },
+  )
+}
 
+/// A wide range is the same trick with an upper bound attached.
+test a_wide_validity_range_is_refused() {
+  let pool = StakingPoolDatum { ..mock_pool(), total_staked: 1_000 }
+  let now = opened_at + ms_per_day
   !staking_pool.spend(
-    Some(Pool(pool)),
-    ClaimRewards { staker_vkh: #"dd", payout_amount: 100, leaf_index: 0, merkle_proof: proof0 },
-    own_ref,
-    self,
+    Some(pool),
+    TopUpPool { amount: 500_000 },
+    own_ref(),
+    Transaction {
+      ..transaction.placeholder,
+      inputs: [pool_input(pool, 3_650_000)],
+      outputs: [pool_output(topped_up(pool, 500_000, now), 4_150_000)],
+      validity_range: interval.between(
+        now,
+        now + max_validity_range_width + 1,
+      ),
+    },
+  )
+}
+
+/// Permissionless redeemers spend this long-lived UTXO, so its continuing
+/// output must not be paddable with junk.
+test a_padded_pool_output_is_refused() {
+  let pool = StakingPoolDatum { ..mock_pool(), total_staked: 1_000 }
+  let now = opened_at + ms_per_day
+  !staking_pool.spend(
+    Some(pool),
+    TopUpPool { amount: 500_000 },
+    own_ref(),
+    tx(
+      [pool_input(pool, 3_650_000)],
+      [
+        Output {
+          address: script_address(),
+          value: assets.merge(
+            pool_value(4_150_000),
+            assets.from_asset(#"deadbeef", "spam", 1),
+          ),
+          datum: InlineDatum(topped_up(pool, 500_000, now)),
+          reference_script: None,
+        },
+      ],
+      [],
+      now,
+    ),
+  )
+}
+
+/// Two pool UTXOs in one transaction is the shape that lets a single output
+/// satisfy two obligations at once.
+test two_pool_utxos_in_one_transaction_are_refused() {
+  let pool = StakingPoolDatum { ..mock_pool(), total_staked: 1_000 }
+  let now = opened_at + ms_per_day
+  let second =
+    Input {
+      output_reference: OutputReference {
+        transaction_id: #"99",
+        output_index: 0,
+      },
+      output: Output {
+        // A delegation key makes this UTXO's full Address differ from the
+        // pool's while the script is identical — the two must still count as
+        // one another's company.
+        address: script_address() |> address.with_delegation_key(#"de1e"),
+        value: pool_value(1_000),
+        datum: InlineDatum(pool),
+        reference_script: None,
+      },
+    }
+  !staking_pool.spend(
+    Some(pool),
+    TopUpPool { amount: 500_000 },
+    own_ref(),
+    tx(
+      [pool_input(pool, 3_650_000), second],
+      [pool_output(topped_up(pool, 500_000, now), 4_150_000)],
+      [],
+      now,
+    ),
   )
 }

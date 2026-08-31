@@ -77,6 +77,10 @@ export const BondingCurveDatumShape = Data.Object({
   staking_enabled: Data.Boolean(),
   staking_pool_credential: CredentialSchema,
   staking_reserve_tokens: Data.Integer(),
+  /** The runway the creator commits to at launch creation. With the reserve it
+   *  fixes the pool's emission rate for life, and the curve pins that rate on
+   *  chain at graduation — so a wrong value here cannot be corrected later. */
+  staking_duration_days: Data.Integer(),
   // Fix (2026-07-23): added to the on-chain datum after this
   // schema was first written. thread_nft_policy is a PolicyId (bytes).
   cto_governance_credential: CredentialSchema,
@@ -136,6 +140,10 @@ export const BondingCurveTierBDatumShape = Data.Object({
   staking_enabled: Data.Boolean(),
   staking_pool_credential: CredentialSchema,
   staking_reserve_tokens: Data.Integer(),
+  /** The runway the creator commits to at launch creation. With the reserve it
+   *  fixes the pool's emission rate for life, and the curve pins that rate on
+   *  chain at graduation — so a wrong value here cannot be corrected later. */
+  staking_duration_days: Data.Integer(),
   // Fix (2026-07-23): added to the on-chain datum after this
   // schema was first written. thread_nft_policy is a PolicyId (bytes).
   cto_governance_credential: CredentialSchema,
@@ -467,48 +475,48 @@ export function buildCip68FungibleMetadata(fields: Cip68FungibleMetadata): Cip68
   return map as Cip68MetadataData;
 }
 
+/// noctis/stake_accumulator's Position — one staker's slot in the pool's
+/// stake root. Not a UTXO: positions stopped being their own outputs when
+/// reward accounting moved on chain, because `debt` decides a payout and a
+/// datum anyone can author would then be an authorization. See that module.
+export const StakePositionShape = Data.Object({
+  amount: Data.Integer(),
+  debt: Data.Integer(),
+  since: Data.Integer(),
+});
+export type StakePositionData = Data.Static<typeof StakePositionShape>;
+export const StakePositionSchema = StakePositionShape as unknown as StakePositionData;
+
+/// noctis/staking_pool_datum's StakingPoolDatum. ONE per launch, and its own
+/// UTXO value holds every staked token AND the reward budget — `total_staked`
+/// says which is which.
+///
+/// Field order verified against the compiled blueprint, not read off the .ak
+/// source, same discipline as every other schema in this file.
 export const StakingPoolDatumShape = Data.Object({
   launch_id: Data.Bytes(),
-  governor_pub_key_hash: Data.Bytes(),
+  /// Where the residue goes when an exhausted pool is retired. Not an
+  /// authority: no redeemer checks this key's signature.
   creator_pub_key_hash: Data.Bytes(),
   token_policy_id: Data.Bytes(),
   token_asset_name: Data.Bytes(),
-  reward_root: Data.Bytes(),
-  // Who has claimed against the CURRENT reward_root, one bit each, sized and
-  // cleared when that root was published. Replaced a list of (staker, total)
-  // pairs: that grew one entry per claimant forever and is compared by
-  // structural equality on every spend, so a pool meant to run three to five
-  // years would eventually be too expensive to spend at all.
-  claimed_bits: Data.Bytes(),
-  // Added 2026-08-03: policy id of this launch's thread NFTs. The pool's own
-  // UTXO must carry the role-tagged token on both the spent input and the
-  // continuing output. Position UTXOs deliberately have no equivalent field —
-  // they are created per stake action and are not singleton state.
   thread_nft_policy: Data.Bytes(),
+  /// Fixed when the pool opened, from the runway committed to at launch
+  /// creation. Nothing changes it, top-ups included.
+  emission_per_day: Data.Integer(),
+  /// Every staker's position, behind one root.
+  stake_root: Data.Bytes(),
+  /// Reward per token staked, ever, scaled by ACC_SCALE. Monotonic.
+  acc_reward_per_token: Data.Integer(),
+  total_staked: Data.Integer(),
+  /// Reward tokens not yet credited to anyone. The only stopping condition.
+  unallocated: Data.Integer(),
+  last_update_ms: Data.Integer(),
+  /// When `unallocated` first reached zero. A top-up clears it.
+  exhausted_at: Data.Nullable(Data.Integer()),
 });
 export type StakingPoolDatumData = Data.Static<typeof StakingPoolDatumShape>;
 export const StakingPoolDatumSchema = StakingPoolDatumShape as unknown as StakingPoolDatumData;
-
-export const StakingPositionDatumShape = Data.Object({
-  launch_id: Data.Bytes(),
-  staker_vkh: Data.Bytes(),
-  staked_amount: Data.Integer(),
-  stake_timestamp: Data.Integer(),
-});
-export type StakingPositionDatumData = Data.Static<typeof StakingPositionDatumShape>;
-export const StakingPositionDatumSchema = StakingPositionDatumShape as unknown as StakingPositionDatumData;
-
-// StakingDatum wraps the two shapes above — Lucid Evolution's Data.Enum
-// requires each variant to be an Object/Tuple/Literal, so this is
-// constructed with Data.Object per-variant matching Aiken's own
-// single-field-constructor wrapping (Pool(StakingPoolDatum) is Constr 0
-// with ONE field, the nested datum — not the nested fields spliced in).
-const StakingDatumShape = Data.Enum([
-  Data.Object({ Pool: Data.Tuple([StakingPoolDatumShape]) }),
-  Data.Object({ Position: Data.Tuple([StakingPositionDatumShape]) }),
-]);
-export type StakingDatumData = Data.Static<typeof StakingDatumShape>;
-export const StakingDatumSchema = StakingDatumShape as unknown as StakingDatumData;
 
 // cto_governance.ak's own CtoGovernanceDatum — field order verified directly
 // against the .ak source (2026-07-28, Phase G of the CIP-68 prerequisite

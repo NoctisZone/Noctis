@@ -219,27 +219,17 @@ export function selectLaunchUtxo<T extends LaunchScopedDatum>(
   });
 }
 
-/** The `Pool` variant of staking_pool.ak's two-variant datum. */
-type StakingPoolVariant<T> = { Pool: [T] };
-
-function isPoolVariant<T>(decoded: unknown): decoded is StakingPoolVariant<T> {
-  return typeof decoded === 'object' && decoded !== null && 'Pool' in decoded;
-}
-
 /**
- * A launch's staking Pool UTXO.
+ * A launch's staking pool UTXO.
  *
- * staking_pool.ak's datum is a sum type and both variants live at the same
- * address, so the wrong variant is skipped rather than treated as a decode
- * failure. Only `Pool` is a singleton with a thread NFT — `Position` UTXOs are
- * created one per stake action and deliberately carry no equivalent field,
- * which is why there is no lookup for them here.
+ * The datum is a single shape now. It used to be a sum type sharing this
+ * address with per-stake `Position` UTXOs, and the unwrapping that needed is
+ * gone with them: positions became entries under a Merkle root in the pool's
+ * own datum, because once the validator computes what a position is owed, a
+ * datum anyone can author is an authorization rather than a hint.
  *
- * The variant check is belt-and-braces as things stand: a Position has no
- * `thread_nft_policy`, so no unit built from one can match, and removing this
- * check changes no test. It earns its place against the future — give a
- * Position a policy field and the token check alone would begin accepting one
- * as the pool.
+ * So the only thing at this address is pools, one per launch, and the thread
+ * NFT is what says which launch a given one belongs to.
  */
 export function selectStakingPoolUtxo<T extends LaunchScopedDatum>(
   utxos: UTxO[],
@@ -251,7 +241,7 @@ export function selectStakingPoolUtxo<T extends LaunchScopedDatum>(
   const policy = requirePolicyId(expectedThreadNftPolicy, 'selectStakingPoolUtxo');
   const assetName = threadNftAssetName('stakingPool', launchIdHex);
   return selectAuthenticatedUtxo<T>(utxos, address, launchIdHex, schema, {
-    unwrap: (decoded) => (isPoolVariant<T>(decoded) ? decoded.Pool[0] : null),
+    unwrap: (decoded) => decoded as T,
     launchIdOf: (datum) => datum.launch_id,
     claimedPolicyOf: (datum) => datum.thread_nft_policy,
     expectedPolicy: policy,

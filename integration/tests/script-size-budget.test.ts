@@ -156,18 +156,29 @@ for (const v of blueprint.validators) {
  * one. Well inside the 16,384 B cap; recorded here so the growth is a
  * decision rather than a surprise.
  */
+/*
+ * Moved by the trustless staking rebuild. Reward accounting came on chain, so
+ * the pool grew a Merkle accumulator and an emission calculation (+1,084 B),
+ * and both curves grew the seeding check that pins the pool's opening datum
+ * (+~1,090 B each) — the check that stops a permissionless graduation opening
+ * a pool already crediting its author with the whole reserve.
+ *
+ * Tier B is the one to watch: 15,332 against a 16,384 cap leaves ~1 KB, and
+ * the binding limit is PUBLISHING it as a reference script, which cannot be
+ * split across transactions. It has been over that line before.
+ */
 const RECORDED: Record<string, number> = {
-  bonding_curve: 11_198,
-  bonding_curve_tier_b: 14_226,
+  bonding_curve: 12_280,
+  bonding_curve_tier_b: 15_332,
   cto_governance: 8_060,
   cto_sybil_challenge: 2_201,
   curve_order: 1_775,
   launch_token_policy: 419,
-  lp_escrow: 7_628,
+  lp_escrow: 7_649,
   nhop_challenge: 2_157,
-  staking_pool: 4_069,
-  token_metadata: 4_581,
-  vesting: 5_748,
+  staking_pool: 5_153,
+  token_metadata: 4_592,
+  vesting: 5_773,
   zk_anchor: 2_634,
 };
 
