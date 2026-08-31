@@ -154,7 +154,7 @@ NHOP_LOOKBACK_DAYS = 180 // N-hop lookback window
 NHOP_WINDOW_HRS = 72 // Challenge submission window after registration
 NHOP_DEFENCE_HRS = 24 // Registrant defence window after challenge
 SOCIAL_MIN_AGE_DAYS = 30 // Minimum age of project social accounts
-LAUNCH_FEE_USD = 10 // Flat launch fee, identical on all three tiers (USD — paid in
+LAUNCH_FEE_USD = 10 // Flat launch fee, the same on every launch type (USD — paid in
                     // ADA or NIGHT equiv., converted at the LIVE rate; see ORACLE STRATEGY).
                     // Paid whole to the platform wallet. Replaced the per-tier
                     // TIER_{A,B,C}_FEE_USD and the six OPS/TREASURY_PCT constants (2026-08-06)
@@ -186,9 +186,9 @@ equivalent slice deepens a pool nobody can claim.
 
 **Fee split verification:** 0.5 creator + 1.0 platform = 1.5 ✓
 
-**Cardano:** The ops wallet allocation covers team operational costs and funds periodic NIGHT purchases to maintain sufficient DUST. The platform treasury accumulates stablecoins — **confirmed 2026-07-10: USDM** (native Cardano stablecoin, no bridge risk — was already the documented default pending confirmation). No contract change needed: `treasury.compact` treats stablecoin conversion generically (an off-chain swap step), the same "no code change needed" status as a couple of other operational-detail items. Still genuinely open, narrower than the stablecoin choice itself: the exact DEX swap mechanism from ADA → USDM, custody wallet format, and on-chain disclosure format — operational deployment details, not separately tracked as their own issue yet.
+**Cardano:** The platform wallet covers team operational costs and funds the periodic NIGHT purchases that keep DUST topped up. Out of that same wallet's income the platform accumulates stablecoins — **confirmed 2026-07-10: USDM** (native Cardano stablecoin, no bridge risk — was already the documented default pending confirmation). No contract change needed: `treasury.compact` treats stablecoin conversion generically (an off-chain swap step), the same "no code change needed" status as a couple of other operational-detail items. Still genuinely open, narrower than the stablecoin choice itself: the exact DEX swap mechanism from ADA → USDM, custody wallet format, and on-chain disclosure format — operational deployment details, not separately tracked as their own issue yet.
 
-**Midnight Launch:** All fees arrive in NIGHT. The Treasury PSM must convert NIGHT → stablecoin on a schedule. The conversion mechanism and minimum batch size are open issues (see the Midnight Launch Trade Fee Currency and Conversion open issue). The ops wallet receives NIGHT directly — this is the same asset it already needs for DUST, which simplifies the ops cycle.
+**Midnight Launch:** All fees arrive in NIGHT. The Treasury PSM must convert NIGHT → stablecoin on a schedule. The conversion mechanism and minimum batch size are open issues (see the Midnight Launch Trade Fee Currency and Conversion open issue). The platform wallet receives NIGHT directly — the same asset it already needs for DUST, which simplifies the ops cycle.
 
 ---
 
@@ -298,11 +298,11 @@ DarkVeil is used by both Cardano Launch and Midnight Launch. The sequence and el
 NIGHT_returned = NIGHT_bonded × (tokens_purchased / tokens_allocated)
 ```
 - Bought 100% of allocation → 100% NIGHT returned
-- Bought 50% of allocation → 50% returned, 50% forfeited — split 60% treasury / 40% ops (matches the launch-fee-split ratio)
-- Bought 0% (ghost) → 100% forfeited — split 60% treasury / 40% ops
+- Bought 50% of allocation → 50% returned, 50% forfeited — paid whole to the platform wallet
+- Bought 0% (ghost) → 100% forfeited — paid whole to the platform wallet
 - Phase failed (<50% participation) → 100% returned to all (no forfeiture — nothing to split)
 
-> **Implementation status (2026-07-10):** implemented for Midnight Launch. `tokens_allocated` is `baseSlot` (the flat `dv_supply / registered_count` per-registrant allocation, set once by `closeDarkVeil`) and `tokens_purchased` is `dvTokensPurchased[buyer]` (DarkVeil-only, tracked separately from the buyer's combined balance). `claimRatioBondRefund` verifies a caller-supplied `claimedRefund` is the floor of the true value (same cross-multiplication pattern as `verifyPrice`/`verifyFeeSlice`, since Compact can't divide in-circuit) and pays out via `sendUnshielded`. The "phase failed → 100% returned to all" case is the pre-existing `claimBondRefund` circuit (also pays out for real, not just clears the ledger). **Forfeited-portion routing (resolved 2026-07-10):** the same `claimRatioBondRefund` call now also pays the forfeited remainder (`bondAmount - claimedRefund`) directly to fixed treasury/ops addresses set at deploy, split 60/40 — no cross-contract call into `treasury.compact` needed, since `sendUnshielded` can target a real unshielded address directly regardless of which contract holds the funds. This is a different, simpler mechanism than the "relayer/governor-sweep" pattern used elsewhere for cross-contract-call limitations (see the Cross-PSM Atomicity and Midnight Launch contract merge notes elsewhere in this document) — it works here specifically because the payout destinations are known, fixed real addresses, not another contract's circuit that needs to be invoked. Cardano Launch unaffected — its DarkVeil bond mechanics don't route through this contract.
+> **Implementation status (2026-07-10):** implemented for Midnight Launch. `tokens_allocated` is `baseSlot` (the flat `dv_supply / registered_count` per-registrant allocation, set once by `closeDarkVeil`) and `tokens_purchased` is `dvTokensPurchased[buyer]` (DarkVeil-only, tracked separately from the buyer's combined balance). `claimRatioBondRefund` verifies a caller-supplied `claimedRefund` is the floor of the true value (same cross-multiplication pattern as `verifyPrice`/`verifyFeeSlice`, since Compact can't divide in-circuit) and pays out via `sendUnshielded`. The "phase failed → 100% returned to all" case is the pre-existing `claimBondRefund` circuit (also pays out for real, not just clears the ledger). **Forfeited-portion routing (resolved 2026-07-10):** the same `claimRatioBondRefund` call now also pays the forfeited remainder (`bondAmount - claimedRefund`) directly to the one platform address set at deploy — no cross-contract call into `treasury.compact` needed, since `sendUnshielded` can target a real unshielded address directly regardless of which contract holds the funds. This is a different, simpler mechanism than the "relayer/governor-sweep" pattern used elsewhere for cross-contract-call limitations (see the Cross-PSM Atomicity and Midnight Launch contract merge notes elsewhere in this document) — it works here specifically because the payout destination is a known, fixed real address, not another contract's circuit that needs to be invoked. Cardano Launch unaffected — its DarkVeil bond mechanics don't route through this contract.
 
 ### ZK Fair Launch Certificate (anchored on Cardano L1)
 Public after close:
@@ -440,9 +440,9 @@ These are **two entirely different income mechanisms**. Do not conflate them in 
 
 > **Cardano Launch fee-stream resolution superseded (2026-07-11):** an earlier resolution (2026-07-10) originally described Stream A splitting into two independently-claimable balances for Cardano Launch — "Stream A1" accruing in the Midnight Creator Fee Escrow PSM for DarkVeil-phase fees, "Stream A2" accruing in the Cardano curve contract for public-phase fees. Investigating the DarkVeil ADA-payment gap found that Stream A1 as described was never actually mechanically real for Cardano Launch: Compact cannot receive or send ADA (no bridge exists — confirmed via the Midnight Launch Trade Fee Currency and Conversion research), so there was never a working circuit that could have deposited a real ADA fee into that Midnight PSM for a Cardano Launch DarkVeil buy. `eligibility_gate.compact`'s `revealBuyCommit` only ever updated private ledger counters, with zero payment enforcement of any kind.
 >
-> The fix settles Cardano Launch DarkVeil purchases entirely on Cardano instead (a new `ClaimDarkVeilTokens` redeemer on `bonding_curve_tier_b.ak` — see the CONTRACT ARCHITECTURE section's resolution note), which means the creator fee on a DarkVeil buy is charged and accrued there too, in the same `creator_fees_accrued` field public buys already use via `BuyTokens`. **There is no longer a Stream A1/A2 split for Cardano Launch — there was never a real Stream A1 to split from.** All Cardano Launch creator fees (DarkVeil claim + public buy) accrue as ONE balance, in `contracts/cardano/bonding_curve_tier_b.ak`, claimed via that contract's single `ClaimCreatorFees` redeemer — the same self-contained "curve contract accrues and gates its own claim" pattern Tier A already uses.
+> The fix settles Cardano Launch DarkVeil purchases entirely on Cardano instead (a new `ClaimDarkVeilTokens` redeemer on `bonding_curve_tier_b.ak` — see the CONTRACT ARCHITECTURE section's resolution note), which means the creator fee on a DarkVeil buy is charged and accrued there too, in the same `creator_fees_accrued` field public buys already use via `BuyTokens`. **There is no longer a Stream A1/A2 split for Cardano Launch — there was never a real Stream A1 to split from.** All Cardano Launch creator fees (DarkVeil claim + public buy) accrue as ONE balance, in `contracts/cardano/bonding_curve_tier_b.ak`, claimed via that contract's single `ClaimCreatorFees` redeemer — the same self-contained "curve contract accrues and gates its own claim" pattern the linear curve already uses.
 >
-> Midnight Launch is unaffected — its whole curve stays on Midnight, so its Stream A fee accrual there is real (Compact can enforce NIGHT payment natively) and stays a single balance. The linear path never had a Stream A1/A2 split to begin with — it has no DarkVeil phase. Do not build a two-balance fee UI for Cardano Launch going forward — show one Bonding Curve Escrow balance, same as Tier A.
+> Midnight Launch is unaffected — its whole curve stays on Midnight, so its Stream A fee accrual there is real (Compact can enforce NIGHT payment natively) and stays a single balance. The linear path never had a Stream A1/A2 split to begin with — it has no DarkVeil phase. Do not build a two-balance fee UI for Cardano Launch going forward — show one Bonding Curve Escrow balance, the same as the linear curve.
 
 ---
 
@@ -546,7 +546,7 @@ The creator's own token allocation CAN vote in a CTO ballot — it is not exclud
 - Requirements: Full team multi-sig, 72h public notice, max 20% of holdings per event, post-sale on-chain disclosure
 
 ### Budget Ceiling: Option C (confirmed)
-No hard cap on ops wallet, treasury, or team wallet. All wallets grow naturally. Accountability via public addresses + quarterly spending disclosure.
+No hard cap on the platform wallet or the team wallet. Both grow naturally. Accountability via public addresses + quarterly spending disclosure.
 
 ### Founding NIGHT Reserve (resolved 2026-07-13)
 Before the first both launch types launch, the platform wallet has no trade-volume income yet (the 1.0% platform slice only exists once launches are trading) but still needs NIGHT on hand to cover DUST for the very first DarkVeil phase. **Source (decided 2026-07-10):** a founder-provided bootstrap reserve, with an external funding route pursued as the eventual replacement. Funding specifics (exact amount, source, and replenishment plan) are deliberately kept in the local-only ops notes rather than this public spec. Funding the bootstrap from the first launch's own fee revenue was rejected outright, not just deprioritized — it's causally circular: the fees that would fund the NIGHT purchase don't exist until after the DV phase they'd need to fund has already happened.
@@ -669,7 +669,7 @@ Twitter/X, Discord, LinkedIn, Telegram, Instagram, TikTok — displayed on launc
 
 ## STAKING REWARDS (OPTIONAL) — confirmed 2026-07-14
 
-An optional, per-launch feature available on all three tiers. At launch creation, a creator may opt to allocate a **fixed 25% of total supply** (`STAKING_ALLOC_PCT`) into a Staking Rewards Pool — in addition to the existing 15% LP reserve, up-to-10% creator allocation, and 10-20% DarkVeil allocation (B/C). Supply math is safe at every allocation's maximum simultaneously: 20 + 10 + 20 + 25 = 75%, leaving ≥25% for the public bonding curve — no overflow risk. If declined, the 25% simply isn't carved out and the public curve absorbs it instead, same as any other unused allocation headroom.
+An optional, per-launch feature available on every launch type. At launch creation, a creator may opt to allocate a **fixed 25% of total supply** (`STAKING_ALLOC_PCT`) into a Staking Rewards Pool — in addition to the existing 20% LP reserve, up-to-10% creator allocation, and 10-20% DarkVeil allocation. Supply math is safe at every allocation's maximum simultaneously: 20 + 10 + 20 + 25 = 75%, leaving ≥25% for the public bonding curve — no overflow risk. If declined, the 25% simply isn't carved out and the public curve absorbs it instead, same as any other unused allocation headroom.
 
 This is a narrower, different thing from the platform-wide Community Yield Mechanism (still deferred) — see that open issue's entry above for the distinction.
 
@@ -720,7 +720,7 @@ The graduation FDV (bonding curve clearing price × total supply) is different f
 > **Resolution (2026-07-10):** already implemented on the live site — checked before treating this as still-open, same discipline applied to the other doc-sync-only resolutions in this document. The theme's `lp-chart-buy.php`/`lp-chart-buy-tier-b.php` render both FDV figures as two clearly labeled panels side by side (`GRADUATION FDV` marked "Fixed", `CURRENT FDV` marked "updates live"), and the post-graduation summary correctly shows only the fixed `GRADUATION FDV` while linking out to the DEX for live pricing. No unlabelled FDV figure exists anywhere on the site. Documentation-sync fix only, no code change.
 
 ### 🟡 IMPORTANT — DUST Generation Rate (pending preprod test)
-The Ops Wallet purchases NIGHT periodically using ADA from the 0.20% ops slice. DUST is generated from held NIGHT to cover all Midnight user transaction fees.
+The platform wallet purchases NIGHT periodically using ADA from its 1.0% slice of trade volume. DUST is generated from held NIGHT to cover all Midnight user transaction fees.
 
 **Confirmed from midnight-ledger spec (dust.md):**
 ```
@@ -1051,7 +1051,7 @@ the 42,069 ADA graduation figure. First-party values:
 
 **What this actually says about positioning:**
 - **Launch cost is a real disadvantage, as originally recorded.** ~6 ADA against $10 is not close —
-  roughly 5x theirs. **Flattened to $10 across all three tiers on 2026-08-04** (was $10/$30/$50): the
+  roughly 5x theirs. **Flattened to $10 across every launch type on 2026-08-04** (was $10/$30/$50): the
   premium tiers were charging for DarkVeil while the surrounding product — CTO automation, vesting,
   the staking platform, LP escrow — is bundled at every tier, so tiering the entry price
   undersold the whole offer rather than positioning it. One price, more included, is the clearer

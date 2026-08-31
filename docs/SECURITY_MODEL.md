@@ -283,7 +283,7 @@ This is the same trust model already used for `cto_governance.compact`'s balance
 - **Amount:** $50 USD equivalent, fixed at lockup, never re-priced at release
 - **Purpose:** Anti-spam + skin-in-the-game
 - **Refund — ratio-based:** `NIGHT_returned = NIGHT_bonded × (tokens_purchased / tokens_allocated)`. Bought 100% of allocation → 100% returned. Bought 50% → 50% returned, 50% forfeited. Bought 0% (ghost) → 100% forfeited. Phase failed (<50% participation) → 100% returned to all, no forfeiture. Implemented for **both tiers** (Midnight Launch originally, ported to Cardano Launch's `eligibility_gate.compact` in a later merge) and pays out for real via `sendUnshielded` (an earlier version of several of these claim circuits only cleared the ledger with no real payout — an audit finding, now fixed).
-- **Forfeiture routing:** split 60% treasury / 40% ops, paid directly via `sendUnshielded` from the same claim call — no separate cross-contract step needed since the destinations are fixed, real addresses.
+- **Forfeiture routing:** paid whole to the one platform address, directly via `sendUnshielded` from the same claim call — no separate cross-contract step needed, since the destination is a fixed, real address.
 
 ### N-Hop Challenge Bond (Cardano Launch only)
 

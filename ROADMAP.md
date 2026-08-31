@@ -303,7 +303,7 @@ Full layout: registration form, eligibility checklist, allocation tracker, NIGHT
 Midnight Launch section added: DUST/NIGHT stats, active Midnight launches table, PSM status. Stats grid updated to 9 launches. ZK cert description updated for the Midnight relayer. Ops wallet text updated for launch fee split percentage + NIGHT receipt.
 
 ### A6 — Create Launch wizard — Midnight Launch (2026-06-09)
-Midnight Launch card (violet) added. Config panel for Midnight-native launches. DEX selection hidden — a Midnight launch has no Cardano DEX to pick. Pay summary shows current launch fee split (40% ops / 60% treasury). JS fully wired.
+Midnight Launch card (violet) added. Config panel for Midnight-native launches. DEX selection hidden — a Midnight launch has no Cardano DEX to pick. Pay summary shows the current launch fee. JS fully wired.
 
 ### A — Midnight Launch sample launches × 4 (2026-06-09)
 Four Midnight Launch mock launches live: Abyss ($ABYS, DV Active), Spectre ($SPCT, DV Active), Cipher ($CPHR, DV Registration), Nocturne ($NTRN, DV Registration). Full detail pages with NIGHT-denominated UI. Appear on Launches page and in DarkVeil nav dropdown.

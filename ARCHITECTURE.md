@@ -413,7 +413,7 @@ above is the Cardano one.
 
 ## Failure & Refund Flow (Stuck Curve, Cancelled Launch)
 
-**A core user-protection feature, not an edge case.** Every path a buyer or DarkVeil registrant can use to get their money back if a launch stalls or fails, across all three tiers. All timeout/refund mechanics were built 2026-07-10 on top of the failure-path decisions from 2026-07-09.
+**A core user-protection feature, not an edge case.** Every path a buyer or DarkVeil registrant can use to get their money back if a launch stalls or fails, on every launch type. All timeout/refund mechanics were built 2026-07-10 on top of the failure-path decisions from 2026-07-09.
 
 ```
             ┌────────────────────────┐
@@ -492,7 +492,7 @@ DarkVeil bond refunds are a separate flow from curve refunds entirely: a registr
 
 ## CTO Governance Flow
 
-Community takeover (CTO) governance, shared infrastructure across all three tiers (`cto_governance.compact` on Midnight for the private ballot, `cto_governance.ak` on Cardano L1 for anchoring and enforcement). This flow has been through multiple independent security review passes. Anchoring a vote result requires a real bond and passes through a 24-hour challenge window before it takes effect; the downstream validators that enforce a passed vote authenticate the governance record cryptographically rather than by address (see the thread-NFT note below the diagram); and the creator's own tokens may vote but are weight-capped and tallied separately. **Current build status:** the ballot logic is contract-complete and audited, but the vote-casting transaction layer is not yet built, so no CTO vote can be cast in production today.
+Community takeover (CTO) governance, shared infrastructure across every launch type (`cto_governance.compact` on Midnight for the private ballot, `cto_governance.ak` on Cardano L1 for anchoring and enforcement). This flow has been through multiple independent security review passes. Anchoring a vote result requires a real bond and passes through a 24-hour challenge window before it takes effect; the downstream validators that enforce a passed vote authenticate the governance record cryptographically rather than by address (see the thread-NFT note below the diagram); and the creator's own tokens may vote but are weight-capped and tallied separately. **Current build status:** the ballot logic is contract-complete and audited, but the vote-casting transaction layer is not yet built, so no CTO vote can be cast in production today.
 
 ```
 ┌─────────────────────────┐

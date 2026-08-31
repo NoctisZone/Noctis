@@ -15,7 +15,7 @@
 
 1. [Executive Summary](#1-executive-summary)
 2. [System Topology](#2-system-topology)
-3. [Three-Tier Model](#3-three-tier-model)
+3. [Launch Types](#3-launch-types)
 4. [Midnight PSM Architecture](#4-midnight-psm-architecture)
 5. [Cross-PSM Communication](#5-cross-psm-communication)
 6. [Privacy Model](#6-privacy-model)
@@ -99,7 +99,7 @@ Shared Midnight PSMs used by both Cardano Launch and Midnight Launch, unaffected
 
 ---
 
-## 3. Three-Tier Model
+## 3. Launch Types
 
 ### The linear curve (legacy)
 
@@ -496,7 +496,7 @@ This prevents cross-PSM identity linking — a user's key in the bonding curve i
 - **Purpose:** Anti-spam + skin-in-the-game for DarkVeil registration
 - **Full refund (`claimBondRefund`):** launch cancelled outright, or DarkVeil itself failed (<50% participation) — 100% returned to every registrant in both cases, no forfeiture.
 - **Ratio-based refund (`claimRatioBondRefund`):** DarkVeil closed normally. `NIGHT_returned = NIGHT_bonded × tokens_purchased / tokens_allocated` (floored on-chain, computed off-chain). Bought 100% of the flat per-registrant allocation (`baseSlot`) → full refund; bought 0% (ghost) → fully forfeited; anything between is proportional.
-- **Forfeited-portion routing:** the forfeited remainder (`bondAmount - claimedRefund`) is paid out in the SAME `claimRatioBondRefund` call — split 60% treasury / 40% ops (matching the launch-fee-split ratio), sent via `sendUnshielded` directly to fixed addresses set at deploy. Not a cross-PSM call — see §5 below on why that matters.
+- **Forfeited-portion routing:** the forfeited remainder (`bondAmount - claimedRefund`) is paid out in the SAME `claimRatioBondRefund` call — paid whole to the one platform address set at deploy, sent via `sendUnshielded`. Not a cross-PSM call — see §5 below on why that matters.
 
 ---
 

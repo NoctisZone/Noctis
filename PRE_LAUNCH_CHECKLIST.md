@@ -30,7 +30,7 @@ Human sign-off gate. Three stages: website live, preprod contracts, mainnet.
 - [ ] **How-To Guides (/how-to/)** — hero spacing clears the fixed nav, sticky quick-nav jumps to all 4 categories, every guide accordion opens/closes, all in-page links resolve
 - [ ] **Staking (/staking/)** — discovery grid lists staking-enabled launches, search + status tabs + tier filter work, "My staking" gate shows until a wallet connects, then totals (projects / staked / rewards earned) and per-project rows populate and link to the right launch
 - [ ] **Transparency page** — all 10 sections present, all default collapsed, expand/collapse works, wallet addresses placeholder text correct — 🔧 code-ready desktop (A5)
-- [ ] **Create Launch wizard** — all 6 steps accessible, chain selector works, DEX selector has no default (forced selection), vesting slider has no default, fee display matches CLAUDE.md's current launch fee constants — 🔧 code-ready desktop (A6, all 3 tiers wired)
+- [ ] **Create Launch wizard** — all 6 steps accessible, chain selector works, DEX selector has no default (forced selection), vesting slider has no default, fee display matches CLAUDE.md's current launch fee constants — 🔧 code-ready desktop (A6, every launch type wired)
 
 ---
 
@@ -64,7 +64,7 @@ Human sign-off gate. Three stages: website live, preprod contracts, mainnet.
 - [ ] Wallet cap correct (5% per ZK identity)
 - [ ] LP lock duration correct (365 days)
 - [ ] No references to deprecated/removed reward mechanisms
-- [ ] Three tiers correctly described (A: Cardano Only, B: Cardano + DarkVeil, C: Midnight + DarkVeil)
+- [ ] Launch types correctly described (Cardano Launch, Midnight Launch; Solana and XRP marked as announced, not available)
 
 ---
 
