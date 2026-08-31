@@ -8,7 +8,7 @@
 
 import { Data } from '@lucid-evolution/lucid';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fetchStakeHistory } from '../staking-reward-tree-builder.js';
+import { computeRewardSnapshot, fetchStakeHistory, type StakeEvent } from '../staking-reward-tree-builder.js';
 import { type StakingDatumData, StakingDatumSchema, threadNftAssetName } from '../tier-a-schemas.js';
 
 const LAUNCH = 'a1'.repeat(32);
@@ -272,5 +272,92 @@ describe('fetchStakeHistory — which output is the genesis seed', () => {
     await expect(
       fetchStakeHistory(CONFIG as never, 'addr_test1pool', LAUNCH, TOKEN_POLICY, TOKEN_NAME, ''),
     ).rejects.toThrow(/threadNftPolicyId is required/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Accrual stops when the budget does.
+//
+// `durationDays` sets the RATE. It never bounded the loop, and elapsed real
+// time — which is what does bound it — keeps growing after the tokens run
+// out. So a snapshot taken late promised more than the pool had ever held,
+// and the pool cannot pay what it does not hold: the shortfall surfaces as
+// claims that simply fail to build, first-come-first-served, naming neither
+// the pool nor the reason.
+//
+// The figures below are pinned, not merely bounded. A budget-shaped
+// assertion (`<= seed`) passes under any premature stop as well as the right
+// one, so it could not tell a correct runway from a truncated one.
+// ---------------------------------------------------------------------------
+describe('computeRewardSnapshot — the budget is the stopping condition', () => {
+  const SEED = 250_000_000n; // STAKING_ALLOC_PCT of a 1B supply
+  const DURATION = 1095; // STAKING_DURATION_MIN_DAYS, 3 years
+  const BONDING = 7; // STAKING_BONDING_PERIOD_DAYS
+  const START = 1_700_000_000_000;
+  const DAY = 86_400_000;
+  // floor(250_000_000 / 1095). The remainder, 550, is what the final short
+  // day pays out.
+  const DAILY = 228_310n;
+
+  /** One staker, in from the start and never out. */
+  const soloStaker = (amount = 1_000_000n): StakeEvent[] => [
+    { stakerVkh: HONEST, stakedAmount: amount, stakeTimestampMs: START, unstakeTimestampMs: null },
+  ];
+
+  const accruedAtDay = (day: number, events = soloStaker(), budget = SEED) =>
+    computeRewardSnapshot(events, START, START + day * DAY, SEED, DURATION, BONDING, budget).get(HONEST) ?? 0n;
+
+  it('pays a full day at the fixed rate once the staker is seasoned', () => {
+    // Days 0-6 are inside the bonding period and pay nothing at all, so at
+    // calendar day 8 exactly one day has been distributed.
+    expect(accruedAtDay(8)).toBe(DAILY);
+  });
+
+  it('has paid out the entire budget, to the token, once the runway is done', () => {
+    // 1095 full days from day 7, then one short day paying the 550 that
+    // flooring left behind.
+    expect(accruedAtDay(1102)).toBe(DAILY * 1095n);
+    expect(accruedAtDay(1103)).toBe(SEED);
+  });
+
+  it('stops there and does not keep accruing against real time', () => {
+    // Day 1200 was the measured failure: 272,373,830 against a pool that had
+    // only ever held 250,000,000 — 1193 elapsed days each paying a full
+    // DAILY, with nothing to stop them.
+    expect(DAILY * 1193n).toBe(272_373_830n);
+    expect(accruedAtDay(1200)).toBe(SEED);
+    expect(accruedAtDay(3650)).toBe(SEED);
+  });
+
+  it('does not spend budget on days when nobody is seasoned', () => {
+    // The same staker, arriving 500 days late. The runway is a budget, not a
+    // deadline: the quiet stretch pushes the end date out rather than
+    // retiring tokens nobody received.
+    const late: StakeEvent[] = [
+      { stakerVkh: HONEST, stakedAmount: 1_000_000n, stakeTimestampMs: START + 500 * DAY, unstakeTimestampMs: null },
+    ];
+    expect(accruedAtDay(1103, late)).toBe(DAILY * 596n);
+    expect(accruedAtDay(1603, late)).toBe(SEED);
+  });
+
+  it('lets a top-up buy more days at the same rate, not a faster one', () => {
+    // A top-up doubling the budget. The rate is derived from the genesis seed
+    // and must not move; what moves is how long it lasts.
+    const topped = SEED * 2n;
+    expect(accruedAtDay(8, soloStaker(), topped)).toBe(DAILY);
+    expect(accruedAtDay(1103, soloStaker(), topped)).toBe(DAILY * 1096n);
+    expect(accruedAtDay(2198, soloStaker(), topped)).toBe(topped);
+  });
+
+  it('splits each day pro-rata and still never exceeds the budget', () => {
+    const two: StakeEvent[] = [
+      { stakerVkh: HONEST, stakedAmount: 750_000n, stakeTimestampMs: START, unstakeTimestampMs: null },
+      { stakerVkh: LIAR, stakedAmount: 250_000n, stakeTimestampMs: START, unstakeTimestampMs: null },
+    ];
+    const totals = computeRewardSnapshot(two, START, START + 3650 * DAY, SEED, DURATION, BONDING, SEED);
+    const sum = (totals.get(HONEST) ?? 0n) + (totals.get(LIAR) ?? 0n);
+    expect(sum).toBeLessThanOrEqual(SEED);
+    // Three quarters of the weight takes three quarters of the emission.
+    expect((totals.get(HONEST) ?? 0n) / (totals.get(LIAR) ?? 1n)).toBe(3n);
   });
 });

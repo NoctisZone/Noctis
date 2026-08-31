@@ -21,9 +21,14 @@
 //   - Each day's emission splits pro-rata among positions that are past
 //     their 7-day bonding period as of that day, weighted by staked_amount.
 //   - The on-chain contract's only real invariant is that cumulative
-//     claims never exceed the pool's real token balance — satisfied by
-//     construction here, since total distributed per day never exceeds
-//     dailyEmission and days-elapsed is bounded by real time passing.
+//     claims never exceed the pool's real token balance. This file is what
+//     has to keep that true, and it does so with two explicit limits, NOT
+//     by construction — see computeRewardSnapshot's own comment on both.
+//
+// A day on which nobody is seasoned distributes nothing, and does not
+// count against the runway. So a pool's real end date is always later than
+// poolStart + durationDays by however many quiet days it saw: the runway
+// is a budget of distributing days, not a calendar deadline.
 //
 // durationDays has NO on-chain representation at all (staking_pool.ak's
 // own header: "no stored duration, end-timestamp, or emission-rate field
@@ -75,7 +80,18 @@ interface BfAddressTx {
 
 interface BfTxUtxos {
   inputs: Array<{ tx_hash: string; output_index: number }>;
-  outputs: Array<{ output_index: number; inline_datum: string | null }>;
+  outputs: Array<{
+    output_index: number;
+    inline_datum: string | null;
+    /** Blockfrost returns every output's full value here, so the quantities
+     *  below need no second request per output. */
+    amount?: Array<{ unit: string; quantity: string }>;
+  }>;
+}
+
+function quantityOf(output: BfTxUtxos['outputs'][number], unit: string): bigint {
+  const entry = output.amount?.find((a) => a.unit === unit);
+  return entry ? BigInt(entry.quantity) : 0n;
 }
 
 function hexToBytes(hex: string): Uint8Array {
@@ -96,6 +112,16 @@ export interface StakeHistory {
   events: StakeEvent[];
   /** The Pool UTXO's real token balance immediately after the genesis Graduate seed — the base dailyEmission is derived from THIS, never a later balance. */
   initialSeededAmount: bigint;
+  /**
+   * Every reward token the pool has ever held: the genesis seed plus every
+   * later top-up, each read as a real INCREASE in the authenticated Pool
+   * UTXO's own balance rather than taken from a redeemer.
+   *
+   * This is the ceiling on everything the pool can ever owe. A top-up raises
+   * it without touching `dailyEmission`, which is what makes a top-up extend
+   * the runway rather than accelerate payouts.
+   */
+  totalBudget: bigint;
   /** Real block time of the first transaction touching this address for this launch (the Graduate seed) — dailyEmission accrual starts counting from here. */
   poolStartTimestampMs: number;
 }
@@ -145,6 +171,10 @@ export async function fetchStakeHistory(
   const openPositions = new Map<string, number>();
   const events: StakeEvent[] = [];
   let initialSeededAmount: bigint | null = null;
+  // The authenticated Pool UTXO's balance as of the last transaction that
+  // produced one, and the running sum of every increase since genesis.
+  let poolBalance = 0n;
+  let totalToppedUp = 0n;
   const poolStartTimestampMs = txs[0].block_time * 1000;
   const tokenUnit = tokenPolicyId + tokenAssetName;
   const poolThreadNftUnit = threadNftPolicyId + threadNftAssetName('stakingPool', launchIdHex);
@@ -171,8 +201,10 @@ export async function fetchStakeHistory(
       } catch {
         continue;
       }
-      if ('Pool' in decoded && decoded.Pool[0].launch_id === launchIdHex && initialSeededAmount === null) {
-        // First-ever GENUINE Pool output for this launch — the genesis seed.
+      if ('Pool' in decoded && decoded.Pool[0].launch_id === launchIdHex) {
+        // A GENUINE Pool output for this launch. The first one is the genesis
+        // seed; every later one carries the balance forward, and any INCREASE
+        // in it is a real top-up.
         //
         // Genuine is the load-bearing word. Everything above is the datum's
         // own claim, and paying an output to a script address runs no
@@ -187,13 +219,20 @@ export async function fetchStakeHistory(
         // CALLER supplies from its own record of the launch — never the one
         // this datum nominates, which a forger would simply set to their own.
         // Same pair `pool_thread_nft_intact` checks on-chain.
-        const poolNftHeld = await fetchOutputTokenQuantity(config, tx.tx_hash, output.output_index, poolThreadNftUnit);
-        if (poolNftHeld !== 1n) continue;
-        // Its real token balance isn't in the datum itself (only
-        // claimed_so_far is), so this needs the real UTXO value — fetched
-        // separately rather than assumed, since Blockfrost's utxos endpoint
-        // here only gave us the datum, not the amount array.
-        initialSeededAmount = await fetchOutputTokenQuantity(config, tx.tx_hash, output.output_index, tokenUnit);
+        if (quantityOf(output, poolThreadNftUnit) !== 1n) continue;
+        // Its real token balance isn't in the datum itself (only the
+        // nullifier is), so this reads the real UTXO value.
+        const balance = quantityOf(output, tokenUnit);
+        if (initialSeededAmount === null) {
+          initialSeededAmount = balance;
+        } else if (balance > poolBalance) {
+          // The pool only ever gains reward tokens through TopUpPool, and
+          // that redeemer's own `amount` is checked on-chain against exactly
+          // this difference. Reading the difference rather than the redeemer
+          // keeps this derived from value, like every other figure here.
+          totalToppedUp += balance - poolBalance;
+        }
+        poolBalance = balance;
       } else if ('Position' in decoded && decoded.Position[0].launch_id === launchIdHex) {
         const pos = decoded.Position[0];
         // The REAL token quantity, exactly as the Pool branch above does it
@@ -204,7 +243,7 @@ export async function fetchStakeHistory(
         // hand out a share of the pool to a staker who never staked, and
         // Unstake would not even notice: it pays out the output's real value,
         // so the claim costs its author nothing to make.
-        const realStaked = await fetchOutputTokenQuantity(config, tx.tx_hash, output.output_index, tokenUnit);
+        const realStaked = quantityOf(output, tokenUnit);
         if (realStaked === 0n) continue; // holds no stake; not a position
         events.push({
           stakerVkh: pos.staker_vkh,
@@ -221,24 +260,12 @@ export async function fetchStakeHistory(
     throw new Error(`No Pool genesis output found for launch_id ${launchIdHex} at ${stakingPoolAddress}.`);
   }
 
-  return { events, initialSeededAmount, poolStartTimestampMs };
-}
-
-async function fetchOutputTokenQuantity(
-  config: BlockfrostConfig,
-  txHash: string,
-  outputIndex: number,
-  tokenUnit: string,
-): Promise<bigint> {
-  const utxos = await bf<{
-    outputs: Array<{
-      output_index: number;
-      amount: Array<{ unit: string; quantity: string }>;
-    }>;
-  }>(config, `/txs/${txHash}/utxos`);
-  const output = utxos.outputs.find((o) => o.output_index === outputIndex);
-  const entry = output?.amount.find((a) => a.unit === tokenUnit);
-  return entry ? BigInt(entry.quantity) : 0n;
+  return {
+    events,
+    initialSeededAmount,
+    totalBudget: initialSeededAmount + totalToppedUp,
+    poolStartTimestampMs,
+  };
 }
 
 const MS_PER_DAY = 86_400_000;
@@ -255,6 +282,12 @@ export function computeRewardSnapshot(
   initialSeededAmount: bigint,
   durationDays: number,
   bondingPeriodDays: number,
+  /**
+   * Every reward token the pool has ever held — genesis seed plus top-ups,
+   * from `fetchStakeHistory`. Defaults to the seed alone so a caller that
+   * knows of no top-up still gets a budget rather than none.
+   */
+  totalBudget: bigint = initialSeededAmount,
 ): Map<string, bigint> {
   const dailyEmission = initialSeededAmount / BigInt(durationDays);
   const totals = new Map<string, bigint>();
@@ -262,7 +295,20 @@ export function computeRewardSnapshot(
 
   const totalDays = Math.floor((nowMs - poolStartTimestampMs) / MS_PER_DAY);
 
-  for (let day = 0; day < totalDays; day++) {
+  // The limit the pool's on-chain balance invariant rests on, and it is NOT
+  // implied by the loop bound: `totalDays` is elapsed real time, which keeps
+  // growing long after the tokens run out.
+  //
+  // The budget is the only stopping condition. `durationDays` sets the RATE
+  // and nothing else, which is what gives the two documented behaviours for
+  // free: a day with no seasoned staker pays nobody and retires no budget, so
+  // quiet stretches push the end date out rather than burning tokens; and a
+  // top-up raises the budget without touching the rate, so it buys more days
+  // at the same emission instead of accelerating payouts. A day-count cap
+  // would defeat both.
+  let unallocated = totalBudget;
+
+  for (let day = 0; day < totalDays && unallocated > 0n; day++) {
     const dayStartMs = poolStartTimestampMs + day * MS_PER_DAY;
 
     const eligible = events.filter((e) => {
@@ -275,10 +321,23 @@ export function computeRewardSnapshot(
     const totalWeight = eligible.reduce((sum, e) => sum + e.stakedAmount, 0n);
     if (totalWeight <= 0n) continue;
 
+    // The last day of a runway has less left than a whole day's emission.
+    // Paying the remainder is right; paying a full day out of a budget that
+    // cannot cover it is what makes a published root promise more than the
+    // pool holds.
+    const budgetToday = dailyEmission < unallocated ? dailyEmission : unallocated;
+
+    let distributedToday = 0n;
     for (const e of eligible) {
-      const share = (dailyEmission * e.stakedAmount) / totalWeight;
+      const share = (budgetToday * e.stakedAmount) / totalWeight;
+      if (share <= 0n) continue;
       totals.set(e.stakerVkh, (totals.get(e.stakerVkh) ?? 0n) + share);
+      distributedToday += share;
     }
+
+    // Shares are floored, so the day's rounding dust stays unallocated and is
+    // carried into later days rather than silently written off.
+    unallocated -= distributedToday;
   }
 
   return totals;
@@ -325,6 +384,8 @@ export interface StakingRewardSnapshotResult {
   /** The cleared nullifier this root must be published with. */
   claimedBitsHex: string;
   initialSeededAmount: bigint;
+  /** Genesis seed plus every top-up — the ceiling on everything the pool can owe. */
+  totalBudget: bigint;
   dailyEmission: bigint;
 }
 
@@ -333,7 +394,7 @@ export async function buildStakingRewardSnapshot(
   config: BlockfrostConfig,
   snapshotConfig: StakingRewardSnapshotConfig,
 ): Promise<StakingRewardSnapshotResult> {
-  const { events, initialSeededAmount, poolStartTimestampMs } = await fetchStakeHistory(
+  const { events, initialSeededAmount, totalBudget, poolStartTimestampMs } = await fetchStakeHistory(
     config,
     snapshotConfig.stakingPoolAddress,
     snapshotConfig.launchIdHex,
@@ -349,6 +410,7 @@ export async function buildStakingRewardSnapshot(
     initialSeededAmount,
     snapshotConfig.durationDays,
     snapshotConfig.bondingPeriodDays ?? 7,
+    totalBudget,
   );
 
   if (totals.size === 0) {
@@ -394,6 +456,7 @@ export async function buildStakingRewardSnapshot(
     entries,
     claimedBitsHex: clearedNullifierHex(entries.length),
     initialSeededAmount,
+    totalBudget,
     dailyEmission: initialSeededAmount / BigInt(snapshotConfig.durationDays),
   };
 }

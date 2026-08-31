@@ -595,10 +595,30 @@ export class StakingSubmitter {
     governorAddress: string,
     newRootHex: string,
     entryCount: number,
+    expectedClaimedBitsHex?: string,
   ): Promise<TxSignBuilder> {
     const { utxo: poolUtxo, datum: pool } = await this.findPoolUtxo(lucid);
     if (keyHashFromAddress(governorAddress) !== pool.governor_pub_key_hash) {
       throw new Error('Only the governor can publish a new reward root.');
+    }
+
+    // Publishing is what CLEARS the nullifier, and the outgoing nullifier is
+    // the only record of who took what under the outgoing root. So whoever
+    // folded that record into the running already-paid totals must have read
+    // the same bits this transaction is about to erase — a claim landing in
+    // between would be erased without ever being counted as paid, and that
+    // staker's amount would be handed to them a second time in this very
+    // root.
+    //
+    // Checked rather than assumed: the caller says which bits it folded, and
+    // a mismatch aborts instead of publishing. The next run reads the fresh
+    // ones and proceeds normally.
+    if (expectedClaimedBitsHex !== undefined && pool.claimed_bits !== expectedClaimedBitsHex) {
+      throw new Error(
+        `The pool's claim record changed while this snapshot was being built ` +
+          `(folded ${expectedClaimedBitsHex}, found ${pool.claimed_bits}). ` +
+          'Publishing now would clear a claim before it was counted as paid. Rebuild and retry.',
+      );
     }
 
     // A new root is a new roster, so it brings its own nullifier, every bit
@@ -635,13 +655,15 @@ export class StakingSubmitter {
     governorAddress: string,
     newRootHex: string,
     entryCount: number,
+    /** The nullifier the caller folded into its already-paid totals — see publishRewardRootCore. */
+    expectedClaimedBitsHex?: string,
   ): Promise<{ txHash: string }> {
     const lucid = await this.lucidPromise;
     const bech32Key = extendedHexToBech32PrivateKey(governorPrivateKeyExtendedHex);
     const governorUtxos = await lucid.utxosAt(governorAddress);
     lucid.selectWallet.fromAddress(governorAddress, governorUtxos);
 
-    const tx = await this.publishRewardRootCore(lucid, governorAddress, newRootHex, entryCount);
+    const tx = await this.publishRewardRootCore(lucid, governorAddress, newRootHex, entryCount, expectedClaimedBitsHex);
     const signed = await tx.sign.withPrivateKey(bech32Key).complete();
     const txHash = await signed.submit();
     return { txHash };

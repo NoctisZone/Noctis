@@ -161,11 +161,18 @@ async function claimRewards(params: {
   // What the CURRENT root pays, plus this staker's bit in the pool's
   // nullifier. The bit is hashed into their leaf, so the proof only verifies
   // when presented against that one bit.
-  const { proof, payoutAmount, leafIndex } = (await res.json()) as {
+  const { proof, payoutAmount, leafIndex, alreadyClaimed } = (await res.json()) as {
     proof: Array<{ sibling: string; goesLeft: boolean }>;
     payoutAmount: string;
     leafIndex: number;
+    alreadyClaimed: boolean;
   };
+  // The snapshot still lists a leaf after it has been drawn — only the pool's
+  // nullifier records that. Building the claim anyway would spend fees on a
+  // transaction the validator refuses, and report it as a wallet failure.
+  if (alreadyClaimed) {
+    throw new Error('You have already claimed this reward. The next snapshot will include anything earned since.');
+  }
 
   const result = await s.claimRewardsWithWallet(params.walletApi, BigInt(payoutAmount), leafIndex, proof);
   return { txHash: result.txHash, payout: result.payout.toString() };

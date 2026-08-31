@@ -9,7 +9,8 @@
 // ============================================================================
 
 import { validatorToAddress } from '@lucid-evolution/lucid';
-import { buildStakingRewardSnapshot, getRewardProof } from '../staking-reward-tree-builder.js';
+import { testBit } from '../claim-bitmap.js';
+import { buildStakingRewardSnapshot, foldClaimedRoot, getRewardProof } from '../staking-reward-tree-builder.js';
 import { StakingSubmitter, selectPositionToUnstake } from '../staking-submitter.js';
 import {
   CARDANO_NETWORK_MAP,
@@ -78,12 +79,28 @@ interface Input {
   signerPrivateKeyExtendedHex?: string;
   signerAddress?: string;
   newRootHex?: string; // publish-reward-root
+  /** publish-reward-root: the nullifier build-reward-snapshot folded its
+   *  already-paid totals from. The publish clears that record, so it refuses
+   *  if the pool has moved on since. */
+  expectedClaimedBitsHex?: string;
 
   // build-reward-snapshot — governor cron job
   tokenPolicyId?: string;
   tokenAssetName?: string;
   durationDays?: number;
   bondingPeriodDays?: number;
+  /**
+   * The entry list of the root currently on the pool, so its claims can be
+   * folded into the already-paid ledger before the next root is computed.
+   * Omit for a pool that has never published.
+   */
+  previousEntries?: Array<{ stakerVkh: string; payoutAmount: string }>;
+  /**
+   * The running already-paid ledger, keyed by staker key hash, as of the
+   * last successful publish. A leaf pays what its own root pays, so without
+   * this every root re-pays everything the previous ones already did.
+   */
+  alreadyPaid?: Record<string, string>;
 
   // get-reward-proof — the already-built snapshot's entries, re-supplied
   // by the caller (a REST route reading its own last-published snapshot),
@@ -181,7 +198,16 @@ async function main() {
       const addr = requireField(input, 'signerAddress', input.action);
       const newRoot = requireField(input, 'newRootHex', input.action);
       const entryCount = requireField(input, 'entryCount', input.action);
-      result = await submitter().publishRewardRoot(key, addr, newRoot, entryCount);
+      result = await submitter().publishRewardRoot(
+        key,
+        addr,
+        newRoot,
+        entryCount,
+        // From the build-reward-snapshot run that produced this root. Its
+        // absence means "publish regardless", which is only right for a
+        // caller with no already-paid ledger to protect.
+        input.expectedClaimedBitsHex,
+      );
       break;
     }
     case 'read-pool': {
@@ -204,6 +230,31 @@ async function main() {
       // launch's thread NFT, and the policy has to come from the caller's own
       // record rather than the datum being read.
       const durationDays = requireField(input, 'durationDays', input.action);
+
+      // Close out the OUTGOING root before computing the new one.
+      //
+      // A leaf says what its root pays, not what a staker is owed in total,
+      // so the running already-paid ledger is the only thing that stops the
+      // next root re-paying everything the last one already did. The pool
+      // records who claimed as one bit each; folding those bits against the
+      // entries that root published turns them back into amounts.
+      //
+      // `poolClaimedBitsHex` goes back to the caller so the publish can
+      // refuse if the record moved in the meantime — see
+      // publishRewardRootCore. Nothing here is persisted; the caller stores
+      // the new totals only once the publish that clears these bits has
+      // actually landed.
+      const poolClaimedBitsHex = (await submitter().readPoolDatum()).claimed_bits;
+      const previousEntries = (input.previousEntries ?? []).map((e) => ({
+        stakerVkh: e.stakerVkh,
+        payoutAmount: BigInt(e.payoutAmount),
+      }));
+      const alreadyPaid = foldClaimedRoot(
+        previousEntries,
+        poolClaimedBitsHex,
+        new Map(Object.entries(input.alreadyPaid ?? {}).map(([k, v]) => [k, BigInt(v)])),
+      );
+
       const snapshot = await buildStakingRewardSnapshot(
         {
           blockfrostProjectId: input.blockfrostProjectId,
@@ -217,10 +268,17 @@ async function main() {
           threadNftPolicyId: input.threadNftPolicyId,
           durationDays,
           bondingPeriodDays: input.bondingPeriodDays,
+          alreadyPaid,
         },
       );
       result = {
         rootHex: Buffer.from(snapshot.tree.root).toString('hex'),
+        // The nullifier these totals were folded from. Hand it to
+        // publish-reward-root, which refuses if the pool has moved on.
+        poolClaimedBitsHex,
+        // The updated running ledger — persist it only after the publish
+        // lands, since the publish is what erases the record it came from.
+        alreadyPaid: Object.fromEntries(alreadyPaid),
         entries: snapshot.entries.map((e) => ({
           stakerVkh: e.stakerVkh,
           payoutAmount: e.payoutAmount,
@@ -230,6 +288,7 @@ async function main() {
         claimedBitsHex: snapshot.claimedBitsHex,
         entryCount: snapshot.entries.length,
         initialSeededAmount: snapshot.initialSeededAmount,
+        totalBudget: snapshot.totalBudget,
         dailyEmission: snapshot.dailyEmission,
       };
       break;
@@ -241,7 +300,18 @@ async function main() {
         stakerVkh: e.stakerVkh,
         payoutAmount: BigInt(e.payoutAmount),
       }));
-      result = getRewardProof(entries, stakerVkhHex);
+      const proof = getRewardProof(entries, stakerVkhHex);
+      if (proof === null) {
+        result = null;
+        break;
+      }
+      // Whether this leaf's bit is already spent, read from the pool's live
+      // nullifier. The entry list is a cache of what the current root PAYS;
+      // only the chain knows what has since been taken. Without this a
+      // caller cannot tell an unclaimed reward from one already collected,
+      // and would show a claim that was already made as still owed.
+      const pool = await submitter().readPoolDatum();
+      result = { ...proof, alreadyClaimed: testBit(pool.claimed_bits, proof.leafIndex) };
       break;
     }
     default:

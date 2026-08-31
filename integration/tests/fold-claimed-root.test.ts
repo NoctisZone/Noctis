@@ -10,7 +10,7 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { foldClaimedRoot } from '../staking-reward-tree-builder.js';
+import { computeRewardSnapshot, foldClaimedRoot } from '../staking-reward-tree-builder.js';
 
 const A = 'aa'.repeat(28);
 const B = 'bb'.repeat(28);
@@ -64,5 +64,80 @@ describe('foldClaimedRoot', () => {
       payoutAmount: 1n,
     }));
     expect(() => foldClaimedRoot(many, '00')).toThrow(/does not belong to this entry list/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The ledger these folds maintain, end to end.
+//
+// foldClaimedRoot was fully tested and had no caller anywhere: nothing built
+// the already-paid ledger, and nothing passed one in. Every daily root
+// therefore paid each staker their FULL accrual to date, all over again — a
+// staker who claimed on day 20 was offered the whole 20 days a second time on
+// day 21, and again on day 22. The pool drains at a multiple of its emission
+// rate and empties long before its runway.
+//
+// This pins the round trip the cron actually performs: accrue, subtract what
+// has been drawn, publish, fold the claims back in, repeat.
+// ---------------------------------------------------------------------------
+describe('the already-paid ledger across consecutive roots', () => {
+  const SEED = 250_000_000n;
+  const DURATION = 1095;
+  const BONDING = 7;
+  const START = 1_700_000_000_000;
+  const DAY = 86_400_000;
+  const DAILY = 228_310n;
+  const STAKER = A;
+
+  const events = [{ stakerVkh: STAKER, stakedAmount: 1_000_000n, stakeTimestampMs: START, unstakeTimestampMs: null }];
+
+  /** Exactly what buildStakingRewardSnapshot derives: accrual minus drawn. */
+  const rootFor = (day: number, alreadyPaid: Map<string, bigint>) => {
+    const totals = computeRewardSnapshot(events, START, START + day * DAY, SEED, DURATION, BONDING, SEED);
+    return [...totals].map(([stakerVkh, cumulative]) => ({
+      stakerVkh,
+      payoutAmount: cumulative - (alreadyPaid.get(stakerVkh) ?? 0n),
+    }));
+  };
+
+  it('pays the delta once the previous root has been claimed and folded', () => {
+    // Day 20: thirteen distributing days, from day 7.
+    const first = rootFor(20, new Map());
+    expect(first[0]?.payoutAmount).toBe(DAILY * 13n);
+
+    // The staker claims it — one leaf, bit 0 set.
+    const paid = foldClaimedRoot(first, '80');
+    expect(paid.get(STAKER)).toBe(DAILY * 13n);
+
+    // Day 21 owes one more day, not fourteen.
+    const second = rootFor(21, paid);
+    expect(second[0]?.payoutAmount).toBe(DAILY);
+  });
+
+  it('over-pays by the whole accrual when the ledger is not maintained', () => {
+    // The same day 21, with the ledger never folded — what the cron did.
+    const unmaintained = rootFor(21, new Map());
+    expect(unmaintained[0]?.payoutAmount).toBe(DAILY * 14n);
+    // Claimed on both days, that is 27 days of emission drawn in 21.
+    expect(DAILY * 13n + unmaintained[0]!.payoutAmount).toBe(DAILY * 27n);
+  });
+
+  it('carries an unclaimed root forward instead of losing or repeating it', () => {
+    // Nothing claimed under the first root: the bit stays clear, nothing is
+    // added, and day 21's root simply covers all fourteen days.
+    const first = rootFor(20, new Map());
+    const paid = foldClaimedRoot(first, '00');
+    expect(paid.size).toBe(0);
+    expect(rootFor(21, paid)[0]?.payoutAmount).toBe(DAILY * 14n);
+  });
+
+  it('keeps paying a staker who has unstaked but never claimed', () => {
+    // Out on day 30, still owed every day they were in. Their entitlement
+    // lives in the ledger and the accrual history, not in a live position.
+    const left = [
+      { stakerVkh: STAKER, stakedAmount: 1_000_000n, stakeTimestampMs: START, unstakeTimestampMs: START + 30 * DAY },
+    ];
+    const totals = computeRewardSnapshot(left, START, START + 400 * DAY, SEED, DURATION, BONDING, SEED);
+    expect(totals.get(STAKER)).toBe(DAILY * 23n); // days 7..29
   });
 });
