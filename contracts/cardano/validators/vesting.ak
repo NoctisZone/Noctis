@@ -1,15 +1,15 @@
 // ============================================================================
 // Noctis Zone — Cardano L1 Vesting Contract (Aiken)
-// Tier A only
+// The linear curve only
 // ============================================================================
-// Tier A's counterpart to contracts/midnight/vesting.compact (Tier B/C).
+// The linear curve's counterpart to contracts/midnight/vesting.compact (both launch types).
 // Controls the release schedule of the creator's TOKEN allocation (5-10% of
 // total supply) — separate from bonding_curve.ak's fee-claim circuits
 // (ClaimCreatorFees), which handles the
 // creator's ADA trade-fee income. CLAUDE.md is explicit that these are two
 // distinct income streams and must never be conflated ("Two income streams
 // for creators are distinct... never show them as one number") — this
-// didn't exist as a Tier A contract at all until now; Tier A had no vesting
+// didn't exist as the linear curve contract at all until now; the linear curve had no vesting
 // mechanism anywhere in the codebase.
 //
 // Vesting rules (CLAUDE.md):
@@ -384,7 +384,7 @@ fn vesting_tokens_retained(
 
 
 /// State authentication (2026-08-03 audit) — the launch's own thread NFT must be present on the UTXO being
-/// spent AND on the continuing output. See noctis/thread_nft, and Tier A's
+/// spent AND on the continuing output. See noctis/thread_nft, and the linear curve's
 /// bonding_curve.ak thread_nft_intact, for the full reasoning: every
 /// validator here is unparameterized, so all launches share one address and
 /// a UTXO's legitimacy would otherwise rest on a datum anyone can author.

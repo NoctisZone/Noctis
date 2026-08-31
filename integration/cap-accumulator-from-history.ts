@@ -26,7 +26,7 @@
 // Only three actions move a wallet's total, and the fold has to agree with the
 // validator on all three:
 //
-//   - **BuyTokens** and a Tier B **ClaimDarkVeilTokens** add to the buyer.
+//   - **BuyTokens** and a Cardano Launch **ClaimDarkVeilTokens** add to the buyer.
 //   - **SellTokens** subtracts, floored at zero — a seller may hold tokens
 //     they never bought here.
 //   - **BatchTrades** applies its orders IN SEQUENCE, each against the root the

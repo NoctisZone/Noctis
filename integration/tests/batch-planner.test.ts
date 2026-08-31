@@ -405,7 +405,7 @@ describe('planBatch — what the transaction has to build', () => {
   });
 });
 
-describe('planBatch — Tier B is a different curve, not a different fold', () => {
+describe('planBatch — Cardano Launch is a different curve, not a different fold', () => {
   it('prices quadratically when asked to', () => {
     const c = curve();
     const linear = plan([order({ amount: 400n, minReceived: 400n })]);
@@ -414,7 +414,7 @@ describe('planBatch — Tier B is a different curve, not a different fold', () =
     expect(quadratic.fills[0]?.gross).not.toBe(linear.fills[0]?.gross);
   });
 
-  it('threads position on Tier B too', () => {
+  it('threads position on Cardano Launch too', () => {
     const c = curve();
     const result = plan(
       [order({ amount: 400n, minReceived: 400n }), order({ ownerKeyHashHex: BOB, amount: 300n, minReceived: 300n })],

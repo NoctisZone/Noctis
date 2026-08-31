@@ -8,11 +8,11 @@
 //
 // Phase 2 security-audit fix (2026-07-11): darkveil.compact was retired as
 // a standalone deployment — its logic is now merged into eligibility_gate.compact
-// (Tier B) and was already merged into bonding_curve.compact (Tier C).
+// (Cardano Launch) and was already merged into bonding_curve.compact (Midnight Launch).
 // 8 PSMs -> 7: there is no separate DarkVeilWitnesses/darkveilWitnesses
 // anymore; getBuyNonce moved into EligibilityGateWitnesses/
-// eligibilityGateWitnesses (Tier B) and stays part of BondingCurveWitnesses
-// (Tier C, unchanged by this pass).
+// eligibilityGateWitnesses (Cardano Launch) and stays part of BondingCurveWitnesses
+// (Midnight Launch, unchanged by this pass).
 //
 // Fix (2026-07-30): back to 8 — staking_pool.compact (added
 // 2026-07-14) was a real, later-added 8th PSM with no entry in this file
@@ -210,21 +210,21 @@ export function deriveUserPublicKey(sk: UserSecretKey, domain: string, launchId:
 
 // Security-audit fix: ELIGIBILITY_*/CURVE_* previously read
 // 'noctis:eligibility:...'/'noctis:curve:...', which predates the merge.
-// eligibility_gate.compact and bonding_curve.compact's merged Tier C
+// eligibility_gate.compact and bonding_curve.compact's merged Midnight Launch
 // copy both derive identity under the SAME unified domain today (see
 // bonding_curve.compact's file header "Identity note") — kept as two named
 // constants (rather than collapsing to one) only so existing call sites
 // referencing either name don't need to change, but both now correctly
 // point at the one real on-chain domain.
 export const DOMAINS = {
-  // Eligibility Gate (Tier B, merged with DarkVeil — post-Phase-2: same
+  // Eligibility Gate (Cardano Launch, merged with DarkVeil — post-Phase-2: same
   // domain as Bonding Curve, see below. DARKVEIL_USER/GOVERNOR retired
-  // along with the standalone darkveil.compact deployment — Tier B's
+  // along with the standalone darkveil.compact deployment — Cardano Launch's
   // DarkVeil circuits now derive identity under this same domain.)
   ELIGIBILITY_USER: 'noctis:user:pk:v1',
   ELIGIBILITY_GOVERNOR: 'noctis:governor:pk:v1',
 
-  // Bonding Curve (Tier C, merged with Eligibility Gate + DarkVeil,
+  // Bonding Curve (Midnight Launch, merged with Eligibility Gate + DarkVeil,
   // unified with Eligibility Gate's domain)
   CURVE_USER: 'noctis:user:pk:v1',
   CURVE_GOVERNOR: 'noctis:governor:pk:v1',
@@ -251,12 +251,12 @@ export const DOMAINS = {
 // ============================================================================
 
 // ---------------------------------------------------------------------------
-// 1. ELIGIBILITY GATE PSM (Tier B — merged with DarkVeil, Phase 2 2026-07-11)
+// 1. ELIGIBILITY GATE PSM (Cardano Launch — merged with DarkVeil, Phase 2 2026-07-11)
 // Witnesses: getUserSecret, getMerkleProof, getRegistrantMerkleProof,
 //            getGovernorSecret, getBuyNonce
 //
 // Security-audit fix (Phase 2, 2026-07-11): eligibility_gate.compact is now
-// MERGED with darkveil.compact for Tier B (mirrors the Tier C merge of
+// MERGED with darkveil.compact for Cardano Launch (mirrors the Midnight Launch merge of
 // bonding_curve.compact — Compact has no working cross-contract call
 // mechanism, so folding the two sources into one deployed contract with a
 // shared ledger was the only way to make claimRatioBondRefund's per-
@@ -320,7 +320,7 @@ export function eligibilityGateWitnesses(
 // ---------------------------------------------------------------------------
 
 // Fix (2026-07-10): bonding_curve.compact is now MERGED with
-// eligibility_gate.compact for Tier C (see the file header in
+// eligibility_gate.compact for Midnight Launch (see the file header in
 // contracts/midnight/bonding_curve.compact for why — Compact has no
 // working cross-contract call mechanism, so folding the two sources into
 // one deployed contract with a shared ledger was the only way to make the
@@ -329,10 +329,10 @@ export function eligibilityGateWitnesses(
 // Follow-up (2026-07-10): darkveil.compact's getBuyNonce is now also
 // part of this merged contract's witness set — see
 // contracts/midnight/bonding_curve.compact's file header for the 3-way
-// merge (eligibility_gate + darkveil + bonding_curve, Tier C only).
+// merge (eligibility_gate + darkveil + bonding_curve, Midnight Launch only).
 // Design requirement: getAllowlistLeaf removed here too — same
 // reasoning as EligibilityGateWitnesses above (this contract merges that
-// same verifyAllowlist(caller) logic for Tier C).
+// same verifyAllowlist(caller) logic for Midnight Launch).
 export type BondingCurveWitnesses = {
   getUserSecret: WitnessFn<UserSecretKey>;
   getGovernorSecret: WitnessFn<UserSecretKey>;
@@ -354,7 +354,7 @@ export function bondingCurveWitnesses(
     getUserSecret: () => [undefined, userSk],
     getGovernorSecret: () => [undefined, requirePrivileged(governorSk, 'governorSk', 'bondingCurveWitnesses')],
     getMerkleProof: () => [undefined, merkleProof],
-    // Same shape and same fallback as the Tier B builder above, deliberately:
+    // Same shape and same fallback as the Cardano Launch builder above, deliberately:
     // the two contracts carry the same DarkVeil circuits and their witness
     // builders should not diverge. A proof for the wrong tree does not pass
     // silently — verifyRegistrant recomputes the published root or the call
@@ -486,7 +486,7 @@ export function ctoGovernanceWitnesses(
 }
 
 // ---------------------------------------------------------------------------
-// 8. STAKING REWARDS POOL PSM (Tier C only, 2026-07-14)
+// 8. STAKING REWARDS POOL PSM (Midnight Launch only, 2026-07-14)
 // Witnesses: getUserSecret, getGovernorSecret, getCreatorSecret,
 //            getStakeProof, getStakeLeafAmount, getRewardProof,
 //            getRewardLeafAmount

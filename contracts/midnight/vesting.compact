@@ -246,7 +246,7 @@ export circuit claimVested(
 
   // No real token transfer happens here yet — this circuit only updates
   // claimedTokens bookkeeping. Actual token movement is blocked on the
-  // Midnight fungible token standard being unconfirmed for Tier C; "transaction
+  // Midnight fungible token standard being unconfirmed for Midnight Launch; "transaction
   // merging" was never the mechanism regardless (no cross-contract call
   // exists in Compact).
 }
@@ -293,7 +293,7 @@ export circuit triggerCTO(proposalId: Bytes<32>, communityTreasuryWallet_: Bytes
   // circuit freezes claimVested (state -> CTOFrozen) but moves no real
   // tokens to communityTreasuryWallet — consistent with claimVested's own
   // comment that real token transfer is blocked on the Midnight
-  // fungible-token standard being unconfirmed for Tier C. The "redirect to
+  // fungible-token standard being unconfirmed for Midnight Launch. The "redirect to
   // community treasury" this circuit's name implies isn't wired yet;
   // revisit once that resolves and real token movement exists to wire here.
   consumedProposals.insert(disclose(proposalId));

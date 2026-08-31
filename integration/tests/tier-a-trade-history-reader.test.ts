@@ -162,8 +162,8 @@ describe('action tables', () => {
     }
   });
 
-  it('keeps Tier A and Tier B tables separate', () => {
-    // Tier B's constructor order genuinely differs; a shared table would
+  it('keeps both Cardano curves tables separate', () => {
+    // Cardano Launch's constructor order genuinely differs; a shared table would
     // mislabel one of them.
     expect(BONDING_CURVE_TIER_B_ACTIONS).not.toEqual(BONDING_CURVE_ACTIONS);
   });

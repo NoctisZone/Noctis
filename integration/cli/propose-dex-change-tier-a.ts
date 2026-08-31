@@ -1,5 +1,5 @@
 // ============================================================================
-// Noctis Zone — Tier A Preprod Milestone, Phase 5b
+// Noctis Zone — Cardano Preprod milestone, Phase 5b
 // ProposeDexChange (lp_escrow.ak) — multisig-signed, starts the 72h public
 // notice clock. See tier-a-dex-change-submitter.ts's header for the full
 // design (why backdating `timestamp` here is legitimate, unlike

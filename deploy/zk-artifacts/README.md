@@ -120,7 +120,7 @@ rather than an estimate:
      }
    ]
    ```
-4. **Upload artifacts**, preserving the `keys/`/`zkir/` path structure per circuit, for every contract the widget actually needs at runtime (Tier B needs `eligibility_gate`; Tier C, once unblocked, needs `bonding_curve`/`treasury`/`creator_escrow`/`vesting`/`lp_escrow`/`cto_governance`/`staking_pool`):
+4. **Upload artifacts**, preserving the `keys/`/`zkir/` path structure per circuit, for every contract the widget actually needs at runtime (Cardano Launch needs `eligibility_gate`; Midnight Launch, once unblocked, needs `bonding_curve`/`treasury`/`creator_escrow`/`vesting`/`lp_escrow`/`cto_governance`/`staking_pool`):
    ```bash
    aws s3 sync contracts/midnight/compiled_realzk/eligibility_gate/keys/ \
      s3://noctis-zk-artifacts/eligibility_gate/keys/ \

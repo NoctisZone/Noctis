@@ -1,9 +1,9 @@
 // ============================================================================
 // Noctis Zone — Cardano L1 LP Escrow Contract (Aiken)
-// Used by Tier A and Tier B (CLAUDE.md Contract Architecture table)
+// Used by both Cardano curves (CLAUDE.md Contract Architecture table)
 // ============================================================================
 // This is the Cardano L1 counterpart to the Midnight lp_escrow.compact PSM
-// (Tier C uses a Midnight-native LP Escrow PSM instead). Same
+// (Midnight Launch uses a Midnight-native LP Escrow PSM instead). Same
 // invariants either way:
 //   1. 365-day lock from graduation timestamp
 //   2. No withdraw() — EVER. Zero code paths return LP tokens to any wallet.
@@ -96,7 +96,7 @@ use cto_governance.{
   ProposalAnchor, ProposalType, SilenceLockTrigger,
 }
 
-/// Same finding/fix as Tier A's bonding_curve.ak — see that file's
+/// Same finding/fix as the linear curve's bonding_curve.ak — see that file's
 /// own comment on `validity_range_is_narrow` for the full explanation.
 /// Only `ExecuteDexChange` needs this here — it's the one permissionless,
 /// timestamp-deadline-gated redeemer in this file (`ProposeDexChange`
@@ -200,7 +200,7 @@ const migration_cooldown = 7_776_000_000
 /// transaction validity range is natively milliseconds — so the real
 /// "72-hour public notice period" was actually only 259,200 milliseconds,
 /// about 4.3 real minutes. Found while researching Phase 5b (real DEX
-/// migration) of the Tier A Preprod Milestone, before ever building or
+/// migration) of the Cardano Preprod milestone, before ever building or
 /// testing the mechanism for real. Every existing test derives its
 /// timestamps FROM this constant (`dex_change_notice_period ± 100`, not
 /// hardcoded literals like earlier similar bugs), so no test rescaling was
@@ -549,7 +549,7 @@ fn migration_output_ok(
 
 
 /// State authentication (2026-08-03 audit) — the launch's own thread NFT must be present on the UTXO being
-/// spent AND on the continuing output. See noctis/thread_nft, and Tier A's
+/// spent AND on the continuing output. See noctis/thread_nft, and the linear curve's
 /// bonding_curve.ak thread_nft_intact, for the full reasoning: every
 /// validator here is unparameterized, so all launches share one address and
 /// a UTXO's legitimacy would otherwise rest on a datum anyone can author.

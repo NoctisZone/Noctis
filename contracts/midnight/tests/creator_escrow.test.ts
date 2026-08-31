@@ -261,7 +261,7 @@ describe('creator_escrow.compact — pure fee accrual, no vesting curve (split r
 });
 
 describe('creator_escrow.compact — payment enforcement', () => {
-  it('a Night-currency (Tier C) deposit requires receiveUnshielded and does not throw locally', () => {
+  it('a Night-currency (Midnight Launch) deposit requires receiveUnshielded and does not throw locally', () => {
     // Same caveat as bonding_curve/eligibility_gate's equivalent tests: the local
     // compact-runtime simulator doesn't model cross-transaction UTXO
     // matching, so this proves the currency-gated call is wired in and
@@ -273,7 +273,7 @@ describe('creator_escrow.compact — payment enforcement', () => {
     expect(state.escrowAmount).toBe(5000n);
   });
 
-  it('an Ada-currency (Tier B) deposit never calls receiveUnshielded, unchanged behavior', () => {
+  it('an Ada-currency (Cardano Launch) deposit never calls receiveUnshielded, unchanged behavior', () => {
     const { contract, ctx } = deploy(Currency.Ada);
     const result = contract.circuits.depositFees(ctx, 5000n);
     const state = ledger(result.context.currentQueryContext.state);

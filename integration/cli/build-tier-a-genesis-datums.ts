@@ -1,5 +1,5 @@
 // ============================================================================
-// Noctis Zone — Tier A/B genesis datums, as a standalone CLI
+// Noctis Zone — Cardano genesis datums, as a standalone CLI
 // ============================================================================
 // Thin wrapper. The logic lives in ../tier-a-genesis-datums.ts so that
 // mint-tier-a-launch.ts can call it in-process: a module that runs `main()` at

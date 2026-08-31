@@ -1,6 +1,6 @@
 // tier-b-curve-referenced.test.ts — the same action, built the other way.
 //
-// Tier B's curve can name its published validator instead of carrying it. The
+// Cardano Launch's curve can name its published validator instead of carrying it. The
 // risk in offering two ways to build one transaction is that they drift: a fee
 // rounded differently, a datum field set on one path and not the other, a
 // payout that loses its settlement tag. Any of those produces a transaction

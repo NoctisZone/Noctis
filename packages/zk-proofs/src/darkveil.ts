@@ -1,7 +1,7 @@
 // The DarkVeil-phase hashes, shared by both tiers.
 //
 // DarkVeil has no contract of its own: its logic lives inside
-// eligibility_gate.compact (Tier B) and bonding_curve.compact (Tier C),
+// eligibility_gate.compact (Cardano Launch) and bonding_curve.compact (Midnight Launch),
 // which each carry an identical copy of these `pure circuit` helpers —
 // same domain strings, same struct field order. That is why this module is
 // named for the phase rather than for either contract, and why one twin

@@ -132,7 +132,7 @@ export interface BatchPlan {
  *
  * The binding limit is EXECUTION UNITS, not transaction size — which is not
  * what you would guess from a validator this large. Measured on Preprod: eight
- * Tier A buys were refused with `ExUnitsTooBigUTxO`, having used 17,711,813
+ * The linear curve buys were refused with `ExUnitsTooBigUTxO`, having used 17,711,813
  * memory against a 17,500,000 cap, while spending only 6.66 billion of the ten
  * billion steps allowed. Seven of the same orders were accepted. Size was never
  * close on either.

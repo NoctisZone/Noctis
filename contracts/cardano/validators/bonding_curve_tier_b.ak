@@ -1,13 +1,13 @@
 // ============================================================================
 // Noctis Zone — Cardano L1 Bonding Curve Contract (Aiken)
-// Tier B — public phase only
+// Cardano Launch — public phase only
 // ============================================================================
-// Resolution (2026-07-09): Tier B's public bonding curve moved from a
+// Resolution (2026-07-09): Cardano Launch's public bonding curve moved from a
 // Midnight PSM to Cardano/Aiken entirely. Reasoning: the public phase is,
 // by definition, public — nothing about price, amounts, or cap status
 // needs Midnight's privacy once DarkVeil closes. Cardano already proved it
 // can do real quadratic curve math AND real payment enforcement natively
-// (see bonding_curve.ak, Tier A) with no bridge at all. Keeping the public
+// (see bonding_curve.ak, the linear curve) with no bridge at all. Keeping the public
 // curve on Midnight would have needed a NEW relayer/oracle just so
 // `buyTokens` could learn a Cardano payment happened — worse than the
 // bridge this file avoids by existing. Only DarkVeil's private
@@ -20,18 +20,18 @@
 // What stayed the same as bonding_curve.compact's quadratic design:
 //   Price formula: price = base_price + k * sold^2
 //     where k = (max_price - base_price) / curve_supply^2
-//   Same k for both Tier B and Tier C (Jinx's explicit call, unchanged by
-//   this move) — this file and bonding_curve.compact (now Tier C only)
+//   Same k for both Cardano Launch and Midnight Launch (Jinx's explicit call, unchanged by
+//   this move) — this file and bonding_curve.compact (now Midnight Launch only)
 //   verify the identical formula, just in two different languages.
 //
-// What's different from Tier A's bonding_curve.ak:
+// What's different from the linear curve's bonding_curve.ak:
 //   - Quadratic pricing, not linear (see verify_price below)
-//   - The wallet cap here is per-TRANSACTION, exactly as on Tier A. Both
+//   - The wallet cap here is per-TRANSACTION, exactly as on the linear curve. Both
 //     tiers previously kept a cumulative per-wallet running total in the
 //     datum; a datum that grows with every new participant eventually
 //     exceeds the transaction size limit, which would strand a curve at
 //     precisely the moment it was succeeding. See the `wallet_cap` field.
-//     Tier B's real sybil resistance is DarkVeil's eligibility checks and
+//     Cardano Launch's real sybil resistance is DarkVeil's eligibility checks and
 //     the N-hop challenge, not this cap.
 //
 // Privacy fix (2026-07-11): the ORIGINAL version of this file
@@ -69,7 +69,7 @@
 //     allocation crosses exactly once, at DarkVeil close, as a single
 //     Merkle root — not a per-registrant list, and not on every buy.
 //
-// Fix (2026-07-10): same graduation gap as Tier A — `Graduated` was
+// Fix (2026-07-10): same graduation gap as the linear curve — `Graduated` was
 // just a state flag with no redeemer moving the raised ADA or LP token
 // reserve into lp_escrow.ak. Added the identical `Graduate` redeemer
 // (permissionless, verified by real value movement, not a signature) and
@@ -97,7 +97,7 @@ use noctis/settlement
 use noctis/staking_pool_datum
 use noctis/thread_nft
 
-/// Same finding/fix as Tier A's bonding_curve.ak — see that file's
+/// Same finding/fix as the linear curve's bonding_curve.ak — see that file's
 /// own comment on `validity_range_is_narrow` for the full explanation.
 fn validity_range_is_narrow(range: Interval, max_width: Int) -> Bool {
   when (range.lower_bound.bound_type, range.upper_bound.bound_type) is {
@@ -150,7 +150,7 @@ pub type MerkleProofStep {
 // Every field a redeemer REWRITES is therefore declared first, and everything
 // set once at genesis and only read afterwards is declared after them. That
 // single change took this script from 15,952 bytes to 13,715 — 14% — with no
-// behavioural difference whatsoever. Tier A's datum is ordered on the same
+// behavioural difference whatsoever. The linear curve's datum is ordered on the same
 // rule, with the same prefix, so the two read alike.
 //
 // So: a new field that a redeemer writes belongs at the FRONT, next to its
@@ -201,7 +201,7 @@ pub type BondingCurveTierBDatum {
   // must land within `dv_claim_window` of it; the curve may not open until
   // `dv_claim_window + dv_settlement_window` past it.
   dv_claim_opened_at: Int,
-  // CTO fee-redirect fix (2026-07-12): same as Tier A's bonding_curve.ak —
+  // CTO fee-redirect fix (2026-07-12): same as the linear curve's bonding_curve.ak —
   // once a CTO passes, ClaimCreatorFees redirects to the community wallet.
   // Mirrors lp_escrow.ak's cto_triggered/community_wallet_hash.
   community_pub_key_hash: VerificationKeyHash,
@@ -213,7 +213,7 @@ pub type BondingCurveTierBDatum {
   // so that a curve waiting on activation has the same backstop as one that
   // is trading.
   phase_started_at: Int,
-  // Fix (2026-07-19, Tier B cross-chain audit): whether
+  // Fix (2026-07-19, Cardano Launch cross-chain audit): whether
   // dv_allocation_root has been anchored to a real, governor-computed
   // value yet. Starts False at genesis (real value unknown at mint time —
   // DarkVeil hasn't even opened yet). Set True only by the new
@@ -250,12 +250,12 @@ pub type BondingCurveTierBDatum {
   dv_reserve_tokens: Int,
   token_policy_id: PolicyId,
   token_asset_name: AssetName,
-  // Same LP graduation fields as Tier A's bonding_curve.ak — see that
+  // Same LP graduation fields as the linear curve's bonding_curve.ak — see that
   // file's datum comment for the full reasoning.
   lp_escrow_credential: Credential,
   lp_reserve_tokens: Int,
   // Staking Rewards Pool (2026-07-14): optional per-launch feature —
-  // same fields and Graduate-time seeding semantics as Tier A's
+  // same fields and Graduate-time seeding semantics as the linear curve's
   // bonding_curve.ak. See that file's datum comment for the full reasoning.
   staking_enabled: Bool,
   staking_pool_credential: Credential,
@@ -267,14 +267,14 @@ pub type BondingCurveTierBDatum {
   // graduation would be a rate chosen by whoever submitted it.
   staking_duration_days: Int,
   // Fix: cto_governance.ak's own fixed script address, set
-  // at genesis — same pattern as Tier A's bonding_curve.ak; see that
+  // at genesis — same pattern as the linear curve's bonding_curve.ak; see that
   // file's doc comment for the full reasoning. Needed because
   // TriggerCTO/DissolveCTO below now require real reference-input
   // evidence a vote actually passed, instead of trusting a bare governor
   // signature.
   cto_governance_credential: Credential,
   // Fix (2026-07-23 audit): governance THREAD NFT policy id — see the
-  // full doc comment on Tier A's bonding_curve.ak. cto_vote_verified now
+  // full doc comment on the linear curve's bonding_curve.ak. cto_vote_verified now
   // requires the referenced governance UTXO to carry this NFT
   // (asset_name = launch_id), closing the forge-a-fake-governance-UTXO gap.
   thread_nft_policy: PolicyId,
@@ -328,7 +328,7 @@ pub type BatchOrder {
 
 pub type BondingCurveTierBRedeemer {
   /// `current_timestamp` stamped into `phase_started_at`, verified against the
-  /// tx's validity range (same pattern as Tier A).
+  /// tx's validity range (same pattern as the linear curve).
   ActivateCurve { current_timestamp: Int }
   /// The caller names only how much they want and who they are; the contract
   /// derives the price and the fee split itself from the datum, so the amount
@@ -377,7 +377,7 @@ pub type BondingCurveTierBRedeemer {
     cap_committed_before: Int,
     cap_proof: List<CapProofStep>,
   }
-  /// Same two guarantees as Tier A's ClaimCreatorFees — see that file's own
+  /// Same two guarantees as the linear curve's ClaimCreatorFees — see that file's own
   /// doc comment for the full reasoning. (1) Value conservation verified by
   /// real value movement, so buyers' principal cannot leave by this path.
   /// (2) `platform_claim_fee`, a real on-chain-enforced flat charge paid INTO
@@ -394,17 +394,17 @@ pub type BondingCurveTierBRedeemer {
   CancelCurve
   /// Permissionless force-cancel once Active for longer than
   /// `max_curve_duration` without reaching Graduated — same idiom
-  /// as Tier A's ExpireCurve.
+  /// as the linear curve's ExpireCurve.
   ExpireCurve { current_timestamp: Int }
-  /// Pro-rata buyback — same mechanism as Tier A's ClaimBuyback.
+  /// Pro-rata buyback — same mechanism as the linear curve's ClaimBuyback.
   ClaimBuyback { token_amount: Int, buyer_key_hash: VerificationKeyHash }
-  /// Seed the LP once Graduated — same mechanism as Tier A's Graduate.
+  /// Seed the LP once Graduated — same mechanism as the linear curve's Graduate.
   Graduate
-  /// CTO fee-redirect fix (2026-07-12) — same mechanism as Tier A's
+  /// CTO fee-redirect fix (2026-07-12) — same mechanism as the linear curve's
   /// bonding_curve.ak.
   TriggerCTO { community_pub_key_hash: VerificationKeyHash }
   DissolveCTO
-  /// Fix (2026-07-19, Tier B cross-chain audit): anchors the real
+  /// Fix (2026-07-19, Cardano Launch cross-chain audit): anchors the real
   /// dv_allocation_root computed off-chain by the governor from
   /// eligibility_gate.compact's dvTokensPurchased map, once DarkVeil has
   /// closed on Midnight. Governor-signed — same trust boundary as
@@ -419,13 +419,13 @@ pub type BondingCurveTierBRedeemer {
   /// internal tracking.
   AnchorDvAllocationRoot { dv_allocation_root: ByteArray }
   QueryState
-  /// Public sell — the reverse of BuyTokens. Same mechanism as Tier A's
+  /// Public sell — the reverse of BuyTokens. Same mechanism as the linear curve's
   /// bonding_curve.ak SellTokens — see that file's own doc comment
   /// for the full pricing-symmetry and value-conservation reasoning
   /// (the same "total_raised can go negative after a round-trip, and that's
   /// correct" invariant holds).
   ///
-  /// Entitlement is possession, as on Tier A: the seller returns real tokens
+  /// Entitlement is possession, as on the linear curve: the seller returns real tokens
   /// to the curve in the same transaction, so holding them is what qualifies
   /// them. A wallet that acquired its tokens by DarkVeil claim, public buy or
   /// ordinary transfer can all sell them here alike. The creator is blocked
@@ -474,7 +474,7 @@ pub type BondingCurveTierBRedeemer {
 // ============================================================================
 
 /// Fee split in basis points (10000 = 100%) — 0.5% creator + 1.0% platform
-/// = 1.5% total, plus the batcher fee charged per order. Same as Tier A.
+/// = 1.5% total, plus the batcher fee charged per order. Same as the linear curve.
 const creator_bps = 50
 
 /// One platform line, not a treasury slice plus an ops slice.
@@ -482,25 +482,25 @@ const platform_bps = 100
 
 const bps_denominator = 10_000
 
-/// Fix (2026-07-21): ported verbatim from Tier A's bonding_curve.ak —
+/// Fix (2026-07-21): ported verbatim from the linear curve's bonding_curve.ak —
 /// deliberately conservative SANITY FLOOR for ClaimCreatorFees's
 /// new platform_claim_fee, not a precise $1 peg (Aiken has no in-circuit
 /// oracle access). 0.2 ADA comfortably undershoots $1's real ADA value
 /// across ADA's entire realistic historical trading range; the real
 /// $1-equivalent is computed off-chain via the same usdToMinAdaLovelace()
-/// Orcfax oracle Tier A uses, paid with margin above this floor in the
+/// Orcfax oracle the linear curve uses, paid with margin above this floor in the
 /// normal case.
 const min_platform_claim_fee_lovelace = 200_000
 
-/// 90 days in MILLISECONDS — same default and rationale as Tier A's
+/// 90 days in MILLISECONDS — same default and rationale as the linear curve's
 /// bonding_curve.ak.
 ///
-/// Fix (2026-07-17): same bug, same fix, as Tier A's bonding_curve.ak
+/// Fix (2026-07-17): same bug, same fix, as the linear curve's bonding_curve.ak
 /// own `max_curve_duration` — this file's `ActivateCurve`/
 /// `ExpireCurve` bind `current_timestamp`/`phase_started_at` to
 /// `interval.contains(self.validity_range, ...)` identically, so the same
 /// ms-vs-seconds mismatch applied here too, never separately checked when
-/// the Tier A bug was fixed. Found during Phase 5b research.
+/// The linear curve bug was fixed. Found during Phase 5b research.
 const max_curve_duration = 7_776_000_000
 
 /// Bounds on the launch's declared `dv_claim_window` — the time registrants
@@ -612,7 +612,7 @@ fn recompute_merkle_root(leaf: ByteArray, proof: List<MerkleProofStep>) -> ByteA
 /// The cumulative wallet cap's read-and-rewrite, in one call: proves
 /// `before` is this key's real running total under `datum.cap_root`, and
 /// returns the root it becomes at `after`. Lives in `noctis/cap_accumulator`
-/// because Tier A runs the identical tree and one off-chain builder serves
+/// because the linear curve runs the identical tree and one off-chain builder serves
 /// both — see that module's own header.
 ///
 /// Deliberately a DIFFERENT tree from `dv_allocation_root` above, with its own
@@ -745,7 +745,7 @@ fn own_continuing_datum(
 }
 
 /// Fix: real evidence a vote actually passed, replacing a
-/// bare governor signature — same mechanism and reasoning as Tier A's
+/// bare governor signature — same mechanism and reasoning as the linear curve's
 /// bonding_curve.ak's own cto_vote_verified (see that file's doc comment
 /// for the full explanation).
 fn cto_vote_verified(
@@ -802,7 +802,7 @@ fn cto_vote_verified(
 
 /// Verify the buyer's `gross_payment` lovelace actually increased the
 /// validator's own continuing output by exactly that amount — same real
-/// payment-enforcement pattern as Tier A's bonding_curve.ak.
+/// payment-enforcement pattern as the linear curve's bonding_curve.ak.
 fn payment_received(
   self: Transaction,
   own_ref: OutputReference,
@@ -864,7 +864,7 @@ fn token_delivered(
   )
 }
 
-/// Bonus fix found while designing Graduate (2026-07-10) — same as Tier A's
+/// Bonus fix found while designing Graduate (2026-07-10) — same as the linear curve's
 /// bonding_curve.ak: verify the curve's OWN reserve actually shrinks by
 /// token_amount, not just that some output claims to hold it. See that
 /// file's comment on the equivalent helper for the full reasoning.
@@ -890,7 +890,7 @@ fn curve_token_balance_decreased(
 
 /// Reverse of curve_token_balance_decreased — verify the curve's own
 /// reserve actually GREW by token_amount on a sell (the seller's tokens
-/// really arrived, not just claimed). Same mechanism as Tier A's
+/// really arrived, not just claimed). Same mechanism as the linear curve's
 /// bonding_curve.ak tokens_returned_to_curve.
 fn tokens_returned_to_curve(
   self: Transaction,
@@ -908,7 +908,7 @@ fn tokens_returned_to_curve(
   ) + token_amount
 }
 
-/// Fix: same fix, same reasoning, as Tier A's bonding_curve.ak — see that
+/// Fix: same fix, same reasoning, as the linear curve's bonding_curve.ak — see that
 /// file's comment on output_value_clean for the full rationale (MeshJS's
 /// escrow.ak names this the "unbounded value vulnerability").
 fn output_value_clean(output: Output, max_assets: Int) -> Bool {
@@ -942,11 +942,11 @@ fn curve_own_output_clean(self: Transaction, own_ref: OutputReference) -> Bool {
   output_value_clean(own_output, 3)
 }
 
-/// State authentication (2026-08-03 audit) — identical fix, identical reasoning, to Tier A's bonding_curve.ak.
+/// State authentication (2026-08-03 audit) — identical fix, identical reasoning, to the linear curve's bonding_curve.ak.
 /// See that file's thread_nft_intact for the full rationale. The only
-/// difference is the role tag: Tier A and Tier B curves are different
-/// scripts at different addresses, so a Tier A thread NFT must not satisfy
-/// a Tier B check for the same launch.
+/// difference is the role tag: two Cardano curves are different
+/// scripts at different addresses, so the linear curve thread NFT must not satisfy
+/// a Cardano Launch check for the same launch.
 fn thread_nft_intact(
   self: Transaction,
   own_ref: OutputReference,
@@ -971,8 +971,8 @@ fn thread_nft_intact(
 }
 
 /// Fix (2026-07-19, full-suite security audit) — same fix, same
-/// reasoning, as Tier A's bonding_curve.ak: closes a double-satisfaction
-/// risk since every Tier B launch's curve shares this one fixed,
+/// reasoning, as the linear curve's bonding_curve.ak: closes a double-satisfaction
+/// risk since every Cardano Launch launch's curve shares this one fixed,
 /// unparameterized script address. See that file's own comment on this
 /// exact helper for the full explanation.
 fn single_own_utxo(self: Transaction, own_address: Address) -> Bool {
@@ -996,7 +996,7 @@ fn single_own_utxo(self: Transaction, own_address: Address) -> Bool {
   ) <= 1
 }
 
-/// Same buyback helpers as Tier A's bonding_curve.ak.
+/// Same buyback helpers as the linear curve's bonding_curve.ak.
 fn buyback_tokens_returned(
   self: Transaction,
   own_ref: OutputReference,
@@ -1015,7 +1015,7 @@ fn buyback_tokens_returned(
 
 /// Fix (2026-07-22): previously compared the FULL output address
 /// against `from_verification_key(buyer_key_hash)` — a bare enterprise
-/// address, not the buyer's real base address (the original Tier A
+/// address, not the buyer's real base address (the original the linear curve
 /// finding; confirmed to apply byte-for-byte identically here).
 /// Fixed to compare only the payment credential — same idiom this file
 /// already uses for lp_escrow_credential/staking_pool_credential/
@@ -1053,21 +1053,21 @@ fn buyback_share_paid(
   // at their credential holding the share is then equally consistent with
   // their own change coming back while the curve's ada goes elsewhere.
   // Netting their inputs out leaves only what arrived from somewhere else.
-  // See noctis/settlement's net_lovelace_gain, and Tier A's own
+  // See noctis/settlement's net_lovelace_gain, and the linear curve's own
   // lovelace_paid_from_curve.
   let buyer_gained =
     settlement.net_lovelace_gain(self, buyer_credential) >= share
   curve_decreased_by_share && buyer_paid && buyer_gained
 }
 
-/// Fix (2026-07-21): ported from Tier A's bonding_curve.ak — real
+/// Fix (2026-07-21): ported from the linear curve's bonding_curve.ak — real
 /// value-conservation check for a single-direction curve payout (money
 /// only leaves, nothing comes in). Used by ClaimPlatformFees
 /// below; ClaimCreatorFees needs a different two-way check since
 /// platform_claim_fee also flows IN — see that redeemer's own comment.
 ///
 /// Fix (2026-07-22): same payment-credential-only fix as
-/// buyback_share_paid above — this was ported from Tier A's now-fixed
+/// buyback_share_paid above — this was ported from the linear curve's now-fixed
 /// lovelace_paid_from_curve, so it inherited the identical bug at
 /// port time (this fix predates that later fix).
 /// Batch proceeds: THIS ORDER's seller must be paid, tagged with the order it
@@ -1115,7 +1115,7 @@ fn lovelace_paid_from_curve(
   }
 }
 
-/// Same graduation helpers as Tier A's bonding_curve.ak.
+/// Same graduation helpers as the linear curve's bonding_curve.ak.
 fn graduation_funds_left_curve(
   self: Transaction,
   own_ref: OutputReference,
@@ -1144,7 +1144,7 @@ fn graduation_funds_left_curve(
 }
 
 /// The identity currently allowed to claim creator fees — same
-/// active_fee_recipient pattern as Tier A's bonding_curve.ak and
+/// active_fee_recipient pattern as the linear curve's bonding_curve.ak and
 /// lp_escrow.ak's (CTO fee-redirect fix, 2026-07-12).
 fn active_fee_recipient(datum: BondingCurveTierBDatum) -> VerificationKeyHash {
   if datum.cto_triggered {
@@ -1154,7 +1154,7 @@ fn active_fee_recipient(datum: BondingCurveTierBDatum) -> VerificationKeyHash {
   }
 }
 
-/// Fix (2026-07-17): same bug, same fix, as Tier A's bonding_curve.ak
+/// Fix (2026-07-17): same bug, same fix, as the linear curve's bonding_curve.ak
 /// own `lp_seeding_output_ok` — see that file's comment for the full
 /// on-chain-reproduced/aiken-tx-simulate-isolated/unit-test-confirmed
 /// explanation. Exact lovelace equality against `lp_ada` alone can never
@@ -1199,7 +1199,7 @@ fn lp_seeding_output_ok(
   )
 }
 
-/// Same staking_seeding_output_ok pattern as Tier A's bonding_curve.ak.
+/// Same staking_seeding_output_ok pattern as the linear curve's bonding_curve.ak.
 fn staking_seeding_output_ok(self: Transaction, datum: BondingCurveTierBDatum) -> Bool {
   if !datum.staking_enabled {
     True
@@ -1298,7 +1298,7 @@ validator bonding_curve_tier_b {
         let new_datum = own_continuing_datum(self, own_ref)
         // A launch with a DarkVeil phase must have gone through the claim
         // window; one without (DarkVeil cancelled below MIN_DV_PARTICIPANTS,
-        // and the Tier A shape generally) opens straight from Inactive.
+        // and the linear curve shape generally) opens straight from Inactive.
         let has_darkveil = datum.dv_reserve_tokens > 0
         let from_state_ok =
           if has_darkveil {
@@ -1751,7 +1751,7 @@ validator bonding_curve_tier_b {
             tokens_sold: new_sold,
             // Subtract the FULL gross_proceeds, not net_proceeds — see this
             // redeemer's own doc comment (SellTokens, in the type
-            // definition above) and Tier A's identical reasoning for
+            // definition above) and the linear curve's identical reasoning for
             // the invariant this preserves.
             total_raised: datum.total_raised - gross_proceeds,
             creator_fees_accrued: datum.creator_fees_accrued + creator_fee,
@@ -1781,7 +1781,7 @@ validator bonding_curve_tier_b {
           // its position and still be barred from re-entering the launch.
           cap_ok,
           // Deliberately no `gross_proceeds <= datum.total_raised` guard —
-          // same reasoning as Tier A's SellTokens: a symmetric
+          // same reasoning as the linear curve's SellTokens: a symmetric
           // buy-then-sell round-trip legitimately drives total_raised
           // negative by exactly the original buy's fee_total, and the sum
           // invariant (total_raised + 3 fee accumulators == curve's real
@@ -1811,7 +1811,7 @@ validator bonding_curve_tier_b {
         // The curve's own balance moves in TWO directions in the
         // same transaction — `amount` leaves (paid to the claimer),
         // `platform_claim_fee` arrives (paid by the claimer) — same shape
-        // as Tier A's identical fix, verified directly here rather than
+        // as the linear curve's identical fix, verified directly here rather than
         // via lovelace_paid_from_curve's single-direction check.
         let curve_balance_net_ok =
           assets.lovelace_of(own_output.value) == assets.lovelace_of(own_input.output.value) - amount + platform_claim_fee
@@ -1890,7 +1890,7 @@ validator bonding_curve_tier_b {
         and {
           // Active and Inactive, and deliberately NOT DvClaim.
           //
-          // Including Inactive is what guarantees every state a Tier B curve
+          // Including Inactive is what guarantees every state a Cardano Launch curve
           // can rest in has an exit reachable without the governor. The two
           // forward moves out of Inactive (OpenDvClaim, AnchorDvAllocationRoot)
           // are governor-signed, so this arm is the one that answers for a
@@ -1957,7 +1957,7 @@ validator bonding_curve_tier_b {
           !datum.staking_seeded,
           new_datum == expected_datum,
           // Real, positive backing before a launch can call itself graduated
-          // — see Tier A's own Graduate arm for the full reasoning. Enough
+          // — see the linear curve's own Graduate arm for the full reasoning. Enough
           // SellTokens activity before the final buy can leave total_raised
           // non-positive at 100% sell-through, and at zero both of the value
           // checks below degrade into things any output satisfies. This tier
@@ -2011,7 +2011,7 @@ validator bonding_curve_tier_b {
         }
       }
 
-      // Fix (2026-07-19, Tier B cross-chain audit): see
+      // Fix (2026-07-19, Cardano Launch cross-chain audit): see
       // AnchorDvAllocationRoot's own doc comment in
       // BondingCurveTierBRedeemer above for the full reasoning.
       AnchorDvAllocationRoot { dv_allocation_root } -> {
@@ -2043,7 +2043,7 @@ validator bonding_curve_tier_b {
 // TESTS
 // ============================================================================
 
-/// Thread-NFT fixtures — see Tier A's bonding_curve.ak for why these are derived
+/// Thread-NFT fixtures — see the linear curve's bonding_curve.ak for why these are derived
 /// through thread_nft.thread_asset_name rather than hard-coded.
 fn mock_curve_nft() -> assets.Value {
   assets.from_asset(
@@ -2673,7 +2673,7 @@ test buy_tokens_allows_creator_buying_own_curve() {
   // the community off-chain by matching the buyer hash against
   // `creator_pub_key_hash`. The DarkVeil path stays closed to them, since
   // the Fair Launch Certificate publishes that they bought none.
-  // Same protection as Tier A's bonding_curve.ak — creator cannot
+  // Same protection as the linear curve's bonding_curve.ak — creator cannot
   // wash-trade their own public curve to force last-mile 100% sell-through.
   let datum = mock_datum(Active, 0)
   let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
@@ -4297,7 +4297,7 @@ test sell_tokens_succeeds_symmetric_round_trip() {
       ..datum,
       tokens_sold: 0,
       // 0 - 1000 = -1000 (this fixture starts total_raised at 0, unlike
-      // Tier A's sold_state_datum() which pre-seeds it at 980) — the sign
+      // The linear curve's sold_state_datum() which pre-seeds it at 980) — the sign
       // itself is what this test demonstrates: legitimately negative after
       // a round trip, per the redeemer's own doc comment, never a
       // fund-safety issue since lovelace_paid_from_curve already bounds
@@ -4479,7 +4479,7 @@ test sell_tokens_rejects_creator_selling_own_curve() {
   // sell_tokens_rejects_selling_more_than_ever_bought's own logic
   // the explicit creator check covers this with no separate
   // check needed. This test confirms that fallout is real, not just
-  // theorized, same as Tier A's identical test.
+  // theorized, same as the linear curve's identical test.
   let datum = mock_datum(Active, 10)
   let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
   let own_address = from_verification_key(#"cc")
@@ -5427,7 +5427,7 @@ test expire_curve_rejects_padded_continuing_output() {
   )
 }
 
-// Same finding/fix as Tier A's bonding_curve.ak — see that file's
+// Same finding/fix as the linear curve's bonding_curve.ak — see that file's
 // own `expire_curve_rejects_wide_validity_range` test for the full
 // explanation.
 test expire_curve_rejects_wide_validity_range() {
@@ -5549,7 +5549,7 @@ test cancel_curve_fails_after_graduation() {
 
 // ----------------------------------------------------------------------------
 // CTO fee-redirect fix (2026-07-12): TriggerCTO/DissolveCTO + redirected
-// ClaimCreatorFees — same tests as Tier A's bonding_curve.ak.
+// ClaimCreatorFees — same tests as the linear curve's bonding_curve.ak.
 // ----------------------------------------------------------------------------
 
 test tier_b_trigger_cto_succeeds_with_real_anchored_vote() {
@@ -5668,7 +5668,7 @@ test tier_b_trigger_cto_rejects_forged_governance_utxo_without_nft() {
 // Enforcement: cto_vote_verified's `expect Some(cto_ref_input) = ...`
 // panics rather than returning False when no matching reference input
 // exists, so this needs the `fail` test annotation — same reasoning as
-// Tier A's identically-named test.
+// The linear curve's identically-named test.
 test tier_b_trigger_cto_rejects_without_reference_input() fail {
   let datum = mock_datum(Active, 0)
   let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
@@ -5762,7 +5762,7 @@ test tier_b_dissolve_cto_succeeds_with_real_anchored_vote() {
 }
 
 /// Shared shape for the ClaimCreatorFees success-path tests
-/// below — same as Tier A's claim_creator_fees_tx. Curve holds 1,000,000
+/// below — same as the linear curve's claim_creator_fees_tx. Curve holds 1,000,000
 /// lovelace going in; claimer takes `amount` (200) out and pays
 /// `platform_claim_fee` (exactly the floor, 200,000) in, so the curve's
 /// continuing output must show 1,000,000 - 200 + 200,000 = 1,199,800.
@@ -5908,7 +5908,7 @@ test tier_b_claim_creator_fees_succeeds_via_community_wallet_once_cto_triggered(
 
 test tier_b_claim_creator_fees_rejects_platform_fee_below_floor() {
   // Fix regression: platform_claim_fee below the 200,000 floor must
-  // be rejected, same as Tier A's identical test.
+  // be rejected, same as the linear curve's identical test.
   let datum =
     BondingCurveTierBDatum { ..mock_datum(Active, 0), creator_fees_accrued: 500 }
   let new_datum =
@@ -6082,7 +6082,7 @@ test tier_b_claim_platform_fees_succeeds_with_real_payout() {
 }
 
 /// Fix (2026-07-22) regression: same real-base-address proof as
-/// Tier A's identical test — see that file's own comment for why this
+/// The linear curve's identical test — see that file's own comment for why this
 /// matters more than a cosmetic UX gap (the governor's real production
 /// wallet is always a base address, so this redeemer's real payout was
 /// silently broken before this fix, not just inconvenient).
@@ -6238,7 +6238,7 @@ test tier_b_claim_buyback_rejects_padded_continuing_output() {
 }
 
 /// Fix (2026-07-22) regression: same real-base-address proof as
-/// Tier A's identical test.
+/// The linear curve's identical test.
 test tier_b_claim_buyback_succeeds_paying_a_real_base_address_not_just_enterprise() {
   let datum = buyback_datum()
   let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
@@ -6800,13 +6800,13 @@ test tier_b_graduate_succeeds_with_lp_and_staking_seeding() {
 }
 
 // ============================================================================
-// Thread-NFT forge rejection (Tier B)
+// Thread-NFT forge rejection (Cardano Launch)
 // ============================================================================
-// Mirrors the same five tests in Tier A's bonding_curve.ak. Kept in step
+// Mirrors the same five tests in the linear curve's bonding_curve.ak. Kept in step
 // deliberately: the strongest pattern in the 2026-08 audit was fixes landing
 // on one member of a twin pair and not the other.
 
-/// The core state-authentication property — see Tier A's equivalent for the full reasoning.
+/// The core state-authentication property — see the linear curve's equivalent for the full reasoning.
 test tier_b_spend_rejects_curve_utxo_without_thread_nft() {
   let datum = graduation_datum()
   let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
@@ -6838,7 +6838,7 @@ test tier_b_spend_rejects_curve_utxo_without_thread_nft() {
   !bonding_curve_tier_b.spend(Some(datum), Graduate, own_ref, self)
 }
 
-/// A Tier A curve thread NFT must not satisfy the Tier B curve's check for
+/// A the linear curve curve thread NFT must not satisfy the Cardano Launch curve's check for
 /// the same launch — this is the whole reason the two curves get distinct
 /// role tags rather than sharing one.
 test tier_b_spend_rejects_tier_a_role_thread_nft() {
@@ -7281,7 +7281,7 @@ test tier_b_cancel_curve_rejects_value_drain() {
   !bonding_curve_tier_b.spend(Some(datum), CancelCurve, own_ref, self)
 }
 
-// Inactive is the state a Tier B curve can be stranded in: both ways out of
+// Inactive is the state a Cardano Launch curve can be stranded in: both ways out of
 // it (AnchorDvAllocationRoot, OpenDvClaim) are governor-signed, so a governor
 // who stops answering leaves the whole supply sitting here.
 test tier_b_expire_curve_succeeds_from_inactive_after_deadline() {
@@ -7417,7 +7417,7 @@ test tier_b_expire_curve_rejects_from_dv_claim_even_past_the_deadline() {
 /// zero both value checks stop meaning anything — the curve need only not
 /// decrease, and the LP need only receive at least nothing. What lands is a
 /// launch labelled Graduated behind an LP with no ada in it, locked for a
-/// year. Tier A has refused this since the same audit; this tier reaches the
+/// year. The linear curve has refused this since the same audit; this tier reaches the
 /// state by the same route and now refuses it too.
 test tier_b_graduate_rejects_non_positive_total_raised() {
   let datum = BondingCurveTierBDatum { ..graduation_datum(), total_raised: 0 }
@@ -7477,7 +7477,7 @@ test tier_b_graduate_rejects_non_positive_total_raised() {
   !bonding_curve_tier_b.spend(Some(datum), Graduate, own_ref, self)
 }
 
-/// Tier A's own claim_buyback_rejects_refunding_the_buyer_with_their_own_ada,
+/// The linear curve's own claim_buyback_rejects_refunding_the_buyer_with_their_own_ada,
 /// on this tier. The buyer signs this path here too, so the transaction can
 /// spend their utxos and return their own ada as the "refund" while the
 /// curve's ada goes elsewhere. Written out rather than assumed from the other

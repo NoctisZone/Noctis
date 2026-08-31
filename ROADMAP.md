@@ -9,14 +9,14 @@ Rolling task list. Tracks ordered by build sequence — A must precede B, B prec
 
 ## TL;DR
 
-**Updated 2026-07-30 — a full Midnight PSM security audit plus a major test-coverage/tooling pass landed.** DUST measurement and cross-PSM atomicity / SDK availability are closed — see the Resolved table in `local/OPEN_ISSUES.md`. Two full Cardano/Aiken audit passes (an initial pass, then a follow-up full-codebase pass) and a full Midnight/Compact PSM audit (this session, ranging Critical through Low severity) are done, with real fixes and regression tests, not just findings. Contract-level work across all of Tier A/B is essentially complete and hardened; what's left before mainnet is mostly external (an independent professional audit, live preprod deployment, Tier C's remaining ecosystem blockers) plus finishing the WordPress front-end.
+**Updated 2026-07-30 — a full Midnight PSM security audit plus a major test-coverage/tooling pass landed.** DUST measurement and cross-PSM atomicity / SDK availability are closed — see the Resolved table in `local/OPEN_ISSUES.md`. Two full Cardano/Aiken audit passes (an initial pass, then a follow-up full-codebase pass) and a full Midnight/Compact PSM audit (this session, ranging Critical through Low severity) are done, with real fixes and regression tests, not just findings. Contract-level work for a Cardano launch is essentially complete and hardened; what's left before mainnet is mostly external (an independent professional audit, live preprod deployment, a Midnight launch's remaining ecosystem blockers) plus finishing the WordPress front-end.
 
 - **Track A** — WordPress public site (noctis.zone) — *in progress; mobile audit + production deploy remain; a CIP-68 on-chain logo pipeline's CONTRACT half is already built + audited (`token_metadata.ak`, 2026-07-28) with a real Lucid Evolution submitter — the WordPress-side upload/wizard-wiring/Token Profile page work is not yet built*
-- **Track B** — Cardano L1 contracts (Aiken) — *built and twice-audited: 285 checks (real re-run 2026-07-30), thread-NFT-hardened CTO governance (fixed in the latest full-codebase audit pass), new Tier B `SellTokens` + CIP-68 `token_metadata.ak`*
+- **Track B** — Cardano L1 contracts (Aiken) — *built and twice-audited: 549 checks (real re-run this pass), thread-NFT-hardened CTO governance (fixed in the latest full-codebase audit pass), a `SellTokens` redeemer on the quadratic curve + CIP-68 `token_metadata.ak`*
 - **Track C** — Midnight PSM contracts (Compact) — *built and audited: 8 PSMs, 280 tests, full ZK proving keys; full internal security audit (Critical through Low severity) closed 2026-07-30*
 - **Track D** — Integration + API layer — *built: real Blockfrost/Midnight SDK/wallet/eligibility-checker/price-oracle code, now with real test coverage across the CLI/submitter/oracle layers (560+ tests)*
 - **Track E** — Security + audit — *internal adversarial passes done across both Cardano and Midnight; independent professional audit still needed before mainnet*
-- **Track F** — Tier C (Midnight native) — *still blocked on the token standard not yet being ratified, and no confirmed live graduation DEX (NorthStar DEX is a Preprod-live candidate); the trade-fee-conversion and ZK-cert-relayer questions are substantially resolved*
+- **Track F** — Midnight Launch (Midnight-native) — *still blocked on the token standard not yet being ratified, and no confirmed live graduation DEX (NorthStar DEX is a Preprod-live candidate); the trade-fee-conversion and ZK-cert-relayer questions are substantially resolved*
 - **Track G** — Future multi-chain expansion (post-Midnight-live) — *proposed, not started; see below*
 
 Suggested order (updated): **A** (finish, incl. CIP-68 pipeline) → **live preprod deployment (proof-server + ZK artifact host infra provisioning)** → **independent audit** → **mainnet** → **F** (once the token-standard and graduation-DEX blockers clear) → **G** (once the platform is stable on Cardano + Midnight).
@@ -59,7 +59,7 @@ Registration form, eligibility checklist, allocation tracker, NIGHT bond display
 ---
 
 ### A6. Create Launch wizard
-**Status:** Shipped (desktop). Mobile audit pending. 6-step wizard — project info, token config, tier selection, DarkVeil settings, vesting + DEX, review + pay. **Tier C fully wired (2026-06-09):** third tier card, `#cw-tier-c-config` panel, DEX field hidden for Tier C, NIGHT-denominated review, pay summary shows current launch fee per CLAUDE.md constants. **Staking opt-in added (2026-07-14):** Step 5 gets a toggle (25% fixed allocation) + forced 3/4/5-year runway selection, live supply bar updates, review line item — same "no default" forced-choice pattern as vesting.
+**Status:** Shipped (desktop). Mobile audit pending. 6-step wizard — project info, token config, chain selection, DarkVeil settings, vesting + DEX, review + pay. **The Midnight Launch option is fully wired:** its own card, a `#cw-tier-c-config` panel, DEX field hidden (a Midnight launch has no Cardano DEX to pick), NIGHT-denominated review, pay summary showing the current launch fee. **Staking opt-in added (2026-07-14):** Step 5 gets a toggle (25% fixed allocation) + forced 3/4/5-year runway selection, live supply bar updates, review line item — same "no default" forced-choice pattern as vesting.
 
 ---
 
@@ -101,7 +101,7 @@ A mutable, creator/CTO-controlled on-chain logo (via CIP-68 reference NFT, decou
 ---
 
 ### B2. ZK Anchor Contract ✅
-**Status:** Shipped. Receives ZK proof bundles + (for Tier B) a `dv_allocation_root` Merkle root so the Cardano curve can verify DarkVeil claims without publishing the full registrant roster.
+**Status:** Shipped. Receives ZK proof bundles + (for a Cardano launch) a `dv_allocation_root` Merkle root so the Cardano curve can verify DarkVeil claims without publishing the full registrant roster.
 
 ---
 
@@ -110,23 +110,27 @@ A mutable, creator/CTO-controlled on-chain logo (via CIP-68 reference NFT, decou
 
 ---
 
-### B4. Bonding Curve (Tier A, linear) + Bonding Curve Tier B (quadratic) ✅
-**Status:** Shipped. Tier B's entire public bonding curve — plus its real DarkVeil settlement via `ClaimDarkVeilTokens` — moved here from Midnight entirely, since the public phase needs no privacy and Cardano can enforce quadratic-curve payment + ADA settlement natively. `Graduate`/`ClaimBuyback`/`ExpireCurve` give every stalled or graduated curve a real resolution path. Both curves enforce the 5% wallet cap cumulatively across a whole launch — a single `cap_root` in the datum plus a Merkle proof per trade, so the datum stays a fixed size and no allowlist is needed (see the cumulative-wallet-cap note in ARCHITECTURE.md). Each curve also fits in a single published reference script, which is what makes a proof-carrying trade fit inside the transaction size limit.
+### B4. Bonding Curve — quadratic (Cardano Launch) and linear (legacy) ✅
+**Status:** Shipped. A Cardano launch's entire public bonding curve — plus its real DarkVeil settlement via `ClaimDarkVeilTokens` — moved here from Midnight entirely, since the public phase needs no privacy and Cardano can enforce quadratic-curve payment + ADA settlement natively. `Graduate`/`ClaimBuyback`/`ExpireCurve` give every stalled or graduated curve a real resolution path. Both curves enforce the 5% wallet cap cumulatively across a whole launch — a single `cap_root` in the datum plus a Merkle proof per trade, so the datum stays a fixed size and no allowlist is needed (see the cumulative-wallet-cap note in ARCHITECTURE.md). Each curve also fits in a single published reference script, which is what makes a proof-carrying trade fit inside the transaction size limit.
 
 ---
 
-### B5. Vesting Contract (Tier A) ✅
-**Status:** Shipped — Tier A had no vesting mechanism at all until this was added (2026-07-09).
+### B5. Vesting Contract ✅
+**Status:** Shipped. `vesting.ak` is shared by both Cardano curves; there was no Cardano vesting mechanism at all until it was added.
 
 ---
 
 ### B6. N-Hop Challenge Contract ✅
-**Status:** Shipped 2026-07-12. Tier B only — a Sybil-registration challenge window, designed from CLAUDE.md's 5 constants (no fuller spec existed anywhere). Lives on Cardano since the ADA reporter bond can't be Midnight-native; triggers post-claim, not post-registration, for privacy reasons.
+**Status:** Shipped. A Cardano launch only — a Sybil-registration challenge window, designed from CLAUDE.md's 5 constants (no fuller spec existed anywhere). Lives on Cardano since the ADA reporter bond can't be Midnight-native; triggers post-claim, not post-registration, for privacy reasons.
 
 ---
 
-### B7. Staking Rewards Pool Contract (Tier A + B) ✅
-**Status:** Shipped 2026-07-14. New optional per-launch feature — real on-chain stake custody via one pool-state UTXO per launch plus one position UTXO per stake action (staking itself needs no validator redeemer; only spending a position does). `Graduate` on both curve contracts extended to seed the pool alongside LP.
+### B7. Staking Rewards Pool Contract (Cardano) ✅
+**Status:** Shipped, then **rebuilt to run unattended.** The pool now computes what every position is owed from elapsed time using a reward-per-token accumulator, so no key, signature or published snapshot decides a payout — see the Staking Rewards Pool section in `ARCHITECTURE.md` for the mechanism and its consequences. `Graduate` on both curve contracts seeds the pool alongside LP and pins its opening datum, so a permissionless graduation cannot open a pool that credits its own submitter.
+
+Positions moved from separate UTXOs to entries under a Merkle root in the pool datum. That is forced rather than stylistic: paying a UTXO to a script address runs no validator, so a position in its own UTXO would let its holder author the very field that decides their payout.
+
+**Not yet exercised on a real chain** — a Preprod run of stake → claim → unstake → top-up → close is the next step, and pools created before the rebuild sit at the previous validator's address.
 
 ---
 
@@ -134,18 +138,18 @@ A mutable, creator/CTO-controlled on-chain logo (via CIP-68 reference NFT, decou
 
 **Built and audited.** 8 PSMs, 280 tests, full ZK proving-key generation (`compact compile`, not just `--skip-zk`). Cross-PSM atomicity and SDK availability don't gate this anymore — see the TL;DR note above. Two full internal security audits closed (an initial pass, then this session's deeper pass) — see Track E1b.
 
-### C1. Eligibility Gate PSM (Tier B — merged with DarkVeil, Phase 2 2026-07-11) ✅
-**Status:** Shipped. ZK proof verification for allowlist membership; the former standalone DarkVeil PSM (registration, NIGHT bonds, commitment/reveal buying, ratio-based bond refunds) is merged into this same file — Compact has no cross-contract call mechanism, so two contracts could never have shared one cumulative cap. Real Tier B settlement happens on Cardano instead (see B4).
+### C1. Eligibility Gate PSM (Cardano Launch — merged with DarkVeil, Phase 2) ✅
+**Status:** Shipped. ZK proof verification for allowlist membership; the former standalone DarkVeil PSM (registration, NIGHT bonds, commitment/reveal buying, ratio-based bond refunds) is merged into this same file — Compact has no cross-contract call mechanism, so two contracts could never have shared one cumulative cap. Real settlement happens on Cardano instead (see B4).
 
 ---
 
-### C2. Bonding Curve PSM (Tier C only — merged with Eligibility Gate + DarkVeil) ✅
+### C2. Bonding Curve PSM (Midnight Launch — merged with Eligibility Gate + DarkVeil) ✅
 **Status:** Shipped. NIGHT-denominated quadratic price discovery, 5% cap, fee routing, graduation, DarkVeil registration/buying — all one contract for the same cross-contract-call reason as C1.
 
 ---
 
 ### C3. Creator Fee Escrow PSM ✅
-**Status:** Shipped, with a real architectural finding: this contract never actually holds a real fee for either tier — Tier B's accrues on the Cardano curve contract, Tier C's accrues inline in C2. `depositFees` is real and tested, just never invoked in the shipped design.
+**Status:** Shipped, with a real architectural finding: this contract never actually holds a real fee for either launch type — a Cardano launch's accrues on the Cardano curve contract, a Midnight launch's accrues inline in C2. `depositFees` is real and tested, just never invoked in the shipped design.
 
 ---
 
@@ -164,8 +168,8 @@ A mutable, creator/CTO-controlled on-chain logo (via CIP-68 reference NFT, decou
 
 ---
 
-### C7. Staking Rewards Pool PSM (Tier C only) ✅
-**Status:** Shipped 2026-07-14, with a real architectural finding along the way: `bonding_curve.compact` never mints the Tier C launch token as a real coin (tracked only in an internal ledger map), and Compact still has no cross-contract call mechanism — so this PSM can't take real on-chain custody of a stake the way B7 does on Cardano. Two independent verification passes confirmed `mintUnshieldedToken`/`tokenType` ARE real, executable stdlib primitives, which solves reward *minting* — the payout mints live to the staker, real NIGHT claim fee via `receiveUnshielded`/`sendUnshielded` — but not stake custody. Governor-attested stake (same trust model as the allowlist/balance-snapshot trees elsewhere) chosen over merging into the already-audited C2.
+### C7. Staking Rewards Pool PSM (Midnight Launch) ✅
+**Status:** Shipped 2026-07-14, with a real architectural finding along the way: `bonding_curve.compact` never mints a Midnight launch's token as a real coin (tracked only in an internal ledger map), and Compact still has no cross-contract call mechanism — so this PSM can't take real on-chain custody of a stake the way B7 does on Cardano. Two independent verification passes confirmed `mintUnshieldedToken`/`tokenType` ARE real, executable stdlib primitives, which solves reward *minting* — the payout mints live to the staker, real NIGHT claim fee via `receiveUnshielded`/`sendUnshielded` — but not stake custody. Governor-attested stake (same trust model as the allowlist/balance-snapshot trees elsewhere) chosen over merging into the already-audited C2.
 
 ---
 
@@ -196,7 +200,7 @@ A mutable, creator/CTO-controlled on-chain logo (via CIP-68 reference NFT, decou
 ## Track E — Security + audit
 
 ### E1. Cardano/Aiken contract security audit ✅ (internal) / pending (independent)
-**Status:** Multiple full internal adversarial passes complete, most recently a full-codebase pass (2026-07-23) — a Critical forgeable CTO-governance reference-input bug (any Cardano validator trusting `cto_governance.ak` by address alone, letting an attacker plant a fake "vote passed" datum and drain the vesting reserve) fixed via a per-launch governance thread NFT, plus a datum-schema sync fix across all four Tier A/B contracts. Earlier passes: a full Tier A suite pass (2026-07-19 — shared-address double-satisfaction across 5 contracts, `lp_escrow.ak` unsealed-lock/harvest drain paths, `vesting.ak`'s 100%-instant-claim exploit, `cto_governance.ak`'s fabricated-vote-anchor exploit fixed via a bonded challenge window), a Tier B cross-chain + double-satisfaction pass, and several further passes catching bare-enterprise-address payout bugs across 5 redeemers/contracts, plus a standalone audit of the new `token_metadata.ak` CIP-68 validator (2026-07-28, 5 findings fixed — most seriously a forgeable one-shot mint / unchecked reference-NFT spend). 285 Cardano checks passing (real re-run 2026-07-30). **An independent, professional audit still hasn't happened and remains required before mainnet** — internal review, however thorough, isn't a substitute.
+**Status:** Multiple full internal adversarial passes complete, most recently a full-codebase pass (2026-07-23) — a Critical forgeable CTO-governance reference-input bug (any Cardano validator trusting `cto_governance.ak` by address alone, letting an attacker plant a fake "vote passed" datum and drain the vesting reserve) fixed via a per-launch governance thread NFT, plus a datum-schema sync fix across all four Cardano contracts. Earlier passes: a full Cardano suite pass (2026-07-19 — shared-address double-satisfaction across 5 contracts, `lp_escrow.ak` unsealed-lock/harvest drain paths, `vesting.ak`'s 100%-instant-claim exploit, `cto_governance.ak`'s fabricated-vote-anchor exploit fixed via a bonded challenge window), a cross-chain + double-satisfaction pass, and several further passes catching bare-enterprise-address payout bugs across 5 redeemers/contracts, plus a standalone audit of the new `token_metadata.ak` CIP-68 validator (2026-07-28, 5 findings fixed — most seriously a forgeable one-shot mint / unchecked reference-NFT spend). 549 Cardano checks passing (real re-run this pass). **An independent, professional audit still hasn't happened and remains required before mainnet** — internal review, however thorough, isn't a substitute.
 
 ---
 
@@ -220,38 +224,38 @@ A mutable, creator/CTO-controlled on-chain logo (via CIP-68 reference NFT, decou
 
 ---
 
-## Track F — Tier C (Midnight + DarkVeil) — partially blocked
+## Track F — Midnight Launch — partially blocked
 
 **Updated 2026-07-12.** Two of five original blockers have real progress; two remain genuinely open.
 
 | Topic | Question | Status |
 |---|---|---|
 | Token standard | Midnight fungible token standard — native layer or PSM-only? | De-risked, not resolved — `tokenType`/`mintUnshieldedToken`/`mintShieldedToken` are real, compiler-verified primitives, but the MIPs behind them (MIP-0004, MIP-0011) aren't ratified yet |
-| Graduation DEX | Tier C graduation target — no confirmed live Midnight DEX | Still open — NorthStar DEX is a preprod-live candidate, mainnet timing unconfirmed |
+| Graduation DEX | A Midnight launch's graduation target — no confirmed live Midnight DEX | Still open — NorthStar DEX is a preprod-live candidate, mainnet timing unconfirmed |
 | Fee conversion | Trade fee currency conversion (NIGHT → stablecoin) | Substantially clearer — the only bridge found is one-way (Cardano→Midnight, NIGHT-only); a bidirectional version is reportedly in development, ETA a few months |
 | LP Escrow design | Midnight LP Escrow PSM design | Still blocked on the token-standard and graduation-DEX items above |
-| ZK cert relayer | ZK cert relayer (Tier C → Cardano L1) | Resolved — Option B (platform relayer) built for real, including real Cardano-side transaction submission via Lucid Evolution |
+| ZK cert relayer | ZK cert relayer (Midnight → Cardano L1) | Resolved — Option B (platform relayer) built for real, including real Cardano-side transaction submission via Lucid Evolution |
 
-Do not scaffold Tier C contract work until the token-standard and graduation-DEX blockers clear. When they do, the build order is: token standard confirmation → Midnight Token PSM → Midnight LP Escrow PSM → integrate into the existing C2 merge.
+Do not scaffold Midnight Launch contract work until the token-standard and graduation-DEX blockers clear. When they do, the build order is: token standard confirmation → Midnight Token PSM → Midnight LP Escrow PSM → integrate into the existing C2 merge.
 
 ---
 
 ## Track G — Future multi-chain expansion (post-Midnight-live)
 
-**Status:** Proposed, not started. Explicitly sequenced AFTER Tier C ships and the platform has proven stable on Cardano + Midnight — not a parallel workstream, and not something to scaffold prematurely (same discipline already applied to Tier C itself: no contract work starts until the chain in question is a confirmed, real target).
+**Status:** Proposed, not started. Explicitly sequenced AFTER the Midnight Launch ships and the platform has proven stable on Cardano + Midnight — not a parallel workstream, and not something to scaffold prematurely (the same discipline already applied to the Midnight Launch itself: no contract work starts until the chain in question is a confirmed, real target).
 
-Noctis's core privacy value proposition ("they can't front-run what they can't see") depends specifically on Midnight's ZK execution layer — a "Tier D/E" on a different chain is only worth building if that chain offers something genuinely additive (new liquidity, new user base, a different privacy/settlement tradeoff), not privacy-launchpad parity for its own sake. Candidate chains, in no particular priority order yet:
+Noctis's core privacy value proposition ("they can't front-run what they can't see") depends specifically on Midnight's ZK execution layer — a launch on a different chain is only worth building if that chain offers something genuinely additive (new liquidity, new user base, a different privacy/settlement tradeoff), not privacy-launchpad parity for its own sake. Candidate chains, in no particular priority order yet:
 
 - **XRP Ledger (XRPL)** — fast, low-fee settlement; native DEX and (via hooks/sidechains) increasingly programmable. Would need its own bonding-curve/escrow contract design — no direct code reuse from the Aiken (Cardano) or Compact (Midnight) contracts, which are chain-specific by construction.
-- **Solana (SOL)** — high-throughput, large existing launchpad ecosystem (the platform's most direct multi-chain competitive comparison). Would need a full Anchor/Rust contract suite; no privacy layer equivalent to Midnight exists natively, so any DarkVeil-style private phase would need a different mechanism (e.g., a commit-reveal scheme without a real ZK layer) or would simply be omitted for a Solana-only tier.
+- **Solana (SOL)** — high-throughput, large existing launchpad ecosystem (the platform's most direct multi-chain competitive comparison). Would need a full Anchor/Rust contract suite; no privacy layer equivalent to Midnight exists natively, so any DarkVeil-style private phase would need a different mechanism (e.g., a commit-reveal scheme without a real ZK layer) or would simply be omitted.
 
 **Open questions to resolve before this track can move past "proposed":**
-1. Does a new chain integration ship as its own Tier (D/E), or as a variant within an existing tier's framing? The existing Tier A/B/C model is built around "how much of the flow is private, and where does the token live" — a new chain without Midnight's privacy layer doesn't map onto that axis cleanly.
+1. ~~How a new chain is named and presented.~~ **Answered:** a launch is named for the chain its token settles on, so these ship as a **Solana Launch** and an **XRP Launch** alongside the Cardano and Midnight ones. Both cards are already in the Create Wizard, marked "Coming later" and non-selectable. What the naming does not settle is question 3 below.
 2. Fee/revenue model per new chain (native gas token launch fee + trade fee split, mirroring the ADA/NIGHT split documented in CLAUDE.md).
-3. Whether DarkVeil-equivalent privacy is in scope at all for a non-Midnight chain, or whether these become public-only launches (closer to Tier A's shape than B/C's).
+3. Whether DarkVeil-equivalent privacy is in scope at all for a non-Midnight chain, or whether these become public-only launches. The wizard's own copy currently promises "the same private buying phase on Midnight" on both cards, which presumes it is — that copy and this question need to be settled together before either ships.
 4. Wallet integration story per chain (XRPL wallets / Solana wallet adapter) — a different integration surface from the existing Cardano (Mesh/CIP-30) + Midnight (DApp Connector) pairing.
 
-No contract, integration, or WordPress work should start on this track until these are resolved and Tier C has shipped.
+No contract, integration, or WordPress work should start on this track until these are resolved and the Midnight Launch has shipped.
 
 ---
 
@@ -272,7 +276,7 @@ Matches CLAUDE.md's own "Post-MVP: architect now, implement after launch" classi
 - **No partial graduation.** 100% bonding curve sell-through only — no partial.
 - **No withdraw on LP.** It does not exist. Do not build a disabled version either.
 - ~~**No staking infrastructure in V1.**~~ Partially superseded (2026-07-14) — this was scoped against a *platform-wide* yield mechanism (a single protocol pool NIGHT holders lock into for overall fee revenue share), which stays deferred. A narrower, *per-launch* opt-in staking rewards pool (creator-funded from that launch's own supply, not a protocol-wide mechanism) shipped instead — see B7/C7 above.
-- **No Tier C contract work until the token standard and graduation DEX are resolved.** The fee-conversion and ZK-cert-relayer questions have real progress (see Track F); premature scaffolding against the remaining two still creates tech debt against an unstable spec.
+- **No Midnight Launch contract work until the token standard and graduation DEX are resolved.** The fee-conversion and ZK-cert-relayer questions have real progress (see Track F); premature scaffolding against the remaining two still creates tech debt against an unstable spec.
 
 ---
 
@@ -280,8 +284,8 @@ Matches CLAUDE.md's own "Post-MVP: architect now, implement after launch" classi
 
 *(Move items here as they land with date. Keeps the active list lean.)*
 
-### Staking Rewards Pool, all 3 tiers (2026-07-14)
-New optional per-launch feature: 25% of supply, manual staking, daily pro-rata rewards over a 3-5 year runway, $1 flat claim fee. Full spec → WordPress (all 3 tiers, home card, How It Works, Create Wizard) → contracts (B7/C7 above) rollout in one session. Tier C build surfaced a real architecture split from Tier A/B (governor-attested stake vs. real on-chain custody) — see C7's status note. `integration/ada-price-oracle.ts` new. 45 new tests (24 Cardano, 21 Midnight), zero regressions. Full detail in internal tracking.
+### Staking Rewards Pool, every launch type (2026-07-14)
+New optional per-launch feature: 25% of supply, manual staking, daily pro-rata rewards over a 3-5 year runway, $1 flat claim fee. Full spec → WordPress (every launch type, home card, How It Works, Create Wizard) → contracts (B7/C7 above) rollout in one session. The Midnight build surfaced a real architecture split from the Cardano one (governor-attested stake vs. real on-chain custody) — see C7's status note. `integration/ada-price-oracle.ts` new. 45 new tests (24 Cardano, 21 Midnight), zero regressions. Full detail in internal tracking.
 
 ### Tracks B/C/D/E — all contract, integration, and internal-audit work (2026-07-09 → 2026-07-12)
 7 Cardano/Aiken validators (137 tests) + 7 Midnight/Compact PSMs (187 tests, full ZK proving keys) + real integration layer (Blockfrost, Midnight SDK, wallet connection, off-chain eligibility checks, ZK cert relayer + Cardano anchor submitter) + two internal security audit passes (11 Critical/High findings fixed) + four hardening passes. Full detail in internal tracking's issue entries and `docs/SECURITY_MODEL.md`. See the rewritten Track B/C/D/E sections above for the per-item breakdown — moved here as one consolidated entry rather than one row per issue, since that level of detail already lives in the tracking docs.
@@ -295,20 +299,20 @@ Launch card grid with status indicators, tier badges, progress bars, ZK certific
 ### A3 — DV Registration page (2026-06-09)
 Full layout: registration form, eligibility checklist, allocation tracker, NIGHT bond display, timer. Mobile layout stacked vertically with doubled placeholder logo. Mobile-responsive.
 
-### A5 — Transparency page — Tier C updated (2026-06-09)
-Tier C section added: DUST/NIGHT stats, active Tier C launches table, PSM status. Stats grid updated to 9 launches (2A/5B/2C). ZK cert description updated for Tier C relayer. Ops wallet text updated for launch fee split percentage + NIGHT receipt.
+### A5 — Transparency page — Midnight Launch added (2026-06-09)
+Midnight Launch section added: DUST/NIGHT stats, active Midnight launches table, PSM status. Stats grid updated to 9 launches. ZK cert description updated for the Midnight relayer. Ops wallet text updated for launch fee split percentage + NIGHT receipt.
 
-### A6 — Create Launch wizard — Tier C (2026-06-09)
-Third tier card (Tier C, violet) added. Config panel for Midnight-native launches. DEX selection hidden for Tier C. Pay summary shows current launch fee split (40% ops / 60% treasury). JS fully wired.
+### A6 — Create Launch wizard — Midnight Launch (2026-06-09)
+Midnight Launch card (violet) added. Config panel for Midnight-native launches. DEX selection hidden — a Midnight launch has no Cardano DEX to pick. Pay summary shows current launch fee split (40% ops / 60% treasury). JS fully wired.
 
-### A — Tier C sample launches × 4 (2026-06-09)
-Four Tier C mock launches live: Abyss ($ABYS, DV Active), Spectre ($SPCT, DV Active), Cipher ($CPHR, DV Registration), Nocturne ($NTRN, DV Registration). Full detail pages with NIGHT-denominated UI. Appear on Launches page and in DarkVeil nav dropdown.
+### A — Midnight Launch sample launches × 4 (2026-06-09)
+Four Midnight Launch mock launches live: Abyss ($ABYS, DV Active), Spectre ($SPCT, DV Active), Cipher ($CPHR, DV Registration), Nocturne ($NTRN, DV Registration). Full detail pages with NIGHT-denominated UI. Appear on Launches page and in DarkVeil nav dropdown.
 
 ### A — DarkVeil page sample shortcuts (2026-06-09)
-Bottom CTA section redesigned to show 3 sample cards per state group (Registration + Active). Tier B + Tier C samples side by side.
+Bottom CTA section redesigned to show 3 sample cards per state group (Registration + Active). Cardano and Midnight samples side by side.
 
 ### A — Nav dropdown — DarkVeil grouped shortcuts (2026-06-09)
-DarkVeil nav item expanded to 6 items in two labelled groups (REGISTRATION OPEN / DARKVEIL ACTIVE). Tier C items violet-tinted. Mobile menu updated to match.
+DarkVeil nav item expanded to 6 items in two labelled groups (REGISTRATION OPEN / DARKVEIL ACTIVE). Midnight Launch items violet-tinted. Mobile menu updated to match.
 
 ### Offline preview builder — updated (2026-06-09)
-`build-offline.py` now covers 12 pages (added 4 Tier C launch pages). Output `noctis-preview.html` is 3,573 KB. Originally shipped as 8-page builder on 2026-06-09; `build-offline.py` — Python script that fetches pages from local dev server, inlines all local CSS/JS/images as base64 data URIs, outputs single self-contained HTML file using site nav for page switching via postMessage.
+`build-offline.py` now covers 12 pages (added 4 Midnight Launch pages). Output `noctis-preview.html` is 3,573 KB. Originally shipped as 8-page builder on 2026-06-09; `build-offline.py` — Python script that fetches pages from local dev server, inlines all local CSS/JS/images as base64 data URIs, outputs single self-contained HTML file using site nav for page switching via postMessage.

@@ -3,7 +3,7 @@ pragma language_version >= 0.16 && <= 0.23;
 import CompactStandardLibrary;
 
 // ============================================================================
-// LP ESCROW PSM — Noctis Zone (v2 with CTO support, Midnight Tier C)
+// LP ESCROW PSM — Noctis Zone (v2 with CTO support, Midnight Midnight Launch)
 // ============================================================================
 //
 // Holds LP tokens after graduation with a 365-day lock.
@@ -25,7 +25,7 @@ import CompactStandardLibrary;
 //   4. DEX whitelist is updatable by governor OR community wallet (post-CTO)
 //
 // Finding (2026-07-21, High — documented, not independently
-// fixable here, tied to Tier C's open token-layer/DEX-availability blockers): this contract has ZERO real on-chain
+// fixable here, tied to Midnight Launch's open token-layer/DEX-availability blockers): this contract has ZERO real on-chain
 // token custody. No receiveShielded/receiveUnshielded/sendShielded/
 // sendUnshielded call exists anywhere in this file — migrateLp only flips
 // `lpState`, with the actual LP token movement explicitly deferred to "the
@@ -34,7 +34,7 @@ import CompactStandardLibrary;
 // whatever off-chain code eventually builds the real Zswap migration
 // transaction is the true trust anchor, not this contract. This isn't an
 // oversight fixable by adding a missing assert: it's a direct consequence
-// of Tier C's token-layer and DEX-availability blockers (no confirmed
+// of Midnight Launch's token-layer and DEX-availability blockers (no confirmed
 // Midnight fungible-token standard; no established Midnight DEX to
 // migrate to; this PSM's own design is explicitly provisional pending
 // both). Revisit once those resolve and a real Zswap/DEX integration
@@ -228,13 +228,13 @@ export circuit removeDexFromWhitelist(dexAddr: Bytes<32>): [] {
 //   - Every governor/community-gated circuit in this file (isGovernor vs
 //     isCommunity, checked via disclose()) publicly reveals WHICH of the
 //     two actor roles performed the call, even though the underlying
-//     secret stays hidden — a minor privacy leak for Tier C specifically
+//     secret stays hidden — a minor privacy leak for Midnight Launch specifically
 //     (the platform generally isn't privacy-sensitive about WHO the
 //     governor/community actor is, but it's worth naming explicitly).
 //   - migrateLp is terminal (LpState.Migrated) with no repeated-migration
 //     path or 90-day cooldown model, unlike the Cardano LP Escrow twin
 //     (lp_escrow.ak) which supports multiple migrations with a cooldown.
-//     This may be an intentional Tier-C simplification (this
+//     This may be an intentional Midnight Launch simplification (this
 //     PSM's design is provisional pending the token-layer/DEX blockers) rather than an
 //     oversight, but it was never stated explicitly; flagging so a future
 //     multi-migration requirement isn't assumed already supported.

@@ -5,8 +5,8 @@
 // Converts a USD amount into minimum lovelace, using Orcfax's real ADA/USD
 // datum directly -- no Minswap triangulation needed (unlike
 // night-price-oracle.ts's NIGHT/USD path, which has no direct feed and must
-// triangulate through ADA). Used for Tier A/B's ADA-denominated STAKING_CLAIM_FEE_USD
-// ($1 flat claim fee, CLAUDE.md's STAKING REWARDS section) -- Tier C's
+// triangulate through ADA). Used for Cardano's ADA-denominated STAKING_CLAIM_FEE_USD
+// ($1 flat claim fee, CLAUDE.md's STAKING REWARDS section) -- Midnight Launch's
 // equivalent fee is NIGHT-denominated and already covered by
 // night-price-oracle.ts's usdToMinNightAtomic.
 // ============================================================================

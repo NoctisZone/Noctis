@@ -42,14 +42,14 @@ const LAUNCH_ID = fakeBytes32(9);
 
 // Fix (2026-07-10, extended same day): bonding_curve.compact is now a
 // 3-WAY MERGE of eligibility_gate.compact + darkveil.compact +
-// bonding_curve.compact for Tier C — see the file header in
+// bonding_curve.compact for Midnight Launch — see the file header in
 // contracts/midnight/bonding_curve.compact for why (Compact has no working
 // cross-contract call mechanism, verified this session; folding sources
 // into one deployed contract with a shared ledger is the only mechanism
 // confirmed to work). This test file now covers all three halves.
 //
 // Doc-sync note (Phase 2, 2026-07-11): the standalone darkveil.compact this
-// comment used to reference for Tier B no longer exists — Tier B's
+// comment used to reference for Cardano Launch no longer exists — Cardano Launch's
 // eligibility_gate.compact merged in the same logic (mirrors this file's
 // own merge). packages/zk-proofs/src/darkveil.ts holds the DarkVeil-phase
 // struct hashes both merged contracts compute identically, and is reused by
@@ -564,7 +564,7 @@ describe('bonding_curve.compact — quadratic pricing', () => {
     // UTXO matching (real-node/ledger enforcement), so this test
     // can't prove a mismatched payment is rejected end-to-end. It proves
     // receiveUnshielded is wired into every buy (unconditional — this
-    // contract is Tier C/NIGHT only).
+    // contract is Midnight Launch/NIGHT only).
     const { contract, ctx } = deployAndActivate();
     const gross = expectedGross(0n, 5n);
     const { creator, platform } = fees(gross);
@@ -918,7 +918,7 @@ describe('bonding_curve.compact — merged eligibility gate', () => {
 // ============================================================================
 // Resolution (2026-07-13): minimum absolute registrant count required
 // before startBuying() opens the buying phase. Same fix as
-// eligibility_gate.compact (Tier B) — below the floor, the governor must
+// eligibility_gate.compact (Cardano Launch) — below the floor, the governor must
 // call cancelDarkVeil() (the existing, already-refundable DarkVeil-failure
 // path) instead.
 // ============================================================================
@@ -1279,7 +1279,7 @@ describe('bonding_curve.compact — merged DarkVeil private buy (follow-up)', ()
   });
 
   it('Phase 2 regression: revealBuyCommit rejects a reveal exceeding the per-registrant baseSlot, even within the pool-wide dvAllocation and wallet cap', () => {
-    // Security-audit fix (Phase 2): before this fix, Tier C's merged
+    // Security-audit fix (Phase 2): before this fix, Midnight Launch's merged
     // revealBuyCommit set/read baseSlot for the ratio-refund formula but
     // never enforced it as a purchase-time ceiling — only the pool-wide
     // dvAllocation and the (generous, default) wallet cap were checked.
@@ -1932,7 +1932,7 @@ describe('bonding_curve.compact — buyer verification is separate from buying',
 });
 
 // ============================================================================
-// Parity with the Tier B twin — guards that existed there and not here
+// Parity with the Cardano Launch twin — guards that existed there and not here
 // ============================================================================
 
 describe('bonding_curve.compact — lifecycle and range guards', () => {
@@ -2391,7 +2391,7 @@ describe('bonding_curve.compact — permissionless DarkVeil expiry', () => {
 
 describe('bonding_curve.compact — the allowlist is fixed once the launch is decided', () => {
   it('still accepts a late addition while the public curve is trading', () => {
-    // Wider than Tier B on purpose: this contract gates public buying behind
+    // Wider than Cardano Launch on purpose: this contract gates public buying behind
     // the allowlist too, so an eligible buyer must be able to join a curve
     // that is already running.
     const { contract, contractAddress, ctx } = deployAndActivate();

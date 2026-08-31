@@ -1,8 +1,8 @@
 // ============================================================================
-// Noctis Zone — Tier A Preprod Milestone, Phase 3
+// Noctis Zone — Cardano Preprod milestone, Phase 3
 // Genesis-datum encoder: BondingCurveDatum / VestingDatum / LpEscrowDatum
 // ============================================================================
-// Produces the 3 CBOR-encoded inline datums a Tier A mint+seed transaction
+// Produces the 3 CBOR-encoded inline datums the linear curve mint+seed transaction
 // must attach to its 3 genesis outputs (bonding_curve/vesting/lp_escrow's
 // fixed script addresses — see finding #1 in TIER_A_PREPROD_MILESTONE.md:
 // none of the 3 validators take constructor parameters, so every launch
@@ -120,7 +120,7 @@ export interface BuildGenesisDatumsInput {
   // 'A' (default) → bonding_curve.ak / BondingCurveDatum.
   // 'B' → bonding_curve_tier_b.ak / BondingCurveTierBDatum. The ONLY genesis
   // difference is the curve validator + the curve datum's purchase-tracking
-  // fields (Tier B adds
+  // fields (Cardano Launch adds
   // dv_allocation_root/dv_claimed/dv_settled — the DarkVeil-claim
   // mechanism). Supply split is identical: DarkVeil claims draw from the SAME
   // curve_supply (verified against bonding_curve_tier_b.ak's
@@ -128,16 +128,16 @@ export interface BuildGenesisDatumsInput {
   // is NO separate DarkVeil token carve-out at genesis. vesting/lp_escrow are
   // the shared validators, identical for both tiers.
   tier?: 'A' | 'B';
-  /** DarkVeil allocation as a % of total supply — Tier B only, 10-20,
+  /** DarkVeil allocation as a % of total supply — Cardano Launch only, 10-20,
    *  default DV_ALLOC_DEFAULT. Drawn from curve_supply rather than carved out
    *  of it; see dv_reserve_tokens below. */
   dvAllocPct?: number;
-  /** DarkVeil claim window in milliseconds — Tier B only. Defaults to 24h.
+  /** DarkVeil claim window in milliseconds — Cardano Launch only. Defaults to 24h.
    *  The validator accepts 10 minutes to 7 days; this builder additionally
    *  refuses anything under an hour unless `allowShortDvWindows` is set. */
   dvClaimWindowMs?: number;
   /** Dead window between the claim window closing and the public curve
-   *  opening, in milliseconds — Tier B only. Defaults to 30 minutes. The
+   *  opening, in milliseconds — Cardano Launch only. Defaults to 30 minutes. The
    *  validator accepts 1 minute to 24 hours. */
   dvSettlementWindowMs?: number;
   /** Opt in to sub-hour DarkVeil windows.
@@ -175,7 +175,7 @@ export interface BuildGenesisDatumsInput {
   /** Default 20 (LP_RESERVE_PCT, platform-fixed). Raised from 15 on 2026-08-04:
    *  the LP receives 20% of supply plus the whole net-of-fee raise, and because
    *  a curve's average price is below its final price, the pool opens ABOVE the
-   *  graduation price. 20% narrows that step to ~1.8x (Tier A) / ~1.2x (Tier B)
+   *  graduation price. 20% narrows that step to ~1.8x (the linear curve) / ~1.2x (Cardano Launch)
    *  and, unlike a higher figure, never inverts it in any allocation the wizard
    *  permits — a pool opening BELOW the graduation price would put late curve
    *  buyers underwater at the moment trading starts. */
@@ -311,7 +311,7 @@ export async function buildGenesisDatums(input: BuildGenesisDatumsInput) {
   // Taking nothing is the default; a creator raises it deliberately or not at
   // all. `??` rather than `||` matters here — 0 is a real, chosen value.
   const creatorAllocPct = input.creatorAllocPct ?? 0;
-  // Tier A has no DarkVeil phase, so no reserve; Tier B defaults to
+  // The linear curve has no DarkVeil phase, so no reserve; Cardano Launch defaults to
   // DV_ALLOC_DEFAULT and is creator-adjustable within DV_ALLOC_MIN/MAX.
   const dvAllocPct = tier === 'B' ? (input.dvAllocPct ?? 15) : 0;
   if (tier === 'B' && (dvAllocPct < 10 || dvAllocPct > 20)) {
@@ -496,7 +496,7 @@ export async function buildGenesisDatums(input: BuildGenesisDatumsInput) {
     tier === 'B'
       ? {
           ...sharedCurveFields,
-          // Tier B DarkVeil-claim fields. All start empty/false at
+          // Cardano Launch DarkVeil-claim fields. All start empty/false at
           // dv_allocation_root is anchored later by AnchorDvAllocationRoot (with
           // dv_settled → true), which ActivateCurve then requires.
           dv_allocation_root: '',
@@ -634,7 +634,7 @@ export async function buildGenesisDatums(input: BuildGenesisDatumsInput) {
 
   // 2026-08-03: the ZK anchor's own genesis datum — also never authored
   // before. cert_type starts as the DarkVeil certificate since that is the
-  // first one a Tier B launch anchors; proof fields stay empty until a real
+  // first one a Cardano Launch launch anchors; proof fields stay empty until a real
   // AnchorCertificate call fills them. relayer_credential_hash starts as the
   // governor's own key so the anchor is never left with no authorized
   // submitter; the governor reassigns it via AddRelayer.

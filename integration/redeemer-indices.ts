@@ -19,7 +19,7 @@
 //
 // Naming matches the Aiken constructor exactly. That is what the test joins on.
 
-/** `contracts/cardano/validators/bonding_curve.ak` — Tier A. */
+/** `contracts/cardano/validators/bonding_curve.ak` — the linear curve. */
 export const BONDING_CURVE_REDEEMER = {
   ActivateCurve: 0,
   BuyTokens: 1,
@@ -36,7 +36,7 @@ export const BONDING_CURVE_REDEEMER = {
   BatchTrades: 12,
 } as const;
 
-/** `contracts/cardano/validators/bonding_curve_tier_b.ak` — Tier B. */
+/** `contracts/cardano/validators/bonding_curve_tier_b.ak` — Cardano Launch. */
 export const BONDING_CURVE_TIER_B_REDEEMER = {
   ActivateCurve: 0,
   BuyTokens: 1,

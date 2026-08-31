@@ -53,7 +53,7 @@ const REGISTRATION_COMMIT_DOMAIN = 'noctis:dv:reg:commit:v1';
 
 /**
  * Field order and domain match `computeRegistrationCommit` in BOTH
- * eligibility_gate.compact (Tier B) and bonding_curve.compact (Tier C),
+ * eligibility_gate.compact (Cardano Launch) and bonding_curve.compact (Midnight Launch),
  * which carry identical copies.
  *
  * There is deliberately no `nonce`: a prover-chosen one made the commitment
@@ -88,7 +88,7 @@ const BUY_COMMIT_DOMAIN = 'noctis:dv:buy:commit:v1';
 
 /**
  * Field order and domain match `computeBuyCommit` in BOTH
- * eligibility_gate.compact (Tier B) and bonding_curve.compact (Tier C).
+ * eligibility_gate.compact (Cardano Launch) and bonding_curve.compact (Midnight Launch).
  *
  * Unlike the registration commit above this one DOES carry a nonce, and must:
  * the whole point of the commit/reveal pair is that the committed amount stays

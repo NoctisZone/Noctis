@@ -1,5 +1,5 @@
 // ============================================================================
-// Noctis Zone — Tier A Preprod Milestone, Phase 5
+// Noctis Zone — Cardano Preprod milestone, Phase 5
 // Graduate + SealLock + StartVesting.
 // (2026-07-17): split into TWO sequential transactions — TX1 (Graduate +
 // SealLock) and TX2 (StartVesting) — real Preprod tx size limit (16384

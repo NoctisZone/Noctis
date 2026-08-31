@@ -247,8 +247,8 @@ export ledger lastCreatorActivity: Uint<64>;
 
 // Whether the launch's bonding-curve fee escrow (Stream A) currently holds
 // a real, unclaimed balance — governor-attested from off-chain monitoring
-// of the actual fee-holding contract (bonding_curve.compact for Tier C,
-// bonding_curve_tier_b.ak for Tier B; this contract has no cross-contract
+// of the actual fee-holding contract (bonding_curve.compact for Midnight Launch,
+// bonding_curve_tier_b.ak for Cardano Launch; this contract has no cross-contract
 // call mechanism to check either directly). Fix (2026-07-12):
 // without this, a zero-volume launch (no trade fees ever accrued) could
 // still have SilenceLockTrigger proposed and passed purely on elapsed
@@ -1381,7 +1381,7 @@ export circuit executeProposal(
   // submitted transaction calling that PSM's own equivalent circuit
   // (triggerCTO, etc.) — Compact has no cross-contract call mechanism
   // (confirmed), so nothing here can invoke those PSMs directly.
-  // For Tier C, the contract holding the claimable creator/treasury fees is
+  // For Midnight Launch, the contract holding the claimable creator/treasury fees is
   // bonding_curve.compact rather than creator_escrow.compact, and it carries
   // its own ctoTriggered/communityWallet state plus triggerCTO/dissolveCTO
   // circuits. Its withdrawFees pays the creator's share to communityWallet

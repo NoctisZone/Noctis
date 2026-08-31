@@ -1,6 +1,6 @@
 // ============================================================================
 // Noctis Zone — Cardano L1 ZK Anchor Contract (Aiken)
-// Used by Tier B and Tier C (CLAUDE.md Contract Architecture table)
+// Used by Cardano Launch and Midnight Launch (CLAUDE.md Contract Architecture table)
 // ============================================================================
 // This contract receives and stores ZK proof bundles from Midnight PSMs.
 // It serves as the public, on-chain anchor for ZK Fair Launch Certificates.
@@ -9,7 +9,7 @@
 //   1. Immutable — once a certificate is anchored, it cannot be removed
 //   2. Publicly readable — anyone can query the anchor to verify a launch
 //   3. Relayer-authenticated — only authorized relayers can submit proofs
-//   4. Supports Tier B (DarkVeil ZK cert) and Tier C (full Midnight ZK cert)
+//   4. Supports Cardano Launch (DarkVeil ZK cert) and Midnight Launch (full Midnight ZK cert)
 //
 // The anchor stores:
 //   - The proof bundle hash (not the full proof — that's too large for a datum)
@@ -45,10 +45,10 @@ use noctis/thread_nft
 
 /// Certificate types — which Midnight PSM generated this proof
 pub type CertificateType {
-  /// DarkVeil Fair Launch Certificate (Tier B) — proves: creator bought 0
+  /// DarkVeil Fair Launch Certificate (Cardano Launch) — proves: creator bought 0
   /// tokens, no front-running, >=50% participation
   DarkVeilCert
-  /// Full ZK Certificate (Tier C) — proves: all eligibility checks passed,
+  /// Full ZK Certificate (Midnight Launch) — proves: all eligibility checks passed,
   /// private bonding curve was fair
   FullZKCert
   /// CTO Governance Result Anchor — anchors the result of a Midnight
@@ -129,10 +129,10 @@ fn own_continuing_datum(
   new_datum
 }
 
-/// Fix (2026-07-19, Tier B cross-chain audit): same double-satisfaction
+/// Fix (2026-07-19, Cardano Launch cross-chain audit): same double-satisfaction
 /// closure as bonding_curve.ak/lp_escrow.ak/etc.'s own single_own_utxo — this
 /// validator has zero constructor parameters (one shared script address for
-/// every Tier B/C launch's anchor, distinguished only by launch_id in the
+/// every both launch types launch's anchor, distinguished only by launch_id in the
 /// datum), the same structural precondition that made this fix necessary
 /// everywhere else. Missed by the original sweep since this file wasn't
 /// in that pass's file list — see internal tracking.
@@ -330,7 +330,7 @@ validator zk_anchor {
         }
       }
 
-      // Fix (2026-07-19, Tier B cross-chain audit): same critical
+      // Fix (2026-07-19, Cardano Launch cross-chain audit): same critical
       // fix, same reasoning, as the other 6 validators — was an
       // unconditional `True` (zero checks). This file was a 7th validator
       // missed by that sweep; see internal tracking.
@@ -810,7 +810,7 @@ test update_ipfs_cid_fails_via_stranger() {
   )
 }
 
-// Fix (2026-07-19, Tier B cross-chain audit): QueryCertificate previously
+// Fix (2026-07-19, Cardano Launch cross-chain audit): QueryCertificate previously
 // authorized ANY spend unconditionally (`-> True`, zero checks) — the same
 // bug fixed in every other validator, missed here since this file
 // wasn't in that sweep. Proves the fix — a transaction spending this UTXO

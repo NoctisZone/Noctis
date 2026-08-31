@@ -1,9 +1,9 @@
 // ============================================================================
-// Noctis Zone — Tier A Creator Dashboard Widget: browser entry point
+// Noctis Zone — the linear curve Creator Dashboard Widget: browser entry point
 // ============================================================================
 // Webpack browser target (integration/webpack.widgets.config.cjs) — bundled
 // to assets/js/tier-a-dashboard-widget.bundle.js in the theme, enqueued only
-// on a creator's own dashboard page for a Tier A launch, following the exact
+// on a creator's own dashboard page for a linear-curve launch, following the exact
 // pattern inc/enqueue.php already uses for tier-a-buy-widget.bundle.js on
 // lp-chart-buy.php.
 //

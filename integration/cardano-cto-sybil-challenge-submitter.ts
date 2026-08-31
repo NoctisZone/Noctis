@@ -135,7 +135,7 @@ export interface CardanoCtoSybilChallengeSubmitterConfig {
   blockfrostProjectId: string;
   blockfrostUrl: string;
   network: LucidNetwork;
-  /** cto_sybil_challenge.ak's compiled PlutusV3 script CBOR — plutus.json's `validators[].compiledCode` for `cto_sybil_challenge.cto_sybil_challenge.spend`. One fixed address shared by every launch, same pattern as every other Tier A/B validator (no constructor params). */
+  /** cto_sybil_challenge.ak's compiled PlutusV3 script CBOR — plutus.json's `validators[].compiledCode` for `cto_sybil_challenge.cto_sybil_challenge.spend`. One fixed address shared by every launch, same pattern as every other Cardano validator (no constructor params). */
   compiledScriptCbor: string;
   /** Governor's private key — only used by resolveChallenge, never by submitChallenge (which is challenger-wallet-signed). */
   governorPrivateKey?: string;

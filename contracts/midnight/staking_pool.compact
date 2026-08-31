@@ -3,7 +3,7 @@ pragma language_version >= 0.16 && <= 0.23;
 import CompactStandardLibrary;
 
 // ============================================================================
-// STAKING REWARDS POOL PSM — Noctis Zone (Tier C only) — 2026-07-14
+// STAKING REWARDS POOL PSM — Noctis Zone (Midnight Launch only) — 2026-07-14
 // ============================================================================
 //
 // Optional per-launch feature: a creator allocates STAKING_ALLOC_PCT (25%,
@@ -25,8 +25,8 @@ import CompactStandardLibrary;
 // this platform already is.
 //
 // TOKEN CUSTODY — READ BEFORE MODIFYING (architectural caveat):
-// bonding_curve.compact (Tier C's merged eligibility/DarkVeil/bonding-curve
-// PSM) never mints the Tier C launch token as a real Midnight coin — it
+// bonding_curve.compact (Midnight Launch's merged eligibility/DarkVeil/bonding-curve
+// PSM) never mints the Midnight Launch launch token as a real Midnight coin — it
 // tracks ownership purely as an internal ledger `balances: Map<Bytes<32>,
 // Uint<128>>`. Compact has no cross-contract call mechanism (verified
 // repeatedly this session — "every call form tested fails with
@@ -57,8 +57,8 @@ import CompactStandardLibrary;
 //      pre-funded custody) — this sidesteps needing this contract to hold
 //      and later re-spend its own minted coins.
 //
-// This is building ahead of Tier C's own token foundation, same as the
-// rest of Tier C (still design-complete/build-blocked per CLAUDE.md's open
+// This is building ahead of Midnight Launch's own token foundation, same as the
+// rest of Midnight Launch (still design-complete/build-blocked per CLAUDE.md's open
 // issues) — flagged explicitly here rather than hidden.
 //
 // NO ON-CHAIN DURATION OR EMISSION RATE — same "self-limiting depletion"
@@ -631,6 +631,6 @@ export circuit claimRewards(recipientAddr: Bytes<32>, currentTimestamp: Uint<64>
 //     anyone from bonding_curve.compact's real public stake/unstake
 //     events — not a black box, but also not verified in-circuit (see
 //     file header's TOKEN CUSTODY note for why that's currently
-//     unavoidable, same root cause as everywhere else on Tier C).
+//     unavoidable, same root cause as everywhere else on Midnight Launch).
 //
 // ============================================================================

@@ -111,7 +111,7 @@ describe('planLaunchAllocations — refuses what a contract could not', () => {
         darkVeilPercent: 15n,
         stakingEnabled: false,
       }),
-    ).toThrow(/Tier A has no DarkVeil phase/);
+    ).toThrow(/the linear curve has no DarkVeil phase/);
   });
 
   it('rejects a DarkVeil tier that allocates nothing to the phase', () => {

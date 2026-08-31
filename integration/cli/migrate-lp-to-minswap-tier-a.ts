@@ -1,5 +1,5 @@
 // ============================================================================
-// Noctis Zone — Tier A Preprod Milestone, Phase 5b
+// Noctis Zone — Cardano Preprod milestone, Phase 5b
 // Real Migrate (lp_escrow.ak) + Minswap V2 pool-creation, combined in one
 // transaction. See tier-a-lp-migration-submitter.ts's header for the full
 // design and verification trail.

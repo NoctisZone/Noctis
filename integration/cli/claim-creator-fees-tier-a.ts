@@ -1,5 +1,5 @@
 // ============================================================================
-// Noctis Zone — Tier A Preprod Milestone, Phase 6
+// Noctis Zone — Cardano Preprod milestone, Phase 6
 // ClaimCreatorFees (bonding_curve.ak) — creator-signed (or community
 // wallet, once CTO triggered — not exercised here).
 // ============================================================================

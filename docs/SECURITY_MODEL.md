@@ -41,16 +41,16 @@
 |-------|----------|-------|
 | User secret keys | Client-side (wallet) | Identity, funds |
 | Governor secret key | Server-side (secured) | Admin control |
-| NIGHT bonds | `eligibility_gate.compact` (Tier B) / `bonding_curve.compact` (Tier C, merged) | $50 USD per participant |
-| Token balances | Merged curve contract per tier — `eligibility_gate.compact`/`bonding_curve_tier_b.ak` (Tier B) or `bonding_curve.compact` (Tier C) | User tokens |
-| LP tokens | `lp_escrow.ak` (Tier A/B) / Midnight LP Escrow PSM (Tier C, design pending a graduation-target DEX) | Post-graduation liquidity |
-| Creator escrow (Tier B) | **Not `creator_escrow.compact`** — accrues directly on `bonding_curve_tier_b.ak`, the Cardano curve contract, since real ADA settlement moved there entirely. `creator_escrow.compact`'s `depositFees` is real and tested but never invoked in this architecture. | Creator's raised funds |
-| Creator escrow (Tier C) | `bonding_curve.compact`'s inline `creatorFees` ledger field — same reason, Compact has no cross-contract call mechanism to route it through a separate PSM | Creator's raised funds |
+| NIGHT bonds | `eligibility_gate.compact` (Cardano Launch) / `bonding_curve.compact` (Midnight Launch, merged) | $50 USD per participant |
+| Token balances | Merged curve contract per tier — `eligibility_gate.compact`/`bonding_curve_tier_b.ak` (Cardano Launch) or `bonding_curve.compact` (Midnight Launch) | User tokens |
+| LP tokens | `lp_escrow.ak` (Cardano) / Midnight LP Escrow PSM (Midnight Launch, design pending a graduation-target DEX) | Post-graduation liquidity |
+| Creator escrow (Cardano Launch) | **Not `creator_escrow.compact`** — accrues directly on `bonding_curve_tier_b.ak`, the Cardano curve contract, since real ADA settlement moved there entirely. `creator_escrow.compact`'s `depositFees` is real and tested but never invoked in this architecture. | Creator's raised funds |
+| Creator escrow (Midnight Launch) | `bonding_curve.compact`'s inline `creatorFees` ledger field — same reason, Compact has no cross-contract call mechanism to route it through a separate PSM | Creator's raised funds |
 | Treasury fees | Per-tier curve contract (accrual) → `treasury.compact` is designed to receive them but, like `creator_escrow.compact`, is never actually invoked by either tier's curve in the shipped architecture | Platform fees |
-| N-hop challenge bond (Tier B only) | `nhop_challenge.ak`, one UTXO per challenge | 25 ADA per challenge |
+| N-hop challenge bond (Cardano Launch only) | `nhop_challenge.ak`, one UTXO per challenge | 25 ADA per challenge |
 | ZK Fair Launch Certificate | Merged curve/eligibility contract → Cardano ZK Anchor Contract, relayed by a platform-operated relayer | Launch integrity proof |
-| Staking reserve (Tier A/B) | `staking_pool.ak` — real on-chain custody, one pool-state UTXO + one position UTXO per stake action | Up to 25% of total supply, optional per launch |
-| Staking reward mint budget (Tier C) | `staking_pool.compact`'s `poolBalance` ledger field — an authorized-to-mint budget, not pre-funded custody; real coins mint only at claim time via `mintUnshieldedToken` | Up to 25% of total supply, optional per launch |
+| Staking reserve (Cardano) | `staking_pool.ak` — real on-chain custody, one pool-state UTXO + one position UTXO per stake action | Up to 25% of total supply, optional per launch |
+| Staking reward mint budget (Midnight Launch) | `staking_pool.compact`'s `poolBalance` ledger field — an authorized-to-mint budget, not pre-funded custody; real coins mint only at claim time via `mintUnshieldedToken` | Up to 25% of total supply, optional per launch |
 
 ### Adversaries
 
@@ -128,9 +128,9 @@ A governor can also cancel a legitimate launch; recovery is re-deploying with a 
 - Buy commitments are hashes — individual amounts are hidden until reveal
 - Nullifiers are unique per (user, launch) — not linkable across launches
 - ZK Fair Launch Certificate contains only aggregate data
-- Tier B's real DarkVeil settlement (`ClaimDarkVeilTokens` on `bonding_curve_tier_b.ak`) uses a Merkle-root allocation scheme specifically so that no registrant's real Cardano wallet is ever linked to their DarkVeil participation **unless and until that specific wallet claims** — an earlier design had pre-seeded every registrant's `(wallet, amount)` pair in plaintext on Cardano at deploy time, which was a real privacy violation, found and fixed in the same pass that added real settlement
+- Cardano Launch's real DarkVeil settlement (`ClaimDarkVeilTokens` on `bonding_curve_tier_b.ak`) uses a Merkle-root allocation scheme specifically so that no registrant's real Cardano wallet is ever linked to their DarkVeil participation **unless and until that specific wallet claims** — an earlier design had pre-seeded every registrant's `(wallet, amount)` pair in plaintext on Cardano at deploy time, which was a real privacy violation, found and fixed in the same pass that added real settlement
 
-**Residual risk:** Once a user claims their tokens (Tier B) or reveals their commitment, their real wallet address and token amount become linked and public. This is accepted — the claim/reveal is voluntary and is the mechanism `nhop_challenge.ak` (3.8) relies on to have anything real to challenge against.
+**Residual risk:** Once a user claims their tokens (Cardano Launch) or reveals their commitment, their real wallet address and token amount become linked and public. This is accepted — the claim/reveal is voluntary and is the mechanism `nhop_challenge.ak` (3.8) relies on to have anything real to challenge against.
 
 ### 3.6 Double-Buying in DarkVeil
 
@@ -159,7 +159,7 @@ A governor can also cancel a legitimate launch; recovery is re-deploying with a 
 
 **Attack:** A creator's own associates register as ghost DarkVeil participants, increasing `registered_count` and shrinking `base_slot = dv_supply / registered_count` for every legitimate buyer — diluting real participants' allocations without the creator ever touching their own wallet.
 
-**Mitigation:** `contracts/cardano/validators/nhop_challenge.ak` (Tier B only — Tier C is fully build-blocked independent of this feature). Anyone can post a 25 ADA bond and challenge a DarkVeil claimant as a Sybil (within 5 hops of the creator's wallet, 180-day lookback). Deliberately triggers **after** the claimant's `ClaimDarkVeilTokens` call, not at registration — a registrant's real wallet is never publicly linked to DarkVeil until they claim, so triggering earlier would require deanonymizing every registrant just to make them challengeable (see 3.5). Resolution is **governor-adjudicated** — the actual N-hop transaction-graph evidence and the timing of the challenge are both facts a Compact/Aiken script has no way to verify independently (same category as `hasClaimableBalance`/`lastCreatorActivity`, see 5). The contract's on-chain job stays narrow: hold the bond, enforce a mandatory 24-hour defence window against real chain time, and pay out correctly — the challenger's bond back in full if upheld, or forfeited to the platform wallet if rejected. The window counts from a submission time the chain agreed to: opening a challenge mints a token under the validator's own policy, and that mint is where the recorded time is checked against the transaction's validity range. A challenge that never minted cannot be resolved at all, so the defence window a registrant gets is a real 24 hours rather than whatever the challenger wrote down.
+**Mitigation:** `contracts/cardano/validators/nhop_challenge.ak` (Cardano Launch only — Midnight Launch is fully build-blocked independent of this feature). Anyone can post a 25 ADA bond and challenge a DarkVeil claimant as a Sybil (within 5 hops of the creator's wallet, 180-day lookback). Deliberately triggers **after** the claimant's `ClaimDarkVeilTokens` call, not at registration — a registrant's real wallet is never publicly linked to DarkVeil until they claim, so triggering earlier would require deanonymizing every registrant just to make them challengeable (see 3.5). Resolution is **governor-adjudicated** — the actual N-hop transaction-graph evidence and the timing of the challenge are both facts a Compact/Aiken script has no way to verify independently (same category as `hasClaimableBalance`/`lastCreatorActivity`, see 5). The contract's on-chain job stays narrow: hold the bond, enforce a mandatory 24-hour defence window against real chain time, and pay out correctly — the challenger's bond back in full if upheld, or forfeited to the platform wallet if rejected. The window counts from a submission time the chain agreed to: opening a challenge mints a token under the validator's own policy, and that mint is where the recorded time is checked against the transaction's validity range. A challenge that never minted cannot be resolved at all, so the defence window a registrant gets is a real 24 hours rather than whatever the challenger wrote down.
 
 **Residual risk:** Because the challenge can only fire post-claim, it cannot prevent the dilution itself — the tokens are already delivered and cannot be clawed back on Cardano once claimed. This is accepted by design: the mechanism provides post-fact accountability and a bounty, not real-time prevention. A different griefing vector — an outsider registering enough of a launch's DarkVeil participants to force a failed phase — is bounded economically rather than by this mechanism: every registration locks a NIGHT bond worth $50, and a registrant who then buys nothing forfeits all of it, so the attack is paid for per identity and refunds nothing. The eligibility checks in 3.5 set the floor on what an identity costs to produce in the first place.
 
@@ -175,9 +175,9 @@ A governor can also cancel a legitimate launch; recovery is re-deploying with a 
 
 **Attack (governor-forged reward claim):** Both `staking_pool.ak` and `staking_pool.compact` gate reward claims on a governor-published Merkle root over `(staker, cumulative_amount)` leaves — the same trust model already accepted for allowlist membership and CTO voting weight elsewhere in this codebase (Section 5, Governor Pattern). A malicious or compromised governor could publish a root crediting themselves (or a colluding party) with rewards never actually earned.
 
-**Mitigation:** The underlying stake/unstake events (Tier A/B) or off-chain-observed stake activity (Tier C) are all real, public on-chain facts — the governor's reward computation is independently re-derivable and auditable by anyone, the same "trust the computation because it's checkable, not because it's promised" argument already made for `hasClaimableBalance`/`lastCreatorActivity` (Section 5). Neither contract will pay out more than the caller's own proven leaf allows, and `poolBalance` (or the real UTXO balance on the Cardano side) hard-caps total payout regardless of what the governor publishes — a forged root can misallocate who gets what, but cannot mint value the pool was never funded with.
+**Mitigation:** The underlying stake/unstake events (Cardano) or off-chain-observed stake activity (Midnight Launch) are all real, public on-chain facts — the governor's reward computation is independently re-derivable and auditable by anyone, the same "trust the computation because it's checkable, not because it's promised" argument already made for `hasClaimableBalance`/`lastCreatorActivity` (Section 5). Neither contract will pay out more than the caller's own proven leaf allows, and `poolBalance` (or the real UTXO balance on the Cardano side) hard-caps total payout regardless of what the governor publishes — a forged root can misallocate who gets what, but cannot mint value the pool was never funded with.
 
-**Tier-specific residual risk:** Tier A/B's `staking_pool.ak` gives real on-chain custody of the staked tokens themselves — a forged reward root affects only the reward payout, not the underlying stake. Tier C's `staking_pool.compact` has a strictly larger trust surface: `bonding_curve.compact` never mints the Tier C launch token as a real coin (tracked only in an internal ledger map), and Compact has no cross-contract call mechanism to reach it, so **"staked amount" itself is governor-attested, not custodied** — a compromised Tier C governor could misrepresent who has how much staked, not just misallocate rewards. This is a real, deliberate architecture difference from Tier A/B, chosen over merging staking circuits into the already-audited `bonding_curve.compact` — flagged here explicitly rather than presented as equivalent to the Cardano side.
+**Tier-specific residual risk:** Cardano's `staking_pool.ak` gives real on-chain custody of the staked tokens themselves — a forged reward root affects only the reward payout, not the underlying stake. Midnight Launch's `staking_pool.compact` has a strictly larger trust surface: `bonding_curve.compact` never mints the Midnight Launch launch token as a real coin (tracked only in an internal ledger map), and Compact has no cross-contract call mechanism to reach it, so **"staked amount" itself is governor-attested, not custodied** — a compromised Midnight Launch governor could misrepresent who has how much staked, not just misallocate rewards. This is a real, deliberate architecture difference from Cardano, chosen over merging staking circuits into the already-audited `bonding_curve.compact` — flagged here explicitly rather than presented as equivalent to the Cardano side.
 
 ---
 
@@ -227,10 +227,10 @@ assert(disclose(govKey == governorKey), "Only governor can ...");
 | `updateCreatorActivity` | `cto_governance.compact` | Sets `lastCreatorActivity` **and** `hasClaimableBalance` from off-chain monitoring — same governor-attested-fact trust boundary as the balance snapshot above |
 | `TriggerCTO` / `DissolveCTO` (or `triggerCTO`/`dissolveCTO`) | **All three** bonding curve contracts (`bonding_curve.ak`, `bonding_curve_tier_b.ak`, `bonding_curve.compact`), plus `lp_escrow.ak`/`creator_escrow.compact`/`vesting.compact`/`treasury.compact` | Redirects a live creator/LP fee stream to a community wallet, or reverts it. Governor-only trigger, but only fires after a real passed CTO vote (see 4/5's balance-snapshot gate) |
 | `withdrawFees`/`claimFees` (all currencies) | Per-tier curve contract, `treasury.compact`, `creator_escrow.compact` | Now pay out **real value** via `sendUnshielded`/real UTXO movement — before the audit, several of these were ledger-only decrements with no matching real transfer. The risk profile changed from "impossible to actually drain" to "real, but bounded to fixed, pinned payout addresses — not an arbitrary destination" |
-| `ResolveChallenge{upheld, current_timestamp}` | `nhop_challenge.ak` (Tier B) | Governor adjudicates an N-hop Sybil challenge off-chain; on-chain only enforces the defense-window timing and correct payout (see 3.8) |
+| `ResolveChallenge{upheld, current_timestamp}` | `nhop_challenge.ak` (Cardano Launch) | Governor adjudicates an N-hop Sybil challenge off-chain; on-chain only enforces the defense-window timing and correct payout (see 3.8) |
 | `sealLock` / `migrateLp` | `lp_escrow.ak`/`lp_escrow.compact` | Seal/migrate LP; timestamps now bound to real chain time (see 3.9) |
 | `ProposeDexChange` / `ExecuteDexChange` / `CancelPendingDexChange` | `lp_escrow.ak` | Multisig-gated proposal + mandatory 72h public notice before a whitelist change takes effect — replaced an earlier single-governor-signature, immediate-effect design |
-| `publishStakeSnapshot` / `publishRewardRoot` | `staking_pool.ak`/`staking_pool.compact` | Publishes the Merkle roots every `ClaimRewards`/`claimRewards` proof is checked against. On Tier C specifically, this is the ONLY record of "who has staked how much" — see 3.10's residual-risk note, a strictly larger trust surface than the equivalent Tier A/B risk |
+| `publishStakeSnapshot` / `publishRewardRoot` | `staking_pool.ak`/`staking_pool.compact` | Publishes the Merkle roots every `ClaimRewards`/`claimRewards` proof is checked against. On Midnight Launch specifically, this is the ONLY record of "who has staked how much" — see 3.10's residual-risk note, a strictly larger trust surface than the equivalent Cardano risk |
 | `topUpPool` | `staking_pool.ak`/`staking_pool.compact` | Creator-only (not governor), increases the pool's mintable/claimable budget — cannot be used to drain, only to add |
 
 ### User Authentication
@@ -250,7 +250,7 @@ assert(disclose(caller.bytes == ownerHash), "Not the owner");
 ### What Is Guaranteed
 
 1. **Identity privacy:** `UserPublicKey` is a domain-separated hash. It cannot be linked to a real-world identity without the secret key.
-2. **Amount privacy (DarkVeil):** Buy amounts are hidden in commitment hashes until the reveal phase (Tier C) or the real Cardano claim (Tier B's Merkle-root allocation scheme — nobody's amount is published unless and until they claim).
+2. **Amount privacy (DarkVeil):** Buy amounts are hidden in commitment hashes until the reveal phase (Midnight Launch) or the real Cardano claim (Cardano Launch's Merkle-root allocation scheme — nobody's amount is published unless and until they claim).
 3. **Cross-PSM/cross-tier unlinkability:** Different domain tags prevent linking a user's activity across contracts.
 4. **Cross-launch unlinkability:** Nullifiers are launch-specific. A user's nullifier in Launch A is different from Launch B.
 5. **Aggregate-only transparency:** The ZK Fair Launch Certificate contains only totals, not individual records.
@@ -269,7 +269,7 @@ This is the same trust model already used for `cto_governance.compact`'s balance
 
 ### What Is NOT Guaranteed
 
-1. **Post-reveal/post-claim amount privacy:** After a user reveals their commitment (Tier C) or claims their tokens (Tier B), their real wallet address and token amount become linked and public.
+1. **Post-reveal/post-claim amount privacy:** After a user reveals their commitment (Midnight Launch) or claims their tokens (Cardano Launch), their real wallet address and token amount become linked and public.
 2. **Network-level privacy:** IP addresses, timing analysis, and other network-level attacks are not mitigated by the protocol.
 3. **Allowlist privacy:** the allowlist root is public. Individual membership is private (via ZK proofs), but the underlying eligibility computation (see above) is trusted, not independently re-verifiable on-chain.
 4. **Correctness of the underlying off-chain eligibility computation:** the platform must actually run the eligibility checks honestly before publishing the allowlist root — there is no on-chain mechanism that would catch a governor who published a root containing an ineligible wallet.
@@ -282,10 +282,10 @@ This is the same trust model already used for `cto_governance.compact`'s balance
 
 - **Amount:** $50 USD equivalent, fixed at lockup, never re-priced at release
 - **Purpose:** Anti-spam + skin-in-the-game
-- **Refund — ratio-based:** `NIGHT_returned = NIGHT_bonded × (tokens_purchased / tokens_allocated)`. Bought 100% of allocation → 100% returned. Bought 50% → 50% returned, 50% forfeited. Bought 0% (ghost) → 100% forfeited. Phase failed (<50% participation) → 100% returned to all, no forfeiture. Implemented for **both tiers** (Tier C originally, ported to Tier B's `eligibility_gate.compact` in a later merge) and pays out for real via `sendUnshielded` (an earlier version of several of these claim circuits only cleared the ledger with no real payout — an audit finding, now fixed).
+- **Refund — ratio-based:** `NIGHT_returned = NIGHT_bonded × (tokens_purchased / tokens_allocated)`. Bought 100% of allocation → 100% returned. Bought 50% → 50% returned, 50% forfeited. Bought 0% (ghost) → 100% forfeited. Phase failed (<50% participation) → 100% returned to all, no forfeiture. Implemented for **both tiers** (Midnight Launch originally, ported to Cardano Launch's `eligibility_gate.compact` in a later merge) and pays out for real via `sendUnshielded` (an earlier version of several of these claim circuits only cleared the ledger with no real payout — an audit finding, now fixed).
 - **Forfeiture routing:** split 60% treasury / 40% ops, paid directly via `sendUnshielded` from the same claim call — no separate cross-contract step needed since the destinations are fixed, real addresses.
 
-### N-Hop Challenge Bond (Tier B only)
+### N-Hop Challenge Bond (Cardano Launch only)
 
 - **Amount:** 25 ADA, held in a dedicated `nhop_challenge.ak` UTXO per challenge
 - **Purpose:** Anti-spam for Sybil-registration challenges (see 3.8)
@@ -296,7 +296,7 @@ This is the same trust model already used for `cto_governance.compact`'s balance
 
 - **Total:** 2.0% per trade
 - **Split:** 1.0% creator / 0.6% treasury / 0.4% ops
-- **Real accrual location (per tier, not the originally-designed Midnight PSMs — see 2):** Tier A — `bonding_curve.ak`. Tier B — `bonding_curve_tier_b.ak` (Cardano, both public-phase and DarkVeil-claim fees). Tier C — `bonding_curve.compact`'s inline ledger fields.
+- **Real accrual location (per tier, not the originally-designed Midnight PSMs — see 2):** The linear curve — `bonding_curve.ak`. Cardano Launch — `bonding_curve_tier_b.ak` (Cardano, both public-phase and DarkVeil-claim fees). Midnight Launch — `bonding_curve.compact`'s inline ledger fields.
 - **Withdrawal:** gated to the active fee recipient (creator, or the community wallet once a CTO vote has passed — see 5), amounts limited to accumulated balances, real value movement enforced by audit
 
 ### LP Lock
@@ -363,7 +363,7 @@ Please report suspected vulnerabilities **privately** rather than opening a publ
 2. If DEX is not whitelisted: a `ProposeDexChange` must clear its 72h public notice window before `ExecuteDexChange` can run — no more single-signature immediate whitelist changes
 3. If LP is stuck: same propose → notice → execute path applies for adding a new destination DEX
 
-### N-Hop Challenge Disputes (Tier B)
+### N-Hop Challenge Disputes (Cardano Launch)
 
 1. Anyone can submit a challenge against a claimed DarkVeil allocation within the 72-hour post-claim window, posting a 25 ADA bond
 2. Governor must wait a mandatory 24-hour defense window (enforced via real chain time) before resolving

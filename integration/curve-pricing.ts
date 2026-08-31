@@ -2,7 +2,7 @@
 // Noctis Zone — bonding curve pricing
 // ============================================================================
 // The single TypeScript copy of what the two Cardano curve validators charge.
-// `bonding_curve.ak` (Tier A, linear) and `bonding_curve_tier_b.ak` (Tier B,
+// `bonding_curve.ak` (the linear curve, linear) and `bonding_curve_tier_b.ak` (Cardano Launch,
 // quadratic) each compute the price themselves from their own datum; nothing
 // off-chain can propose a figure and have it accepted. So everything here is
 // a MIRROR, and it has to agree with the validator to the lovelace — a
@@ -73,7 +73,7 @@ export function feeSlices(gross: bigint): {
 }
 
 // ----------------------------------------------------------------------------
-// Tier A — linear, P(x) = base + (max - base) * x / supply
+// The linear curve — linear, P(x) = base + (max - base) * x / supply
 // ----------------------------------------------------------------------------
 
 /**
@@ -90,7 +90,7 @@ export function grossRangeLinear(datum: CurveParams, fromSold: bigint, amount: b
 }
 
 // ----------------------------------------------------------------------------
-// Tier B — quadratic, P(x) = base + (max - base) * x^2 / supply^2
+// Cardano Launch — quadratic, P(x) = base + (max - base) * x^2 / supply^2
 // ----------------------------------------------------------------------------
 
 /** `m(m+1)(2m+1)`, six times the sum of squares up to m. `g(-1) === 0`, which

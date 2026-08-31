@@ -830,9 +830,9 @@ describe.each(FALLBACK_METHODS)(
 // ============================================================================
 // NoctisLaunchManager — reads of published state
 // ============================================================================
-// These figures are ledger fields on Tier B, so reading them is a query
+// These figures are ledger fields on Cardano Launch, so reading them is a query
 // against the indexer rather than a circuit call: no wallet, no proof server,
-// no transaction, and nothing for the caller to pay. Tier C's merged curve
+// no transaction, and nothing for the caller to pay. Midnight Launch's merged curve
 // returns the certificate from a circuit instead, so the two tiers take
 // genuinely different routes and both are covered here.
 
@@ -887,7 +887,7 @@ describe('NoctisLaunchManager.getDarkVeilSnapshot', () => {
     expect(readDarkVeilSnapshot).toHaveBeenCalledWith('the-provider', FAKE_CONTRACT_ADDRESS);
   });
 
-  it('refuses on Tier C, whose curve does not publish these fields', async () => {
+  it('refuses on Midnight Launch, whose curve does not publish these fields', async () => {
     const client = new NoctisMidnightClient(USER_SK);
     client.bondingCurve = fakeHandle({});
     const manager = new NoctisLaunchManager(client);
@@ -919,7 +919,7 @@ describe('NoctisLaunchManager.getFairLaunchCert', () => {
     vi.mocked(readDarkVeilSnapshot).mockReset();
   });
 
-  it('reads the certificate off the published ledger on Tier B', async () => {
+  it('reads the certificate off the published ledger on Cardano Launch', async () => {
     vi.mocked(readEligibilityGateLedger).mockResolvedValue({
       fairLaunchCert: SNAPSHOT.fairLaunchCert,
     } as never);
@@ -931,7 +931,7 @@ describe('NoctisLaunchManager.getFairLaunchCert', () => {
     expect(readEligibilityGateLedger).toHaveBeenCalledWith('the-provider', FAKE_CONTRACT_ADDRESS);
   });
 
-  it('calls the circuit on Tier C and unwraps the JS-typed return value', async () => {
+  it('calls the circuit on Midnight Launch and unwraps the JS-typed return value', async () => {
     const circuitFn = vi.fn().mockResolvedValue({ private: { result: SNAPSHOT.fairLaunchCert } });
     const client = new NoctisMidnightClient(USER_SK);
     client.bondingCurve = fakeHandle({ getFairLaunchCert: circuitFn });
@@ -1085,12 +1085,12 @@ describe.each(SINGLE_PSM_METHODS)(
 );
 
 // ============================================================================
-// NoctisLaunchManager — the Cardano settlement record (Tier B only)
+// NoctisLaunchManager — the Cardano settlement record (Cardano Launch only)
 // ============================================================================
-// Tier B's DarkVeil purchases settle on Cardano, so the governor attests each
-// real settlement back to the gate. Tier C settles inside its own merged curve
+// Cardano Launch's DarkVeil purchases settle on Cardano, so the governor attests each
+// real settlement back to the gate. Midnight Launch settles inside its own merged curve
 // and has no such circuit — so these must NOT fall back to bondingCurve, or a
-// Tier C caller gets a runtime failure naming a circuit instead of a tier.
+// Midnight Launch caller gets a runtime failure naming a circuit instead of a tier.
 
 describe('NoctisLaunchManager settlement record', () => {
   it('records a settlement against the eligibility gate with the buyer key and amount', async () => {
@@ -1124,7 +1124,7 @@ describe('NoctisLaunchManager settlement record', () => {
       const manager = new NoctisLaunchManager(client);
 
       await expect((manager[method] as (...a: unknown[]) => Promise<unknown>)(fakeBytes32(201), 1n)).rejects.toThrow(
-        /Tier B circuit on the eligibility gate/,
+        /Cardano Launch circuit on the eligibility gate/,
       );
       expect(circuitFn).not.toHaveBeenCalled();
     },
@@ -1136,7 +1136,7 @@ describe('NoctisLaunchManager settlement record', () => {
 // ============================================================================
 
 describe('NoctisLaunchManager.revealDarkVeilBuyCommit', () => {
-  it('Tier B path: calls eligibilityGate.revealBuyCommit with (commitment, tokenAmount, pricePerToken, currentTimestamp) — no fee args', async () => {
+  it('Cardano Launch path: calls eligibilityGate.revealBuyCommit with (commitment, tokenAmount, pricePerToken, currentTimestamp) — no fee args', async () => {
     const revealBuyCommit = vi.fn().mockResolvedValue({ ok: true });
     const client = new NoctisMidnightClient(USER_SK);
     client.eligibilityGate = fakeHandle({ revealBuyCommit });
@@ -1147,7 +1147,7 @@ describe('NoctisLaunchManager.revealDarkVeilBuyCommit', () => {
     expect(revealBuyCommit).toHaveBeenCalledWith(fakeBytes32(120), 500n, 10n, 9_000n);
   });
 
-  it('Tier C path (bondingCurve only, no eligibilityGate): passes creator and platform fees plus the reveal timestamp', async () => {
+  it('Midnight Launch path (bondingCurve only, no eligibilityGate): passes creator and platform fees plus the reveal timestamp', async () => {
     const revealBuyCommit = vi.fn().mockResolvedValue({ ok: true });
     const client = new NoctisMidnightClient(USER_SK);
     client.bondingCurve = fakeHandle({ revealBuyCommit });
@@ -1163,7 +1163,7 @@ describe('NoctisLaunchManager.revealDarkVeilBuyCommit', () => {
     expect(revealBuyCommit).toHaveBeenCalledWith(fakeBytes32(121), 500n, 10n, 5n, 3n, 9_000n);
   });
 
-  it('Tier C path without tierCFees throws before ever calling the circuit', async () => {
+  it('Midnight Launch path without tierCFees throws before ever calling the circuit', async () => {
     const revealBuyCommit = vi.fn().mockResolvedValue({ ok: true });
     const client = new NoctisMidnightClient(USER_SK);
     client.bondingCurve = fakeHandle({ revealBuyCommit });
@@ -1175,7 +1175,7 @@ describe('NoctisLaunchManager.revealDarkVeilBuyCommit', () => {
     expect(revealBuyCommit).not.toHaveBeenCalled();
   });
 
-  it('when both eligibilityGate and bondingCurve are connected, takes the Tier B path (not Tier C)', async () => {
+  it('when both eligibilityGate and bondingCurve are connected, takes the Cardano Launch path (not Midnight Launch)', async () => {
     const egReveal = vi.fn().mockResolvedValue({ ok: true });
     const bcReveal = vi.fn().mockResolvedValue({ ok: true });
     const client = new NoctisMidnightClient(USER_SK);
@@ -1272,7 +1272,7 @@ describe('NoctisLaunchManager.graduateAndSeedLp', () => {
 });
 
 describe('NoctisLaunchManager.executeCtoProposal', () => {
-  it('calls executeProposal then triggerCTO on escrow/vesting/lpEscrow with the given address, and triggerCTO on bondingCurve when connected (Tier C)', async () => {
+  it('calls executeProposal then triggerCTO on escrow/vesting/lpEscrow with the given address, and triggerCTO on bondingCurve when connected (Midnight Launch)', async () => {
     const executeProposal = vi.fn().mockResolvedValue('exec-ok');
     const escrowTrigger = vi.fn().mockResolvedValue('escrow-cto-ok');
     const vestingTrigger = vi.fn().mockResolvedValue('vesting-cto-ok');
@@ -1307,7 +1307,7 @@ describe('NoctisLaunchManager.executeCtoProposal', () => {
     });
   });
 
-  it('skips bondingCurve.triggerCTO (undefined curveResult) when bondingCurve is not connected — Tier B has no Midnight curve to trigger', async () => {
+  it('skips bondingCurve.triggerCTO (undefined curveResult) when bondingCurve is not connected — Cardano Launch has no Midnight curve to trigger', async () => {
     const client = new NoctisMidnightClient(USER_SK);
     client.ctoGovernance = fakeHandle({
       executeProposal: vi.fn().mockResolvedValue('exec-ok'),

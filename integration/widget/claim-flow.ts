@@ -1,5 +1,5 @@
 // ============================================================================
-// Noctis Zone — DarkVeil widget: Tier B claim flow
+// Noctis Zone — DarkVeil widget: Cardano Launch claim flow
 // ============================================================================
 // Thin wrapper around darkveil-claim-submitter.ts's real Lucid Evolution
 // submitter. Unlike registration/buy-flow, this needs NO ContractProviders

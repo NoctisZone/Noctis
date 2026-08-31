@@ -1,16 +1,16 @@
 // ============================================================================
-// Noctis Zone — Tier B public bonding curve, real Lucid submitter
+// Noctis Zone — Cardano Launch public bonding curve, real Lucid submitter
 // ============================================================================
 // bonding_curve_tier_b.ak's BuyTokens (and every other post-mint redeemer)
 // is a custom-Plutus-redeemer spend — Anvil's REST API can't do this (this
 // session's own finding, confirmed against the earlier Anvil research). Same category of
 // gap as darkveil-claim-submitter.ts and tier-a-curve-submitter.ts
-// (Tier A's own Phase 4), both already fixed via Lucid Evolution. This is
-// the identical treatment for Tier B's public curve.
+// (the linear curve's own Phase 4), both already fixed via Lucid Evolution. This is
+// the identical treatment for Cardano Launch's public curve.
 //
-// Real differences from Tier A's curve, verified directly against
+// Real differences from the linear curve's curve, verified directly against
 // bonding_curve_tier_b.ak's real source before writing this (not assumed
-// from Tier A's shape):
+// from the linear curve's shape):
 //   - QUADRATIC pricing (P = P0 + k*x^2), not linear. Both tiers charge the
 //     SUM of the prices of the tokens a trade moves through, so the shape of
 //     the curve is the only difference: see gross_range in each validator,
@@ -20,7 +20,7 @@
 //     next to BuyTokens where it reads most naturally, so that adding it did
 //     not renumber the variants already deployed above it.
 //   - ClaimCreatorFees takes a SECOND `platform_claim_fee` arg — same real
-//     value-conservation discipline as Tier A's identical redeemer.
+//     value-conservation discipline as the linear curve's identical redeemer.
 //
 // **Redeemer indices are named, never written as numbers here.** They come
 // from ./redeemer-indices.ts, which a test pins against the compiled
@@ -31,7 +31,7 @@
 //
 // **Every spend here goes through `executeSpend`.** This validator is over
 // 15 KB, more than a transaction can carry alongside its own inputs and
-// outputs, so a Tier B curve spend has to NAME the published script rather
+// outputs, so a Cardano Launch curve spend has to NAME the published script rather
 // than embed it. Routing every action through one place is what stops an
 // action being added that quietly does not.
 //
@@ -84,7 +84,7 @@ import { BondingCurveTierBDatumSchema, capProofToPlutus, settlementDatum } from 
 
 // Fix (2026-07-21): platform_claim_fee split — mirrors bonding_curve_tier_b.ak's
 // platform_fee_ops_bps/platform_fee_treasury_bps/min_platform_claim_fee_lovelace
-// exactly (ported from Tier A's fix for parity).
+// exactly (ported from the linear curve's fix for parity).
 const MIN_PLATFORM_CLAIM_FEE_LOVELACE = 200_000n;
 
 // Pricing and the fee split are mirrors of bonding_curve_tier_b.ak's own
@@ -195,7 +195,7 @@ export interface LucidTierBCurveSubmitterConfig {
   blockfrostUrl: string;
   network: LucidNetwork;
   /** bonding_curve_tier_b.ak's compiled PlutusV3 script CBOR — one shared,
-   *  unparameterized script address across every Tier B launch. */
+   *  unparameterized script address across every Cardano Launch launch. */
   compiledScriptCbor: string;
   launchIdHex: string;
   /**
@@ -476,7 +476,7 @@ export class LucidTierBCurveSubmitter {
     return utxo.datum;
   }
 
-  /** Every Tier B launch shares one script address, so a datum's `launch_id`
+  /** Every Cardano Launch launch shares one script address, so a datum's `launch_id`
    *  is a claim rather than evidence — the launch's own thread NFT is what
    *  makes the UTXO the real one, and a second UTXO claiming the same launch
    *  has to stop the caller rather than be silently ignored. Both rules live
@@ -889,7 +889,7 @@ export class LucidTierBCurveSubmitter {
   // BuyTokens — buyer-signed.
   // --------------------------------------------------------------------------
 
-  /** Same skipClientCapCheck escape hatch as Tier A's — never pass true from a real buy flow. */
+  /** Same skipClientCapCheck escape hatch as the linear curve's — never pass true from a real buy flow. */
   async buyTokens(
     buyerMnemonic: string,
     tokenAmount: bigint,
@@ -947,7 +947,7 @@ export class LucidTierBCurveSubmitter {
 
     const buyerKeyHashHex = buyerKeyHashFromAddress(buyerAddress);
 
-    // The cap is CUMULATIVE, and on Tier B it spans the DarkVeil claim window
+    // The cap is CUMULATIVE, and on Cardano Launch it spans the DarkVeil claim window
     // too: a registrant who claimed an allocation has that much less public
     // headroom. `cap` carries the proof that makes the prior total real rather
     // than self-reported — the validator re-walks it against `cap_root`.
@@ -1005,12 +1005,12 @@ export class LucidTierBCurveSubmitter {
 
   // --------------------------------------------------------------------------
   // SellTokens — the reverse of BuyTokens. Seller-signed, same two-signing-
-  // shape pattern as buyTokens above. Same mechanism as Tier A's SellTokens
+  // shape pattern as buyTokens above. Same mechanism as the linear curve's SellTokens
   // — see bonding_curve_tier_b.ak's own SellTokens doc comment for
   // the full pricing-symmetry/value-conservation reasoning. Differs from
-  // Tier A's copy exactly the same way buyTokensCore already does: quadratic
+  // The linear curve's copy exactly the same way buyTokensCore already does: quadratic
   // pricing (curvePriceAtQuadratic, not curvePriceAt), FLOOR-rounded fees
-  // (floorFeeSlice, shared with Tier A's feeSlice).
+  // (floorFeeSlice, shared with the linear curve's feeSlice).
   // Constructor index 14 — deliberately the LAST variant declared in
   // bonding_curve_tier_b.ak's redeemer type (not grouped next to BuyTokens
   // where it reads most naturally), specifically so every other already-
@@ -1101,7 +1101,7 @@ export class LucidTierBCurveSubmitter {
       // Subtract the FULL grossProceeds, not netProceeds — see bonding_
       // curve_tier_b.ak's own SellTokens doc comment for the invariant
       // this preserves (total_raised can legitimately go negative on a
-      // round-trip sell; that's correct, not a bug — same as Tier A).
+      // round-trip sell; that's correct, not a bug — same as the linear curve).
       total_raised: currentDatum.total_raised - grossProceeds,
       creator_fees_accrued: currentDatum.creator_fees_accrued + creatorFee,
       platform_fees_accrued: currentDatum.platform_fees_accrued + platformFee,
@@ -1148,7 +1148,7 @@ export class LucidTierBCurveSubmitter {
   /**
    * CLI-driven verification path — signs with a decrypted extended key
    * (CML.PrivateKey.from_extended_bytes() + sign.withPrivateKey()), the
-   * SAME pattern Tier A's claimCreatorFees() (tier-a-claims-submitter.ts)
+   * SAME pattern the linear curve's claimCreatorFees() (tier-a-claims-submitter.ts)
    * uses for its own policy-wallet-as-creator-stand-in — the platform
    * wallet custody scheme (anvil-client.php) only ever persists an
    * extended skey, never a mnemonic, so this is the only signing shape
@@ -1313,7 +1313,7 @@ export class LucidTierBCurveSubmitter {
 
   // --------------------------------------------------------------------------
   // ExpireCurve — permissionless, constructor index 7. Same
-  // honest-"now" discipline as Tier A's (see tier-a-curve-submitter.ts's
+  // honest-"now" discipline as the linear curve's (see tier-a-curve-submitter.ts's
   // own method header for the full timing-bug lesson this avoids).
   // --------------------------------------------------------------------------
 
@@ -1325,7 +1325,7 @@ export class LucidTierBCurveSubmitter {
       BondingCurveTierBDatumSchema,
     );
 
-    // Mirrors the validator's own set of expirable states — see the Tier A
+    // Mirrors the validator's own set of expirable states — see the linear curve
     // submitter's expireCurve for the reasoning. DvClaim is deliberately not
     // among them on either side: ActivateCurve out of it is permissionless
     // once the windows pass, so it is not stranded and cancelling it would

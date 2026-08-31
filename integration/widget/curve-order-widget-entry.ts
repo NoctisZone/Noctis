@@ -1,23 +1,23 @@
 // ============================================================================
-// Noctis Zone — Curve Order Widget: browser entry point (Tier B public curve)
+// Noctis Zone — Curve Order Widget: browser entry point (Cardano Launch public curve)
 // ============================================================================
 // webpack browser target (see ../webpack.widgets.config.cjs's
 // curve-order-widget block) — bundled to assets/js/curve-order-widget.bundle.js
-// in the theme, enqueued only on Tier B curve_live launch pages
-// (lp-chart-buy-tier-b.php), following the exact enqueue pattern the Tier A
+// in the theme, enqueued only on Cardano Launch curve_live launch pages
+// (lp-chart-buy-tier-b.php), following the exact enqueue pattern the linear curve
 // buy widget already uses.
 //
 // Exposes window.NoctisCurveOrder, a plain object of async functions the
 // theme's vanilla JS calls directly from DOM event handlers — same shape as
 // window.NoctisTierABuy (tier-a-buy-widget-entry.ts).
 //
-// WHY THIS IS AN ORDER WIDGET AND NOT A DIRECT-SPEND WIDGET: the Tier A
+// WHY THIS IS AN ORDER WIDGET AND NOT A DIRECT-SPEND WIDGET: the linear curve
 // widget spends the curve UTXO itself, which works because Lucid Evolution
 // always EMBEDS the validator it spends (tests/script-size-budget.test.ts
-// records why readFrom cannot change that) and the Tier A script leaves room
-// for it. The Tier B validator is 14,226 B of the 16,384-byte transaction
+// records why readFrom cannot change that) and the linear curve script leaves room
+// for it. The Cardano Launch validator is 14,226 B of the 16,384-byte transaction
 // cap before a single input, output or cap proof — a browser cannot spend it
-// the Tier A way, and the referenced path is server-side by construction
+// The linear curve way, and the referenced path is server-side by construction
 // (Mesh signs with keys a browser must never hold). Placing an ORDER needs
 // none of that: creating a UTXO at a script address never runs its
 // validator, so placement is an ordinary payment. The batcher touches the
@@ -30,8 +30,8 @@
 //
 // HONEST SCOPE — read before wiring a template to this:
 //
-// 1. BUY ONLY, plus my-orders and cancel. The Tier B template renders no
-//    sell form today, and the Tier A widget is buy-only for the same
+// 1. BUY ONLY, plus my-orders and cancel. The Cardano Launch template renders no
+//    sell form today, and the linear curve widget is buy-only for the same
 //    reason. placeSellOrder is a straightforward extension when the
 //    template grows a sell side (the submitter underneath already supports
 //    it) — deliberately not shipped unexercised.

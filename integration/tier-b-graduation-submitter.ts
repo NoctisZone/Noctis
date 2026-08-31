@@ -1,5 +1,5 @@
 // ============================================================================
-// Noctis Zone — Tier B Preprod, graduation submitter
+// Noctis Zone — Cardano Launch Preprod, graduation submitter
 // Real Cardano transaction submitter for a TIER B launch's graduation:
 // bonding_curve_tier_b.ak's Graduate + lp_escrow.ak's SealLock +
 // vesting.ak's StartVesting.
@@ -7,12 +7,12 @@
 // This is a direct MIRROR of tier-a-graduation-submitter.ts (the proven Tier
 // A flow — real Preprod txs a7531f4b… graduate+seal and 09d917d2… Minswap
 // pool, TIER_A_PREPROD_MILESTONE.md Phase 5/5b). Everything that made the
-// Tier A version correct applies here unchanged, because:
-//   - lp_escrow.ak and vesting.ak are SHARED across Tier A and Tier B (one
+// The linear curve version correct applies here unchanged, because:
+//   - lp_escrow.ak and vesting.ak are SHARED across both Cardano curves (one
 //     validator each, not tier-specific). SealLock and StartVesting are
 //     byte-for-byte the same redeemers with the same variant indices.
-//   - Tier B's Graduate arm (bonding_curve_tier_b.ak) is structurally
-//     identical to Tier A's — verified directly: same
+//   - Cardano Launch's Graduate arm (bonding_curve_tier_b.ak) is structurally
+//     identical to the linear curve's — verified directly: same
 //     `curve_state == Graduated`, `!lp_seeded`, `!staking_seeded`,
 //     `new_datum == expected_datum` (only total_raised→0, lp_seeded→True,
 //     staking_seeded→True change), and the same four value-movement helpers
@@ -24,9 +24,9 @@
 //     BondingCurveTierBDatumSchema was synced to the real 31-field datum,
 //     2026-07-23).
 //
-// The ONLY differences from the Tier A submitter:
+// The ONLY differences from the linear curve submitter:
 //   - decodes/re-encodes the curve UTXO with BondingCurveTierBDatumSchema
-//     (Tier B's genuinely different datum shape — adds dv_allocation_root /
+//     (Cardano Launch's genuinely different datum shape — adds dv_allocation_root /
 //     dv_claimed / dv_settled).
 //   - targets bonding_curve_tier_b.ak's compiled script instead of
 //     bonding_curve.ak's.
@@ -36,9 +36,9 @@
 // declaration order (ActivateCurve=0, BuyTokens=1, ClaimDarkVeilTokens=2,
 // ClaimCreatorFees=3, ClaimTreasuryFees=4, ClaimOpsFees=5, CancelCurve=6,
 // ExpireCurve=7, ClaimBuyback=8, Graduate=9, TriggerCTO=10, DissolveCTO=11,
-// AnchorDvAllocationRoot=12), not assumed to match Tier A.
+// AnchorDvAllocationRoot=12), not assumed to match the linear curve.
 //
-// Timestamp units — MILLISECONDS throughout, matching the Tier A submitter
+// Timestamp units — MILLISECONDS throughout, matching the linear curve submitter
 // and Cardano's own validity range. This file is a mirror, and it inherits
 // the units along with everything else:
 //   - Graduate takes no timestamp parameter at all (bare variant).
@@ -54,8 +54,8 @@
 // Graduate and SealLock are PERMISSIONLESS; StartVesting requires the
 // governor signature. Two-transaction split (TX1 = Graduate + SealLock,
 // TX2 = StartVesting alone, built only after TX1 confirms) — same 16384-byte
-// tx-size-cap reasoning and same independence proof as Tier A. TX1 builds
-// through mesh-curve-spend.ts's reference-script path exactly as Tier A's
+// tx-size-cap reasoning and same independence proof as the linear curve. TX1 builds
+// through mesh-curve-spend.ts's reference-script path exactly as the linear curve's
 // does (2026-08-31): the curve and LP escrow validators are NAMED via their
 // published CIP-33 reference scripts, staking_pool.ak is carried when a
 // staking-enabled launch's pool seeding (TopUpPool, creator-signed) joins
@@ -108,7 +108,7 @@ function fromHex(hex: string): Uint8Array {
   return new Uint8Array(Buffer.from(hex, 'hex'));
 }
 
-/** Same conversion the Tier A submitter proved on real Preprod — the
+/** Same conversion the linear curve submitter proved on real Preprod — the
  *  governor key is a shared, tier-agnostic role, so this is reused verbatim. */
 function extendedHexToBech32PrivateKey(extendedHex: string): string {
   const bytes = fromHex(extendedHex);
@@ -140,7 +140,7 @@ export interface TierBGraduationConfig {
   /**
    * Where the curve and LP escrow validators are published as CIP-33
    * reference scripts — TX1 names both rather than carrying them, the same
-   * mechanism every referenced Tier B trade already uses. Optional at the
+   * mechanism every referenced Cardano Launch trade already uses. Optional at the
    * type level only because `startVesting` (TX2) has no use for them;
    * `graduateAndSealLp` requires both and refuses to build without them.
    */
@@ -275,7 +275,7 @@ export class TierBGraduationSubmitter {
     }
 
     // total_raised must be real, positive backing for the LP — same
-    // guard as the Tier A submitter (fail fast with a clear message rather
+    // guard as the linear curve submitter (fail fast with a clear message rather
     // than building a tx the contract's value helpers will reject).
     if (curveDatum.total_raised <= 0n) {
       throw new Error(
@@ -288,7 +288,7 @@ export class TierBGraduationSubmitter {
 
     // ---- bonding_curve_tier_b's own continuing output (Graduate) ----
     // The spread carries every unchanged field through — crucially including
-    // Tier B's DarkVeil fields (dv_allocation_root /
+    // Cardano Launch's DarkVeil fields (dv_allocation_root /
     // dv_claimed / dv_settled) and the cto_governance_* fields, matching the
     // contract's own `..datum` spread. Only these three change. The assets
     // spread likewise: built from the FULL input value so the curve's thread
@@ -350,7 +350,7 @@ export class TierBGraduationSubmitter {
     const requiredSignerHashes: string[] = [];
 
     // ---- staking pool's own seeding spend (TopUpPool), staking launches ----
-    // Same mechanism as the Tier A submitter — staking_pool.ak is SHARED
+    // Same mechanism as the linear curve submitter — staking_pool.ak is SHARED
     // across both curve validators, so the pool spend is identical.
     //
     // The pool UTXO already exists — its thread NFT is minted once, with the
@@ -445,7 +445,7 @@ export class TierBGraduationSubmitter {
   }
 
   /**
-   * The Mesh execution parts for TX1 — same shape as the Tier A submitter's:
+   * The Mesh execution parts for TX1 — same shape as the linear curve submitter's:
    * a spender referencing the curve, the governor's key-backed wallet funding
    * fees and change, and the creator as co-signer when one was passed and is
    * not the governor already.

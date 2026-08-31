@@ -1,6 +1,6 @@
 // ============================================================================
 // Noctis Zone — Cardano L1 N-Hop Challenge Contract (Aiken)
-// Tier B only (CLAUDE.md, 2026-07-12)
+// Cardano Launch only (CLAUDE.md, 2026-07-12)
 // ============================================================================
 // Implements CLAUDE.md's N-Hop Challenge Window (constants NHOP_CHALLENGE_BOND,
 // NHOP_MAX_HOPS, NHOP_LOOKBACK_DAYS, NHOP_WINDOW_HRS, NHOP_DEFENCE_HRS).
@@ -8,21 +8,21 @@
 // this repo or HISTORY_ARCHIVE.md — the mechanism below was designed this
 // session from that alone, with Jinx confirming each real design fork.
 //
-// Purpose: lets anyone challenge a Tier B DarkVeil claimant as a Sybil —
+// Purpose: lets anyone challenge a Cardano Launch DarkVeil claimant as a Sybil —
 // specifically, a wallet within NHOP_MAX_HOPS (5) Cardano transaction hops
 // of the creator's own wallet within a NHOP_LOOKBACK_DAYS (180) window,
 // evidence of the "slot dilution" griefing vector described elsewhere (the
 // creator's own associates registering as ghost DarkVeil participants to
 // shrink `base_slot` for legitimate buyers).
 //
-// Why this is Tier B only: Tier C is already fully build-blocked,
-// independent of this feature. Tier B already has a full
+// Why this is Cardano Launch only: Midnight Launch is already fully build-blocked,
+// independent of this feature. Cardano Launch already has a full
 // Cardano contract suite (bonding_curve_tier_b.ak) to sit alongside.
 //
 // Why this lives on Cardano, not Midnight: the reporter bond
 // (NHOP_CHALLENGE_BOND, 25 ADA) is ADA-denominated, and DarkVeil
 // registration itself lives on Midnight — same cross-chain mismatch
-// already solved by moving Tier B's public curve to Cardano entirely.
+// already solved by moving Cardano Launch's public curve to Cardano entirely.
 // ADA isn't representable as a Midnight-native token; this validator
 // avoids that problem by existing on the same chain the bond is paid in.
 //
@@ -250,7 +250,7 @@ fn paid_to(
 }
 
 /// Fix (2026-07-20, Aiken security-review pass): this validator has
-/// zero constructor parameters — every N-hop challenge across every Tier B
+/// zero constructor parameters — every N-hop challenge across every Cardano Launch
 /// launch shares ONE fixed script address, distinguished only by launch_id
 /// in the datum (same structural precondition as the double-satisfaction
 /// gap fixed across bonding_curve.ak/lp_escrow.ak/vesting.ak/

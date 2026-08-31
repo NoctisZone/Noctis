@@ -177,7 +177,7 @@ describe('collateral', () => {
 });
 
 describe('signing a transaction someone else built', () => {
-  /** A real referenced Tier B spend, built by the real builder. */
+  /** A real referenced Cardano Launch spend, built by the real builder. */
   async function realUnsignedTx(): Promise<string> {
     const spender = new MeshCurveSpender({
       network: 'preprod',

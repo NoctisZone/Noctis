@@ -109,7 +109,7 @@ export function planLaunchAllocations(request: LaunchAllocationRequest): LaunchA
 function resolveDarkVeilPercent(tier: Tier, requested: bigint | undefined): bigint {
   if (tier === 'A') {
     if (requested !== undefined && requested !== 0n) {
-      throw new Error(`Tier A has no DarkVeil phase, so it cannot allocate ${requested}% to one`);
+      throw new Error(`the linear curve has no DarkVeil phase, so it cannot allocate ${requested}% to one`);
     }
     return 0n;
   }

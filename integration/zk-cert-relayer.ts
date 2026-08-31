@@ -4,7 +4,7 @@
 // CLAUDE.md's design: after DarkVeil closes on Midnight, the resulting ZK Fair
 // Launch Certificate needs to be anchored on Cardano L1
 // (contracts/cardano/validators/zk_anchor.ak) so it's publicly verifiable —
-// including for Tier C, whose launch otherwise has no Cardano footprint at
+// including for Midnight Launch, whose launch otherwise has no Cardano footprint at
 // all. CLAUDE.md's decision: "Default: Option A [direct Midnight SDK
 // cross-chain posting] if supported, fall back to Option B [platform-
 // operated relayer]. Do not use Option C [omit the anchor]."
@@ -118,7 +118,7 @@ export interface ProofBundle {
    *
    * Everything above this line is an AGGREGATE — how many took part, how much
    * was raised, how many tokens went out. None of it says WHICH allocations
-   * the launch will honour, and on Tier B that is decided entirely by the root
+   * the launch will honour, and on Cardano Launch that is decided entirely by the root
    * `AnchorDvAllocationRoot` writes into the curve datum, since
    * `ClaimDarkVeilTokens` pays out against a proof under that root and nothing
    * else. Committing to it here is what lets a reader check that the
@@ -126,11 +126,11 @@ export interface ProofBundle {
    * `dv_allocation_root` off the curve UTXO, compare it to this field, and any
    * disagreement is visible without trusting the relayer that published both.
    *
-   * Empty string on Tier C, and that is a real difference rather than an
-   * omission: Tier C allocates every registrant the same `baseSlot`
+   * Empty string on Midnight Launch, and that is a real difference rather than an
+   * omission: Midnight Launch allocates every registrant the same `baseSlot`
    * (`closeDarkVeil` sets one figure for all of them), so there is no
    * per-registrant tree for a root to summarise. `totalTokensAllocated` and
-   * `totalParticipants` already pin that distribution between them. If Tier C
+   * `totalParticipants` already pin that distribution between them. If Midnight Launch
    * ever gains per-registrant allocations, this is the field they bind to.
    */
   dvAllocationRoot: string;
@@ -143,16 +143,16 @@ function toHex(bytes: Uint8Array): string {
 }
 
 /**
- * `dvAllocationRoot` is REQUIRED on Tier B and refused rather than defaulted:
- * a Tier B certificate that omits it is exactly the certificate that says
+ * `dvAllocationRoot` is REQUIRED on Cardano Launch and refused rather than defaulted:
+ * a Cardano Launch certificate that omits it is exactly the certificate that says
  * nothing about who gets paid, and a silent empty string would produce a
- * perfectly valid-looking bundle carrying that hole. Tier C passes nothing —
+ * perfectly valid-looking bundle carrying that hole. Midnight Launch passes nothing —
  * see the field's own comment for why it has no root to bind.
  */
 export function assembleProofBundle(cert: FairLaunchCert, tier: 'B' | 'C', dvAllocationRoot?: Uint8Array): ProofBundle {
   if (tier === 'B' && dvAllocationRoot?.length !== 32) {
     throw new Error(
-      'Cannot assemble a Tier B proof bundle without the DarkVeil allocation root: ' +
+      'Cannot assemble a Cardano Launch proof bundle without the DarkVeil allocation root: ' +
         `expected 32 bytes, got ${dvAllocationRoot ? `${dvAllocationRoot.length} bytes` : 'nothing'}. ` +
         'This is the root ClaimDarkVeilTokens settles against, so a certificate omitting it ' +
         'commits to no distribution at all.',
@@ -160,7 +160,7 @@ export function assembleProofBundle(cert: FairLaunchCert, tier: 'B' | 'C', dvAll
   }
   if (tier === 'C' && dvAllocationRoot) {
     throw new Error(
-      'Tier C has no DarkVeil allocation root to bind — every registrant receives the same ' +
+      'Midnight Launch has no DarkVeil allocation root to bind — every registrant receives the same ' +
         'baseSlot, so there is no per-registrant tree. Passing one means the caller has ' +
         'confused it with something else.',
     );
@@ -280,17 +280,17 @@ export interface RelayCertificateResult {
  * Full relay flow: fetch the cert from Midnight, assemble + hash the proof
  * bundle, pin it to IPFS, then anchor the hashes on Cardano L1.
  *
- * `tier` determines certType: Tier B closes DarkVeil into a public curve on
- * Cardano already so its cert is 'DarkVeilCert'; Tier C's is the
+ * `tier` determines certType: Cardano Launch closes DarkVeil into a public curve on
+ * Cardano already so its cert is 'DarkVeilCert'; Midnight Launch's is the
  * 'FullZKCert' (the whole launch, not just DarkVeil, lives on Midnight).
  */
 export async function relayCertificate(
   launchManager: NoctisLaunchManager,
   tier: 'B' | 'C',
   /**
-   * The same 32 bytes `AnchorDvAllocationRoot` writes to the Tier B curve, so
+   * The same 32 bytes `AnchorDvAllocationRoot` writes to the Cardano Launch curve, so
    * the certificate and the settlement commit to one distribution. Omitted on
-   * Tier C. `assembleProofBundle` refuses a Tier B call without it.
+   * Midnight Launch. `assembleProofBundle` refuses a Cardano Launch call without it.
    */
   dvAllocationRoot: Uint8Array | undefined,
   ipfsPinner: IpfsPinner,
@@ -298,8 +298,8 @@ export async function relayCertificate(
   relayerAddress: string,
   extraMetadata: Record<string, string | number | boolean> = {},
 ): Promise<RelayCertificateResult> {
-  // Returns the certificate itself. On Tier B that is a read of the published
-  // ledger; on Tier C it is a circuit call whose `.private.result` unwrapping
+  // Returns the certificate itself. On Cardano Launch that is a read of the published
+  // ledger; on Midnight Launch it is a circuit call whose `.private.result` unwrapping
   // the manager handles. Either way the caller gets a FairLaunchCert.
   const cert = await launchManager.getFairLaunchCert();
 

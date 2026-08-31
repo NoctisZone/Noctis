@@ -1,5 +1,5 @@
 // ============================================================================
-// Noctis Zone — Tier B public bonding curve, real Cardano actions
+// Noctis Zone — Cardano Launch public bonding curve, real Cardano actions
 // ============================================================================
 // One consolidated CLI (action-dispatched) rather than 7 near-identical
 // per-redeemer files, matching the class this session's own fix
@@ -178,7 +178,7 @@ async function main() {
     case 'buy': {
       const mnemonic = requireField(input, 'buyerMnemonic', input.action);
       const amount = BigInt(requireField(input, 'tokenAmount', input.action));
-      // The cumulative cap's accumulator — on Tier B this spans the DarkVeil
+      // The cumulative cap's accumulator — on Cardano Launch this spans the DarkVeil
       // claim window as well as public buys. Omit it only for a curve nothing
       // has been taken from yet; the submitter refuses to build a transaction
       // if what it is handed does not derive the datum's own cap_root.

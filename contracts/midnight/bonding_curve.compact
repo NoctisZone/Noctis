@@ -9,7 +9,7 @@ import CompactStandardLibrary;
 // ---------------------------------------------------------------------------
 // TWIN RULE — read before changing anything in the DarkVeil half of this file
 // ---------------------------------------------------------------------------
-// This contract and eligibility_gate.compact (Tier B) are twins: both
+// This contract and eligibility_gate.compact (Cardano Launch) are twins: both
 // merge DarkVeil registration, bonding and commit/reveal buying into one
 // contract, and both
 // carry near-identical circuits for it. They drifted once, because a fix
@@ -22,16 +22,16 @@ import CompactStandardLibrary;
 // how the drift happened; a stated reason is checkable, silence is not.
 // ---------------------------------------------------------------------------
 //
-// This is the Tier C Midnight bonding curve — QUADRATIC pricing, NIGHT-
-// denominated. Tier A never touches Midnight at all; its linear curve lives
+// This is the Midnight Launch Midnight bonding curve — QUADRATIC pricing, NIGHT-
+// denominated. The linear curve never touches Midnight at all; its linear curve lives
 // in a separate Aiken/Cardano contract (contracts/cardano/bonding_curve.ak).
-// Tier B's public bonding curve ALSO moved to Cardano/Aiken (resolved
+// Cardano Launch's public bonding curve ALSO moved to Cardano/Aiken (resolved
 // 2026-07-09, see contracts/cardano/bonding_curve_tier_b.ak) — the public
 // phase is public information by definition, so it never needed Midnight's
 // privacy, and keeping it on Midnight would have needed a relayer bridge
 // just so buyTokens could learn a Cardano ADA payment had happened, since
 // ADA isn't representable as a Midnight-native unshielded token. Only
-// Tier C keeps its public curve on Midnight, because Tier C's token and LP
+// Midnight Launch keeps its public curve on Midnight, because Midnight Launch's token and LP
 // are Midnight-native too — there's no cross-chain payment problem for it
 // to begin with.
 //
@@ -51,10 +51,10 @@ import CompactStandardLibrary;
 // call form tested fails with "contract types are not yet implemented"
 // (verified against the installed compactc, not assumed). The one mechanism
 // that DOES work, verified by compiling it, is folding `.compact` sources
-// into one deployed contract with one shared ledger. So for Tier C,
+// into one deployed contract with one shared ledger. So for Midnight Launch,
 // eligibility_gate's allowlist/registration/cap-tracking logic,
 // darkveil's private commit/reveal buying logic, and bonding_curve's
-// public-buy logic are now ONE PSM instead of three. Tier B still deploys
+// public-buy logic are now ONE PSM instead of three. Cardano Launch still deploys
 // eligibility_gate.compact AND darkveil.compact standalone (no bonding
 // curve to merge with — that moved to Cardano) — the two tiers now use
 // different shapes of "the eligibility gate" and "DarkVeil," which is an
@@ -68,7 +68,7 @@ import CompactStandardLibrary;
 // Also closes a related, previously-undiscovered gap: darkveil.compact had
 // ZERO payment enforcement anywhere — revealBuyCommit verified the claimed
 // price/allocation but never checked the buyer actually paid any NIGHT at
-// all, for any tier. Fixed here for Tier C via receiveUnshielded, applied
+// all, for any tier. Fixed here for Midnight Launch via receiveUnshielded, applied
 // at REVEAL time specifically (not submit time) — this is deliberate, not
 // an oversight: submitBuyCommit only stores a commitment hash, and the
 // purchase amount is intentionally still hidden at that point (that's the
@@ -79,10 +79,10 @@ import CompactStandardLibrary;
 // PRIVACY ANALYSIS section), so enforcing payment there costs no
 // additional disclosure beyond what the feature already does — reviewed
 // against the privacy/selective-disclosure gold standard before landing,
-// not after. Tier B settles its DarkVeil purchases on Cardano instead, for
+// not after. Cardano Launch settles its DarkVeil purchases on Cardano instead, for
 // a reason that is structural rather than a matter of scope: Compact can
 // never custody ADA, so payment there is enforced where the ada actually is.
-// This contract is Tier C only and needed no change for it.
+// This contract is Midnight Launch only and needed no change for it.
 //
 // Identity note: eligibility_gate.compact, bonding_curve.compact, and
 // darkveil.compact previously derived the caller's UserPublicKey under
@@ -97,8 +97,8 @@ import CompactStandardLibrary;
 // balances, paidByBuyer, buyRecords, and now commitments/nullifiers too,
 // are all keyed by that same identity, not the old per-file ones.
 //
-// Per CLAUDE.md's tier design, Tier A is deliberately the "weak" tier (weak
-// per-address cap, simple linear pricing) and Tier B/C are deliberately
+// Per CLAUDE.md's tier design, the linear curve is deliberately the "weak" tier (weak
+// per-address cap, simple linear pricing) and both launch types are deliberately
 // "strong" (ZK-identity cap + a curve that accelerates faster the more of
 // it one wallet buys). Do not flatten this to linear — that was tried in an
 // earlier draft of this file and was a spec deviation, not a
@@ -109,7 +109,7 @@ import CompactStandardLibrary;
 //   k = (maxPrice - basePrice) / curveSupply^2
 //   i.e. price = basePrice + ((maxPrice - basePrice) * sold^2) / curveSupply^2
 //
-// Same k derivation — i.e. same curve SHAPE — as Tier B's Cardano-side
+// Same k derivation — i.e. same curve SHAPE — as Cardano Launch's Cardano-side
 // curve (Jinx's explicit call: no per-tier steepness difference). basePrice/
 // maxPrice/grossPayment are always in the smallest unit of NIGHT
 // (micro-NIGHT).
@@ -200,7 +200,7 @@ struct BuyRecordIdInput {
 // Input for computing a registration commitment from private data
 // Fix (2026-07-21, Medium): dropped the prover-chosen `nonce`
 // field — same fix and reasoning as eligibility_gate.compact's parallel
-// struct (this merged Tier C contract has its own copy of the same bug).
+// struct (this merged Midnight Launch contract has its own copy of the same bug).
 struct RegistrationCommitInput {
   domain: Bytes<32>;
   userKey: Bytes<32>;
@@ -479,7 +479,7 @@ export ledger platformFees: Uint<128>;
 // cto_triggered/community-wallet pattern already used by
 // lp_escrow.compact/creator_escrow.compact's own triggerCTO/dissolveCTO,
 // applied here for the first time to the bonding curve's own fee accrual
-// (which holds the REAL claimable creator fee for Tier C).
+// (which holds the REAL claimable creator fee for Midnight Launch).
 // Before this fix, a passed CTO vote never redirected anything here: this
 // contract had no CTO concept at all, so the creator could keep receiving
 // withdrawFees' creatorAmount share regardless of governance outcome.
@@ -595,7 +595,7 @@ sealed ledger registrationCloseTime: Uint<64>;
 // registering as ghosts to dilute baseSlot for legitimate buyers, and (b)
 // an attacker cheaply registering >50% of a tiny launch's participants
 // purely to force DV to fail (bonds are refunded on failure, so the only
-// real cost is gas). Same fix as eligibility_gate.compact (Tier B).
+// real cost is gas). Same fix as eligibility_gate.compact (Cardano Launch).
 // CLAUDE.md: MIN_DV_PARTICIPANTS = 15.
 sealed ledger minDvParticipants: Uint<64>;
 
@@ -1171,7 +1171,7 @@ export circuit registerForDarkVeil(): [] {
   assert(disclose(phase == LaunchPhase.DarkVeil), "DarkVeil registration not active");
   // Fix (2026-07-21, Medium): `phase` alone was checked, never
   // `dvState` — see eligibility_gate.compact's parallel fix comment for
-  // the full finding (this merged Tier C contract has the same bug).
+  // the full finding (this merged Midnight Launch contract has the same bug).
   assert(disclose(dvState == DarkVeilState.Registration), "DarkVeil not in registration sub-phase");
 
   // Derive caller identity (moved above verifyAllowlist — security audit
@@ -1231,7 +1231,7 @@ export circuit registerForDarkVeil(): [] {
 // revealing WHICH registrant is buying (a nullifier is already a one-way,
 // unlinkable value, and this one is already public from registration),
 // preserving the commit-time identity-blindness this circuit is designed
-// around. Same fix applied identically to Tier B's eligibility_gate.compact.
+// around. Same fix applied identically to Cardano Launch's eligibility_gate.compact.
 // Fix (2026-07-21, High): nullifier is no longer a caller-supplied
 // parameter — see computeBuyNullifier's own comment for the full finding.
 export circuit submitBuyCommit(
@@ -1364,9 +1364,9 @@ export circuit revealBuyCommit(
   // Verify the price matches DarkVeil price
   assert(disclose(pricePerToken == dvPrice), "Price mismatch with DarkVeil price");
 
-  // Security-audit fix (Phase 2): darkveil.compact's standalone Tier B
+  // Security-audit fix (Phase 2): darkveil.compact's standalone Cardano Launch
   // copy of this circuit already enforces this per-registrant cap
-  // (design requirement) — this merged Tier C copy set/read baseSlot for the
+  // (design requirement) — this merged Midnight Launch copy set/read baseSlot for the
   // ratio-refund formula but never enforced it as a purchase-time ceiling,
   // so a single registrant could reveal up to the entire dvAllocation pool
   // in one call, bounded only by the coarser 5% wallet cap below.
@@ -1639,7 +1639,7 @@ export circuit expireDarkVeil(): [] {
 }
 
 // Cancel DarkVeil (failure path). Bonds are refundable
-// via claimBondRefund (this same contract now, for Tier C).
+// via claimBondRefund (this same contract now, for Midnight Launch).
 //
 // `dvFailed` is set here as well as `dvState`, and both are required for
 // that refund promise to hold. claimBondRefund gates on
@@ -1676,7 +1676,7 @@ export circuit cancelDarkVeil(): [] {
 // keyed by their own in-circuit-derived caller identity (see the cap
 // enforcement above and in revealBuyCommit) — so it's removed rather than
 // fixed in place. eligibility_gate.compact's standalone copy (used by
-// Tier B, which has no equivalent inline check) keeps the circuit but
+// Cardano Launch, which has no equivalent inline check) keeps the circuit but
 // binds callerKey to the derived caller identity instead of accepting it
 // as a parameter.
 
@@ -1877,7 +1877,7 @@ export circuit rebutRegistrantExclusion(registrantKey: Bytes<32>): [] {
 // Gated on the reveal window having closed, not merely on the dispute window:
 // while a reveal can still land this registrant might yet record a purchase,
 // and paying the bond back in full here would pay where a ratio refund was
-// owed. Tier B gates the same payout on its settlement record being finalized,
+// owed. Cardano Launch gates the same payout on its settlement record being finalized,
 // for the same reason — on this tier the reveal deadline IS that record
 // closing, because the purchase is recorded here rather than on Cardano.
 export circuit claimDisputedBond(
@@ -1969,7 +1969,7 @@ export circuit verifyBuyerEligibility(): [] {
 // claim genuinely true for the public phase too. Confirmed intended
 // behavior change, not a bug: the public phase is now allowlist-gated, the
 // same eligibility check DarkVeil registrants clear — not open to
-// arbitrary buyers the way a Tier A/B public curve is.
+// arbitrary buyers the way a Cardano public curve is.
 export circuit buyTokens(
   tokenAmount: Uint<128>,
   grossPayment: Uint<128>,
@@ -2108,7 +2108,7 @@ export circuit buyTokens(
 // output would be worse than removing it outright. basePrice/maxPrice/
 // curveSupply are now `export`ed (see their declarations above) precisely
 // so this same formula can be computed correctly off-chain — the same
-// division-in-TypeScript pattern Tier A's real `curvePriceAt()` already
+// division-in-TypeScript pattern the linear curve's real `curvePriceAt()` already
 // uses for its own (linear, Aiken-side) curve, and the pattern this
 // finding recommended.
 
@@ -2142,7 +2142,7 @@ export circuit getFees(): FeeConfig {
 // Update allowlist root, for late additions.
 //
 // The window is wider here than in eligibility_gate.compact, and deliberately
-// so: on Tier B the allowlist gates registration alone, but this merged
+// so: on Cardano Launch the allowlist gates registration alone, but this merged
 // contract also gates the PUBLIC phase behind it (see buyTokens and
 // verifiedBuyers), so eligible buyers must still be able to join a curve that
 // is already trading. The gate is therefore the launch being live at all.
@@ -2293,7 +2293,7 @@ export circuit cancelCurve(): [] {
 // required; the deadline check itself is the authorization, same trust
 // model as this file's own closeDarkVeil-adjacent timeouts. Once
 // Cancelled, buyers can already recover their NIGHT via claimCurveRefund
-// (unlike Tier A/B's atomic-delivery model, Tier C's balances are internal
+// (unlike Cardano's atomic-delivery model, Midnight Launch's balances are internal
 // ledger credits, not delivered tokens, so a real refund path already
 // existed here — this circuit just makes it reachable without depending
 // on the governor acting).
@@ -2344,7 +2344,7 @@ export circuit claimCurveRefund(recipientAddr: Bytes<32>): [] {
 // Design requirement: this must never only decrement the three
 // counters below with a comment deferring to "the Zswap layer via
 // transaction merging" — a mechanism that doesn't exist (see witnesses.ts).
-// Every graduated Tier C launch's fees were permanently unrecoverable.
+// Every graduated Midnight Launch launch's fees were permanently unrecoverable.
 // Now pays out for real via sendUnshielded, same pattern claimBondRefund/
 // claimRatioBondRefund already use, to the three fixed addresses pinned at
 // deploy (creatorAddr/platformAddr) so the governor can route
@@ -2379,7 +2379,7 @@ export circuit withdrawFees(
 
   // CTO fee-redirect fix (2026-07-12): the creator's share now goes to
   // communityWallet once a CTO has been triggered, same
-  // active_fee_recipient pattern as the Cardano curve contracts (Tier A/B)
+  // active_fee_recipient pattern as the Cardano curve contracts (Cardano)
   // and lp_escrow.ak's equivalent mechanism. platformAddr is unaffected by CTO —
   // only the CREATOR's income stream redirects (CLAUDE.md's "What a Passed
   // Vote Does" #1: "Creator fee escrow future payments -> CTO wallet").

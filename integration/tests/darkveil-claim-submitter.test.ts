@@ -1,5 +1,5 @@
 // Tests for darkveil-claim-submitter.ts's LucidDarkVeilClaimSubmitter — the
-// real Cardano tx submitter for Tier B's buyer-initiated ClaimDarkVeilTokens.
+// real Cardano tx submitter for Cardano Launch's buyer-initiated ClaimDarkVeilTokens.
 // This is real money movement (the buyer pays gross_payment for their
 // DarkVeil allocation) gated by several distinct security checks (the
 // creator-self-claim block, double-claim prevention, the 5% wallet cap,

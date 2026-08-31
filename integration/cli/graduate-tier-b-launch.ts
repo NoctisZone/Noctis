@@ -1,5 +1,5 @@
 // ============================================================================
-// Noctis Zone — Tier B Preprod, graduation CLI
+// Noctis Zone — Cardano Launch Preprod, graduation CLI
 // Graduate (bonding_curve_tier_b) + SealLock (lp_escrow) + StartVesting
 // (vesting). Direct mirror of graduate-tier-a-launch.ts — the ONLY
 // difference is the bonding-curve script title

@@ -130,12 +130,24 @@ async function getPoolState(): Promise<StakingPoolSummary> {
   return summarise(await requireSubmitter().overview());
 }
 
-/** One wallet's own position, or null when it has none open. */
-async function getMyPosition(stakerAddress: string): Promise<StakingPositionSummary | null> {
-  const overview = await requireSubmitter().overview();
+/**
+ * The payment key hash a pool records a wallet under.
+ *
+ * Exposed because a page needs it whether or not the wallet has a position —
+ * to recognise itself in the pool-wide list the moment it stakes. Asking for a
+ * position and inferring the key from the answer cannot do that: a wallet with
+ * no position has no answer to infer from.
+ */
+async function stakerKeyHash(stakerAddress: string): Promise<string> {
   const { getAddressDetails } = await import('@lucid-evolution/lucid');
   const vkh = getAddressDetails(stakerAddress).paymentCredential?.hash;
   if (!vkh) throw new Error('Could not derive a payment-credential key hash from the connected wallet.');
+  return vkh;
+}
+
+/** One wallet's own position, or null when it has none open. */
+async function getMyPosition(stakerAddress: string): Promise<StakingPositionSummary | null> {
+  const [overview, vkh] = await Promise.all([requireSubmitter().overview(), stakerKeyHash(stakerAddress)]);
   return summarise(overview).positions.find((p) => p.stakerVkhHex === vkh) ?? null;
 }
 
@@ -182,6 +194,7 @@ const NoctisStaking = {
   configure,
   getPoolState,
   getMyPosition,
+  stakerKeyHash,
   stake,
   unstake,
   claimRewards,

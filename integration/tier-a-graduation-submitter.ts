@@ -1,5 +1,5 @@
 // ============================================================================
-// Noctis Zone — Tier A Preprod Milestone, Phase 5
+// Noctis Zone — Cardano Preprod milestone, Phase 5
 // Real Cardano transaction submitter for graduation: bonding_curve.ak's
 // Graduate + lp_escrow.ak's SealLock + vesting.ak's StartVesting.
 // ============================================================================

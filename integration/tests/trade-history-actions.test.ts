@@ -55,13 +55,13 @@ describe('field lists name constructors that exist', () => {
 describe('the drift that actually happened', () => {
   // Written as literals on purpose. The point is to notice a SHIFT, and a test
   // that reads the same table the code reads cannot.
-  it('decodes Tier A index 4 as a sell, not an ops fee claim', () => {
+  it('decodes the linear curve index 4 as a sell, not an ops fee claim', () => {
     expect(BONDING_CURVE_ACTIONS[4]?.[0]).toBe('SellTokens');
     expect(BONDING_CURVE_ACTIONS[7]?.[0]).toBe('ClaimBuyback');
     expect(BONDING_CURVE_ACTIONS[12]?.[0]).toBe('BatchTrades');
   });
 
-  it('does not reuse Tier A’s numbering for Tier B, which differs from index 2 on', () => {
+  it('does not reuse the linear curve’s numbering for Cardano Launch, which differs from index 2 on', () => {
     expect(BONDING_CURVE_TIER_B_ACTIONS[2]?.[0]).toBe('ClaimDarkVeilTokens');
     expect(BONDING_CURVE_TIER_B_ACTIONS[13]?.[0]).toBe('SellTokens');
     // The same name, two different numbers — which is the whole hazard.

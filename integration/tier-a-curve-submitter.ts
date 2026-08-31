@@ -1,5 +1,5 @@
 // ============================================================================
-// Noctis Zone — Tier A Preprod Milestone, Phase 4
+// Noctis Zone — Cardano Preprod milestone, Phase 4
 // Real Cardano transaction submitter for bonding_curve.ak's ActivateCurve
 // and BuyTokens redeemers.
 // ============================================================================
@@ -157,7 +157,7 @@ export interface LucidTierACurveSubmitterConfig {
   network: LucidNetwork;
   /** bonding_curve.ak's compiled PlutusV3 script CBOR — plutus.json's
    *  validators[].compiledCode for bonding_curve.bonding_curve.spend. One
-   *  shared, unparameterized script address across every Tier A launch. */
+   *  shared, unparameterized script address across every linear-curve launch. */
   compiledScriptCbor: string;
   launchIdHex: string;
   /**
@@ -364,10 +364,10 @@ export class LucidTierACurveSubmitter {
   //   - buyTokens(mnemonic, ...): this session's CLI-driven verification
   //     path (Phase 4), signs via lucid.selectWallet.fromSeed().
   //   - buyTokensWithWallet(walletApi, ...): the real production path (the
-  //     Tier A buy widget, integration/widget/tier-a-buy-widget-entry.ts),
+  //     The linear curve buy widget, integration/widget/tier-a-buy-widget-entry.ts),
   //     signs via lucid.selectWallet.fromAPI(walletApi) — the same real,
   //     installed WalletApi type and fromAPI() call darkveil-claim-
-  //     submitter.ts already proved out for Tier B's buyer-signed claim flow.
+  //     submitter.ts already proved out for Cardano Launch's buyer-signed claim flow.
   // --------------------------------------------------------------------------
 
   /**
@@ -376,7 +376,7 @@ export class LucidTierACurveSubmitter {
    * `new_total_purchases <= datum.wallet_cap` check (bonding_curve.ak) can
    * be verified directly, not just this client's own honesty — used once,
    * for real, to produce genuine on-chain evidence of cap enforcement
-   * (Tier A Preprod Milestone Phase 4's own checkpoint requires a real
+   * (Cardano Preprod milestone Phase 4's own checkpoint requires a real
    * failed tx/validator error, not "the client also happens to agree").
    * Never pass true from any real buy flow.
    */

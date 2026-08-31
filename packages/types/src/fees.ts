@@ -20,5 +20,5 @@ export const FEE_SPLIT_BPS = {
  */
 export const FEE_DENOMINATOR_BPS = 10_000;
 
-/** Tier A/B trade currency is ADA; Tier C is NIGHT. Mirrors bonding_curve.compact's `Currency` enum. */
+/** Cardano trade currency is ADA; Midnight Launch is NIGHT. Mirrors bonding_curve.compact's `Currency` enum. */
 export type TradeCurrency = 'Ada' | 'Night';

@@ -2,7 +2,7 @@
 // Node-platform CLI bundles only (for PHP's proc_open-invoked one-shot
 // checks). Run: node build.mjs [--watch]
 //
-// (2026-07-17): the browser widget bundles (DarkVeil, Tier A buy) moved
+// (2026-07-17): the browser widget bundles (DarkVeil, the linear curve buy) moved
 // OFF esbuild entirely, to webpack.widgets.config.cjs — esbuild's WASM
 // handling cannot correctly link wasm-bindgen's `--target bundler` output
 // that several Lucid Evolution/Midnight transitive deps ship, which broke
@@ -258,7 +258,7 @@ const activateCurveCliConfig = {
 	logLevel: "info",
 };
 
-// (2026-07-21): one consolidated action-dispatched CLI for Tier B's
+// (2026-07-21): one consolidated action-dispatched CLI for Cardano Launch's
 // public curve (activate/buy/claim-*-fees/expire/claim-buyback) — same
 // __dirname/CML-WASM CJS reasoning as activateCurveCliConfig above (Lucid
 // Evolution's own bundled CML dependency needs a real __dirname at runtime,
@@ -591,13 +591,13 @@ const readDvPurchasesCliConfig = {
 // depends on @midnight-ntwrk/wallet-sdk-* (HD derivation, WalletFacade)
 // plus midnight-js-contracts, same WASM dependency (ledger-v8) as
 // readDvPurchasesCliConfig, no package-specific WASM of its own.
-// Deploys a Tier B eligibility gate. Same packages:external treatment as
+// Deploys a Cardano Launch eligibility gate. Same packages:external treatment as
 // publishAllowlistRootCliConfig below and for the same reason — it pulls the
 // identical Midnight dependency tree, so it cannot be bundled either.
 // Completes a gate that was deployed in phases, one maintenance update per
 // circuit. Same packages:external treatment as the deploy CLI above and for
 // the same reason — it pulls the identical Midnight dependency tree.
-// Drives a Tier B DarkVeil phase: the governor's phase transitions and each
+// Drives a Cardano Launch DarkVeil phase: the governor's phase transitions and each
 // registrant's own register/commit/reveal/claim. Same packages:external
 // treatment as the deploy CLI and for the same reason — identical Midnight
 // dependency tree.

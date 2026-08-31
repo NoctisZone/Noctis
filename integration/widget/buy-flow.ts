@@ -83,16 +83,16 @@ export async function revealBuyCommit(
   params: BuyFlowContractParams & {
     tokenAmount: bigint;
     pricePerToken: bigint;
-    // Fix (2026-07-30): Tier B's eligibility_gate.compact
+    // Fix (2026-07-30): Cardano Launch's eligibility_gate.compact
     // revealBuyCommit now takes a real currentTimestamp, bound to real
     // chain time, enforcing a 30-day reveal window after DarkVeil closes.
-    // Required for both tiers here (Tier C's circuit ignores it, but the
+    // Required for both tiers here (Midnight Launch's circuit ignores it, but the
     // caller always supplies real wall-clock "now").
     currentTimestamp: bigint;
-    // Required for Tier C only — bonding_curve.compact's revealBuyCommit
+    // Required for Midnight Launch only — bonding_curve.compact's revealBuyCommit
     // now verifies and accrues real fee slices (fix, 2026-07-21;
     // see midnight-client.ts's revealDarkVeilBuyCommit for the full
-    // rationale). Tier B's eligibility_gate.compact stays payment-free by
+    // rationale). Cardano Launch's eligibility_gate.compact stays payment-free by
     // design (real settlement is on Cardano), so this is omitted
     // there.
     tierCFees?: {
@@ -104,7 +104,9 @@ export async function revealBuyCommit(
   const { manager, buyerKey, buyNonce } = await connectForBuyFlow(session, params);
 
   if (params.tier === 'C' && !params.tierCFees) {
-    throw new Error('revealBuyCommit: tierCFees is required for Tier C (see manager.revealDarkVeilBuyCommit).');
+    throw new Error(
+      'revealBuyCommit: tierCFees is required for Midnight Launch (see manager.revealDarkVeilBuyCommit).',
+    );
   }
 
   // Recomputed with the SAME nonce used at commit time — guaranteed equal

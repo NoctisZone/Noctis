@@ -18,7 +18,7 @@
 // (experiments.asyncWebAssembly below) — not a esbuild misconfiguration on
 // this project's part, a genuine capability gap.
 //
-// Scope: ONLY the 2 browser widget bundles (DarkVeil, Tier A buy) move to
+// Scope: ONLY the 2 browser widget bundles (DarkVeil, the linear curve buy) move to
 // Webpack. Every Node-platform CLI bundle (integration/build.mjs's other
 // configs) stays on esbuild — this issue is specific to wasm-bindgen
 // bundler-target output consumed by a BROWSER build; the same packages'
@@ -142,7 +142,7 @@ module.exports = [
 		devtool,
 	},
 	{
-		// Tier B order widget (2026-08-27) — placing an order is an
+		// Cardano Launch order widget (2026-08-27) — placing an order is an
 		// ordinary payment, so unlike the three spend widgets this needs no
 		// Mesh alias block: its whole import graph is Lucid Evolution plus
 		// pure local modules. Same webpack requirement as the others (Lucid's

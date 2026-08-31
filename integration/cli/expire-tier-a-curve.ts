@@ -1,5 +1,5 @@
 // ============================================================================
-// Noctis Zone — Tier A Preprod Milestone, Phase 7
+// Noctis Zone — Cardano Preprod milestone, Phase 7
 // ExpireCurve (bonding_curve.ak) — permissionless on-chain, the
 // governor's key here is only used as this CLI's fee-paying/signing
 // wallet, not for authorization. See tier-a-curve-submitter.ts's

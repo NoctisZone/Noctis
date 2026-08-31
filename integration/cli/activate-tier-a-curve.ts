@@ -1,5 +1,5 @@
 // ============================================================================
-// Noctis Zone — Tier A Preprod Milestone, Phase 4
+// Noctis Zone — Cardano Preprod milestone, Phase 4
 // ActivateCurve — governor-signed, single-phase (see tier-a-curve-
 // submitter.ts's own header for why the original two-phase build/sign(PHP)/
 // submit design was abandoned: WeldPress's CBOR parser rejected Lucid's

@@ -3,14 +3,14 @@
 // ============================================================================
 // The foundation every other widget flow builds on: connects the Cardano
 // wallet (required for every tier — DV eligibility proof, fee payment, and
-// for Tier B the actual DarkVeil claim), optionally the Midnight wallet
-// (required for Tier C, and for actually submitting a Midnight transaction
+// for Cardano Launch the actual DarkVeil claim), optionally the Midnight wallet
+// (required for Midnight Launch, and for actually submitting a Midnight transaction
 // on any tier), gets the ONE master signature both password-derivation.ts
 // and private-state-store.ts need, and wires up the DarkVeilPrivateStore.
 //
 // HONEST SCOPE NOTE: this module gets a session to the point where identity/
 // buy-nonce derivation and Cardano-side actions (eligibility checks,
-// registration intent, Tier B claim) all work for real. Actually SUBMITTING
+// registration intent, Cardano Launch claim) all work for real. Actually SUBMITTING
 // a Midnight transaction (registerForDarkVeil, submitBuyCommit,
 // revealBuyCommit) needs a real ContractProviders.
 // widget/midnight-wallet-bridge.ts builds the WalletProvider/

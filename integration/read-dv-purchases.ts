@@ -1,5 +1,5 @@
 // ============================================================================
-// Noctis Zone — Tier B: read eligibility_gate.compact's real DarkVeil
+// Noctis Zone — Cardano Launch: read eligibility_gate.compact's real DarkVeil
 // purchase totals
 // ============================================================================
 // Closes the same "how do you enumerate a Map off-chain" question

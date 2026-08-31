@@ -1,5 +1,5 @@
 // ============================================================================
-// Noctis Zone — Tier A Preprod Milestone, Phase 7
+// Noctis Zone — Cardano Preprod milestone, Phase 7
 // ClaimBuyback — buyer-signed, mnemonic-based (this session's CLI-driven
 // verification path, same convention as buy-tier-a-curve.ts).
 // ============================================================================

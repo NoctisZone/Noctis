@@ -62,7 +62,7 @@ const BUY_NONCE = fakeBytes32(8);
 const REGISTRANT_TREE = buildRegistrantTree([hashRegistrantLeaf(REGISTRANT_KEY)]);
 
 // Phase 2 security-audit fix (2026-07-11): darkveil.compact merged into
-// this file (mirrors the Tier C merge) — getBuyNonce is now part of this
+// this file (mirrors the Midnight Launch merge) — getBuyNonce is now part of this
 // contract's own witness set.
 /** Attests the allowlist root with a SECOND attestor, completing the 2-of-3. */
 function attestAllowlistAgain(contractAddress: string, ctx: never, root: Uint8Array, at = 0n) {
@@ -784,7 +784,7 @@ describe('eligibility_gate.compact — minimum DarkVeil participant floor', () =
 
 // ============================================================================
 // Phase 2 security-audit fix (2026-07-11): darkveil.compact merged into
-// this contract for Tier B. Test coverage below ports what darkveil.test.ts
+// this contract for Cardano Launch. Test coverage below ports what darkveil.test.ts
 // used to cover (now deleted — that file tested a contract nothing deploys
 // anymore), adapted for the merged identity/constructor, plus new coverage
 // for what the merge specifically added (cumulativePurchases/
@@ -1172,7 +1172,7 @@ describe('eligibility_gate.compact — merged DarkVeil private buy (Phase 2)', (
   });
 });
 
-describe('eligibility_gate.compact — Phase 2: claimRatioBondRefund (previously Tier C only)', () => {
+describe('eligibility_gate.compact — Phase 2: claimRatioBondRefund (previously Midnight Launch only)', () => {
   /** Registers, submits + reveals a DV buy for `purchased` tokens, closes DarkVeil with `baseSlot`. */
   function registerBuyAndClose(purchased: bigint, baseSlot: bigint) {
     const d = deploy();
@@ -1892,7 +1892,7 @@ describe('eligibility_gate.compact — registrant exclusion dispute', () => {
 
 describe('eligibility_gate.compact — a closed DarkVeil cannot be marked failed', () => {
   it('refuses markDarkVeilFailed once DarkVeil has closed normally', () => {
-    // The twin of the same guard on the Tier C contract. Failed and
+    // The twin of the same guard on the Midnight Launch contract. Failed and
     // normally-closed are mutually exclusive by design: claimRatioBondRefund
     // settles a bond against what the registrant actually bought, while
     // dvFailed opens the full-refund path to everyone.

@@ -1,6 +1,6 @@
 // ============================================================================
 // Noctis Zone — Cardano L1 Token Metadata Contract (Aiken)
-// CIP-68 reference NFT — mutable on-chain token metadata, Tier A
+// CIP-68 reference NFT — mutable on-chain token metadata, the linear curve
 // ============================================================================
 // This validator guards the CIP-68 reference NFT's UTXO: the datum it holds
 // IS the launch token's metadata, and spending that UTXO is how the metadata
@@ -42,7 +42,7 @@
 // off-chain readers/indexers should treat "was the mint tx itself signed by
 // the live bonding_curve creator key" as the canonical genuineness filter.
 //
-// SCOPE: this validator serves Tier A launches. It reads a Tier A curve datum
+// SCOPE: this validator serves linear-curve launches. It reads the linear curve curve datum
 // to derive live creator authority, and that is the launch shape it accepts.
 // ============================================================================
 

@@ -2,7 +2,7 @@
 // Noctis Zone — reclaim the deposits behind superseded reference scripts
 // ============================================================================
 // Every validator change strands the reference script published before it, and
-// the deposit behind it — 56 ada for the Tier A curve, 73 for Tier B. This
+// the deposit behind it — 56 ada for the linear curve curve, 73 for Cardano Launch. This
 // spends the stranded ones back.
 //
 //   list      what the wallet holds, marked current or superseded

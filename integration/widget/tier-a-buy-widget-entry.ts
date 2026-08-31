@@ -1,9 +1,9 @@
 // ============================================================================
-// Noctis Zone — Tier A Buy Widget: browser entry point
+// Noctis Zone — the linear curve Buy Widget: browser entry point
 // ============================================================================
 // esbuild browser target (see ../build.mjs's tierABuyWidgetConfig) — bundled
 // to assets/js/tier-a-buy-widget.bundle.js in the theme, enqueued only on
-// Tier A curve_live launch pages (lp-chart-buy.php), following the exact
+// The linear curve curve_live launch pages (lp-chart-buy.php), following the exact
 // pattern inc/enqueue.php already uses for darkveil-widget.bundle.js on
 // DarkVeil-phase pages and create.js on /create/.
 //
@@ -19,7 +19,7 @@
 // button could just call noctis-platform's existing np/v1/tx/build+submit
 // REST routes). This widget needs Lucid Evolution running IN THE BROWSER,
 // signing via the connected wallet's real CIP-30 API — the exact same
-// pattern darkveil-claim-submitter.ts already proved out for Tier B's
+// pattern darkveil-claim-submitter.ts already proved out for Cardano Launch's
 // buyer-signed ClaimDarkVeilTokens, reused here via
 // integration/tier-a-curve-submitter.ts's buyTokensWithWallet().
 //

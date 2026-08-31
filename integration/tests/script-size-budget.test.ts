@@ -45,7 +45,7 @@ for (const v of blueprint.validators) {
  * states its own terms and OpenDvClaim bounds them before starting the clock
  * they are measured from. Two read-only fields, declared at the BACK per this
  * datum's ordering rule, plus four bounds and two datum reads replacing two
- * constant reads. Tier A did not move: it has no DarkVeil phase.
+ * constant reads. The linear curve did not move: it has no DarkVeil phase.
  *
  * Note what the 271 bytes BUY beyond configurability — the submitter used to
  * mirror both constants in its own source, and a mirror is only correct until
@@ -56,7 +56,7 @@ for (const v of blueprint.validators) {
  * declared validity range, using the helper and constant the file's other
  * timestamp-gated arm already applies. It writes `phase_started_at`, which is
  * the origin ExpireCurve measures its 90-day backstop from, so pinning it to
- * real chain time keeps that deadline off the signer's own clock. Tier B was
+ * real chain time keeps that deadline off the signer's own clock. Cardano Launch was
  * untouched — its four timestamp-gated arms already carry the bound — which
  * is why only one hash moved here, and only one reference script had to be
  * re-derived.
@@ -108,25 +108,25 @@ for (const v of blueprint.validators) {
  * lp_escrow +12, cto_governance +12, cto_sybil_challenge +11.
  *
  * Last moved by requiring a payee to be NET better off by what they are
- * owed, not merely to hold it in some output: Tier A +201, Tier B +178,
+ * owed, not merely to hold it in some output: the linear curve +201, Cardano Launch +178,
  * staking_pool +209. An output at the payee's own credential is equally
  * consistent with their change, and both of these paths are signed by the
  * payee, so the transaction can contain their own utxos. Netting those out
  * is what makes the payment check mean the payee gained something.
  *
- * Last moved by requiring a graduating Tier B curve to have raised something:
- * +18, for the guard Tier A has had since the same audit found it. At zero
+ * Last moved by requiring a graduating Cardano Launch curve to have raised something:
+ * +18, for the guard the linear curve has had since the same audit found it. At zero
  * raised, both of that arm's value checks stop constraining anything.
  *
  * Before that, letting ExpireCurve reach a curve that was minted and never
- * activated: Tier A +24, Tier B +16, for one extra state in each arm's
+ * activated: the linear curve +24, Cardano Launch +16, for one extra state in each arm's
  * disjunction. Both ways out of that state are governor-signed, so the cost
  * buys a launch's whole supply a way out that does not depend on one key
  * still answering.
  *
  * Before that, ordering both curve datums so the fields a redeemer REWRITES
- * are declared before the fields only read: Tier A −1,258, Tier B −2,253, and
- * token_metadata +27 because it reads Tier A's datum and its fields moved
+ * are declared before the fields only read: the linear curve −1,258, Cardano Launch −2,253, and
+ * token_metadata +27 because it reads the linear curve's datum and its fields moved
  * back. A record update walks the field list to reach what it replaces, so
  * cost scales with the updated field's index — measured at ~10.5 bytes of
  * script per index position per update site, against ~0.15 for a read, which
@@ -135,7 +135,7 @@ for (const v of blueprint.validators) {
  * integration/tier-a-schemas.ts moved with it.
  *
  * Before that, refusing a graduation output that carries a staking
- * credential: Tier A +43, Tier B +44. `Graduate` is permissionless, so without
+ * credential: the linear curve +43, Cardano Launch +44. `Graduate` is permissionless, so without
  * it whoever submits one chooses where the locked LP delegates for a year.
  *
  * Before that, binding an order's payout to the owner's OWN address rather
@@ -146,7 +146,7 @@ for (const v of blueprint.validators) {
  *
  * Before that, the batch fixes: both curves and the order validator grew so
  * that a batched fill names the order it settles, and so that a batch verifies
- * the curve's own value moved by what it claims. Tier A +169, Tier B +174,
+ * the curve's own value moved by what it claims. The linear curve +169, Cardano Launch +174,
  * curve_order +196 — paid knowingly, and partly bought back by routing the
  * batch's value check through the two helpers a single trade already uses.
  * Most recently, cto_governance +761: AnchorVoteResult now reads the launch's
@@ -163,7 +163,7 @@ for (const v of blueprint.validators) {
  * (+~1,090 B each) — the check that stops a permissionless graduation opening
  * a pool already crediting its author with the whole reserve.
  *
- * Tier B is the one to watch: 15,332 against a 16,384 cap leaves ~1 KB, and
+ * Cardano Launch is the one to watch: 15,332 against a 16,384 cap leaves ~1 KB, and
  * the binding limit is PUBLISHING it as a reference script, which cannot be
  * split across transactions. It has been over that line before.
  */
@@ -204,7 +204,7 @@ describe('compiled validator sizes', () => {
   // The harder ceiling, and now the binding one. Referencing a script lifts
   // the SPENDING budget, but the script has to be PUBLISHED first — by an
   // ordinary transaction bound by the same cap, serialising the script whole
-  // into one output. That cannot be split. Tier B has been over this line
+  // into one output. That cannot be split. Cardano Launch has been over this line
   // before and is the closest to it now, so it gets a test rather than a note.
   for (const [module, recorded] of Object.entries(RECORDED)) {
     it(`${module} is small enough to publish as a reference script`, () => {

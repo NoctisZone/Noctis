@@ -7,7 +7,7 @@
 // opens, and not once after.
 //
 // The spend itself lives on LucidTierBCurveSubmitter, alongside every other
-// way a Tier B curve UTXO can be spent. It was a second implementation here
+// way a Cardano Launch curve UTXO can be spent. It was a second implementation here
 // until this file became a wrapper: that curve compiles to more than 15 KB, so
 // a spend has to NAME the published validator rather than carry it, and a
 // second copy of the spending logic is a second place for that to be missed.
@@ -43,7 +43,7 @@ export interface CardanoDvAllocationAnchorSubmitterConfig {
   blockfrostProjectId: string;
   blockfrostUrl: string;
   network: LucidNetwork;
-  /** bonding_curve_tier_b.ak's compiled PlutusV3 script CBOR — plutus.json's `validators[].compiledCode` for `bonding_curve_tier_b.bonding_curve_tier_b.spend`. One shared, unparameterized script address across every Tier B launch. */
+  /** bonding_curve_tier_b.ak's compiled PlutusV3 script CBOR — plutus.json's `validators[].compiledCode` for `bonding_curve_tier_b.bonding_curve_tier_b.spend`. One shared, unparameterized script address across every Cardano Launch launch. */
   compiledScriptCbor: string;
   launchIdHex: string;
   /** The launch's thread-NFT policy id, hex, from the platform's own record —

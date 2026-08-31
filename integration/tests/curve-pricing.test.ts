@@ -37,7 +37,7 @@ function chunkedExit(shape: CurveShape, datum: CurveParams, start: bigint, chunk
   return total;
 }
 
-describe('linear curve (Tier A) — matches bonding_curve.ak to the lovelace', () => {
+describe('linear curve (the linear curve) — matches bonding_curve.ak to the lovelace', () => {
   const shape: CurveShape = 'linear';
 
   it('charges one token the price at its own position', () => {
@@ -68,7 +68,7 @@ describe('linear curve (Tier A) — matches bonding_curve.ak to the lovelace', (
   });
 });
 
-describe('quadratic curve (Tier B) — matches bonding_curve_tier_b.ak to the lovelace', () => {
+describe('quadratic curve (Cardano Launch) — matches bonding_curve_tier_b.ak to the lovelace', () => {
   const shape: CurveShape = 'quadratic';
 
   it('charges one token the price at its own position', () => {

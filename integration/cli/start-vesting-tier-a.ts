@@ -1,5 +1,5 @@
 // ============================================================================
-// Noctis Zone — Tier A Preprod Milestone, Phase 5
+// Noctis Zone — Cardano Preprod milestone, Phase 5
 // StartVesting (vesting.ak) — standalone, independently retriable.
 // (2026-07-17): split out of graduate-tier-a-launch.ts's single tx once
 // embedding all 3 validators in one transaction exceeded Cardano's real

@@ -1,8 +1,8 @@
 // ============================================================================
 // Noctis Zone — reclaiming superseded reference scripts
 // ============================================================================
-// A published reference script locks a deposit — 56 ada for the Tier A curve,
-// 73 for Tier B — and every change to a validator strands the one published
+// A published reference script locks a deposit — 56 ada for the linear curve curve,
+// 73 for Cardano Launch — and every change to a validator strands the one published
 // before it. The hash moves, so the address moves, so the old script points at
 // a validator nothing is locked by any more. The deposit is still there, and
 // still ours.

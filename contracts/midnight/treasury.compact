@@ -7,17 +7,17 @@ import CompactStandardLibrary;
 // ============================================================================
 //
 // Accumulates platform fees (0.6% of each trade) and manages conversion
-// to stablecoins. For Tier A/B: fees arrive in ADA, swapped on Cardano DEXes.
-// For Tier C: fees arrive in NIGHT, accumulated and converted monthly.
+// to stablecoins. For Cardano: fees arrive in ADA, swapped on Cardano DEXes.
+// For Midnight Launch: fees arrive in NIGHT, accumulated and converted monthly.
 //
 // This PSM is intentionally simple — it's a fee accumulator.
 // The actual DEX swaps happen off-chain via the ops team.
 //
 // IMPORTANT (found 2026-07-12): `depositFees` here is real, tested,
 // and correctly gated — but nothing in the current architecture actually
-// calls it for either tier. Tier B's treasury share accrues directly on
+// calls it for either tier. Cardano Launch's treasury share accrues directly on
 // the Cardano curve contract (`bonding_curve_tier_b.ak`), and
-// Tier C's `bonding_curve.compact` accrues its own inline `treasuryFees`
+// Midnight Launch's `bonding_curve.compact` accrues its own inline `treasuryFees`
 // instead (and couldn't call this PSM even if it wanted to — Compact has
 // no cross-contract call mechanism). Same class of gap as
 // `creator_escrow.compact`'s `depositFees` — see that file's header and
@@ -28,7 +28,7 @@ import CompactStandardLibrary;
 //
 // Fix (2026-07-10): two real gaps closed while implementing the treasury
 // floor check (CLAUDE.md's 10,000 ADA-equivalent hard floor pausing
-// new Tier B/C launches, 25,000 ADA-equivalent warning threshold):
+// new both launch types launches, 25,000 ADA-equivalent warning threshold):
 //
 // 1. `treasuryBalance` previously summed ADA-denominated and NIGHT-
 //    denominated deposits into ONE combined Uint<128> with no unit
@@ -47,7 +47,7 @@ import CompactStandardLibrary;
 //    Fixed via `sendUnshielded`, same pattern as
 //    every other real NIGHT payout in this codebase. ADA withdrawals stay
 //    bookkeeping-only — ADA isn't a Midnight-native unshielded token, same
-//    accepted limitation as `depositFees`'s ADA path and the Tier B curve
+//    accepted limitation as `depositFees`'s ADA path and the Cardano Launch curve
 //    migration's ADA gaps elsewhere; the real ADA lives in a Cardano wallet the ops team
 //    already controls, this ledger entry just tracks it.
 //
@@ -74,7 +74,7 @@ import CompactStandardLibrary;
 export struct UserSecretKey { bytes: Bytes<32>; }
 
 // Treasury is a single shared pool across ALL launches and BOTH currencies
-// (Tier A/B fees arrive in ADA, Tier C fees arrive in NIGHT — see the file
+// (Cardano fees arrive in ADA, Midnight Launch fees arrive in NIGHT — see the file
 // header), unlike bonding_curve.compact/creator_escrow.compact which are
 // per-launch and therefore single-currency for their whole lifetime. So
 // currency has to be a depositFees()/withdrawFees() call argument here,
@@ -214,8 +214,8 @@ constructor(
 // deliberately-submitted transaction — Compact has no cross-contract call
 // mechanism, so the bonding curve can never invoke this directly.
 // In the CURRENT architecture, neither tier's bonding curve deposits here:
-// Tier B's treasury share accrues on the Cardano curve contract, and
-// Tier C's bonding_curve.compact accrues its own inline treasuryFees
+// Cardano Launch's treasury share accrues on the Cardano curve contract, and
+// Midnight Launch's bonding_curve.compact accrues its own inline treasuryFees
 // instead of calling out to this PSM. Same class of gap as
 // creator_escrow.compact's depositFees — tracked together (see FLAGGED_
 // ISSUES.md for the CTO/treasury fee-redirect investigation this surfaced).
@@ -223,10 +223,10 @@ export circuit depositFees(amount: Uint<128>, currency: Currency): [] {
   // Fix (2026-07-09): this circuit had NO access control and NO
   // payment check at all — it could be called with an arbitrary amount
   // and inflate the treasury's claimable balance for free. For NIGHT
-  // deposits (Tier C), require the deposit to actually be paid:
+  // deposits (Midnight Launch), require the deposit to actually be paid:
   // receiveUnshielded adds a ledger-enforced constraint that this
   // transaction includes a matching unshielded NIGHT input of exactly
-  // `amount`. ADA deposits (Tier A/B) remain self-reported here — ADA
+  // `amount`. ADA deposits (Cardano) remain self-reported here — ADA
   // isn't a Midnight-native unshielded token, and how it's represented
   // on-chain is still open.
   //
@@ -331,7 +331,7 @@ export circuit getNightBalance(): Uint<128> {
 // Mark-to-market ADA-equivalent total (adaBalance + nightBalance
 // converted at the given rate). Read-only — see file header on why this
 // can't gate anything on-chain and is meant to be checked off-chain before
-// a new Tier B/C launch is created.
+// a new both launch types launch is created.
 export circuit getAdaEquivalentBalance(nightPriceLovelacePerAtomicUnit: Uint<128>): Uint<128> {
   return computeAdaEquivalent(adaBalance, nightBalance, nightPriceLovelacePerAtomicUnit);
 }

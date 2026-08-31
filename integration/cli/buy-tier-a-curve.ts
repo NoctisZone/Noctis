@@ -1,5 +1,5 @@
 // ============================================================================
-// Noctis Zone — Tier A Preprod Milestone, Phase 4
+// Noctis Zone — Cardano Preprod milestone, Phase 4
 // BuyTokens — buyer-signed, mnemonic-based (this session's CLI-driven
 // verification path; see tier-a-curve-submitter.ts's header for why this
 // isn't the real browser-wallet production path, which is a deferred Launch

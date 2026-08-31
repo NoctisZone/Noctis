@@ -1,5 +1,5 @@
 // ============================================================================
-// Noctis Zone — Tier A Preprod Milestone, Phase 6
+// Noctis Zone — Cardano Preprod milestone, Phase 6
 // ClaimVested (vesting.ak) — creator-signed. See
 // tier-a-claims-submitter.ts's header for the fix this depends on.
 // ============================================================================

@@ -1,5 +1,5 @@
 // ============================================================================
-// Noctis Zone — deploy the Tier B eligibility gate to Midnight
+// Noctis Zone — deploy the Cardano Launch eligibility gate to Midnight
 // ============================================================================
 // WHY THIS EXISTS
 // `midnight-client.ts` has had seven working, unit-tested deploy methods for

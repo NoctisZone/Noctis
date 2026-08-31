@@ -110,9 +110,9 @@ describe('treasury.compact', () => {
     // 1000 lovelace + 500 NIGHT atomic units became a meaningless "1500."
     // A floor check needs each currency's real value tracked separately.
     const { contract, contractAddress, ctx } = deploy();
-    const r1 = contract.circuits.depositFees(ctx, 1000n, Currency.Ada); // Tier B launch fee
+    const r1 = contract.circuits.depositFees(ctx, 1000n, Currency.Ada); // Cardano Launch launch fee
     const ctx2 = nextContext(contractAddress, r1.context);
-    const r2 = contract.circuits.depositFees(ctx2, 500n, Currency.Night); // Tier C launch fee
+    const r2 = contract.circuits.depositFees(ctx2, 500n, Currency.Night); // Midnight Launch launch fee
     const state = trackLedger(lastLedger, ledger(r2.context.currentQueryContext.state));
     expect(state.adaBalance).toBe(1000n);
     expect(state.nightBalance).toBe(500n);
@@ -188,7 +188,7 @@ describe('treasury.compact', () => {
 });
 
 describe('treasury.compact — payment enforcement', () => {
-  it('a NIGHT deposit (Tier C fees) requires receiveUnshielded and does not throw locally', () => {
+  it('a NIGHT deposit (Midnight Launch fees) requires receiveUnshielded and does not throw locally', () => {
     // Same caveat as the other payment-enforcement tests: the local compact-runtime
     // simulator doesn't model cross-transaction UTXO matching, so this
     // proves the currency-gated call is wired in, not that a missing
@@ -199,7 +199,7 @@ describe('treasury.compact — payment enforcement', () => {
     expect(state.nightBalance).toBe(2000n);
   });
 
-  it('an ADA deposit (Tier A/B fees) never calls receiveUnshielded, unchanged behavior', () => {
+  it('an ADA deposit (Cardano fees) never calls receiveUnshielded, unchanged behavior', () => {
     const { contract, ctx } = deploy();
     const result = contract.circuits.depositFees(ctx, 2000n, Currency.Ada);
     const state = ledger(result.context.currentQueryContext.state);

@@ -2,7 +2,7 @@
 // direct mirror of tier-a-graduation-submitter.ts's proven two-transaction
 // graduation flow, targeting bonding_curve_tier_b.ak instead of
 // bonding_curve.ak. This file's own header flags the one thing genuinely
-// worth testing distinctly from the Tier A version: Tier B's DarkVeil-
+// worth testing distinctly from the linear curve version: Cardano Launch's DarkVeil-
 // specific datum fields (dv_allocation_root, dv_claimed,
 // dv_settled) must survive Graduate's `...curveDatum` spread untouched — a
 // real schema-sync bug once dropped them. Same importOriginal
@@ -61,7 +61,7 @@ function curveDatum(overrides: Record<string, unknown> = {}) {
     creator_pub_key_hash: fakeKeyHash(0x22),
     token_policy_id: TOKEN_POLICY,
     token_asset_name: TOKEN_ASSET_NAME,
-    // Tier B-only DarkVeil fields — must survive Graduate's spread unchanged.
+    // Cardano Launch-only DarkVeil fields — must survive Graduate's spread unchanged.
     dv_allocation_root: toHex(new Uint8Array(32).fill(9)),
     dv_claimed: [fakeKeyHash(0x88)],
     dv_settled: true,
@@ -227,8 +227,8 @@ beforeEach(() => {
   txHashCounter = 0;
 });
 
-// The lookup's own properties are covered against Tier A. What is distinct
-// here is the role tag: Tier A and Tier B curves are separate validators at
+// The lookup's own properties are covered against the linear curve. What is distinct
+// here is the role tag: two Cardano curves are separate validators at
 // separate addresses, but they are both "the curve", and their thread NFTs
 // differ only by the role byte the asset name starts with.
 describe('TierBGraduationSubmitter — which UTXO it graduates', () => {
@@ -243,7 +243,7 @@ describe('TierBGraduationSubmitter — which UTXO it graduates', () => {
     );
   });
 
-  it('does not accept a Tier A curve NFT in place of a Tier B one', async () => {
+  it('does not accept the linear curve curve NFT in place of a Cardano Launch one', async () => {
     // Same policy, same launch, same 31 bytes of launch id — only the leading
     // role byte differs. A lookup that checked the policy alone would take it.
     const { builder } = makeFakeTxBuilder();
@@ -302,7 +302,7 @@ describe('TierBGraduationSubmitter — which UTXO it graduates', () => {
   });
 });
 
-describe('TierBGraduationSubmitter.graduateAndSealLp — guard rails (same as Tier A)', () => {
+describe('TierBGraduationSubmitter.graduateAndSealLp — guard rails (same as the linear curve)', () => {
   it('rejects when the curve is not Graduated', async () => {
     const { builder } = makeFakeTxBuilder();
     const { submitter } = makeSubmitter(builder, {
@@ -335,7 +335,7 @@ describe('TierBGraduationSubmitter.graduateAndSealLp — guard rails (same as Ti
   });
 });
 
-describe('TierBGraduationSubmitter.graduateAndSealLp — Tier B DarkVeil field preservation', () => {
+describe('TierBGraduationSubmitter.graduateAndSealLp — Cardano Launch DarkVeil field preservation', () => {
   it('carries dv_allocation_root/dv_claimed/dv_settled through Graduate unchanged', async () => {
     const { builder } = makeFakeTxBuilder();
     const dvRoot = toHex(new Uint8Array(32).fill(42));

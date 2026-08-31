@@ -25,7 +25,7 @@ Notable changes to the Noctis Zone, by release. Internal development history pre
 
 ### Changed
 
-- Bonding curve trades on Tier A and Tier B are priced by summing the price of each
+- Bonding curve trades on both Cardano curves are priced by summing the price of each
   token a trade moves through, so a trade costs the same whether it is made in one
   transaction or several. A buyer pays the range rounded up and a seller receives it
   rounded down. The validator computes both the price and the 2.0% fee split from its
@@ -48,8 +48,8 @@ Notable changes to the Noctis Zone, by release. Internal development history pre
 
 Initial public release of the consolidated Noctis Zone codebase.
 
-- Cardano L1 contracts (Tier A, Tier B) — bonding curve, LP escrow, CTO governance, vesting, staking, ZK anchor, N-hop challenge
-- Midnight Network contracts (Tier C, design-complete, build-blocked pending ecosystem dependencies) — bonding curve, eligibility gate, creator escrow, treasury, vesting, LP escrow, CTO governance, staking
+- Cardano L1 contracts — bonding curve, LP escrow, CTO governance, vesting, staking, ZK anchor, N-hop challenge
+- Midnight Network contracts (Midnight Launch, design-complete, build-blocked pending ecosystem dependencies) — bonding curve, eligibility gate, creator escrow, treasury, vesting, LP escrow, CTO governance, staking
 - Integration layer — chain clients, ZK proof tooling, CLI submitters, browser widgets
 - Full public documentation set — see [README.md](README.md), [ARCHITECTURE.md](ARCHITECTURE.md), [docs/PSM_ARCHITECTURE.md](docs/PSM_ARCHITECTURE.md), [docs/SECURITY_MODEL.md](docs/SECURITY_MODEL.md), and [ROADMAP.md](ROADMAP.md)
 

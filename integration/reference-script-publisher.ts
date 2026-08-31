@@ -50,7 +50,7 @@ const DEPOSIT_HEADROOM_BPS = 500n;
  *
  * A UTXO must hold at least the minimum its own size demands, and a script
  * UTXO is a large one: the rule works out at roughly 4,310 lovelace per byte,
- * so a 16 KB Tier B curve needs about 69 ada and a 12 KB Tier A curve about
+ * so a 16 KB Cardano Launch curve needs about 69 ada and a 12 KB the linear curve curve about
  * 53.
  *
  * It is a DEPOSIT rather than a cost — spending the UTXO returns it — and it
@@ -58,12 +58,12 @@ const DEPOSIT_HEADROOM_BPS = 500n;
  * these validators takes parameters. Against the alternative it is cheap: an
  * embedded script is charged at `min_fee_a`, 44 lovelace per byte on EVERY
  * transaction, where a referenced one is charged 15. The deposit is repaid in
- * about 150 trades, and on Tier B there is no alternative to weigh it against
+ * about 150 trades, and on Cardano Launch there is no alternative to weigh it against
  * at all.
  *
  * Computed from the script rather than fixed, because a flat figure large
  * enough for the biggest validator over-locks every smaller one — by 22 ada on
- * the Tier A curve and more than 45 on the others.
+ * The linear curve curve and more than 45 on the others.
  */
 export function referenceOutputLovelace(compiledScriptCbor: string, coinsPerUtxoSize?: number): bigint {
   const minimum = getUtxoMinLovelace(

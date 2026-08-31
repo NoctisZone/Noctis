@@ -2,8 +2,8 @@
 // Noctis Zone — cumulative wallet-cap accumulator (off-chain half)
 // ============================================================================
 // Mirrors contracts/cardano/lib/noctis/cap_accumulator.ak EXACTLY. That module
-// is shared by BOTH curve validators, so this one file serves Tier A and
-// Tier B alike — which is the whole reason the Aiken side was factored into a
+// is shared by BOTH curve validators, so this one file serves the linear curve and
+// Cardano Launch alike — which is the whole reason the Aiken side was factored into a
 // library rather than copied into each validator.
 //
 // WHAT THIS IS FOR

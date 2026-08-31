@@ -43,14 +43,14 @@ function input(overrides: Record<string, unknown> = {}) {
 }
 
 describe('tier-a-genesis-datums.ts — the stall clock starts at the mint', () => {
-  it('stamps phase_started_at with the genesis time on Tier A, not zero', async () => {
+  it('stamps phase_started_at with the genesis time on the linear curve, not zero', async () => {
     const at = 1_785_000_000_000;
     const g = await buildGenesisDatums(input({ genesisTimestampMs: at }));
     const datum = Data.from(g.datums.bondingCurve, BondingCurveDatumSchema);
     expect(datum.phase_started_at).toBe(BigInt(at));
   });
 
-  it('stamps phase_started_at with the genesis time on Tier B too', async () => {
+  it('stamps phase_started_at with the genesis time on Cardano Launch too', async () => {
     const at = 1_785_000_000_000;
     const g = await buildGenesisDatums(input({ tier: 'B', genesisTimestampMs: at }));
     const datum = Data.from(g.datums.bondingCurve, BondingCurveTierBDatumSchema);

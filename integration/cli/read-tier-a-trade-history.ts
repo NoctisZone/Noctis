@@ -1,5 +1,5 @@
 // ============================================================================
-// Noctis Zone — Tier A/B Trade History CLI
+// Noctis Zone — Cardano Trade History CLI
 // ============================================================================
 // Thin stdin/stdout wrapper around tier-a-trade-history-reader.ts's
 // getCurveTradeHistory(), same proc_open calling convention as
@@ -36,8 +36,8 @@ interface ReadTradeHistoryInput {
   network: 'preview' | 'preprod' | 'mainnet';
   blockfrostProjectId: string;
   blockfrostUrl: string;
-  /** Tier B launches resolve to bonding_curve_tier_b.ak's own fixed script
-   *  address instead of Tier A's bonding_curve.ak — everything else about
+  /** Cardano Launch launches resolve to bonding_curve_tier_b.ak's own fixed script
+   *  address instead of the linear curve's bonding_curve.ak — everything else about
    *  the walk is identical (Step 8 of the trade-history plan). */
   tier: 'A' | 'B';
   /** Incremental-cache boundary — omit to walk all the way to genesis. */

@@ -235,7 +235,7 @@ export async function pollAllowlistProof(
 
 export interface RegisterOnChainParams {
   tier: 'B' | 'C';
-  /** The deployed eligibility_gate (Tier B) or bonding_curve (Tier C) contract's real address — NOT the same as launchId. */
+  /** The deployed eligibility_gate (Cardano Launch) or bonding_curve (Midnight Launch) contract's real address — NOT the same as launchId. */
   contractAddress: string;
   /** The deploy-time launchId baked into the contract's own ledger state — a separate value from contractAddress. */
   launchIdBytes: Uint8Array;

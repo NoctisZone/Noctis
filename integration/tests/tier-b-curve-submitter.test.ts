@@ -1,4 +1,4 @@
-// Tests for tier-b-curve-submitter.ts's LucidTierBCurveSubmitter — Tier B's
+// Tests for tier-b-curve-submitter.ts's LucidTierBCurveSubmitter — Cardano Launch's
 // public bonding curve. Structurally similar to
 // tier-a-curve-submitter.test.ts's coverage, but this file focuses on the
 // REAL differences this module's own header documents: QUADRATIC pricing
@@ -6,7 +6,7 @@
 // balance from a DarkVeil claim), SellTokens' deliberately-non-adjacent
 // constructor index 13, and the two-directional ClaimCreatorFees value
 // check plus the governor-signed ClaimTreasuryFees/ClaimOpsFees this class
-// adds beyond Tier A's curve submitter. Same importOriginal partial-mock
+// adds beyond the linear curve's curve submitter. Same importOriginal partial-mock
 // Lucid strategy as the other submitter tests.
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -114,7 +114,7 @@ function baseDatum(overrides: Record<string, unknown> = {}): Record<string, unkn
     creator_fees_accrued: 0n,
     platform_fees_accrued: 0n,
     wallet_cap: 500n,
-    // The DarkVeil fields. A Tier B datum has carried these since the claim
+    // The DarkVeil fields. A Cardano Launch datum has carried these since the claim
     // window was added; a fixture without them describes a datum the
     // validator could not decode.
     dv_allocation_root: '',
@@ -222,7 +222,7 @@ beforeEach(() => {
   vi.mocked(Lucid).mockReset();
 });
 
-describe('floorFeeSlice (Tier B: floor-rounded, NOT exact-equality like Tier A)', () => {
+describe('floorFeeSlice (Cardano Launch: floor-rounded, NOT exact-equality like the linear curve)', () => {
   it('floors non-exact divisions instead of throwing', () => {
     expect(floorFeeSlice(999n, 100n)).toBe(9n); // floor(9.99)
     expect(floorFeeSlice(1_000_000n, 60n)).toBe(6_000n);

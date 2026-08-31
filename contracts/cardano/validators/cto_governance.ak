@@ -1,6 +1,6 @@
 // ============================================================================
 // Noctis Zone — Cardano L1 CTO Governance Contract (Aiken)
-// Used by Tier A, Tier B, and Tier C (CLAUDE.md Contract Architecture table)
+// Used by the linear curve, Cardano Launch, and Midnight Launch (CLAUDE.md Contract Architecture table)
 // ============================================================================
 // This contract is the Cardano L1 anchor for the Midnight CTO Governance PSM.
 // It records the results of community takeover votes that happen privately
@@ -57,7 +57,7 @@ use noctis/lp_escrow_datum.{Locked, LpEscrowDatum}
 use noctis/settlement
 use noctis/thread_nft
 
-/// Same finding/fix as Tier A's bonding_curve.ak — see that file's own
+/// Same finding/fix as the linear curve's bonding_curve.ak — see that file's own
 /// comment on `validity_range_is_narrow` for the full explanation. Applies
 /// here to `AnchorProposal` (open-relay/permissionless by design) and
 /// `ExpireProposal` (also permissionless) — NOT `ExecuteProposal`, which

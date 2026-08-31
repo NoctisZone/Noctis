@@ -2,7 +2,7 @@
 // Noctis Zone — fix: serves ONE buyer's own DarkVeil allocation
 // proof, never anyone else's
 // ============================================================================
-// Closes the gap ("no endpoint serves a Tier B buyer's private DarkVeil
+// Closes the gap ("no endpoint serves a Cardano Launch buyer's private DarkVeil
 // allocation proof"). The actual HTTP endpoint is a WordPress REST route
 // (out of scope for this git repo — WP code stays local, per this
 // project's established convention) that:

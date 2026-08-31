@@ -1,7 +1,7 @@
 // Tests for midnight-public-state.ts — reading a launch's published ledger
 // off the indexer, with no wallet, proof server, or transaction involved.
 //
-// The decoding itself is verified against the real deployed Tier B gate on
+// The decoding itself is verified against the real deployed Cardano Launch gate on
 // Preprod rather than here (a decoder faithful to a hand-built fixture would
 // prove nothing about a real chain state). What these cover is the part a
 // fixture CAN speak to: that a missing contract is reported as a missing

@@ -161,8 +161,8 @@ describe('MeshCurveSpender', () => {
   // ==========================================================================
 
   for (const [tier, v] of [
-    ['Tier A', TIER_A],
-    ['Tier B', TIER_B],
+    ['the linear curve', TIER_A],
+    ['Cardano Launch', TIER_B],
   ] as const) {
     describe(`${tier}`, () => {
       it('leaves the validator out of the witness set entirely', async () => {
@@ -202,7 +202,7 @@ describe('MeshCurveSpender', () => {
   // The comparison the whole module exists for, stated as a measurement
   // rather than left implicit.
   //
-  // This test used to assert that an embedded Tier B trade could not be built
+  // This test used to assert that an embedded Cardano Launch trade could not be built
   // at ANY size. Reordering the curve datum so the fields a redeemer rewrites
   // sit at the front took the validator from 15,952 bytes to 13,699, and that
   // is no longer true: a single embedded trade fits again, with room for the

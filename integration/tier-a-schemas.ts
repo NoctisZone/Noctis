@@ -1,5 +1,5 @@
 // ============================================================================
-// Noctis Zone — Tier A shared Lucid Evolution Data schemas
+// Noctis Zone — the linear curve shared Lucid Evolution Data schemas
 // ============================================================================
 // Single source of truth for bonding_curve/vesting/lp_escrow's real datum
 // shapes, shared by read-tier-a-launch-state.ts (Phase 2, decode) and
@@ -21,7 +21,7 @@
 // Aiken's Credential (VerificationKeyCredential=0, ScriptCredential=1 on
 // both sides; CIP-57 titles are never encoded on-chain, only Constr index +
 // positional fields matter) — same confirmed-compatible pattern
-// darkveil-claim-submitter.ts already established for Tier B.
+// darkveil-claim-submitter.ts already established for Cardano Launch.
 // ============================================================================
 
 import { Constr, CredentialSchema, Data } from '@lucid-evolution/lucid';
@@ -33,7 +33,7 @@ export const CurveStateSchema = Data.Enum([
   Data.Literal('Cancelled'),
 ]);
 
-/// Tier B's CurveState is a DIFFERENT on-chain type from Tier A's, and no
+/// Cardano Launch's CurveState is a DIFFERENT on-chain type from the linear curve's, and no
 /// longer the same shape: it carries the DarkVeil claim window. `DvClaim` is
 /// declared last on-chain precisely so `Active`/`Graduated`/`Cancelled` keep
 /// their indices, so this must list it last too — the order here IS the
@@ -89,11 +89,11 @@ export const BondingCurveDatumShape = Data.Object({
 export type BondingCurveDatumData = Data.Static<typeof BondingCurveDatumShape>;
 export const BondingCurveDatumSchema = BondingCurveDatumShape as unknown as BondingCurveDatumData;
 
-// Tier B's bonding_curve_tier_b.ak datum is a genuinely different shape
-// from Tier A's above (adds
+// Cardano Launch's bonding_curve_tier_b.ak datum is a genuinely different shape
+// from the linear curve's above (adds
 // dv_allocation_root/dv_claimed for the DarkVeil-claim mechanism) —
 // verified directly against BondingCurveTierBDatum's real field order
-// before writing this, not assumed from Tier A's shape.
+// before writing this, not assumed from the linear curve's shape.
 export const BondingCurveTierBDatumShape = Data.Object({
   curve_state: CurveStateTierBSchema,
   // One platform wallet: a single accrual, claimed once.
@@ -101,8 +101,8 @@ export const BondingCurveTierBDatumShape = Data.Object({
   creator_fees_accrued: Data.Integer(),
   total_raised: Data.Integer(),
   tokens_sold: Data.Integer(),
-  // Same field, same tree, same position as Tier A's — one accumulator
-  // definition serves both curves. On Tier B it additionally spans the
+  // Same field, same tree, same position as the linear curve's — one accumulator
+  // definition serves both curves. On Cardano Launch it additionally spans the
   // DarkVeil claim window, so a claim and a public buy draw on one 5%.
   cap_root: Data.Bytes(),
   // Was `dv_claimed`, a growing list of every claimant's key hash. Now one
@@ -115,7 +115,7 @@ export const BondingCurveTierBDatumShape = Data.Object({
   community_pub_key_hash: Data.Bytes(),
   cto_triggered: Data.Boolean(),
   phase_started_at: Data.Integer(),
-  // (2026-07-19, Tier B cross-chain audit): whether
+  // (2026-07-19, Cardano Launch cross-chain audit): whether
   // dv_allocation_root has been anchored to a real value yet — see
   // bonding_curve_tier_b.ak's own field comment for the full reasoning.
   dv_settled: Data.Boolean(),
@@ -219,7 +219,7 @@ export const LpEscrowDatumShape = Data.Object({
 export type LpEscrowDatumData = Data.Static<typeof LpEscrowDatumShape>;
 export const LpEscrowDatumSchema = LpEscrowDatumShape as unknown as LpEscrowDatumData;
 
-// staking_pool.ak (shared by Tier A + B — one validator, not tier-
+// staking_pool.ak (shared by both Cardano curves — one validator, not tier-
 // specific like bonding_curve vs bonding_curve_tier_b). Field order/
 // constructor indices verified directly against a freshly-regenerated
 // plutus.json's real `definitions` block, not assumed from .ak source

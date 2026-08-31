@@ -1,13 +1,13 @@
 // ============================================================================
 // Noctis Zone — a curve-spend wallet backed by a raw extended key
 // ============================================================================
-// Every Tier B curve action has to reference its validator rather than embed
+// Every Cardano Launch curve action has to reference its validator rather than embed
 // it, and the referenced path builds with Mesh. Mesh's own `MeshWallet` covers
 // the trades, which are signed from a mnemonic — but the governor and creator
 // actions are not. The platform's wallet custody never persists a mnemonic: it
 // stores a 64-byte BIP32-Ed25519 extended private key (kL||kR, no chaincode),
 // decrypts it for the lifetime of one process, and signs with that. So a
-// referenced Tier B activation, fee claim or expiry needs a wallet of this
+// referenced Cardano Launch activation, fee claim or expiry needs a wallet of this
 // shape, and there was none.
 //
 // It is deliberately the smallest thing that satisfies `CurveSpendWallet`:

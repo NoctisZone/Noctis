@@ -3,13 +3,13 @@ pragma language_version >= 0.16 && <= 0.23;
 import CompactStandardLibrary;
 
 // ============================================================================
-// ELIGIBILITY GATE + DARKVEIL PSM (merged) — Noctis Zone, Tier B
+// ELIGIBILITY GATE + DARKVEIL PSM (merged) — Noctis Zone, Cardano Launch
 // ============================================================================
 //
 // ---------------------------------------------------------------------------
 // TWIN RULE — read before changing anything in the DarkVeil half of this file
 // ---------------------------------------------------------------------------
-// This contract and bonding_curve.compact (Tier C) are twins: both
+// This contract and bonding_curve.compact (Midnight Launch) are twins: both
 // merge DarkVeil registration, bonding and commit/reveal buying into one
 // contract, and both
 // carry near-identical circuits for it. They drifted once, because a fix
@@ -22,44 +22,44 @@ import CompactStandardLibrary;
 // how the drift happened; a stated reason is checkable, silence is not.
 // ---------------------------------------------------------------------------
 //
-// This is Tier B's merged DarkVeil contract — eligibility_gate.compact
+// This is Cardano Launch's merged DarkVeil contract — eligibility_gate.compact
 // (allowlist, cumulative cap, NIGHT bond lock/refund) folded together with
 // darkveil.compact (private commit/reveal buying, ZK Fair Launch Cert).
-// Tier B's public bonding curve moved to Cardano/Aiken (resolved,
+// Cardano Launch's public bonding curve moved to Cardano/Aiken (resolved,
 // contracts/cardano/bonding_curve_tier_b.ak) — this contract only ever
 // covers the private DarkVeil pre-sale phase, never the public phase.
 //
 // MERGED (Phase 2 security-audit fix, 2026-07-11), mirroring the exact
-// reasoning already established for Tier C's bonding_curve.compact:
+// reasoning already established for Midnight Launch's bonding_curve.compact:
 // Compact has no working cross-contract call mechanism (verified against
 // the real compiler — every call form fails with "contract types are not
-// yet implemented"), so a Tier B registrant's real per-registrant
+// yet implemented"), so a Cardano Launch registrant's real per-registrant
 // DarkVeil purchase total (needed for a ratio-based partial bond refund)
 // couldn't be read by this file while it lived in a separate deployed
 // darkveil.compact. Folding both into one deployed contract with one
 // shared ledger is the only mechanism confirmed to work. This closes two
 // gaps in the same pass:
-//   1. Tier B previously had NO ratio-based partial bond refund at all —
+//   1. Cardano Launch previously had NO ratio-based partial bond refund at all —
 //      only the full-refund claimBondRefund (cancelled/failed launches).
 //      A registrant who bought less than their full allocation in a
 //      normally-closed DarkVeil had zero on-chain path to reclaim any
-//      bond portion. claimRatioBondRefund below ports Tier C's already-
+//      bond portion. claimRatioBondRefund below ports Midnight Launch's already-
 //      proven ratio-refund formula, now that dvTokensPurchased/baseSlot live
 //      in the same contract as lockedBonds.
 //   2. Bonus fix found in the same pass: revealBuyCommit never updated
 //      cumulativePurchases at all (checkAndUpdateCap was a standalone
 //      circuit nothing else in this file called) — the 5% cumulative cap
 //      had no enforced link to an actual DarkVeil purchase. Now wired in
-//      atomically, same pattern Tier C's merge already uses. That standalone
+//      atomically, same pattern Midnight Launch's merge already uses. That standalone
 //      checkAndUpdateCap circuit was later removed from this file entirely
 //      (2026-07-12) once nothing called it here either — see
 //      submitBuyCommit's own comment below for what replaced it.
 //
-// Standalone darkveil.compact is retired as of this merge — Tier B now
+// Standalone darkveil.compact is retired as of this merge — Cardano Launch now
 // deploys only this one contract for the whole DarkVeil phase. See
 // internal tracking / commit history for the migration note.
 //
-// RESOLVED (2026-07-11): Tier B's DarkVeil buy is ADA-denominated,
+// RESOLVED (2026-07-11): Cardano Launch's DarkVeil buy is ADA-denominated,
 // and ADA isn't representable as a Midnight-native unshielded token, so
 // revealBuyCommit here was never going to be able to enforce payment
 // directly (and still doesn't — that's by design now, not a gap). Real
@@ -121,7 +121,7 @@ export enum LaunchPhase { Pending, DarkVeil, Public, Graduated, Cancelled }
 // DarkVeil's own sub-phase within the overall LaunchPhase.DarkVeil period
 // (registration vs buying vs closed) — a finer-grained state machine than
 // LaunchPhase, tracked separately on purpose, same distinction
-// bonding_curve.compact's Tier C merge already uses.
+// bonding_curve.compact's Midnight Launch merge already uses.
 export enum DarkVeilState { Inactive, Registration, Buying, Closed, Cancelled }
 
 export enum CommitStatus { Open, Revealed, Cancelled }
@@ -300,7 +300,7 @@ export ledger phase: LaunchPhase;
 // Only the DarkVeil-phase portion is actually enforced here now (via
 // revealBuyCommit, wired in by this merge) — the public phase lives on
 // Cardano and enforces its own copy of the cap there, pre-seeded
-// from this map via the relayer/anchor mechanism (see CLAUDE.md's Tier B
+// from this map via the relayer/anchor mechanism (see CLAUDE.md's Cardano Launch
 // cap description).
 export ledger cumulativePurchases: Map<Bytes<32>, Uint<128>>;
 
@@ -368,7 +368,7 @@ export ledger totalRaisedCommitted: Uint<128>;
 export sealed ledger dvAllocation: Uint<128>;
 
 // Price per token during DarkVeil (fixed price, not bonding curve;
-// ADA-denominated for Tier B). Exported for the same reason: the price a
+// ADA-denominated for Cardano Launch). Exported for the same reason: the price a
 // buyer is charged is verifiable from chain state alone. Same shape as
 // bonding_curve.compact's basePrice/maxPrice.
 export sealed ledger dvPrice: Uint<128>;
@@ -425,7 +425,7 @@ sealed ledger minDvParticipants: Uint<64>;
 export ledger baseSlot: Uint<128>;
 
 // Cumulative tokens a buyer DECLARED (via revealBuyCommit) they purchased
-// DURING DarkVeil specifically. NOT payment-verified — Tier B's real ADA
+// DURING DarkVeil specifically. NOT payment-verified — Cardano Launch's real ADA
 // payment happens on Cardano via ClaimDarkVeilTokens, and Compact has
 // no way to observe that from here. This map is therefore a self-reported
 // intent statistic only: used to bound the pool-wide/wallet-cap checks in
@@ -448,7 +448,7 @@ export ledger dvTokensPurchased: Map<Bytes<32>, Uint<128>>;
 // Governor-attested count of tokens a buyer has REALLY settled for —
 // written only by recordDarkVeilSettlement, from real, observed Cardano
 // ClaimDarkVeilTokens transactions (that mechanism is what actually moves
-// ADA and delivers tokens for Tier B; this ledger is Midnight's mirror of
+// ADA and delivers tokens for Cardano Launch; this ledger is Midnight's mirror of
 // that real event, not a duplicate of the unpaid declaration above). This
 // is what claimRatioBondRefund uses to compute the real refund — same
 // governor-published-attestation trust model already used everywhere else
@@ -665,7 +665,7 @@ pure circuit computeCertHash(
 
 // Verify a claimed ratio-based NIGHT bond refund is the FLOOR of
 // `bonded * purchased / allocated` — same formula and floor-rounding
-// double-inequality pattern as bonding_curve.compact's Tier C copy.
+// double-inequality pattern as bonding_curve.compact's Midnight Launch copy.
 // purchased == allocated -> refund == bonded (100% back); purchased == 0
 // -> refund == 0 (ghost, fully forfeited); anything between is the
 // proportional partial return.
@@ -964,7 +964,7 @@ export circuit registerForDarkVeil(): [] {
 // (revealBuyCommit enforces the identical 5% cumulative wallet cap inline,
 // see its own "Bonus fix (this merge)" comment below), and no off-chain
 // caller invoked it either. Dead code duplicating the real enforcement
-// path, same class of cleanup as bonding_curve.compact's Tier C merge
+// path, same class of cleanup as bonding_curve.compact's Midnight Launch merge
 // . Test coverage for the cap boundary ported onto revealBuyCommit
 // directly — see eligibility_gate.test.ts's "wallet cap enforcement via
 // revealBuyCommit" describe block.
@@ -987,7 +987,7 @@ export circuit registerForDarkVeil(): [] {
 // ledger entry with a comment deferring to "the Zswap layer via
 // transaction merging" — a mechanism that doesn't exist. Now takes a
 // recipientAddr and pays out via sendUnshielded, mirroring
-// bonding_curve.compact's already-fixed Tier C copy of this exact circuit.
+// bonding_curve.compact's already-fixed Midnight Launch copy of this exact circuit.
 export circuit claimBondRefund(recipientAddr: Bytes<32>): [] {
   assert(
     disclose(phase == LaunchPhase.Cancelled || dvFailed),
@@ -1021,8 +1021,8 @@ export circuit claimBondRefund(recipientAddr: Bytes<32>): [] {
 
 // Claim a RATIO-BASED partial NIGHT bond refund — for a DarkVeil that
 // closed NORMALLY (succeeded, not cancelled, not marked failed). Phase 2
-// security-audit fix, 2026-07-11: Tier B had no equivalent of this circuit
-// at all before this merge (Tier C's bonding_curve.compact has had it
+// security-audit fix, 2026-07-11: Cardano Launch had no equivalent of this circuit
+// at all before this merge (Midnight Launch's bonding_curve.compact has had it
 // since its own ratio-refund fix) — a registrant who bought less than their full baseSlot
 // allocation had no on-chain path to reclaim any bond portion. Ported
 // verbatim from that already-proven implementation, now that
@@ -1147,11 +1147,11 @@ export circuit submitBuyCommit(
 // cumulativePurchases (5% cumulative cap, previously only reachable via
 // the standalone checkAndUpdateCap that nothing here ever called) and
 // dvTokensPurchased (needed by claimRatioBondRefund above) atomically,
-// same pattern Tier C's merged revealBuyCommit already uses.
+// same pattern Midnight Launch's merged revealBuyCommit already uses.
 //
 // This circuit records a purchase; it does not take payment, and is not
-// where a Tier B buyer pays. ADA is not a Midnight-native asset, so a
-// Tier B DarkVeil purchase is settled on Cardano: the buyer presents their
+// where a Cardano Launch buyer pays. ADA is not a Midnight-native asset, so a
+// Cardano Launch DarkVeil purchase is settled on Cardano: the buyer presents their
 // own allocation against the anchored root and pays there, via the curve's
 // ClaimDarkVeilTokens. What this circuit commits to is bounded before that
 // happens — the amount revealed here cannot exceed the per-registrant

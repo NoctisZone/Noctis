@@ -1,5 +1,5 @@
 // ============================================================================
-// Noctis Zone — drive a Tier B DarkVeil phase on Midnight
+// Noctis Zone — drive a Cardano Launch DarkVeil phase on Midnight
 // ============================================================================
 // One action-dispatched CLI rather than nine near-identical files, matching
 // tier-b-curve-action.ts and the other action CLIs: each action is a thin call

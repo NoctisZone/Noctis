@@ -40,7 +40,7 @@ import CompactStandardLibrary;
 //
 // IMPORTANT (found 2026-07-12): despite the description above, this
 // PSM does not actually hold real fees for EITHER tier in the current
-// architecture. Tier B's bonding-curve trade fee accrues directly on the
+// architecture. Cardano Launch's bonding-curve trade fee accrues directly on the
 // Cardano curve contract (`bonding_curve_tier_b.ak`), and Tier
 // C's `bonding_curve.compact` accrues its own inline `creatorFees` instead
 // of calling `depositFees` here (and couldn't call it even if it wanted to
@@ -59,7 +59,7 @@ import CompactStandardLibrary;
 export enum EscrowState { Active, Closed, FullyClaimed, CTORedirected, Cancelled }
 
 // Which currency this escrow's fees arrive in — matches the launch's own
-// bonding_curve.compact instance's currency (Ada for Tier B, Night for Tier
+// bonding_curve.compact instance's currency (Ada for Cardano Launch, Night for Tier
 // C; one escrow per launch, so exactly one currency for its whole lifetime,
 // unlike treasury.compact which is a single shared pool across all launches
 // and both currencies). See bonding_curve.compact's Currency enum comment.
@@ -175,9 +175,9 @@ export circuit closeEscrowAtGraduation(graduationTimestamp: Uint<64>): [] {
 //
 // Design requirement: this must never only decrement
 // claimedAmount with a comment deferring to "the Zswap layer" — a
-// mechanism that does not exist — so a Tier C (NIGHT) creator's fees had
+// mechanism that does not exist — so a Midnight Launch (NIGHT) creator's fees had
 // no way out of this contract. Now pays out for real via sendUnshielded
-// when currency == Night. Tier B (Ada) launches remain ledger-only here —
+// when currency == Night. Cardano Launch (Ada) launches remain ledger-only here —
 // ADA isn't a Midnight-native unshielded token, same open question as
 // depositFees's Ada branch and darkveil.compact's payment gap; this
 // is not a new gap introduced by this fix, just not one this fix can close.
@@ -331,7 +331,7 @@ export circuit dissolveCTO(proposalId: Bytes<32>): [] {
 // deliberately-submitted transaction — Compact has no cross-contract call
 // mechanism, so the bonding curve can never invoke this directly.
 // In the CURRENT architecture, neither tier's bonding curve deposits here at
-// all: Tier B's fees accrue on the Cardano curve contract, and Tier
+// all: Cardano Launch's fees accrue on the Cardano curve contract, and Tier
 // C's bonding_curve.compact accrues its own inline `creatorFees` instead of
 // calling out to this PSM. See the CTO fee-redirect gap this surfaced,
 // tracked separately.
@@ -339,10 +339,10 @@ export circuit depositFees(amount: Uint<128>): [] {
   // Fix (2026-07-09): this circuit had NO access control and NO
   // payment check at all — it could be called with an arbitrary amount
   // and inflate the creator's (or, post-CTO, the community's) claimable
-  // balance for free. For Night-currency launches (Tier C), require the
+  // balance for free. For Night-currency launches (Midnight Launch), require the
   // deposit to actually be paid: receiveUnshielded adds a ledger-enforced
   // constraint that this transaction includes a matching unshielded NIGHT
-  // input of exactly `amount`. Ada-currency launches (Tier B) remain
+  // input of exactly `amount`. Ada-currency launches (Cardano Launch) remain
   // self-reported here — ADA isn't a Midnight-native unshielded token, and
   // how it's represented on-chain is still open.
   //

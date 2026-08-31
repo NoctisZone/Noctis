@@ -1,13 +1,13 @@
 // ============================================================================
 // Noctis Zone — Cardano L1 Bonding Curve Contract (Aiken)
-// Tier A only
+// The linear curve only
 // ============================================================================
-// Tier A never touches Midnight — this is the entire public sale mechanism
-// for Tier A launches. Per CLAUDE.md's tier design, Tier A is deliberately
+// The linear curve never touches Midnight — this is the entire public sale mechanism
+// for linear-curve launches. Per CLAUDE.md's tier design, the linear curve is deliberately
 // the "weak" tier: LINEAR pricing (not quadratic) and a weak per-ADDRESS
 // cap (not a strong ZK-identity cap — the same wallet can be split to dodge
 // it, an accepted trade-off for the free/simple tier). The quadratic curve
-// + ZK-identity cap combination is Tier B/C's, on Midnight instead — see
+// + ZK-identity cap combination is both launch types's, on Midnight instead — see
 // contracts/midnight/bonding_curve.compact. Do not import that file's
 // shape here; the two are intentionally different curves for different
 // tiers, not two implementations of the same thing.
@@ -19,9 +19,9 @@
 // At sold=0:             price = base_price
 // At sold=curve_supply:  price = max_price
 //
-// Fee structure (2.0% total, same split as Tier B/C):
+// Fee structure (2.0% total, same split as both launch types):
 //   1.0% -> creator fee accumulator (claimed by creator; mirrors the
-//           "Stream A" Bonding Curve Escrow pattern from CLAUDE.md — Tier A
+//           "Stream A" Bonding Curve Escrow pattern from CLAUDE.md — the linear curve
 //           has no separate Cardano Creator Fee Escrow contract in the
 //           architecture table, so this curve contract accrues and gates
 //           the claim directly instead of handing off to another PSM)
@@ -112,7 +112,7 @@ use noctis/thread_nft
 /// a curve must not be cancellable immediately after activation by
 /// simply declaring a wide-enough validity range and claiming a
 /// timestamp near its far end. Found while researching Phase 5b (real DEX
-/// migration) of the Tier A Preprod Milestone — see internal tracking
+/// migration) of the Cardano Preprod milestone — see internal tracking
 /// for the full cross-contract audit — every other permissionless,
 /// timestamp-gated redeemer on the platform carries this same bound,
 /// applied in the same pass. `max_width` is generous
@@ -155,7 +155,7 @@ pub type CurveState {
 // Every field a redeemer REWRITES is therefore declared first, and everything
 // set once at genesis and only read afterwards is declared after them. That
 // single change took this script from 12,134 bytes to 11,042 — 9% — with no
-// behavioural difference whatsoever. Tier B's datum is ordered on the same
+// behavioural difference whatsoever. Cardano Launch's datum is ordered on the same
 // rule and shares this prefix, so the two read alike.
 //
 // So: a new field that a redeemer writes belongs at the FRONT, next to its
@@ -171,7 +171,7 @@ pub type BondingCurveDatum {
   // ops slice is a single accrual, claimed once.
   platform_fees_accrued: Int,
   // net of fees, lovelace
-  // Fee accumulators (2.0% total: 1.0/0.6/0.4 split, same as Tier B/C)
+  // Fee accumulators (2.0% total: 1.0/0.6/0.4 split, same as both launch types)
   creator_fees_accrued: Int,
   total_raised: Int,
   tokens_sold: Int,
@@ -179,7 +179,7 @@ pub type BondingCurveDatum {
   // this curve`. Declared near the front because every trade rewrites it —
   // see the ordering note above this type.
   //
-  // Identical tree, leaf layout and depth as Tier B's — see
+  // Identical tree, leaf layout and depth as Cardano Launch's — see
   // `noctis/cap_accumulator` for why it is a root rather than a list, and why
   // both tiers share one definition. Genesis writes the empty tree's root, so
   // every slot starts unoccupied and the curve is open to anyone from block
@@ -223,9 +223,9 @@ pub type BondingCurveDatum {
   //
   // What it does NOT do, stated plainly so no product surface overclaims it:
   // one WALLET KEY is capped, one PERSON is not. A buyer who wants more uses
-  // a second key. Sybil resistance on Tier B/C comes from DarkVeil's
-  // eligibility checks and the N-hop challenge; Tier A has neither, so the
-  // honest reading of this cap on Tier A is "per wallet", full stop.
+  // a second key. Sybil resistance on both launch types comes from DarkVeil's
+  // eligibility checks and the N-hop challenge; the linear curve has neither, so the
+  // honest reading of this cap on the linear curve is "per wallet", full stop.
   wallet_cap: Int,
   // Token identity (the launch's native asset, locked in this UTxO)
   token_policy_id: PolicyId,
@@ -279,7 +279,7 @@ pub type BondingCurveDatum {
 }
 
 /// Redeemer actions — what the contract can be spent with
-/// One order inside a batch. Mirrors Tier B's identical type; see
+/// One order inside a batch. Mirrors Cardano Launch's identical type; see
 /// bonding_curve_tier_b.ak for the reasoning, which does not differ by tier.
 pub type BatchOrder {
   owner: VerificationKeyHash,
@@ -298,7 +298,7 @@ pub type BatchOrder {
   min_received: Int,
   /// The owner's committed total before this order, and the proof of it. A
   /// batch applies orders in sequence, so each proof is taken against the root
-  /// the PRECEDING order left behind — see Tier B's identical field.
+  /// the PRECEDING order left behind — see Cardano Launch's identical field.
   cap_committed_before: Int,
   cap_proof: List<CapProofStep>,
 }
@@ -308,7 +308,7 @@ pub type BondingCurveRedeemer {
   /// is stamped into `phase_started_at`, verified against the tx's actual
   /// validity range so ExpireCurve has a trustworthy start point.
   ActivateCurve { current_timestamp: Int }
-  /// Public buy — no identity proof required, unlike Tier B/C's DarkVeil-
+  /// Public buy — no identity proof required, unlike both launch types's DarkVeil-
   /// gated purchases. The caller names only how much they want and who they
   /// are; the contract derives the price and the fee split itself from the
   /// datum, so the amount charged is a function of curve position and batch
@@ -477,7 +477,7 @@ const min_platform_claim_fee_lovelace = 200_000
 /// 1784273626775`, a 13-digit ms epoch). Adding a seconds-scale constant to
 /// a ms-scale `phase_started_at` meant the documented "90-day stall window" was
 /// actually enforced as ~7,776,000ms ≈ 2.16 real hours. Found while
-/// building Phase 5 of the Tier A Preprod Milestone (see internal tracking)
+/// building Phase 5 of the Cardano Preprod milestone (see internal tracking)
 /// — fixed here, and the SAME bug pattern was found and fixed in
 /// cto_governance.ak's `execution_window` in the same pass (that field is
 /// ALSO checked via `interval.contains`, so it needed the identical fix).
@@ -739,7 +739,7 @@ fn curve_own_output_clean(self: Transaction, own_ref: OutputReference) -> Bool {
 /// State authentication (2026-08-03 audit) — the launch's own thread NFT must be present on the UTXO being
 /// spent AND on the continuing output.
 ///
-/// Every validator in this project is unparameterized, so all Tier A
+/// Every validator in this project is unparameterized, so all the linear curve
 /// launches share ONE curve address and a UTXO's legitimacy would otherwise
 /// rest entirely on a datum anyone can author (paying to a script address
 /// never runs its validator). Requiring the NFT on the INPUT means an
@@ -783,7 +783,7 @@ fn thread_nft_intact(
 /// double-satisfaction risk. Every value-check helper in this file locates
 /// "this input's own continuing output" by ADDRESS ONLY
 /// (list.find/list.any on own_address) — not by a per-UTXO beacon token or
-/// input-index correlation. Since every Tier A launch's curve shares ONE
+/// input-index correlation. Since every linear-curve launch's curve shares ONE
 /// fixed, unparameterized script address (no constructor params — see this
 /// file's own header), a transaction combining inputs from TWO DIFFERENT
 /// launches' curves in one transaction would make every such lookup
@@ -1197,7 +1197,7 @@ fn staking_seeding_output_ok(self: Transaction, datum: BondingCurveDatum) -> Boo
 
 /// The cumulative wallet cap's read-and-rewrite, in one call: proves `before`
 /// is this key's real running total under `datum.cap_root`, and returns the
-/// root it becomes at `after`. Lives in `noctis/cap_accumulator` because Tier B
+/// root it becomes at `after`. Lives in `noctis/cap_accumulator` because Cardano Launch
 /// runs the identical tree and one off-chain builder serves both — see that
 /// module's own header for the whole design.
 fn cap_transition(
@@ -1243,7 +1243,7 @@ validator bonding_curve {
           // a stalled curve becomes expirable. Bounding the declared range's
           // width pins it to real chain time, which keeps the permissionless
           // backstop's deadline outside the control of the party who starts
-          // the clock. Tier B's equivalent arm carries the same bound.
+          // the clock. Cardano Launch's equivalent arm carries the same bound.
           validity_range_is_narrow(self.validity_range, max_validity_range_width),
           new_datum == BondingCurveDatum {
             ..datum,
@@ -1309,7 +1309,7 @@ validator bonding_curve {
           cap_after <= datum.wallet_cap,
           // Fix: buyer_key_hash was previously self-reported in the
           // redeemer with no cryptographic binding to who actually signed
-          // the tx — matching Tier B's bonding_curve_tier_b.ak, which
+          // the tx — matching Cardano Launch's bonding_curve_tier_b.ak, which
           // already had this check. Without it, the creator-block below is
           // not sufficient on its own and the
           // wallet cap itself is theatrical (claim a fresh hash every buy).
@@ -1680,7 +1680,7 @@ validator bonding_curve {
       // authorized regardless of what it did with the curve's real value —
       // an unconditional authorization, which must never be possible (buyers' principal, all 3
       // fee accumulators, the LP/staking reserves) reachable by anyone, on
-      // every deployed Tier A launch. QueryState was always DOCUMENTED as
+      // every deployed linear-curve launch. QueryState was always DOCUMENTED as
       // "off-chain callers should read the datum directly rather than
       // spend through this redeemer" — the redeemer variant exists so
       // off-chain tooling can reference it as a value, but it must never
@@ -1879,7 +1879,7 @@ fn mock_staking_pool_nft() -> assets.Value {
 // Derived through `noctis/cap_accumulator`'s own tree construction rather than
 // written as literal roots. A hard-coded root would keep every test below
 // passing if the leaf layout, the node hash or the depth changed — which is
-// the one blind spot these tests exist to cover. Identical to Tier B's, on
+// the one blind spot these tests exist to cover. Identical to Cardano Launch's, on
 // purpose: one tree, two curves.
 // ----------------------------------------------------------------------------
 
@@ -2926,7 +2926,7 @@ test buy_tokens_rejects_unauthenticated_buyer_key_hash() {
 // ----------------------------------------------------------------------------
 // The CUMULATIVE cap
 //
-// Tier A has no DarkVeil, so this is the whole of its cap story: a wallet's 5%
+// The linear curve has no DarkVeil, so this is the whole of its cap story: a wallet's 5%
 // is spent across every trade it makes, not refreshed per transaction. Each
 // test pairs a rejection with the otherwise-identical acceptance, so none can
 // pass by rejecting everything.
@@ -5940,7 +5940,7 @@ test graduate_rejects_non_positive_total_raised() {
 }
 
 // ----------------------------------------------------------------------------
-// BatchTrades — N orders applied against one curve UTXO (Tier A, linear)
+// BatchTrades — N orders applied against one curve UTXO (the linear curve, linear)
 // ----------------------------------------------------------------------------
 
 fn a_run_batch_signed(
@@ -6191,7 +6191,7 @@ test tier_a_batch_rejects_leaving_the_reserve_intact() {
 
 
 /// The property the design rests on: order 2 prices from where order 1
-/// finished. Tier A is linear where Tier B is quadratic, so this is a genuinely
+/// finished. The linear curve is linear where Cardano Launch is quadratic, so this is a genuinely
 /// separate check, not a copy.
 test tier_a_batch_prices_each_order_at_its_own_position() {
   let d = mock_datum(Active, 0)

@@ -1,5 +1,5 @@
 // ============================================================================
-// Noctis Zone — Tier A/B Trade History Reader
+// Noctis Zone — Cardano Trade History Reader
 // ============================================================================
 // Reconstructs a launch's full real transaction history — every action ever
 // taken against its bonding_curve (and vesting) script UTxOs — by walking
@@ -354,16 +354,16 @@ export interface TierATradeHistoryConfig {
   blockfrostProjectId: string;
   blockfrostUrl: string;
   bondingCurveAddress: string;
-  /** Tier A only (vesting.ak) — omit for Tier B (bonding_curve_tier_b.ak
-   *  has no vesting counterpart; Tier B/C vesting lives on Midnight). Only
+  /** the linear curve only (vesting.ak) — omit for Cardano Launch (bonding_curve_tier_b.ak
+   *  has no vesting counterpart; both launch types vesting lives on Midnight). Only
    *  getTradeHistory() (both contracts) needs this; getCurveTradeHistory()
    *  (the trade/chart consumer) never touches it. */
   vestingAddress?: string;
   launchIdHex: string;
-  /** Tier B's bonding_curve_tier_b.ak has a different datum shape AND a
-   *  different redeemer constructor order than Tier A's bonding_curve.ak
+  /** Cardano Launch's bonding_curve_tier_b.ak has a different datum shape AND a
+   *  different redeemer constructor order than the linear curve's bonding_curve.ak
    *  (see BONDING_CURVE_TIER_B_ACTIONS's own header note) — only affects
-   *  getCurveTradeHistory(); getTradeHistory() (Tier A + vesting) is
+   *  getCurveTradeHistory(); getTradeHistory() (the linear curve + vesting) is
    *  unaffected. Defaults to 'A' for backward compatibility with existing
    *  callers. */
   tier?: 'A' | 'B';

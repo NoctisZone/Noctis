@@ -25,7 +25,7 @@ function fakeBytes(fill: number, len = 32): Uint8Array {
   return new Uint8Array(len).fill(fill);
 }
 
-/** The 32-byte root a Tier B certificate has to commit to. */
+/** The 32-byte root a Cardano Launch certificate has to commit to. */
 function dvRoot(fill = 7): Uint8Array {
   return fakeBytes(fill);
 }
@@ -78,23 +78,23 @@ describe('assembleProofBundle', () => {
     expect(assembleProofBundle(baseCert(), 'C').tier).toBe('C');
   });
 
-  it('carries the DarkVeil allocation root a Tier B certificate settles against', () => {
+  it('carries the DarkVeil allocation root a Cardano Launch certificate settles against', () => {
     expect(assembleProofBundle(baseCert(), 'B', dvRoot()).dvAllocationRoot).toBe('07'.repeat(32));
   });
 
-  it('REFUSES a Tier B bundle with no allocation root — the certificate would commit to no distribution', () => {
+  it('REFUSES a Cardano Launch bundle with no allocation root — the certificate would commit to no distribution', () => {
     expect(() => assembleProofBundle(baseCert(), 'B')).toThrow(/without the DarkVeil allocation root/);
   });
 
-  it('refuses a Tier B allocation root that is not 32 bytes, rather than hashing a truncated one', () => {
+  it('refuses a Cardano Launch allocation root that is not 32 bytes, rather than hashing a truncated one', () => {
     expect(() => assembleProofBundle(baseCert(), 'B', new Uint8Array(31).fill(7))).toThrow(/got 31 bytes/);
   });
 
-  it('leaves the root empty on Tier C, where every registrant gets the same baseSlot', () => {
+  it('leaves the root empty on Midnight Launch, where every registrant gets the same baseSlot', () => {
     expect(assembleProofBundle(baseCert(), 'C').dvAllocationRoot).toBe('');
   });
 
-  it('refuses a root on Tier C rather than silently binding one that gates nothing', () => {
+  it('refuses a root on Midnight Launch rather than silently binding one that gates nothing', () => {
     expect(() => assembleProofBundle(baseCert(), 'C', dvRoot())).toThrow(/no DarkVeil allocation root to bind/);
   });
 });
@@ -149,7 +149,7 @@ describe('computeProofBundleHash', () => {
     expect(Array.from(h1)).not.toEqual(Array.from(h2));
   });
 
-  it('produces a different hash for Tier B vs Tier C of the SAME cert data (tier is part of the hashed content)', () => {
+  it('produces a different hash for Cardano Launch vs Midnight Launch of the SAME cert data (tier is part of the hashed content)', () => {
     const cert = baseCert();
     const hB = computeProofBundleHash(assembleProofBundle(cert, 'B', dvRoot()));
     const hC = computeProofBundleHash(assembleProofBundle(cert, 'C'));
@@ -191,7 +191,7 @@ describe('relayCertificate — orchestration', () => {
   }
 
   // The manager hands back a FairLaunchCert whichever way it obtained one — a
-  // published-ledger read on Tier B, a circuit call on Tier C — so the relayer
+  // published-ledger read on Cardano Launch, a circuit call on Midnight Launch — so the relayer
   // no longer has an SDK return shape to unwrap.
   it('assembles the bundle from the certificate the manager returns', async () => {
     const cert = baseCert();

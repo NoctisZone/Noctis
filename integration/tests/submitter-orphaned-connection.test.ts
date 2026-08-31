@@ -67,7 +67,7 @@ describe('a submitter that is constructed but never used', () => {
     expect(c.seen).toEqual([]);
   });
 
-  it('does not report one for the Tier B curve submitter either', async () => {
+  it('does not report one for the Cardano Launch curve submitter either', async () => {
     // Checked separately rather than assumed from the one above: each
     // submitter attaches its own handler, so one of them missing it is exactly
     // the regression worth catching.

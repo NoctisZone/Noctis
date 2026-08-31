@@ -213,7 +213,7 @@ function toRecord(handle: PsmHandle, pendingCircuits: readonly string[] = []): P
  *
  * Phase 2 security-audit fix (2026-07-11): darkveil.compact retired as a
  * standalone deployment — its logic is merged into `eligibilityGate`
- * (Tier B) and was already merged into `bondingCurve` (Tier C).
+ * (Cardano Launch) and was already merged into `bondingCurve` (Midnight Launch).
  * There is no separate `darkveil` field anymore; every DarkVeil-related
  * circuit call in NoctisLaunchManager below now routes through whichever
  * of `eligibilityGate`/`bondingCurve` is connected for a given launch.
@@ -245,7 +245,7 @@ export class NoctisMidnightClient {
 
   /**
    * The caller's public key for ONE launch, derived the same way the
-   * eligibility gate / merged Tier C bonding curve circuit expects it,
+   * eligibility gate / merged Midnight Launch bonding curve circuit expects it,
    * using the real `persistentHash`-based derivation under the unified
    * post-merge domain (`'noctis:user:pk:v1'`).
    *
@@ -289,20 +289,20 @@ export class NoctisMidnightClient {
     };
   }
 
-  /** True when a Tier B eligibility gate is the connected DarkVeil contract. */
+  /** True when a Cardano Launch eligibility gate is the connected DarkVeil contract. */
   isTierB(): boolean {
     return this.eligibilityGate !== null;
   }
 
-  // --- Eligibility Gate (Tier B — merged with DarkVeil, Phase 2 2026-07-11) ---
+  // --- Eligibility Gate (Cardano Launch — merged with DarkVeil, Phase 2 2026-07-11) ---
   //
   // Security-audit fix: eligibility_gate.compact absorbed darkveil.compact's
-  // circuits and ledger state (mirrors the Tier C merge) so
+  // circuits and ledger state (mirrors the Midnight Launch merge) so
   // claimRatioBondRefund can read a registrant's real DarkVeil purchase
   // total — Compact has no cross-contract call to do that across two
   // separate deployments. deployDarkVeil/connectDarkVeil are gone; this
   // single deploy now covers both registration AND private buying for
-  // Tier B.
+  // Cardano Launch.
 
   async deployEligibilityGate(
     providers: ContractProviders,
@@ -425,21 +425,21 @@ export class NoctisMidnightClient {
     });
   }
 
-  // --- Bonding Curve (Tier C only, NIGHT-denominated) ---
-  // Tier B's public bonding curve moved to Cardano/Aiken
+  // --- Bonding Curve (Midnight Launch only, NIGHT-denominated) ---
+  // Cardano Launch's public bonding curve moved to Cardano/Aiken
   // (contracts/cardano/bonding_curve_tier_b.ak) and is deployed/called
   // through the Cardano tx-building path, not this Midnight client.
   //
   // Fix (2026-07-10, extended same day): this is now the MERGED
-  // eligibility_gate + darkveil + bonding_curve contract for Tier C (see
+  // eligibility_gate + darkveil + bonding_curve contract for Midnight Launch (see
   // bonding_curve.compact's file header — a 3-way merge). The constructor
   // and witnesses take all three halves' requirements — there is no
   // separate eligibilityGateAddr any more, since it's the same contract,
-  // not a cross-contract reference. For Tier C, this single deployment is
+  // not a cross-contract reference. For Midnight Launch, this single deployment is
   // what registerForDarkVeil/checkAndUpdateCap/claimBondRefund/
-  // submitBuyCommit/revealBuyCommit/etc. all get called against — Tier C
+  // submitBuyCommit/revealBuyCommit/etc. all get called against — Midnight Launch
   // has no separate eligibilityGate or darkveil deployment at all (those
-  // client fields stay reserved for Tier B, which still deploys both
+  // client fields stay reserved for Cardano Launch, which still deploys both
   // standalone).
 
   async deployBondingCurve(
@@ -919,7 +919,7 @@ export type TreasuryHealth = {
  * concept existed. Callers (the launch-creation flow, wherever it lives —
  * currently the WordPress backend, outside this repo's tracked TS layer)
  * are expected to call this BEFORE building a deploy transaction for a new
- * Tier B/C launch and refuse to proceed if `belowFloor` is true.
+ * both launch types launch and refuse to proceed if `belowFloor` is true.
  */
 export async function checkTreasuryHealth(
   treasuryHandle: PsmHandle,
@@ -957,11 +957,11 @@ export class NoctisLaunchManager {
   // --- DarkVeil ---
 
   /**
-   * Tier B: registerForDarkVeil lives on the standalone eligibility_gate
-   * deployment. Tier C: it lives on the merged eligibility_gate +
+   * Cardano Launch: registerForDarkVeil lives on the standalone eligibility_gate
+   * deployment. Midnight Launch: it lives on the merged eligibility_gate +
    * bonding_curve contract (2026-07-10 — see bonding_curve.compact's
    * file header) — there is no separate eligibilityGate deployment for
-   * Tier C at all, so this falls back to bondingCurve when eligibilityGate
+   * Midnight Launch at all, so this falls back to bondingCurve when eligibilityGate
    * isn't connected.
    */
   async registerForDarkVeil() {
@@ -1043,8 +1043,8 @@ export class NoctisLaunchManager {
 
   /**
    * Phase 2 security-audit fix (2026-07-11): darkveil.compact retired —
-   * Tier B's submitBuyCommit now lives on eligibilityGate (the merged
-   * contract), Tier C's on bondingCurve, same fallback pattern as
+   * Cardano Launch's submitBuyCommit now lives on eligibilityGate (the merged
+   * contract), Midnight Launch's on bondingCurve, same fallback pattern as
    * registerForDarkVeil above.
    *
    * Fix (2026-07-21, High): submitBuyCommit no longer takes a
@@ -1065,14 +1065,14 @@ export class NoctisLaunchManager {
   /**
    * Reveals a DarkVeil buy — same eligibilityGate-or-bondingCurve fallback
    * as submitDarkVeilBuyCommit above, EXCEPT the two tiers' real circuit
-   * signatures now genuinely diverge (fix, 2026-07-21): Tier C's
+   * signatures now genuinely diverge (fix, 2026-07-21): Midnight Launch's
    * bonding_curve.compact's revealBuyCommit now takes real
    * claimedCreatorFee/claimedTreasuryFee/claimedOpsFee parameters, verified
    * and accrued into the same payout accumulators buyTokens/withdrawFees
    * use — closing a Critical finding where DarkVeil proceeds had no real
    * payout path at all (accrued into totalRaisedCommitted, which nothing
-   * ever paid out). Tier B's eligibility_gate.compact revealBuyCommit
-   * itself is still payment-free by design — real Tier B settlement
+   * ever paid out). Cardano Launch's eligibility_gate.compact revealBuyCommit
+   * itself is still payment-free by design — real Cardano Launch settlement
    * happens on Cardano via ClaimDarkVeilTokens, not here.
    *
    * Both tiers take a real currentTimestamp, bound to real chain time
@@ -1080,7 +1080,7 @@ export class NoctisLaunchManager {
    * DarkVeil closes — an unrevealed Open commitment could otherwise sit
    * forever, and nothing downstream could conclude a registrant did not buy.
    *
-   * Tier C's fee arguments are creator and platform. The treasury/ops pair
+   * Midnight Launch's fee arguments are creator and platform. The treasury/ops pair
    * they used to be became one platform slice, and this pass-through still
    * named the old three when it was reached.
    */
@@ -1097,7 +1097,7 @@ export class NoctisLaunchManager {
     if (this.client.bondingCurve && !this.client.eligibilityGate) {
       if (!tierCFees) {
         throw new Error(
-          "Tier C revealBuyCommit requires tierCFees (claimedCreatorFee/claimedPlatformFee) — see this method's own comment.",
+          "Midnight Launch revealBuyCommit requires tierCFees (claimedCreatorFee/claimedPlatformFee) — see this method's own comment.",
         );
       }
       return this.client.bondingCurve.callTx.revealBuyCommit(
@@ -1122,7 +1122,7 @@ export class NoctisLaunchManager {
    * Required for claimRatioBondRefund below.
    *
    * Phase 2 security-audit fix (2026-07-11): both tiers' merged
-   * `closeDarkVeil` now take `baseSlot` — Tier B's eligibility_gate.compact
+   * `closeDarkVeil` now take `baseSlot` — Cardano Launch's eligibility_gate.compact
    * gained the ratio-refund mechanism (and its own baseSlot requirement)
    * in the same pass that retired the standalone darkveil.compact, so the
    * old per-tier arity branch is no longer needed.
@@ -1171,14 +1171,14 @@ export class NoctisLaunchManager {
    * anything they assert on Midnight. `settledAmount` must be taken from that
    * transaction's own `dv_amount`.
    *
-   * Tier B only. Tier C settles inside its own merged curve, so there is no
+   * Cardano Launch only. Midnight Launch settles inside its own merged curve, so there is no
    * separate Cardano leg for a governor to attest to.
    */
   async recordDarkVeilSettlement(buyerKey: Uint8Array, settledAmount: bigint) {
     const handle = this.client.eligibilityGate;
     if (!handle) {
       throw new Error(
-        'recordDarkVeilSettlement is a Tier B circuit on the eligibility gate; no eligibilityGate is connected.',
+        'recordDarkVeilSettlement is a Cardano Launch circuit on the eligibility gate; no eligibilityGate is connected.',
       );
     }
     return handle.callTx.recordDarkVeilSettlement(buyerKey, settledAmount);
@@ -1194,13 +1194,13 @@ export class NoctisLaunchManager {
    * be cancelled or marked failed instead, which routes every bond back in
    * full.
    *
-   * Tier B only, for the same reason as recordDarkVeilSettlement above.
+   * Cardano Launch only, for the same reason as recordDarkVeilSettlement above.
    */
   async finalizeDvSettlement() {
     const handle = this.client.eligibilityGate;
     if (!handle) {
       throw new Error(
-        'finalizeDvSettlement is a Tier B circuit on the eligibility gate; no eligibilityGate is connected.',
+        'finalizeDvSettlement is a Cardano Launch circuit on the eligibility gate; no eligibilityGate is connected.',
       );
     }
     return handle.callTx.finalizeDvSettlement();
@@ -1229,10 +1229,10 @@ export class NoctisLaunchManager {
    * platform in the same call. One wallet, so the caller supplies no share
    * and the amount is fully determined by the refund already verified above.
    *
-   * Phase 2 security-audit fix (2026-07-11): previously Tier C only —
-   * Tier B's standalone eligibility_gate.compact had no ratio-refund
-   * circuit at all (internal tracking's old entry: "Tier B
-   * unaffected"). Now available on both tiers, since Tier B's
+   * Phase 2 security-audit fix (2026-07-11): previously Midnight Launch only —
+   * Cardano Launch's standalone eligibility_gate.compact had no ratio-refund
+   * circuit at all (internal tracking's old entry: "Cardano Launch
+   * unaffected"). Now available on both tiers, since Cardano Launch's
    * eligibility_gate.compact merged in darkveil.compact's
    * dvTokensPurchased/baseSlot state in the same pass — same
    * eligibilityGate-or-bondingCurve fallback as the rest of this class.
@@ -1287,8 +1287,8 @@ export class NoctisLaunchManager {
 
   /**
    * Takes back a bond behind a dispute that stood unanswered for the full
-   * window. Waits for the settlement record to be closed first — on Tier B
-   * that is `settlementFinalized`, on Tier C the reveal window elapsing,
+   * window. Waits for the settlement record to be closed first — on Cardano Launch
+   * that is `settlementFinalized`, on Midnight Launch the reveal window elapsing,
    * because the purchase is recorded on Midnight there rather than on
    * Cardano. Either way the point is the same: nothing should conclude a
    * registrant did not buy while a purchase can still be recorded.
@@ -1321,12 +1321,12 @@ export class NoctisLaunchManager {
    * relayer in integration/zk-cert-relayer.ts fetches and anchors to Cardano
    * L1's zk_anchor.ak.
    *
-   * On Tier B the certificate is a published ledger field, so this reads it
+   * On Cardano Launch the certificate is a published ledger field, so this reads it
    * off the indexer: free, permissionless, and no transaction. Anyone can
    * check the certificate against the chain themselves, which is what makes it
    * evidence rather than a claim.
    *
-   * Tier C's merged curve returns it from a circuit instead, so that tier goes
+   * Midnight Launch's merged curve returns it from a circuit instead, so that tier goes
    * through `.callTx` and the JS-typed return value is unwrapped from
    * `.private.result` (the real field per midnight-js-contracts' CallResult —
    * compact-js's CompiledContract widening means the compiler will not catch a
@@ -1347,8 +1347,8 @@ export class NoctisLaunchManager {
   /**
    * Cancels an open (not yet revealed) DarkVeil buy commitment, before
    * DarkVeil closes. No wrapper existed for this real circuit before
-   * now — confirmed identical between eligibility_gate.compact (Tier B)
-   * and bonding_curve.compact (Tier C) by diff, same eligibilityGate-or-
+   * now — confirmed identical between eligibility_gate.compact (Cardano Launch)
+   * and bonding_curve.compact (Midnight Launch) by diff, same eligibilityGate-or-
    * bondingCurve fallback as the rest of this class.
    */
   async cancelDarkVeilBuyCommit(commitment: Uint8Array) {
@@ -1358,7 +1358,7 @@ export class NoctisLaunchManager {
   }
 
   /**
-   * Everything a launch page renders about a Tier B DarkVeil phase — the
+   * Everything a launch page renders about a Cardano Launch DarkVeil phase — the
    * phase, the flat price, the allocation, what has been committed, the
    * certificate — in one read off the indexer.
    *
@@ -1370,17 +1370,17 @@ export class NoctisLaunchManager {
   async getDarkVeilSnapshot(): Promise<DarkVeilSnapshot> {
     if (!this.client.isTierB()) {
       throw new Error(
-        'getDarkVeilSnapshot reads the Tier B eligibility gate’s published ledger; no eligibilityGate is connected.',
+        'getDarkVeilSnapshot reads the Cardano Launch eligibility gate’s published ledger; no eligibilityGate is connected.',
       );
     }
     const { publicDataProvider, contractAddress } = this.client.darkVeilPublicRead();
     return readDarkVeilSnapshot(publicDataProvider, contractAddress);
   }
 
-  // --- Bonding curve buy (Tier C only) ---
+  // --- Bonding curve buy (Midnight Launch only) ---
 
   /**
-   * Buys tokens on Tier C's public bonding curve. The 5% cumulative wallet
+   * Buys tokens on Midnight Launch's public bonding curve. The 5% cumulative wallet
    * cap is now enforced INSIDE buyTokens itself (2026-07-10 — the
    * merged eligibility_gate + bonding_curve contract checks and updates
    * cumulativePurchases atomically in the same circuit call, no separate
@@ -1396,7 +1396,7 @@ export class NoctisLaunchManager {
    * a later public buyTokens share the same cumulativePurchases entry"
    * test proves it.
    *
-   * Tier B only, not Tier C: this method doesn't apply. Tier B's public
+   * Cardano Launch only, not Midnight Launch: this method doesn't apply. Cardano Launch's public
    * curve moved to contracts/cardano/bonding_curve_tier_b.ak, a
    * Cardano transaction, not a Midnight circuit call — build and submit
    * that through the Cardano tx-building path instead.
@@ -1618,7 +1618,7 @@ export class NoctisLaunchManager {
    * actually voted on.
    *
    * CTO fee-redirect fix (2026-07-12): `bondingCurve.triggerCTO` added —
-   * this is Tier C only (Tier B has no Midnight-side bonding curve to
+   * this is Midnight Launch only (Cardano Launch has no Midnight-side bonding curve to
    * trigger; its Cardano curve's TriggerCTO redeemer is a separate,
    * off-chain-orchestrated call against `bonding_curve_tier_b.ak`, not
    * wired here). Before this fix, `bonding_curve.compact` held the REAL
@@ -1641,7 +1641,7 @@ export class NoctisLaunchManager {
     const escrowResult = await escrow.callTx.triggerCTO(proposalId, communityWalletAddr);
     const vestingResult = await vesting.callTx.triggerCTO(proposalId, communityWalletAddr);
     const lpResult = await lp.callTx.triggerCTO(proposalId, communityWalletAddr);
-    // Tier C only — Tier B's bonding curve lives on Cardano, not here.
+    // Midnight Launch only — Cardano Launch's bonding curve lives on Cardano, not here.
     const curveResult = this.client.bondingCurve
       ? await this.client.bondingCurve.callTx.triggerCTO(proposalId, communityWalletAddr)
       : undefined;
@@ -1677,16 +1677,16 @@ export class NoctisLaunchManager {
     return { curveResult, escrowResult, vestingResult, lpResult };
   }
 
-  // --- Bonding curve refund (Tier C only — 2026-07-09) ---
+  // --- Bonding curve refund (Midnight Launch only — 2026-07-09) ---
 
   /**
-   * Claims back the NIGHT a buyer paid into Tier C's bonding curve, once
+   * Claims back the NIGHT a buyer paid into Midnight Launch's bonding curve, once
    * it's been cancelled (failure path). `recipientAddr` is the real
    * Midnight address the refund should be sent to — separate from the
    * derived identity key the circuit uses internally to look up how much
    * this caller paid.
    *
-   * Tier B only, not Tier C: has no equivalent here — its ADA never left
+   * Cardano Launch only, not Midnight Launch: has no equivalent here — its ADA never left
    * Cardano, so a refund there is a plain Cardano-side claim against
    * bonding_curve_tier_b.ak, not a Midnight circuit call.
    */

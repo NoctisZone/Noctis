@@ -1,8 +1,8 @@
 // ============================================================================
-// Noctis Zone — Tier A Preprod Milestone, Phase 2
+// Noctis Zone — Cardano Preprod milestone, Phase 2
 // Live chain-state reader: bonding_curve / vesting / lp_escrow, by launch_id
 // ============================================================================
-// None of Tier A's 3 relevant validators (bonding_curve.ak, vesting.ak,
+// None of the linear curve's 3 relevant validators (bonding_curve.ak, vesting.ak,
 // lp_escrow.ak) take constructor parameters — confirmed directly against
 // contracts/cardano/plutus.json (`parameters` is undefined on all 3 spend
 // validators). Every launch shares ONE fixed script address per validator;
@@ -74,13 +74,13 @@ interface ReadLaunchStateInput {
   blockfrostProjectId: string;
   blockfrostUrl: string;
   /**
-   * Which curve validator to look at. Tier B's curve is a DIFFERENT script at
-   * a different address, so a Tier B launch read against Tier A's address
+   * Which curve validator to look at. Cardano Launch's curve is a DIFFERENT script at
+   * a different address, so a Cardano Launch launch read against the linear curve's address
    * simply finds nothing and reports `bondingCurve: null` — which reads as "no
    * curve exists" rather than "looked in the wrong place". Vesting and LP
    * escrow need no tier because those two validators are shared.
    *
-   * Optional, defaulting to 'A', so existing Tier A callers are unchanged.
+   * Optional, defaulting to 'A', so existing the linear curve callers are unchanged.
    * Same field and same values as read-tier-a-trade-history.ts, which has been
    * tier-aware all along — this reader is the one that was left behind.
    */
@@ -102,8 +102,8 @@ async function main() {
   if (tier !== 'A' && tier !== 'B') {
     throw new Error(`tier must be "A" or "B", got ${JSON.stringify(input.tier)}`);
   }
-  // The datum has to travel with the address: decoding a Tier B curve against
-  // Tier A's schema fails the Data.from and is skipped as "not our UTxO",
+  // The datum has to travel with the address: decoding a Cardano Launch curve against
+  // The linear curve's schema fails the Data.from and is skipped as "not our UTxO",
   // producing the same silent null the wrong address does.
   const bondingCurveValidator = loadValidator(
     blueprint,

@@ -11,7 +11,7 @@
 // published numbers against the chain without asking the platform, which is
 // the point of publishing them.
 //
-// Verified against the real deployed Tier B gate on Preprod (contract
+// Verified against the real deployed Cardano Launch gate on Preprod (contract
 // 5dd23569…) before this module was written: `queryContractState` returns the
 // live state, and returns `null` for an address holding no contract.
 // ============================================================================
@@ -28,7 +28,7 @@ import {
 export type { EligibilityGateLedger };
 
 /**
- * Reads and decodes the whole published ledger of a Tier B eligibility gate.
+ * Reads and decodes the whole published ledger of a Cardano Launch eligibility gate.
  *
  * Callers wanting only the headline figures should prefer
  * {@link readDarkVeilSnapshot}, which returns a plain, serialisable object.
@@ -110,7 +110,7 @@ export function summarizeDarkVeil(ledger: EligibilityGateLedger): DarkVeilSnapsh
   };
 }
 
-/** Reads a Tier B gate and returns only its headline figures. */
+/** Reads a Cardano Launch gate and returns only its headline figures. */
 export async function readDarkVeilSnapshot(
   publicDataProvider: PublicDataProvider,
   contractAddress: string,

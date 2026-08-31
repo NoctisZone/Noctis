@@ -134,14 +134,14 @@ export interface DarkVeilWidgetConfig {
      */
     proofServerUrl: string;
   };
-  /** For claimTierB (Tier B only) — see scope note 3 above re: blockfrostUrl. */
+  /** For claimTierB (Cardano Launch only) — see scope note 3 above re: blockfrostUrl. */
   cardano?: {
     blockfrostProjectId: string;
     blockfrostUrl: string;
     network: LucidNetwork;
     compiledScriptCbor: string;
     /** The launch's thread-NFT policy id, hex, as rendered by the platform.
-     *  The Tier B curve UTXO the claim spends is authenticated against it. */
+     *  The Cardano Launch curve UTXO the claim spends is authenticated against it. */
     threadNftPolicyId: string;
   };
 }
@@ -297,7 +297,7 @@ async function revealCommit(params: {
   merkleProof: BuyFlowContractParams['merkleProof'];
   tokenAmount: bigint;
   pricePerToken: bigint;
-  // Fix (2026-07-30): required now that Tier B's revealBuyCommit
+  // Fix (2026-07-30): required now that Cardano Launch's revealBuyCommit
   // enforces a real 30-day reveal-window deadline — same caller-supplied
   // "now" convention buyCommit's own timestamp already uses above.
   currentTimestamp: bigint;

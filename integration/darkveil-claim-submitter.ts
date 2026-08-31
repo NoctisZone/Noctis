@@ -1,5 +1,5 @@
 // ============================================================================
-// Noctis Zone — Tier B's ClaimDarkVeilTokens
+// Noctis Zone — Cardano Launch's ClaimDarkVeilTokens
 // ============================================================================
 // Settles one registrant's private DarkVeil allocation on Cardano: they pay
 // the flat DarkVeil price in real ADA and receive their tokens, revealing
@@ -7,7 +7,7 @@
 // pays — the validator asks for exactly the key the leaf was built from.
 //
 // The spend itself lives on LucidTierBCurveSubmitter, alongside every other
-// way a Tier B curve UTXO can be spent, and this file is a wrapper over it.
+// way a Cardano Launch curve UTXO can be spent, and this file is a wrapper over it.
 // That curve compiles to more than 15 KB — more than a transaction can carry
 // beside its own inputs and outputs — so a spend has to NAME the published
 // script rather than embed it, and a second implementation of how to spend a
@@ -47,7 +47,7 @@ export interface LucidDarkVeilClaimSubmitterConfig {
   blockfrostUrl: string;
   network: LucidNetwork;
   /** bonding_curve_tier_b.ak's compiled PlutusV3 script CBOR. The validator is
-   *  unparameterized, so this is one shared script address across every Tier B
+   *  unparameterized, so this is one shared script address across every Cardano Launch
    *  launch — launches are told apart by `launch_id` in the datum. */
   compiledScriptCbor: string;
   launchId: Uint8Array;

@@ -144,11 +144,11 @@ export type TxCoSigner = Pick<CurveSpendWallet, 'signTx'>;
  * A batch: the curve spent alongside N order UTXOs.
  *
  * The curve's validator is REFERENCED and the orders' is EMBEDDED, which is
- * not an arbitrary split. A Tier A curve is 12 KB and a batch of two orders
+ * not an arbitrary split. A the linear curve curve is 12 KB and a batch of two orders
  * measured 17,991 bytes against the 16,384 cap with it embedded — referencing
  * it alone leaves over 10 KB spare. `curve_order` is 1.7 KB and carrying it
  * costs little, so it is not worth a second reference UTXO to publish and keep
- * current. Referencing the curve is not an optimisation on Tier B: that
+ * current. Referencing the curve is not an optimisation on Cardano Launch: that
  * validator cannot be embedded at all.
  */
 export interface CurveBatchPlan {

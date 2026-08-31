@@ -6,7 +6,7 @@
 // whole compiled script against Cardano's 16,384-byte transaction cap;
 // referencing charges only a pointer.
 //
-// This matters because `bonding_curve_tier_b` compiles to over 15 KB. A Tier B
+// This matters because `bonding_curve_tier_b` compiles to over 15 KB. A Cardano Launch
 // trade that embeds it has no room left for the cap-accumulator proof a buy
 // carries, and a batch of orders is further out of reach still. Referencing
 // removes the script from the transaction entirely, which is what makes both
@@ -167,7 +167,7 @@ export function resolveReferenceScript(
  * the transaction. Measured overhead beyond the script itself is ~232 bytes
  * unsigned and ~332 signed, so the headroom below is deliberately conservative.
  *
- * Tier B has been over this line before. It is worth knowing before spending
+ * Cardano Launch has been over this line before. It is worth knowing before spending
  * the deposit, not after.
  */
 export const PUBLISH_TX_OVERHEAD_BYTES = 332;

@@ -1,5 +1,5 @@
 // ============================================================================
-// Noctis Zone — Tier A Preprod Milestone, Phase 5b
+// Noctis Zone — Cardano Preprod milestone, Phase 5b
 // ExecuteDexChange (lp_escrow.ak) — permissionless, applies a pending
 // whitelist change once its 72h public notice period has elapsed. See
 // tier-a-dex-change-submitter.ts's header (validity-width-bound, real honest

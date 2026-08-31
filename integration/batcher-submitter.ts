@@ -49,8 +49,8 @@ import {
 } from './tier-a-schemas.js';
 
 /**
- * `BatchTrades`' constructor index — DIFFERENT on the two tiers, because Tier B
- * declares three redeemers Tier A does not.
+ * `BatchTrades`' constructor index — DIFFERENT on the two tiers, because Cardano Launch
+ * declares three redeemers the linear curve does not.
  *
  * Taken by NAME from `redeemer-indices.ts`, whose table a test holds against
  * the compiled blueprint, never assumed from the order the `.ak` source reads
@@ -82,7 +82,7 @@ export interface BatcherSubmitterConfig {
    *
    * REQUIRED, unlike a single trade's. A batch carries N cap proofs on top of
    * the curve's own datum and the orders' inputs and outputs; with the curve
-   * embedded, a two-order Tier A batch measured 17,991 bytes against a 16,384
+   * embedded, a two-order the linear curve batch measured 17,991 bytes against a 16,384
    * cap. A spend cannot be split across transactions, so there is no
    * arrangement that fits — the curve has to be named rather than carried.
    */

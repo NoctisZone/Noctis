@@ -25,10 +25,10 @@
 //// pair) means an NFT can still be traced back to its launch by eye on a
 //// block explorer.
 ////
-//// Distinct tags for the Tier A and Tier B curves are deliberate: they are
+//// Distinct tags for the two Cardano curves are deliberate: they are
 //// different scripts at different addresses and a launch is only ever one of
-//// the two, so a shared tag would buy nothing and would let a Tier A token be
-//// replanted at a Tier B address.
+//// the two, so a shared tag would buy nothing and would let a linear-curve token be
+//// replanted at a Cardano Launch address.
 
 use aiken/primitive/bytearray
 
@@ -84,8 +84,8 @@ test thread_asset_name_differs_per_launch() {
   )
 }
 
-/// The two curve tags must never collide — a Tier A token must not satisfy a
-/// Tier B check for the same launch.
+/// The two curve tags must never collide — a linear-curve token must not satisfy a
+/// Cardano Launch check for the same launch.
 test curve_roles_do_not_collide() {
   let launch_id =
     #"0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20"
