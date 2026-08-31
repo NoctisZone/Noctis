@@ -185,7 +185,9 @@ Launch Wizard
 
 LP Escrow fans out from the Bonding Curve because graduation (100% sell-through) is what triggers LP seeding — see the Graduation Flow diagram below. Once locked, LP Escrow also supports **HarvestFees**: a DEX-agnostic redeemer that lets post-graduation trading fees reach the creator, or the CTO community wallet, without ever touching the locked LP position. The real per-DEX harvest call (CSwap, Minswap, Splash, WingRiders and SundaeSwap each differ) arrives with the DEX integration work; what the contract enforces today are its own invariants — the LP position is byte-for-byte unchanged, and the correct recipient is really paid in the same transaction.
 
-**Forfeited DarkVeil bonds go whole to the platform wallet.** An earlier version of this diagram split them 60/40 between a treasury and an ops wallet; that pair was retired on 2026-08-06 and there is no fee split anywhere on the platform now — one address receives the launch fee, the platform's 1.0%, forfeited bonds and staking claim fees alike.
+**Forfeited DarkVeil bonds go whole to the platform wallet.** An earlier version of this diagram split them 60/40 between a treasury and an ops wallet; that pair was retired for *revenue* on 2026-08-06. One address now receives the launch fee, the platform's 1.0% of trade volume, forfeited DarkVeil bonds and staking claim fees alike.
+
+**The treasury/ops pair is not gone from the platform, though — only from revenue.** Three validators still pay a *slashed challenge bond* to two separate addresses, 60/40: `nhop_challenge.ak`, `cto_sybil_challenge.ak` and `cto_governance.ak` each carry `treasury_bps = 60` / `ops_bps = 40` and a `treasury_pub_key_hash` / `ops_pub_key_hash` pair in their datum, with tests pinning the split. That is a different kind of money — a forfeited bond from someone who challenged and lost, not platform income — but it means both addresses must still be provisioned, and any claim that the platform has no split anywhere is wrong.
 
 ---
 

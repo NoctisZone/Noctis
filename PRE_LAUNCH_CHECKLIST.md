@@ -130,7 +130,7 @@ Human sign-off gate. Three stages: website live, preprod contracts, mainnet.
 - [ ] DarkVeil buying window opens → submit buy commitment (private, Midnight) → private state updated
 - [ ] DarkVeil closes → relayer anchors `dv_allocation_root` on Cardano ZK Anchor Contract (Merkle root, not a plaintext registrant list)
 - [ ] Buyer calls `ClaimDarkVeilTokens` on the Cardano Bonding Curve Cardano Launch contract → presents `(dv_amount, salt, merkle_proof)` → pays real ADA → receives tokens (this is where real Cardano Launch DarkVeil settlement actually happens, not on Midnight)
-- [ ] Ratio-based NIGHT bond refund correct for a partial buyer (`claimRatioBondRefund`); ghost registrants forfeit fully, split 60/40 treasury/ops
+- [ ] Ratio-based NIGHT bond refund correct for a partial buyer (`claimRatioBondRefund`); ghost registrants forfeit fully, the forfeited amount paid whole to the one platform address
 - [ ] Regression (Critical fix, 2026-07-30, see `local/SECURITY_AUDIT.md` for detail): confirm the fix holds against real preprod behavior, not just the simulator — 🔧 code-ready (13 regression tests pass; live preprod re-verification still needed since this closes a real fund-drain exploit)
 - [ ] N-hop challenge: submit a test challenge against a claimed allocation within 72h, confirm the 24h defense window and governor-adjudicated resolution both work
 - [ ] Public bonding curve opens on Cardano → buy tokens → price increases correctly

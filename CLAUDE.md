@@ -131,8 +131,11 @@ STAKING_DURATION_MIN_DAYS = 1095 // Minimum staking pool runway (3 years) — cr
 STAKING_DURATION_MAX_DAYS = 1825 // Maximum staking pool runway (5 years)
 STAKING_BONDING_PERIOD_DAYS = 7 // A newly-staked position earns nothing until seasoned this long — anti-gaming, enforced off-chain via the governor's snapshot formula
 STAKING_CLAIM_FEE_USD = 1 // Flat USD fee to claim accrued rewards — ADA (Cardano) or NIGHT (Midnight) at oracle spot price
-// The whole claim fee goes to the single platform wallet — there is no
-// treasury/ops split anywhere on the platform (2026-08-06).
+// The whole claim fee goes to the single platform wallet. Every REVENUE
+// stream does: no launch fee, trade fee, forfeited DarkVeil bond or claim
+// fee is split (2026-08-06). Slashed CHALLENGE bonds are the exception and
+// are still split 60/40 to separate treasury/ops addresses — see the
+// Challenge Bond Slashing note under TEAM REVENUE SOURCES.
 LP_LOCK_DAYS = 365 // LP escrow lock duration
 LP_MIGRATION_COOLDOWN= 90 // Days between LP migrations
 CTO_MIN_DAYS_POSTGRD = 90 // Minimum days post-graduation before CTO vote (raised from 30, anti-whale-takeover fix, 2026-07-28 — see CTO GOVERNANCE section)
@@ -539,6 +542,18 @@ The creator's own token allocation CAN vote in a CTO ballot — it is not exclud
 | Platform Wallet | The whole flat $10 launch fee (all tiers) + 1.0% of curve trade volume + every forfeited DarkVeil bond + staking claim fees | ONE address, public, quarterly disclosure. Replaced the treasury/ops pair on 2026-08-06: no fee splits anywhere. Also funds the NIGHT purchases that generate DUST |
 | NIGHT Holdings | Market appreciation as ops buys NIGHT for DUST | Sellable under exceptional circumstances only |
 | Stablecoin Reserve | USDM accumulated out of the platform wallet's income | Protocol liquidity reserve, not a salary account. A holding policy now, not a separate wallet |
+
+> **Challenge bond slashing is the one real exception to "one wallet, no splits" (verified in code 2026-08-31).**
+> Revenue is unsplit — launch fee, the platform's 1.0%, forfeited DarkVeil bonds and staking claim
+> fees all land in the single platform wallet. But a *slashed challenge bond* is not revenue, and
+> three shipped validators still divide one 60/40 between two distinct addresses:
+> `nhop_challenge.ak`, `cto_sybil_challenge.ak` and `cto_governance.ak` each declare
+> `treasury_bps = 60` / `ops_bps = 40` and carry a `treasury_pub_key_hash` / `ops_pub_key_hash` pair
+> in their datum, with tests asserting the payout. **Both addresses must therefore still be
+> provisioned and disclosed** — retiring the pair for revenue did not retire it here, and the
+> deployment checklist needs both. Whether these should also collapse to one address is a real open
+> question, not a documentation slip; it needs a contract change and a re-audit, so it is not assumed
+> either way here.
 
 ### NIGHT Sell Policy (Team-held NIGHT only)
 - Protocol treasury NIGHT: **never sold, ever**

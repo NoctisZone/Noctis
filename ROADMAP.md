@@ -13,7 +13,7 @@ Rolling task list. Tracks ordered by build sequence — A must precede B, B prec
 
 - **Track A** — WordPress public site (noctis.zone) — *in progress; mobile audit + production deploy remain; a CIP-68 on-chain logo pipeline's CONTRACT half is already built + audited (`token_metadata.ak`, 2026-07-28) with a real Lucid Evolution submitter — the WordPress-side upload/wizard-wiring/Token Profile page work is not yet built*
 - **Track B** — Cardano L1 contracts (Aiken) — *built and twice-audited: 549 checks (real re-run this pass), thread-NFT-hardened CTO governance (fixed in the latest full-codebase audit pass), a `SellTokens` redeemer on the quadratic curve + CIP-68 `token_metadata.ak`*
-- **Track C** — Midnight PSM contracts (Compact) — *built and audited: 8 PSMs, 280 tests, full ZK proving keys; full internal security audit (Critical through Low severity) closed 2026-07-30*
+- **Track C** — Midnight PSM contracts (Compact) — *built and audited: 8 PSMs, 502 tests, full ZK proving keys; full internal security audit (Critical through Low severity) closed 2026-07-30*
 - **Track D** — Integration + API layer — *built: real Blockfrost/Midnight SDK/wallet/eligibility-checker/price-oracle code, now with real test coverage across the CLI/submitter/oracle layers (560+ tests)*
 - **Track E** — Security + audit — *internal adversarial passes done across both Cardano and Midnight; independent professional audit still needed before mainnet*
 - **Track F** — Midnight Launch (Midnight-native) — *still blocked on the token standard not yet being ratified, and no confirmed live graduation DEX (NorthStar DEX is a Preprod-live candidate); the trade-fee-conversion and ZK-cert-relayer questions are substantially resolved*
@@ -136,7 +136,7 @@ Positions moved from separate UTXOs to entries under a Merkle root in the pool d
 
 ## Track C — Midnight PSM contracts (Compact)
 
-**Built and audited.** 8 PSMs, 280 tests, full ZK proving-key generation (`compact compile`, not just `--skip-zk`). Cross-PSM atomicity and SDK availability don't gate this anymore — see the TL;DR note above. Two full internal security audits closed (an initial pass, then this session's deeper pass) — see Track E1b.
+**Built and audited.** 8 PSMs, 502 tests, full ZK proving-key generation (`compact compile`, not just `--skip-zk`). Cross-PSM atomicity and SDK availability don't gate this anymore — see the TL;DR note above. Two full internal security audits closed (an initial pass, then this session's deeper pass) — see Track E1b.
 
 ### C1. Eligibility Gate PSM (Cardano Launch — merged with DarkVeil, Phase 2) ✅
 **Status:** Shipped. ZK proof verification for allowlist membership; the former standalone DarkVeil PSM (registration, NIGHT bonds, commitment/reveal buying, ratio-based bond refunds) is merged into this same file — Compact has no cross-contract call mechanism, so two contracts could never have shared one cumulative cap. Real settlement happens on Cardano instead (see B4).
