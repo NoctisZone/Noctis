@@ -2,7 +2,7 @@
 
 **They can't front-run what they can't see.**
 
-A multi-chain token launchpad built on Cardano L1 and Midnight Network. Private buying phases powered by zero-knowledge proofs, per-wallet whale caps, permanent LP lock, and community rescue mechanics.
+A token launchpad built on Midnight Network. DarkVeil — the private buying phase — runs on Midnight for every launch, so nothing can trade ahead of an order it cannot read. The chain a token settles on is the creator's choice: Cardano L1 today, with Solana and XRP announced. Per-wallet whale caps, permanent LP lock, and community rescue mechanics.
 
 This project is built on the Midnight Network.
 

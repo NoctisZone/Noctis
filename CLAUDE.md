@@ -58,12 +58,14 @@ Full detail — mechanics, reproduction, which items remain open and where — b
 
 **Platform name:** Noctis 
 **Tagline:** They can't front-run what they can't see. 
-**Type:** Token launchpad — competitor to snek.fun on Cardano 
-**Chains:** Cardano L1 (public) + Midnight Network (private execution) 
+**Type:** Token launchpad built on Midnight Network — the private buying phase is Midnight on every launch, whichever chain the token settles on 
+**Chains:** Midnight Network (private execution, every launch) + the settlement chain the creator picks — Cardano L1 today; Solana and XRP announced 
 **Status:** Design complete. Moving to build phase. 
 **Version:** Whitepaper v1 / Spec v1 
 
-Noctis is a multi-chain token launchpad. A launch is named for the chain its token settles on. A **Cardano Launch** pairs a private buying phase (DarkVeil) on Midnight Network with a public quadratic curve, escrow and LP on Cardano L1. A **Midnight Launch** is fully Midnight-native: the token, bonding curve, DarkVeil phase, and LP all live on Midnight; Cardano is only used for the ZK anchor certificate.
+Noctis is a token launchpad built on **Midnight Network**. DarkVeil — the private registration and buying phase — runs on Midnight for **every** launch, whichever chain the token settles on. That is the product: Midnight is the privacy engine, not one of two chains.
+
+The settlement chain is the creator's choice, and a launch is named for it. A **Cardano Launch** settles the public quadratic curve, escrow and LP on Cardano L1 — the first venue built, and the proof of the concept. A **Midnight Launch** is fully Midnight-native: the token, bonding curve, DarkVeil phase and LP all live on Midnight, with Cardano used only for the ZK anchor certificate. **Solana Launch** and **XRP Launch** are announced, not built.
 
 There is **no platform token**. Revenue flows in ADA and NIGHT only.
 
