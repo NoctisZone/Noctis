@@ -32,6 +32,12 @@ import {
 
 declare const __dirname: string;
 
+interface ReferencePointerInput {
+  txHash: string;
+  outputIndex: number;
+  scriptHash: string;
+}
+
 interface GraduateInput {
   network: 'preview' | 'preprod' | 'mainnet';
   launchIdHex: string;
@@ -41,6 +47,16 @@ interface GraduateInput {
   lockSealTimestampMs: number;
   blockfrostProjectId: string;
   blockfrostUrl: string;
+  /** Published reference scripts TX1 names instead of carrying — required. */
+  bondingCurveRef: ReferencePointerInput;
+  lpEscrowRef: ReferencePointerInput;
+  /**
+   * Required when the launch opted into staking: the pool's seeding spend
+   * (TopUpPool) is creator-signed. Both PLAINTEXT-decrypted server-side by
+   * the PHP caller, same handling as the governor key. Never logged.
+   */
+  creatorAddress?: string;
+  creatorPrivateKeyExtendedHex?: string;
 }
 
 async function main() {
@@ -56,6 +72,8 @@ async function main() {
     'lockSealTimestampMs',
     'blockfrostProjectId',
     'blockfrostUrl',
+    'bondingCurveRef',
+    'lpEscrowRef',
   ]);
 
   const blueprint = loadPlutusBlueprint(__dirname);
@@ -67,14 +85,23 @@ async function main() {
     bondingCurveScriptCbor: loadValidatorCbor(blueprint, 'bonding_curve.bonding_curve.spend'),
     lpEscrowScriptCbor: loadValidatorCbor(blueprint, 'lp_escrow.lp_escrow.spend'),
     vestingScriptCbor: loadValidatorCbor(blueprint, 'vesting.vesting.spend'),
+    stakingPoolScriptCbor: loadValidatorCbor(blueprint, 'staking_pool.staking_pool.spend'),
+    bondingCurveRef: input.bondingCurveRef,
+    lpEscrowRef: input.lpEscrowRef,
     launchIdHex: input.launchIdHex,
     threadNftPolicyId: input.threadNftPolicyId,
   });
+
+  const creator =
+    input.creatorAddress && input.creatorPrivateKeyExtendedHex
+      ? { address: input.creatorAddress, privateKeyExtendedHex: input.creatorPrivateKeyExtendedHex }
+      : undefined;
 
   const result = await submitter.graduate(
     input.governorPrivateKeyExtendedHex,
     input.governorAddress,
     requireTimestampMs(input.lockSealTimestampMs, 'lockSealTimestampMs'),
+    creator,
   );
   process.stdout.write(
     JSON.stringify({
@@ -83,6 +110,7 @@ async function main() {
       lpAda: result.lpAda.toString(),
       lpReserveTokens: result.lpReserveTokens.toString(),
       stakingReserveTokens: result.stakingReserveTokens.toString(),
+      stakingSeeded: result.stakingSeeded,
     }),
   );
 }

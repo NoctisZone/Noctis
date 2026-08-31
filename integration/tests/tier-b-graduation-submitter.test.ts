@@ -57,6 +57,8 @@ function curveDatum(overrides: Record<string, unknown> = {}) {
     staking_reserve_tokens: 250_000_000n,
     lp_seeded: false,
     staking_seeded: false,
+    staking_enabled: false,
+    creator_pub_key_hash: fakeKeyHash(0x22),
     token_policy_id: TOKEN_POLICY,
     token_asset_name: TOKEN_ASSET_NAME,
     // Tier B-only DarkVeil fields — must survive Graduate's spread unchanged.
@@ -193,6 +195,9 @@ function makeSubmitter(
     bondingCurveTierBScriptCbor: '590001',
     lpEscrowScriptCbor: '590002',
     vestingScriptCbor: '590003',
+    stakingPoolScriptCbor: '590004',
+    bondingCurveRef: { txHash: 'ab'.repeat(32), outputIndex: 0, scriptHash: 'a1'.repeat(28) },
+    lpEscrowRef: { txHash: 'cd'.repeat(32), outputIndex: 0, scriptHash: 'b2'.repeat(28) },
     launchIdHex: LAUNCH_ID_HEX,
     threadNftPolicyId: THREAD_POLICY,
   });
@@ -200,7 +205,21 @@ function makeSubmitter(
   addressRefs.lp = (submitter as unknown as { lpEscrowAddress: string }).lpEscrowAddress;
   addressRefs.vesting = (submitter as unknown as { vestingAddress: string }).vestingAddress;
 
-  return { submitter, fakeLucid };
+  // TX1 executes through mesh-curve-spend.ts, which is tested against real
+  // transaction bytes in its own file — here the execution parts are stubbed
+  // so these tests assert the PLAN the submitter authors.
+  const submitGraduation = vi.fn().mockImplementation(() => Promise.resolve(nextTxHash()));
+  (submitter as unknown as { meshParts: unknown }).meshParts = vi
+    .fn()
+    .mockResolvedValue({ spender: { submitGraduation }, wallet: {}, coSigners: [] });
+
+  return { submitter, fakeLucid, submitGraduation };
+}
+
+/** The plan the (stubbed) spender was handed. */
+function planOf(submitGraduation: ReturnType<typeof vi.fn>) {
+  expect(submitGraduation).toHaveBeenCalledTimes(1);
+  return submitGraduation.mock.calls[0]?.[0] as import('../mesh-curve-spend.js').GraduationSpendPlan;
 }
 
 beforeEach(() => {
@@ -247,9 +266,9 @@ describe('TierBGraduationSubmitter — which UTXO it graduates', () => {
     // The forged datum names the forger's own policy, so a token check built
     // from the datum accepts it. Built from the policy the platform recorded
     // at mint, it is not a candidate at all.
-    const { builder, collectFromCalls } = makeFakeTxBuilder();
+    const { builder } = makeFakeTxBuilder();
     const forgerPolicy = 'ee'.repeat(28);
-    const { submitter } = makeSubmitter(builder, {
+    const { submitter, submitGraduation } = makeSubmitter(builder, {
       curveUtxos: [
         // Planted first, because provider ordering is not the caller's to choose.
         {
@@ -265,8 +284,7 @@ describe('TierBGraduationSubmitter — which UTXO it graduates', () => {
 
     await submitter.graduateAndSealLp(REAL_EXTENDED_KEY_HEX, GOVERNOR_ADDR, 1000);
 
-    const spentCurve = collectFromCalls[0]?.[0] as Array<{ txHash: string }>;
-    expect(spentCurve[0]?.txHash).toBe('11'.repeat(32));
+    expect(planOf(submitGraduation).scriptUtxo.txHash).toBe('11'.repeat(32));
   });
 
   it('still refuses when two UTXOs both carry the genuine thread NFT', async () => {
@@ -319,11 +337,11 @@ describe('TierBGraduationSubmitter.graduateAndSealLp — guard rails (same as Ti
 
 describe('TierBGraduationSubmitter.graduateAndSealLp — Tier B DarkVeil field preservation', () => {
   it('carries dv_allocation_root/dv_claimed/dv_settled through Graduate unchanged', async () => {
-    const { builder, payToContractCalls } = makeFakeTxBuilder();
+    const { builder } = makeFakeTxBuilder();
     const dvRoot = toHex(new Uint8Array(32).fill(42));
     const dvClaimed = [fakeKeyHash(0x11), fakeKeyHash(0x22)];
     const _identityPurchases = [[fakeKeyHash(0x33), 12345n]];
-    const { submitter } = makeSubmitter(builder, {
+    const { submitter, submitGraduation } = makeSubmitter(builder, {
       curveUtxos: [
         {
           datum: curveDatum({
@@ -339,14 +357,14 @@ describe('TierBGraduationSubmitter.graduateAndSealLp — Tier B DarkVeil field p
 
     await submitter.graduateAndSealLp(REAL_EXTENDED_KEY_HEX, GOVERNOR_ADDR, 1_700_000_000);
 
-    const [, curvePayload] = payToContractCalls[0] as [string, { value: Record<string, unknown> }];
-    expect(curvePayload.value.dv_allocation_root).toBe(dvRoot);
-    expect(curvePayload.value.dv_claimed).toEqual(dvClaimed);
-    expect(curvePayload.value.dv_settled).toBe(true);
+    const curvePayload = planOf(submitGraduation).continuing.datumCbor as unknown as Record<string, unknown>;
+    expect(curvePayload.dv_allocation_root).toBe(dvRoot);
+    expect(curvePayload.dv_claimed).toEqual(dvClaimed);
+    expect(curvePayload.dv_settled).toBe(true);
     // The 3 fields Graduate DOES change:
-    expect(curvePayload.value.total_raised).toBe(0n);
-    expect(curvePayload.value.lp_seeded).toBe(true);
-    expect(curvePayload.value.staking_seeded).toBe(true);
+    expect(curvePayload.total_raised).toBe(0n);
+    expect(curvePayload.lp_seeded).toBe(true);
+    expect(curvePayload.staking_seeded).toBe(true);
   });
 });
 
@@ -361,23 +379,22 @@ describe('TierBGraduationSubmitter — SealLock/StartVesting are bound to a real
   const SEAL_MS = 1_775_000_000_000;
 
   it('SealLock: sets a range that brackets lock_timestamp, no wider than the cap', async () => {
-    const { builder, calls, payToContractCalls } = makeFakeTxBuilder();
-    const { submitter } = makeSubmitter(builder, {
+    const { builder } = makeFakeTxBuilder();
+    const { submitter, submitGraduation } = makeSubmitter(builder, {
       curveUtxos: [{ datum: curveDatum(), assets: {} }],
       lpUtxos: [{ datum: lpDatum(), assets: {} }],
     });
 
     await submitter.graduateAndSealLp(REAL_EXTENDED_KEY_HEX, GOVERNOR_ADDR, SEAL_MS);
 
-    const from = calls.validFrom?.[0] as number;
-    const to = calls.validTo?.[0] as number;
-    expect(from).toBeLessThanOrEqual(SEAL_MS);
-    expect(to).toBeGreaterThanOrEqual(SEAL_MS);
+    const plan = planOf(submitGraduation);
+    expect(plan.validity?.fromMs).toBeLessThanOrEqual(SEAL_MS);
+    expect(plan.validity?.toMs).toBeGreaterThanOrEqual(SEAL_MS);
     // max_validity_range_width in lp_escrow.ak, as a literal — expressing it
     // via the submitter's own 240_000 would scale with the bug it guards.
-    expect(to - from).toBeLessThanOrEqual(600_000);
+    expect((plan.validity?.toMs ?? 0) - (plan.validity?.fromMs ?? 0)).toBeLessThanOrEqual(600_000);
 
-    const sealedDatum = (payToContractCalls[1] as [string, { value: Record<string, unknown> }, unknown])[1].value;
+    const sealedDatum = plan.payouts[0]?.datumCbor as unknown as Record<string, unknown>;
     expect(sealedDatum.lock_timestamp).toBe(BigInt(SEAL_MS));
   });
 
@@ -402,8 +419,8 @@ describe('TierBGraduationSubmitter — SealLock/StartVesting are bound to a real
 
 describe('TierBGraduationSubmitter.graduateAndSealLp — value movement + redeemers', () => {
   it('moves lpAda + reserve tokens OUT of the curve and INTO lp_escrow exactly, redeemer indices 8/0', async () => {
-    const { builder, payToContractCalls, collectFromCalls } = makeFakeTxBuilder();
-    const { submitter } = makeSubmitter(builder, {
+    const { builder } = makeFakeTxBuilder();
+    const { submitter, submitGraduation } = makeSubmitter(builder, {
       curveUtxos: [
         {
           datum: curveDatum({
@@ -425,26 +442,32 @@ describe('TierBGraduationSubmitter.graduateAndSealLp — value movement + redeem
     const result = await submitter.graduateAndSealLp(REAL_EXTENDED_KEY_HEX, GOVERNOR_ADDR, 1_700_000_000);
 
     expect(result.lpAda).toBe(5_000_000n);
-    const [, , curveAssets] = payToContractCalls[0] as [string, unknown, Record<string, bigint>];
-    expect(curveAssets.lovelace).toBe(15_000_000n);
-    expect(curveAssets[TOKEN_UNIT]).toBe(999_850n);
-    const [, , lpAssets] = payToContractCalls[1] as [string, unknown, Record<string, bigint>];
-    expect(lpAssets.lovelace).toBe(7_000_000n);
-    expect(lpAssets[TOKEN_UNIT]).toBe(100n);
+    const plan = planOf(submitGraduation);
+    expect(plan.continuing.assets.lovelace).toBe(15_000_000n);
+    expect(plan.continuing.assets[TOKEN_UNIT]).toBe(999_850n);
+    // The curve's thread NFT continues — the seeding checks authenticate
+    // every state output by its role's NFT.
+    expect(plan.continuing.assets[threadNft('bondingCurveTierB')]).toBe(1n);
+    const lpPayout = plan.payouts[0];
+    expect(lpPayout?.assets.lovelace).toBe(7_000_000n);
+    expect(lpPayout?.assets[TOKEN_UNIT]).toBe(100n);
+    expect(lpPayout?.assets[threadNft('lpEscrow')]).toBe(1n);
 
-    expect((collectFromCalls[0][1] as { index: number }).index).toBe(8);
-    expect((collectFromCalls[1][1] as { index: number }).index).toBe(0);
+    expect((plan.redeemerCbor as unknown as { index: number }).index).toBe(8);
+    expect((plan.companionInputs[0]?.redeemerCbor as unknown as { index: number } | undefined)?.index).toBe(0);
   });
 
-  it('requires the governor as signer and passes localUPLCEval: false (multi-script eval)', async () => {
-    const { builder, calls } = makeFakeTxBuilder();
-    const { submitter } = makeSubmitter(builder, {
+  it('references the LP escrow validator and requires no signer on a staking-declined launch', async () => {
+    const { builder } = makeFakeTxBuilder();
+    const { submitter, submitGraduation } = makeSubmitter(builder, {
       curveUtxos: [{ datum: curveDatum(), assets: {} }],
       lpUtxos: [{ datum: lpDatum(), assets: {} }],
     });
     await submitter.graduateAndSealLp(REAL_EXTENDED_KEY_HEX, GOVERNOR_ADDR, 1000);
-    expect(calls.addSigner).toEqual([GOVERNOR_ADDR]);
-    expect(calls.complete).toEqual([{ localUPLCEval: false }]);
+    const plan = planOf(submitGraduation);
+    expect(plan.companionInputs).toHaveLength(1);
+    expect(plan.companionInputs[0] && 'referenceScript' in plan.companionInputs[0].script).toBe(true);
+    expect(plan.requiredSignerHashes).toEqual([]);
   });
 });
 

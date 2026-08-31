@@ -200,4 +200,33 @@ describe('compiled validator sizes', () => {
       expect(recorded).toBeLessThanOrEqual(MAX_PUBLISHABLE_SCRIPT_BYTES);
     });
   }
+
+  // A budget is per TRANSACTION, and a graduation spends three validators at
+  // once: the curve (Graduate), lp_escrow (SealLock) and staking_pool
+  // (TopUpPool). The per-script assertions above cannot see that sum — each
+  // curve + lp_escrow pair alone is over the cap, which is exactly why the
+  // graduation submitters reference both and carry only the pool. This
+  // records the shape as measurements: the pair must stay unembeddable-
+  // together knowledge (so nobody quietly reverts to carrying them), and the
+  // one script a graduation DOES carry must leave room for everything else.
+  // The full built transaction is measured in mesh-curve-spend.test.ts.
+  describe('the graduation transaction', () => {
+    const curveA = RECORDED.bonding_curve ?? 0;
+    const curveB = RECORDED.bonding_curve_tier_b ?? 0;
+    const lp = RECORDED.lp_escrow ?? 0;
+    const pool = RECORDED.staking_pool ?? 0;
+    // Everything in a real graduation that is not a script: three inputs with
+    // datum-bearing outputs, redeemers, signatures, fee/change. Measured on
+    // a real build at ~2.5 KB; doubled for margin.
+    const GRADUATION_OVERHEAD = 5_000;
+
+    it('cannot carry both of its big validators, either tier — they must be referenced', () => {
+      expect(curveA + lp).toBeGreaterThan(MAX_TX_BYTES);
+      expect(curveB + lp).toBeGreaterThan(MAX_TX_BYTES);
+    });
+
+    it('fits with the curve and escrow referenced and only staking_pool carried', () => {
+      expect(pool + GRADUATION_OVERHEAD).toBeLessThan(MAX_TX_BYTES);
+    });
+  });
 });

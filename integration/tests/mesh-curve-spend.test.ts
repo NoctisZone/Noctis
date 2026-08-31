@@ -22,7 +22,12 @@ import { deserializeTx } from '@meshsdk/core-cst';
 import { describe, expect, it, vi } from 'vitest';
 import { MAX_ORDERS_PER_BATCH } from '../batch-planner.js';
 import { capProofFor, hexToBytes } from '../cap-accumulator-tree.js';
-import { type CurveSpendPlan, type CurveSpendWallet, MeshCurveSpender } from '../mesh-curve-spend.js';
+import {
+  type CurveSpendPlan,
+  type CurveSpendWallet,
+  type GraduationSpendPlan,
+  MeshCurveSpender,
+} from '../mesh-curve-spend.js';
 import { MAX_TX_BYTES, rawScriptSize, scriptAddressOf, scriptHashOf } from '../reference-script.js';
 import { capProofToPlutus } from '../tier-a-schemas.js';
 
@@ -260,5 +265,176 @@ describe('MeshCurveSpender', () => {
     const s = spender(TIER_B);
     expect(scriptHashOf(TIER_B.compiledCode)).toBe(TIER_B.hash);
     expect(s.scriptAddress).toContain('addr_test1');
+  });
+});
+
+// ============================================================================
+// Graduation — the transaction that spends THREE contracts at once.
+// ============================================================================
+// Graduate (curve) + SealLock (lp_escrow) + TopUpPool (staking_pool) settle in
+// one transaction, and the first two validators together are over the 16,384-
+// byte cap before a single input or output joins them. These tests build the
+// real transaction from the real compiled validators and decode the result:
+// the curve and the escrow must be NAMED as reference inputs, only the small
+// pool validator may ride in the witness set, and the whole thing must fit.
+//
+// The size assertion is the point. The per-script budget test
+// (script-size-budget.test.ts) bounds each validator alone; nothing bounded
+// the PAIR a graduation carries, and growth in either validator could push
+// the combined transaction over the cap without any test noticing. Building
+// the full three-contract transaction here — with datums padded LARGER than
+// any real launch's — makes that regression a failing test instead of a
+// failed Preprod submission.
+describe('MeshCurveSpender — graduation', () => {
+  const LP = validator('lp_escrow.lp_escrow.spend');
+  const POOL = validator('staking_pool.staking_pool.spend');
+  const LP_REF_TX = 'ef'.repeat(32);
+  const LP_ADDRESS = scriptAddressOf(LP.compiledCode, 0);
+  const POOL_ADDRESS = scriptAddressOf(POOL.compiledCode, 0);
+  const THREAD_UNIT = `${'bb'.repeat(28)}00`;
+
+  /** Valid CBOR of at least `bytes` bytes — padding stand-in datums so the
+   *  size assertion holds for datums BIGGER than any real launch writes. */
+  function paddedDatum(bytes: number): string {
+    return Data.to(new Constr(0, ['aa'.repeat(bytes)]));
+  }
+
+  function graduationProvider() {
+    return {
+      fetchProtocolParameters: vi.fn().mockResolvedValue(DEFAULT_PROTOCOL_PARAMETERS),
+      evaluateTx: vi.fn().mockResolvedValue([
+        { tag: 'SPEND', index: 0, budget: { mem: 3_000_000, steps: 1_200_000_000 } },
+        { tag: 'SPEND', index: 1, budget: { mem: 2_000_000, steps: 800_000_000 } },
+        { tag: 'SPEND', index: 2, budget: { mem: 1_000_000, steps: 400_000_000 } },
+      ]),
+    };
+  }
+
+  function graduationPlan(s: MeshCurveSpender): GraduationSpendPlan {
+    return {
+      scriptUtxo: {
+        txHash: CURVE_TX,
+        outputIndex: 0,
+        address: s.scriptAddress,
+        assets: { lovelace: 20_000_000n, [TOKEN_UNIT]: 6_000_000n, [THREAD_UNIT]: 1n },
+      },
+      redeemerCbor: Data.to(new Constr(8, [])),
+      continuing: {
+        // Real curve datums run a few hundred bytes; 600 is a ceiling.
+        datumCbor: paddedDatum(600),
+        assets: { lovelace: 10_000_000n, [TOKEN_UNIT]: 1_500_000n, [THREAD_UNIT]: 1n },
+      },
+      companionInputs: [
+        {
+          utxo: {
+            txHash: 'ee'.repeat(32),
+            outputIndex: 0,
+            address: LP_ADDRESS,
+            assets: { lovelace: 2_000_000n, [THREAD_UNIT]: 1n },
+          },
+          redeemerCbor: Data.to(new Constr(0, [1_700_000_000_000n, 10_000_000n])),
+          script: {
+            compiledScriptCbor: LP.compiledCode,
+            referenceScript: { txHash: LP_REF_TX, outputIndex: 0, scriptHash: LP.hash },
+          },
+        },
+        {
+          utxo: {
+            txHash: 'ec'.repeat(32),
+            outputIndex: 0,
+            address: POOL_ADDRESS,
+            assets: { lovelace: 1_400_000n, [THREAD_UNIT]: 1n },
+          },
+          redeemerCbor: Data.to(new Constr(2, [2_500_000n])),
+          script: { embeddedScriptCbor: POOL.compiledCode },
+        },
+      ],
+      payouts: [
+        {
+          address: LP_ADDRESS,
+          assets: { lovelace: 12_000_000n, [TOKEN_UNIT]: 2_000_000n, [THREAD_UNIT]: 1n },
+          datumCbor: paddedDatum(400),
+        },
+        {
+          address: POOL_ADDRESS,
+          assets: { lovelace: 1_700_000n, [TOKEN_UNIT]: 2_500_000n, [THREAD_UNIT]: 1n },
+          datumCbor: paddedDatum(300),
+        },
+      ],
+      requiredSignerHashes: [BUYER_KEY_HASH],
+      validity: { fromMs: 1_756_000_000_000, toMs: 1_756_000_480_000 },
+    };
+  }
+
+  function graduationSpender() {
+    return spender(TIER_A, graduationProvider());
+  }
+
+  it('carries ONLY the pool validator — the curve and the escrow are referenced', async () => {
+    const s = graduationSpender();
+    const hex = await s.buildGraduation(graduationPlan(s), fakeWallet());
+    const decoded = deserializeTx(hex);
+    expect(decoded.witnessSet().plutusV3Scripts()?.size() ?? 0).toBe(1);
+    const refs = decoded.body().referenceInputs()?.toCore() ?? [];
+    const named = refs.map((r) => `${r.txId}#${r.index}`);
+    expect(named).toContain(`${REF_TX}#0`);
+    expect(named).toContain(`${LP_REF_TX}#0`);
+    expect(decoded.witnessSet().redeemers()?.size() ?? 0).toBe(3);
+  });
+
+  it('fits the whole three-contract graduation under the transaction cap', async () => {
+    const s = graduationSpender();
+    const hex = await s.buildGraduation(graduationPlan(s), fakeWallet());
+    // Signatures land on top of this; leave room for several of them.
+    expect(hex.length / 2 + 500).toBeLessThan(MAX_TX_BYTES);
+    // And the same transaction with the two referenced validators carried
+    // instead is over the cap — which is why they are referenced.
+    const embeddedEquivalent = hex.length / 2 + rawScriptSize(TIER_A.compiledCode) + rawScriptSize(LP.compiledCode);
+    expect(embeddedEquivalent).toBeGreaterThan(MAX_TX_BYTES);
+  });
+
+  it('refuses a companion pointer published for a different validator', async () => {
+    const s = graduationSpender();
+    const plan = graduationPlan(s);
+    const lp = plan.companionInputs[0];
+    if (!lp || !('referenceScript' in lp.script)) throw new Error('fixture drift');
+    lp.script.referenceScript = { txHash: LP_REF_TX, outputIndex: 0, scriptHash: TIER_B.hash };
+    await expect(s.buildGraduation(plan, fakeWallet())).rejects.toThrow(/stale/i);
+  });
+
+  it('refuses a companion UTXO its pointer’s validator does not lock', async () => {
+    const s = graduationSpender();
+    const plan = graduationPlan(s);
+    const lp = plan.companionInputs[0];
+    if (!lp) throw new Error('fixture drift');
+    lp.utxo.address = POOL_ADDRESS;
+    await expect(s.buildGraduation(plan, fakeWallet())).rejects.toThrow(/would need the validator/i);
+  });
+
+  it('refuses a graduation with no companion inputs', async () => {
+    const s = graduationSpender();
+    const plan = graduationPlan(s);
+    plan.companionInputs = [];
+    await expect(s.buildGraduation(plan, fakeWallet())).rejects.toThrow(/no companion inputs/i);
+  });
+
+  it('collects every co-signer’s witness before submitting', async () => {
+    const s = graduationSpender();
+    const wallet = fakeWallet();
+    const order: string[] = [];
+    wallet.signTx = vi.fn().mockImplementation(async () => {
+      order.push('wallet');
+      return 'signed-1';
+    });
+    const coSigner = {
+      signTx: vi.fn().mockImplementation(async (hex: string) => {
+        order.push(`co:${hex}`);
+        return 'signed-2';
+      }),
+    };
+    const hash = await s.submitGraduation(graduationPlan(s), wallet, [coSigner]);
+    expect(hash).toBe('submitted-hash');
+    expect(order).toEqual(['wallet', 'co:signed-1']);
+    expect(wallet.submitTx).toHaveBeenCalledWith('signed-2');
   });
 });

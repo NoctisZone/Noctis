@@ -61,11 +61,13 @@ async function main() {
     blockfrostUrl: input.blockfrostUrl,
     network: CARDANO_NETWORK_MAP[input.network],
     // Graduate/SealLock scripts aren't needed for this call, but the
-    // submitter's constructor derives all 3 validator addresses up front —
-    // pass the real compiled code for all 3 regardless.
+    // submitter's constructor derives every validator address up front —
+    // pass the real compiled code for all of them regardless. The two
+    // reference pointers stay unset: startVesting never builds TX1.
     bondingCurveScriptCbor: loadValidatorCbor(blueprint, 'bonding_curve.bonding_curve.spend'),
     lpEscrowScriptCbor: loadValidatorCbor(blueprint, 'lp_escrow.lp_escrow.spend'),
     vestingScriptCbor: loadValidatorCbor(blueprint, 'vesting.vesting.spend'),
+    stakingPoolScriptCbor: loadValidatorCbor(blueprint, 'staking_pool.staking_pool.spend'),
     launchIdHex: input.launchIdHex,
     threadNftPolicyId: input.threadNftPolicyId,
   });

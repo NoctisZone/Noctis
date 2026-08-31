@@ -54,23 +54,54 @@
 // Graduate and SealLock are PERMISSIONLESS; StartVesting requires the
 // governor signature. Two-transaction split (TX1 = Graduate + SealLock,
 // TX2 = StartVesting alone, built only after TX1 confirms) — same 16384-byte
-// tx-size-cap fix and same independence proof as Tier A.
+// tx-size-cap reasoning and same independence proof as Tier A. TX1 builds
+// through mesh-curve-spend.ts's reference-script path exactly as Tier A's
+// does (2026-08-31): the curve and LP escrow validators are NAMED via their
+// published CIP-33 reference scripts, staking_pool.ak is carried when a
+// staking-enabled launch's pool seeding (TopUpPool, creator-signed) joins
+// the transaction — see tier-a-graduation-submitter.ts's header, which this
+// file mirrors.
 // ============================================================================
 
 import type { Assets, LucidEvolution, Network as LucidNetwork, SpendingValidator, UTxO } from '@lucid-evolution/lucid';
 import { Blockfrost, CML, Constr, Data, Lucid, validatorToAddress } from '@lucid-evolution/lucid';
-import { selectLaunchUtxo } from './launch-utxo-lookup.js';
-import { BONDING_CURVE_TIER_B_REDEEMER, LP_ESCROW_REDEEMER, VESTING_REDEEMER } from './redeemer-indices.js';
+import { BlockfrostProvider } from '@meshsdk/core';
+import { KeyCurveSpendWallet } from './key-curve-spend-wallet.js';
+import { selectLaunchUtxo, selectStakingPoolUtxo } from './launch-utxo-lookup.js';
+import {
+  type CompanionScriptInput,
+  type CurveNetwork,
+  type GraduationSpendPlan,
+  MeshCurveSpender,
+  type TxCoSigner,
+} from './mesh-curve-spend.js';
+import {
+  BONDING_CURVE_TIER_B_REDEEMER,
+  LP_ESCROW_REDEEMER,
+  STAKING_POOL_REDEEMER,
+  VESTING_REDEEMER,
+} from './redeemer-indices.js';
+import type { ReferenceScriptPointer } from './reference-script.js';
+import type { CreatorSigner } from './tier-a-graduation-submitter.js';
 import {
   type BondingCurveTierBDatumData,
   BondingCurveTierBDatumSchema,
   type LpEscrowDatumData,
   LpEscrowDatumSchema,
   loadValidator,
+  StakingDatumSchema,
+  type StakingPoolDatumData,
   type ThreadNftRole,
   type VestingDatumData,
   VestingDatumSchema,
 } from './tier-a-schemas.js';
+
+/** Lucid's network names, as Mesh's builder and slot maths take them. */
+const CURVE_NETWORK: Partial<Record<LucidNetwork, CurveNetwork>> = {
+  Preprod: 'preprod',
+  Preview: 'preview',
+  Mainnet: 'mainnet',
+};
 
 function fromHex(hex: string): Uint8Array {
   return new Uint8Array(Buffer.from(hex, 'hex'));
@@ -104,6 +135,16 @@ export interface TierBGraduationConfig {
   bondingCurveTierBScriptCbor: string;
   lpEscrowScriptCbor: string;
   vestingScriptCbor: string;
+  stakingPoolScriptCbor: string;
+  /**
+   * Where the curve and LP escrow validators are published as CIP-33
+   * reference scripts — TX1 names both rather than carrying them, the same
+   * mechanism every referenced Tier B trade already uses. Optional at the
+   * type level only because `startVesting` (TX2) has no use for them;
+   * `graduateAndSealLp` requires both and refuses to build without them.
+   */
+  bondingCurveRef?: ReferenceScriptPointer;
+  lpEscrowRef?: ReferenceScriptPointer;
   launchIdHex: string;
   /**
    * The launch's thread-NFT policy id, hex, from the platform's own record of
@@ -119,9 +160,11 @@ export class TierBGraduationSubmitter {
   private bondingCurveValidator: SpendingValidator;
   private lpEscrowValidator: SpendingValidator;
   private vestingValidator: SpendingValidator;
+  private stakingPoolValidator: SpendingValidator;
   private bondingCurveAddress: string;
   private lpEscrowAddress: string;
   private vestingAddress: string;
+  private stakingPoolAddress: string;
 
   constructor(private config: TierBGraduationConfig) {
     this.bondingCurveValidator = {
@@ -136,9 +179,14 @@ export class TierBGraduationSubmitter {
       type: 'PlutusV3',
       script: config.vestingScriptCbor,
     };
+    this.stakingPoolValidator = {
+      type: 'PlutusV3',
+      script: config.stakingPoolScriptCbor,
+    };
     this.bondingCurveAddress = validatorToAddress(config.network, this.bondingCurveValidator);
     this.lpEscrowAddress = validatorToAddress(config.network, this.lpEscrowValidator);
     this.vestingAddress = validatorToAddress(config.network, this.vestingValidator);
+    this.stakingPoolAddress = validatorToAddress(config.network, this.stakingPoolValidator);
     this.lucidPromise = Lucid(new Blockfrost(config.blockfrostUrl, config.blockfrostProjectId), config.network);
     // Nothing awaits this until a method runs, so a caller that constructs the
     // submitter and then fails before calling one leaves the rejection with no
@@ -183,13 +231,24 @@ export class TierBGraduationSubmitter {
     governorPrivateKeyExtendedHex: string,
     governorAddress: string,
     lockSealTimestampMs: number,
+    creator?: CreatorSigner,
   ): Promise<{
     txHash: string;
     lpAda: bigint;
     lpReserveTokens: bigint;
     stakingReserveTokens: bigint;
+    stakingSeeded: boolean;
   }> {
     const lucid = await this.lucidPromise;
+
+    const { bondingCurveRef, lpEscrowRef } = this.config;
+    if (!bondingCurveRef || !lpEscrowRef) {
+      throw new Error(
+        'Graduation needs both reference-script pointers (bondingCurveRef, lpEscrowRef) — TX1 names ' +
+          'the curve and LP escrow validators on chain rather than carrying them, and carried they do ' +
+          'not fit the transaction size cap. Publish them (publish-reference-script) and pass the pointers.',
+      );
+    }
 
     const { utxo: curveUtxo, datum: curveDatum } = await this.findUtxo<BondingCurveTierBDatumData>(
       lucid,
@@ -230,8 +289,11 @@ export class TierBGraduationSubmitter {
     // The spread carries every unchanged field through — crucially including
     // Tier B's DarkVeil fields (dv_allocation_root /
     // dv_claimed / dv_settled) and the cto_governance_* fields, matching the
-    // contract's own `..datum` spread. Only these three change.
+    // contract's own `..datum` spread. Only these three change. The assets
+    // spread likewise: built from the FULL input value so the curve's thread
+    // NFT continues, with only the graduation's own movements applied.
     const newCurveAssets = pruneZero({
+      ...curveUtxo.assets,
       lovelace: (curveUtxo.assets.lovelace ?? 0n) - lpAda,
       [tokenUnit]: (curveUtxo.assets[tokenUnit] ?? 0n) - tokensLeaving,
     });
@@ -243,7 +305,10 @@ export class TierBGraduationSubmitter {
     };
 
     // ---- lp_escrow's own continuing output (SealLock) ----
+    // Same full-value discipline: the escrow's thread NFT continues, and
+    // `lp_seeding_output_ok` requires it to (== 1 in the seeded output).
     const newLpAssets = pruneZero({
+      ...lpUtxo.assets,
       lovelace: (lpUtxo.assets.lovelace ?? 0n) + lpAda,
       [tokenUnit]: lpDatum.lp_token_amount,
     });
@@ -259,52 +324,160 @@ export class TierBGraduationSubmitter {
     const graduateRedeemer = new Constr(BONDING_CURVE_TIER_B_REDEEMER.Graduate, []);
     const sealLockRedeemer = new Constr(LP_ESCROW_REDEEMER.SealLock, [BigInt(lockSealTimestampMs), lpAda]);
 
-    // SealLock binds its timestamp to the range, so the range has to exist.
-    const sealValidFrom = lockSealTimestampMs - 240_000;
-    const sealValidTo = lockSealTimestampMs + 240_000;
-
-    const bech32Key = extendedHexToBech32PrivateKey(governorPrivateKeyExtendedHex);
-    const governorUtxos = await lucid.utxosAt(governorAddress);
-    lucid.selectWallet.fromAddress(governorAddress, governorUtxos);
-
-    const tx = await lucid
-      .newTx()
-      .validFrom(sealValidFrom)
-      .validTo(sealValidTo)
-      .collectFrom([curveUtxo], Data.to(graduateRedeemer))
-      .collectFrom([lpUtxo], Data.to(sealLockRedeemer))
-      .attach.SpendingValidator(this.bondingCurveValidator)
-      .attach.SpendingValidator(this.lpEscrowValidator)
-      .pay.ToContract(
-        this.bondingCurveAddress,
-        {
-          kind: 'inline',
-          value: Data.to<BondingCurveTierBDatumData>(newCurveDatum, BondingCurveTierBDatumSchema),
+    const companionInputs: CompanionScriptInput[] = [
+      {
+        utxo: {
+          txHash: lpUtxo.txHash,
+          outputIndex: lpUtxo.outputIndex,
+          address: lpUtxo.address,
+          assets: lpUtxo.assets,
         },
-        newCurveAssets,
-      )
-      .pay.ToContract(
-        this.lpEscrowAddress,
-        {
-          kind: 'inline',
-          value: Data.to<LpEscrowDatumData>(newLpDatum, LpEscrowDatumSchema),
+        redeemerCbor: Data.to(sealLockRedeemer),
+        script: {
+          compiledScriptCbor: this.config.lpEscrowScriptCbor,
+          referenceScript: lpEscrowRef,
         },
-        newLpAssets,
-      )
-      .addSigner(governorAddress)
-      // Multi-script (2 distinct Plutus validators in one tx) — force
-      // provider (Blockfrost) evaluation, same reasoning as the Tier A flow.
-      .complete({ localUPLCEval: false });
+      },
+    ];
+    const payouts: GraduationSpendPlan['payouts'] = [
+      {
+        address: this.lpEscrowAddress,
+        assets: newLpAssets,
+        datumCbor: Data.to<LpEscrowDatumData>(newLpDatum, LpEscrowDatumSchema),
+      },
+    ];
+    const requiredSignerHashes: string[] = [];
 
-    const signed = await tx.sign.withPrivateKey(bech32Key).complete();
-    const txHash = await signed.submit();
+    // ---- staking pool's own seeding spend (TopUpPool), staking launches ----
+    // Same mechanism as the Tier A submitter — staking_pool.ak is SHARED
+    // across the two tiers, so the pool spend is identical.
+    if (curveDatum.staking_enabled) {
+      if (!creator) {
+        throw new Error(
+          'This launch opted into staking, so graduation seeds the staking pool — and the pool ' +
+            "contract's seeding spend (TopUpPool) is creator-signed. Pass the creator signer.",
+        );
+      }
+      const { utxo: poolUtxo } = await this.findStakingPoolUtxo(lucid);
+      if (!poolUtxo.datum) {
+        throw new Error(`Staking pool UTXO ${poolUtxo.txHash}#${poolUtxo.outputIndex} carries no inline datum.`);
+      }
+      const topUpRedeemer = new Constr(STAKING_POOL_REDEEMER.TopUpPool, [curveDatum.staking_reserve_tokens]);
+      companionInputs.push({
+        utxo: {
+          txHash: poolUtxo.txHash,
+          outputIndex: poolUtxo.outputIndex,
+          address: poolUtxo.address,
+          assets: poolUtxo.assets,
+        },
+        redeemerCbor: Data.to(topUpRedeemer),
+        script: { embeddedScriptCbor: this.config.stakingPoolScriptCbor },
+      });
+      payouts.push({
+        address: this.stakingPoolAddress,
+        assets: pruneZero({
+          ...poolUtxo.assets,
+          // The pool gains a second asset, which raises its own minimum-ada
+          // floor — a small top-up keeps the output above it.
+          lovelace: (poolUtxo.assets.lovelace ?? 0n) + 300_000n,
+          [tokenUnit]: (poolUtxo.assets[tokenUnit] ?? 0n) + curveDatum.staking_reserve_tokens,
+        }),
+        // Verbatim — TopUpPool requires the continuing datum unchanged.
+        datumCbor: poolUtxo.datum,
+      });
+      requiredSignerHashes.push(curveDatum.creator_pub_key_hash);
+    }
+
+    const plan: GraduationSpendPlan = {
+      scriptUtxo: {
+        txHash: curveUtxo.txHash,
+        outputIndex: curveUtxo.outputIndex,
+        address: curveUtxo.address,
+        assets: curveUtxo.assets,
+      },
+      redeemerCbor: Data.to(graduateRedeemer),
+      continuing: {
+        datumCbor: Data.to<BondingCurveTierBDatumData>(newCurveDatum, BondingCurveTierBDatumSchema),
+        assets: newCurveAssets,
+      },
+      payouts,
+      companionInputs,
+      requiredSignerHashes,
+      // SealLock binds its timestamp to the range, so the range has to exist.
+      validity: { fromMs: lockSealTimestampMs - 240_000, toMs: lockSealTimestampMs + 240_000 },
+    };
+
+    const { spender, wallet, coSigners } = await this.meshParts(
+      bondingCurveRef,
+      governorPrivateKeyExtendedHex,
+      governorAddress,
+      creator,
+    );
+    const txHash = await spender.submitGraduation(plan, wallet, coSigners);
 
     return {
       txHash,
       lpAda,
       lpReserveTokens: curveDatum.lp_reserve_tokens,
       stakingReserveTokens: curveDatum.staking_reserve_tokens,
+      stakingSeeded: curveDatum.staking_enabled,
     };
+  }
+
+  /** The launch's staking Pool UTXO — sum-type datum, so its own selector. */
+  private async findStakingPoolUtxo(lucid: LucidEvolution) {
+    const utxos = await lucid.utxosAt(this.stakingPoolAddress);
+    return selectStakingPoolUtxo<StakingPoolDatumData>(
+      utxos,
+      this.stakingPoolAddress,
+      this.config.launchIdHex,
+      StakingDatumSchema,
+      this.config.threadNftPolicyId,
+    );
+  }
+
+  /**
+   * The Mesh execution parts for TX1 — same shape as the Tier A submitter's:
+   * a spender referencing the curve, the governor's key-backed wallet funding
+   * fees and change, and the creator as co-signer when one was passed and is
+   * not the governor already.
+   */
+  private async meshParts(
+    bondingCurveRef: ReferenceScriptPointer,
+    governorPrivateKeyExtendedHex: string,
+    governorAddress: string,
+    creator?: CreatorSigner,
+  ): Promise<{ spender: MeshCurveSpender; wallet: KeyCurveSpendWallet; coSigners: TxCoSigner[] }> {
+    const network = CURVE_NETWORK[this.config.network];
+    if (!network) {
+      throw new Error(
+        `Network ${this.config.network} has no Mesh equivalent — the referenced graduation path ` +
+          'supports Preprod, Preview and Mainnet.',
+      );
+    }
+    const provider = new BlockfrostProvider(this.config.blockfrostProjectId);
+    const spender = new MeshCurveSpender({
+      network,
+      compiledScriptCbor: this.config.bondingCurveTierBScriptCbor,
+      referenceScript: bondingCurveRef,
+      provider,
+    });
+    const wallet = await KeyCurveSpendWallet.forAddress({
+      address: governorAddress,
+      privateKeyExtendedHex: governorPrivateKeyExtendedHex,
+      provider,
+    });
+    const coSigners: TxCoSigner[] = [];
+    if (creator && creator.address !== governorAddress) {
+      coSigners.push(
+        await KeyCurveSpendWallet.forAddress({
+          address: creator.address,
+          privateKeyExtendedHex: creator.privateKeyExtendedHex,
+          provider,
+        }),
+      );
+    }
+    return { spender, wallet, coSigners };
   }
 
   /**
@@ -385,16 +558,23 @@ export class TierBGraduationSubmitter {
     governorPrivateKeyExtendedHex: string,
     governorAddress: string,
     lockSealTimestampMs: number,
+    creator?: CreatorSigner,
   ): Promise<{
     graduateSealLockTxHash: string;
     startVestingTxHash: string;
     lpAda: bigint;
     lpReserveTokens: bigint;
     stakingReserveTokens: bigint;
+    stakingSeeded: boolean;
   }> {
     const lucid = await this.lucidPromise;
 
-    const step1 = await this.graduateAndSealLp(governorPrivateKeyExtendedHex, governorAddress, lockSealTimestampMs);
+    const step1 = await this.graduateAndSealLp(
+      governorPrivateKeyExtendedHex,
+      governorAddress,
+      lockSealTimestampMs,
+      creator,
+    );
 
     await lucid.awaitTx(step1.txHash);
 
@@ -416,6 +596,7 @@ export class TierBGraduationSubmitter {
       lpAda: step1.lpAda,
       lpReserveTokens: step1.lpReserveTokens,
       stakingReserveTokens: step1.stakingReserveTokens,
+      stakingSeeded: step1.stakingSeeded,
     };
   }
 }

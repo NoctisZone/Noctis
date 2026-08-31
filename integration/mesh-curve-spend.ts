@@ -91,6 +91,56 @@ export interface CurveSpendPlan {
 }
 
 /**
+ * A companion contract spent alongside the curve — how graduation moves
+ * value into the LP escrow and the staking pool in the same transaction the
+ * curve releases it.
+ *
+ * Each names its own script source. A large, published validator is
+ * referenced (with the same staleness guard the curve's own pointer gets); a
+ * small one is carried, the same split `CurveBatchPlan` already draws for
+ * orders. The companion's continuing output rides in the plan's `payouts` —
+ * to its validator it is simply an output at its own address, and the plan
+ * does not need a second notion of "continuing" to say so.
+ */
+export interface CompanionScriptInput {
+  utxo: PlanScriptUtxo;
+  /** The redeemer, CBOR hex. */
+  redeemerCbor: string;
+  script:
+    | {
+        /** The raw compiled CBOR, straight from plutus.json. */
+        compiledScriptCbor: string;
+        /** Where that exact validator is published. Checked, not trusted. */
+        referenceScript: ReferenceScriptPointer;
+      }
+    | {
+        /** The raw compiled CBOR, carried in the witness set. */
+        embeddedScriptCbor: string;
+      };
+}
+
+/**
+ * A graduation: the curve spent against its published reference script,
+ * alongside the launch's other contracts settling in the same transaction.
+ *
+ * The plan stays library-neutral like the others — the submitter does all the
+ * arithmetic and datum work, and this only decides how each script reaches
+ * the transaction.
+ */
+export interface GraduationSpendPlan extends CurveSpendPlan {
+  companionInputs: CompanionScriptInput[];
+}
+
+/**
+ * A co-signer: something that can add its witness to an already-built
+ * transaction. `KeyCurveSpendWallet` satisfies it. Witness sets merge —
+ * verified against the serialisation library's own source, which concatenates
+ * the existing vkey witnesses with the new ones rather than replacing them —
+ * so signatures accumulate across sequential `signTx` calls.
+ */
+export type TxCoSigner = Pick<CurveSpendWallet, 'signTx'>;
+
+/**
  * A batch: the curve spent alongside N order UTXOs.
  *
  * The curve's validator is REFERENCED and the orders' is EMBEDDED, which is
@@ -411,6 +461,139 @@ export class MeshCurveSpender {
   async submitBatch(plan: CurveBatchPlan, wallet: CurveSpendWallet): Promise<string> {
     const unsigned = await this.buildBatch(plan, wallet);
     const signed = await wallet.signTx(unsigned);
+    return wallet.submitTx(signed);
+  }
+
+  /**
+   * Builds a graduation: the curve against its reference script, plus each
+   * companion contract with the script source its plan entry names.
+   *
+   * Same load-bearing call order as `buildBatch`: Mesh applies
+   * `spendingTxInReference` / `txInScript` to whichever input was queued
+   * last, so each input's script call must follow its own `txIn` directly.
+   */
+  async buildGraduation(plan: GraduationSpendPlan, wallet: CurveSpendWallet): Promise<string> {
+    if (plan.scriptUtxo.address !== this.ref.scriptAddress) {
+      throw new Error(
+        `The curve UTXO sits at ${plan.scriptUtxo.address}, but this spender references a script whose ` +
+          `address is ${this.ref.scriptAddress}. Spending it would need the validator that locks it.`,
+      );
+    }
+    if (plan.companionInputs.length === 0) {
+      throw new Error(
+        'A graduation with no companion inputs is just a curve spend — use build() for that, so a ' +
+          'missing LP escrow input fails here rather than at the node.',
+      );
+    }
+
+    const [changeAddress, walletUtxos, collateral] = await Promise.all([
+      wallet.getChangeAddress(),
+      wallet.getUtxos(),
+      wallet.getCollateral(),
+    ]);
+    const collateralUtxo = collateral[0];
+    if (!collateralUtxo) {
+      throw new Error(
+        'The wallet has no collateral UTXO. A Plutus spend needs one — a pure-ada UTXO the wallet ' +
+          'sets aside, which most wallets create on request.',
+      );
+    }
+
+    const tx = this.newBuilder();
+
+    // The curve: named, not carried — the validator alone is most of the
+    // transaction size cap, so a graduation that embeds it cannot fit.
+    tx.spendingPlutusScriptV3()
+      .txIn(
+        plan.scriptUtxo.txHash,
+        plan.scriptUtxo.outputIndex,
+        toMesh(plan.scriptUtxo.assets),
+        plan.scriptUtxo.address,
+        0,
+      )
+      .spendingTxInReference(this.ref.txHash, this.ref.outputIndex, String(this.ref.rawSizeBytes), this.ref.scriptHash)
+      .txInInlineDatumPresent()
+      .txInRedeemerValue(plan.redeemerCbor, 'CBOR', this.config.executionUnits);
+
+    for (const companion of plan.companionInputs) {
+      tx.spendingPlutusScriptV3().txIn(
+        companion.utxo.txHash,
+        companion.utxo.outputIndex,
+        toMesh(companion.utxo.assets),
+        companion.utxo.address,
+        0,
+      );
+      if ('referenceScript' in companion.script) {
+        // The same staleness guard the curve's pointer gets at construction:
+        // a pointer published for an older build of this validator fails here
+        // with both hashes named, not at the node.
+        const ref = resolveReferenceScript(
+          companion.script.compiledScriptCbor,
+          companion.script.referenceScript,
+          MESH_NETWORK_ID[this.config.network],
+        );
+        if (companion.utxo.address !== ref.scriptAddress) {
+          throw new Error(
+            `A companion UTXO sits at ${companion.utxo.address}, but its reference pointer holds a ` +
+              `script whose address is ${ref.scriptAddress}. Spending it would need the validator ` +
+              'that actually locks it.',
+          );
+        }
+        tx.spendingTxInReference(ref.txHash, ref.outputIndex, String(ref.rawSizeBytes), ref.scriptHash);
+      } else {
+        tx.txInScript(applyCborEncoding(companion.script.embeddedScriptCbor));
+      }
+      tx.txInInlineDatumPresent().txInRedeemerValue(companion.redeemerCbor, 'CBOR');
+    }
+
+    tx.txOut(this.ref.scriptAddress, toMesh(plan.continuing.assets)).txOutInlineDatumValue(
+      plan.continuing.datumCbor,
+      'CBOR',
+    );
+
+    for (const payout of plan.payouts) {
+      tx.txOut(payout.address, toMesh(payout.assets));
+      if (payout.datumCbor) tx.txOutInlineDatumValue(payout.datumCbor, 'CBOR');
+    }
+
+    for (const hash of plan.requiredSignerHashes) tx.requiredSignerHash(hash);
+
+    if (plan.validity) {
+      tx.invalidBefore(Number(resolveSlotNo(this.config.network, plan.validity.fromMs)));
+      tx.invalidHereafter(Number(resolveSlotNo(this.config.network, plan.validity.toMs)));
+    }
+
+    tx.txInCollateral(
+      collateralUtxo.input.txHash,
+      collateralUtxo.input.outputIndex,
+      collateralUtxo.output.amount,
+      collateralUtxo.output.address,
+    )
+      .selectUtxosFrom(spendableForFees(walletUtxos))
+      .changeAddress(changeAddress)
+      .setNetwork(this.config.network);
+
+    return tx.complete();
+  }
+
+  /**
+   * Builds, signs and submits a graduation. Returns the transaction hash.
+   *
+   * `coSigners` add their witnesses after the funding wallet's — a companion
+   * redeemer that names a required signer beyond the fee payer (the staking
+   * pool's seeding does) gets its signature this way, and the witness sets
+   * merge rather than replace.
+   */
+  async submitGraduation(
+    plan: GraduationSpendPlan,
+    wallet: CurveSpendWallet,
+    coSigners: readonly TxCoSigner[] = [],
+  ): Promise<string> {
+    const unsigned = await this.buildGraduation(plan, wallet);
+    let signed = await wallet.signTx(unsigned);
+    for (const coSigner of coSigners) {
+      signed = await coSigner.signTx(signed);
+    }
     return wallet.submitTx(signed);
   }
 }

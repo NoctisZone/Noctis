@@ -56,6 +56,8 @@ function curveDatum(overrides: Record<string, unknown> = {}) {
     staking_reserve_tokens: 250_000_000n,
     lp_seeded: false,
     staking_seeded: false,
+    staking_enabled: false,
+    creator_pub_key_hash: fakeKeyHash(0x22),
     token_policy_id: TOKEN_POLICY,
     token_asset_name: TOKEN_ASSET_NAME,
     thread_nft_policy: THREAD_POLICY,
@@ -142,7 +144,21 @@ function nextTxHash() {
   return `grad-tx-${txHashCounter}`;
 }
 
-const addressRefs = { curve: '', lp: '', vesting: '' };
+const addressRefs = { curve: '', lp: '', vesting: '', stakingPool: '' };
+
+/** A pool fixture datum, in the Pool-variant wrapping the real datum uses. */
+function poolDatum(overrides: Record<string, unknown> = {}) {
+  return {
+    Pool: [
+      {
+        launch_id: LAUNCH_ID_HEX,
+        creator_pub_key_hash: fakeKeyHash(0x22),
+        thread_nft_policy: THREAD_POLICY,
+        ...overrides,
+      },
+    ],
+  };
+}
 
 interface FixtureUtxo {
   datum: unknown;
@@ -174,6 +190,9 @@ function makeSubmitter(
     curveUtxos?: FixtureUtxo[];
     lpUtxos?: FixtureUtxo[];
     vestingUtxos?: FixtureUtxo[];
+    stakingPoolUtxos?: FixtureUtxo[];
+    /** Leave the reference pointers unset, to describe a misconfigured caller. */
+    withoutRefs?: boolean;
   } = {},
 ) {
   const awaitTx = vi.fn().mockResolvedValue(true);
@@ -183,6 +202,8 @@ function makeSubmitter(
       if (address === addressRefs.curve) return Promise.resolve(asChainUtxos('bondingCurve', opts.curveUtxos));
       if (address === addressRefs.lp) return Promise.resolve(asChainUtxos('lpEscrow', opts.lpUtxos));
       if (address === addressRefs.vesting) return Promise.resolve(asChainUtxos('vesting', opts.vestingUtxos));
+      if (address === addressRefs.stakingPool)
+        return Promise.resolve(asChainUtxos('stakingPool', opts.stakingPoolUtxos));
       return Promise.resolve([]);
     }),
     awaitTx,
@@ -190,6 +211,12 @@ function makeSubmitter(
   };
   vi.mocked(Lucid).mockResolvedValue(fakeLucid as never);
 
+  const refs = opts.withoutRefs
+    ? {}
+    : {
+        bondingCurveRef: { txHash: 'ab'.repeat(32), outputIndex: 0, scriptHash: 'a1'.repeat(28) },
+        lpEscrowRef: { txHash: 'cd'.repeat(32), outputIndex: 0, scriptHash: 'b2'.repeat(28) },
+      };
   const submitter = new TierAGraduationSubmitter({
     blockfrostProjectId: 'proj',
     blockfrostUrl: 'https://cardano-preprod.blockfrost.io/api/v0',
@@ -197,14 +224,32 @@ function makeSubmitter(
     bondingCurveScriptCbor: '590001',
     lpEscrowScriptCbor: '590002',
     vestingScriptCbor: '590003',
+    stakingPoolScriptCbor: '590004',
+    ...refs,
     launchIdHex: LAUNCH_ID_HEX,
     threadNftPolicyId: THREAD_POLICY,
   });
   addressRefs.curve = (submitter as unknown as { bondingCurveAddress: string }).bondingCurveAddress;
   addressRefs.lp = (submitter as unknown as { lpEscrowAddress: string }).lpEscrowAddress;
   addressRefs.vesting = (submitter as unknown as { vestingAddress: string }).vestingAddress;
+  addressRefs.stakingPool = (submitter as unknown as { stakingPoolAddress: string }).stakingPoolAddress;
 
-  return { submitter, fakeLucid };
+  // TX1 executes through mesh-curve-spend.ts, which is tested against real
+  // transaction bytes in its own file — here the execution parts are stubbed
+  // so these tests assert the PLAN the submitter authors, which is where all
+  // of its arithmetic and datum work lands.
+  const submitGraduation = vi.fn().mockImplementation(() => Promise.resolve(nextTxHash()));
+  (submitter as unknown as { meshParts: unknown }).meshParts = vi
+    .fn()
+    .mockResolvedValue({ spender: { submitGraduation }, wallet: {}, coSigners: [] });
+
+  return { submitter, fakeLucid, submitGraduation };
+}
+
+/** The plan the (stubbed) spender was handed. */
+function planOf(submitGraduation: ReturnType<typeof vi.fn>) {
+  expect(submitGraduation).toHaveBeenCalledTimes(1);
+  return submitGraduation.mock.calls[0]?.[0] as import('../mesh-curve-spend.js').GraduationSpendPlan;
 }
 
 beforeEach(() => {
@@ -233,14 +278,14 @@ describe('TierAGraduationSubmitter — which UTXO it graduates', () => {
     // which satisfies any token check derived from that datum. It does not
     // satisfy one derived from the policy the platform recorded at mint, so
     // the planted UTXO is not a candidate and the real one is chosen outright.
-    const { builder, collectFromCalls } = makeFakeTxBuilder();
+    const { builder } = makeFakeTxBuilder();
     const planted = {
       datum: curveDatum({ thread_nft_policy: 'ee'.repeat(28) }),
       assets: { ['ee'.repeat(28) + threadNftAssetName('bondingCurve', LAUNCH_ID_HEX)]: 1n },
       noThreadNft: true,
       txHash: '22'.repeat(32),
     };
-    const { submitter } = makeSubmitter(builder, {
+    const { submitter, submitGraduation } = makeSubmitter(builder, {
       // Planted FIRST: the shape this replaced took the first match, and
       // provider ordering is not something an honest caller controls.
       curveUtxos: [planted, { datum: curveDatum(), assets: {}, txHash: '11'.repeat(32) }],
@@ -249,8 +294,7 @@ describe('TierAGraduationSubmitter — which UTXO it graduates', () => {
 
     await submitter.graduateAndSealLp(REAL_EXTENDED_KEY_HEX, GOVERNOR_ADDR, 1000);
 
-    const spentCurve = collectFromCalls[0]?.[0] as Array<{ txHash: string }>;
-    expect(spentCurve[0]?.txHash).toBe('11'.repeat(32));
+    expect(planOf(submitGraduation).scriptUtxo.txHash).toBe('11'.repeat(32));
   });
 
   it('still refuses when two UTXOs both carry the genuine thread NFT', async () => {
@@ -359,9 +403,9 @@ describe('TierAGraduationSubmitter.graduateAndSealLp — guard rails', () => {
 });
 
 describe('TierAGraduationSubmitter.graduateAndSealLp — value movement', () => {
-  it('moves lpAda + reserve tokens OUT of the curve and INTO lp_escrow, exactly (graduation_funds_left_curve / lp_seeding_output_ok)', async () => {
-    const { builder, payToContractCalls } = makeFakeTxBuilder();
-    const { submitter } = makeSubmitter(builder, {
+  it('moves lpAda + reserve tokens OUT of the curve and INTO lp_escrow, exactly, with both thread NFTs continuing (graduation_funds_left_curve / lp_seeding_output_ok)', async () => {
+    const { builder } = makeFakeTxBuilder();
+    const { submitter, submitGraduation } = makeSubmitter(builder, {
       curveUtxos: [
         {
           datum: curveDatum({
@@ -385,32 +429,32 @@ describe('TierAGraduationSubmitter.graduateAndSealLp — value movement', () => 
     expect(result.lpAda).toBe(5_000_000n);
     expect(result.lpReserveTokens).toBe(100n);
     expect(result.stakingReserveTokens).toBe(50n);
+    expect(result.stakingSeeded).toBe(false);
 
-    const [, curvePayload, curveAssets] = payToContractCalls[0] as [
-      string,
-      { value: Record<string, unknown> },
-      Record<string, bigint>,
-    ];
-    expect(curveAssets.lovelace).toBe(15_000_000n); // 20,000,000 - 5,000,000
-    expect(curveAssets[TOKEN_UNIT]).toBe(999_850n); // 1,000,000 - (100+50)
-    expect(curvePayload.value.total_raised).toBe(0n);
-    expect(curvePayload.value.lp_seeded).toBe(true);
-    expect(curvePayload.value.staking_seeded).toBe(true);
+    const plan = planOf(submitGraduation);
+    expect(plan.continuing.assets.lovelace).toBe(15_000_000n); // 20,000,000 - 5,000,000
+    expect(plan.continuing.assets[TOKEN_UNIT]).toBe(999_850n); // 1,000,000 - (100+50)
+    // The curve's own thread NFT continues — the contract's seeding checks
+    // authenticate every state output by its role's NFT, so an output built
+    // from the movement amounts alone would not validate.
+    expect(plan.continuing.assets[threadNft('bondingCurve')]).toBe(1n);
+    const curveDatumOut = plan.continuing.datumCbor as unknown as Record<string, unknown>;
+    expect(curveDatumOut.total_raised).toBe(0n);
+    expect(curveDatumOut.lp_seeded).toBe(true);
+    expect(curveDatumOut.staking_seeded).toBe(true);
 
-    const [, lpPayload, lpAssets] = payToContractCalls[1] as [
-      string,
-      { value: Record<string, unknown> },
-      Record<string, bigint>,
-    ];
-    expect(lpAssets.lovelace).toBe(7_000_000n); // 2,000,000 + 5,000,000
-    expect(lpAssets[TOKEN_UNIT]).toBe(100n); // exactly lp_token_amount
-    expect(lpPayload.value.lock_timestamp).toBe(1_700_000_000n);
-    expect(lpPayload.value.lp_state).toBe('Locked');
+    const lpPayout = plan.payouts[0];
+    expect(lpPayout?.assets.lovelace).toBe(7_000_000n); // 2,000,000 + 5,000,000
+    expect(lpPayout?.assets[TOKEN_UNIT]).toBe(100n); // exactly lp_token_amount
+    expect(lpPayout?.assets[threadNft('lpEscrow')]).toBe(1n);
+    const lpDatumOut = lpPayout?.datumCbor as unknown as Record<string, unknown>;
+    expect(lpDatumOut.lock_timestamp).toBe(1_700_000_000n);
+    expect(lpDatumOut.lp_state).toBe('Locked');
   });
 
   it('omits a token unit that computes to exactly zero (curve_own_output_clean / lp_own_output_clean)', async () => {
-    const { builder, payToContractCalls } = makeFakeTxBuilder();
-    const { submitter } = makeSubmitter(builder, {
+    const { builder } = makeFakeTxBuilder();
+    const { submitter, submitGraduation } = makeSubmitter(builder, {
       curveUtxos: [
         {
           datum: curveDatum({
@@ -426,55 +470,129 @@ describe('TierAGraduationSubmitter.graduateAndSealLp — value movement', () => 
 
     await submitter.graduateAndSealLp(REAL_EXTENDED_KEY_HEX, GOVERNOR_ADDR, 1000);
 
-    const [, , curveAssets] = payToContractCalls[0] as [string, unknown, Record<string, bigint>];
-    expect(curveAssets[TOKEN_UNIT]).toBeUndefined(); // 100 - 100 = 0, pruned
-    const [, , lpAssets] = payToContractCalls[1] as [string, unknown, Record<string, bigint>];
-    expect(lpAssets[TOKEN_UNIT]).toBeUndefined(); // lp_token_amount 0, pruned
+    const plan = planOf(submitGraduation);
+    expect(plan.continuing.assets[TOKEN_UNIT]).toBeUndefined(); // 100 - 100 = 0, pruned
+    expect(plan.payouts[0]?.assets[TOKEN_UNIT]).toBeUndefined(); // lp_token_amount 0, pruned
   });
 
-  it('builds the Graduate (index 8, no fields) and SealLock (index 0, [timestamp, lpAda]) redeemers correctly', async () => {
-    const { builder, collectFromCalls, calls } = makeFakeTxBuilder();
-    const { submitter } = makeSubmitter(builder, {
+  it('builds the Graduate (index 8, no fields) and SealLock (index 0, [timestamp, lpAda]) redeemers, with the timestamp inside a narrow validity range', async () => {
+    const { builder } = makeFakeTxBuilder();
+    const { submitter, submitGraduation } = makeSubmitter(builder, {
       curveUtxos: [{ datum: curveDatum({ total_raised: 42n }), assets: {} }],
       lpUtxos: [{ datum: lpDatum(), assets: {} }],
     });
 
     await submitter.graduateAndSealLp(REAL_EXTENDED_KEY_HEX, GOVERNOR_ADDR, 999);
 
-    const graduateRedeemer = collectFromCalls[0][1] as {
-      index: number;
-      fields: unknown[];
-    };
+    const plan = planOf(submitGraduation);
+    const graduateRedeemer = plan.redeemerCbor as unknown as { index: number; fields: unknown[] };
     expect(graduateRedeemer.index).toBe(8);
     expect(graduateRedeemer.fields).toEqual([]);
 
-    const sealLockRedeemer = collectFromCalls[1][1] as {
+    const sealLockRedeemer = plan.companionInputs[0]?.redeemerCbor as unknown as {
       index: number;
       fields: unknown[];
     };
     expect(sealLockRedeemer.index).toBe(0);
     expect(sealLockRedeemer.fields).toEqual([999n, 42n]);
     // The redeemer's timestamp is bound to this range on chain, and the range
-    // is capped at ten minutes wide. Recording the calls is not enough -- a
-    // mock that merely swallows validFrom would let an absent or mismatched
-    // range pass unnoticed, which is exactly how this defect survived.
-    const from = calls.validFrom?.[0] as number;
-    const to = calls.validTo?.[0] as number;
-    expect(from).toBeLessThanOrEqual(999);
-    expect(to).toBeGreaterThanOrEqual(999);
-    expect(to - from).toBeLessThanOrEqual(600_000);
+    // is capped at ten minutes wide. An absent or mismatched range would
+    // otherwise pass unnoticed, which is exactly how this defect survived.
+    expect(plan.validity).toBeDefined();
+    expect(plan.validity?.fromMs).toBeLessThanOrEqual(999);
+    expect(plan.validity?.toMs).toBeGreaterThanOrEqual(999);
+    expect((plan.validity?.toMs ?? 0) - (plan.validity?.fromMs ?? 0)).toBeLessThanOrEqual(600_000);
   });
 
-  it('requires the governor as signer and passes localUPLCEval: false to complete() (multi-script eval)', async () => {
-    const { builder, calls } = makeFakeTxBuilder();
-    const { submitter } = makeSubmitter(builder, {
+  it('spends only the curve and the LP escrow when the launch declined staking — no pool input, no required signer', async () => {
+    const { builder } = makeFakeTxBuilder();
+    const { submitter, submitGraduation } = makeSubmitter(builder, {
       curveUtxos: [{ datum: curveDatum(), assets: {} }],
       lpUtxos: [{ datum: lpDatum(), assets: {} }],
     });
 
     await submitter.graduateAndSealLp(REAL_EXTENDED_KEY_HEX, GOVERNOR_ADDR, 1000);
-    expect(calls.addSigner).toEqual([GOVERNOR_ADDR]);
-    expect(calls.complete).toEqual([{ localUPLCEval: false }]);
+
+    const plan = planOf(submitGraduation);
+    expect(plan.companionInputs).toHaveLength(1);
+    expect('referenceScript' in plan.companionInputs[0]!.script).toBe(true);
+    expect(plan.requiredSignerHashes).toEqual([]);
+    expect(plan.payouts).toHaveLength(1);
+  });
+
+  it('refuses to build without both reference-script pointers', async () => {
+    const { builder } = makeFakeTxBuilder();
+    const { submitter } = makeSubmitter(builder, {
+      curveUtxos: [{ datum: curveDatum(), assets: {} }],
+      lpUtxos: [{ datum: lpDatum(), assets: {} }],
+      withoutRefs: true,
+    });
+
+    await expect(submitter.graduateAndSealLp(REAL_EXTENDED_KEY_HEX, GOVERNOR_ADDR, 1000)).rejects.toThrow(
+      /reference-script pointers/,
+    );
+  });
+});
+
+describe('TierAGraduationSubmitter — staking-enabled launches', () => {
+  const stakingCurve = () =>
+    curveDatum({
+      staking_enabled: true,
+      staking_reserve_tokens: 250n,
+      lp_reserve_tokens: 100n,
+      total_raised: 5_000_000n,
+      creator_pub_key_hash: fakeKeyHash(0x22),
+    });
+
+  it('refuses to graduate without the creator signer — the pool seeding spend is creator-signed', async () => {
+    const { builder } = makeFakeTxBuilder();
+    const { submitter } = makeSubmitter(builder, {
+      curveUtxos: [{ datum: stakingCurve(), assets: { lovelace: 20_000_000n, [TOKEN_UNIT]: 1_000n } }],
+      lpUtxos: [{ datum: lpDatum(), assets: {} }],
+      stakingPoolUtxos: [{ datum: poolDatum(), assets: { lovelace: 1_200_000n } }],
+    });
+
+    await expect(submitter.graduateAndSealLp(REAL_EXTENDED_KEY_HEX, GOVERNOR_ADDR, 1000)).rejects.toThrow(/creator/i);
+  });
+
+  it('seeds the pool through TopUpPool: pool input carried, reserve tokens + NFT in its output, datum verbatim, creator as required signer', async () => {
+    const { builder } = makeFakeTxBuilder();
+    const poolFixtureDatum = poolDatum();
+    const { submitter, submitGraduation } = makeSubmitter(builder, {
+      curveUtxos: [{ datum: stakingCurve(), assets: { lovelace: 20_000_000n, [TOKEN_UNIT]: 1_000n } }],
+      lpUtxos: [{ datum: lpDatum({ lp_token_amount: 100n }), assets: { lovelace: 2_000_000n } }],
+      stakingPoolUtxos: [{ datum: poolFixtureDatum, assets: { lovelace: 1_200_000n } }],
+    });
+
+    const result = await submitter.graduateAndSealLp(REAL_EXTENDED_KEY_HEX, GOVERNOR_ADDR, 1000, {
+      address: addrFor(fakeKeyHash(0x22)),
+      privateKeyExtendedHex: REAL_EXTENDED_KEY_HEX,
+    });
+    expect(result.stakingSeeded).toBe(true);
+
+    const plan = planOf(submitGraduation);
+    expect(plan.companionInputs).toHaveLength(2);
+
+    const poolInput = plan.companionInputs[1]!;
+    expect('embeddedScriptCbor' in poolInput.script).toBe(true);
+    const topUp = poolInput.redeemerCbor as unknown as { index: number; fields: unknown[] };
+    expect(topUp.index).toBe(2); // STAKING_POOL_REDEEMER.TopUpPool
+    expect(topUp.fields).toEqual([250n]);
+
+    const poolPayout = plan.payouts[1]!;
+    expect(poolPayout.assets[TOKEN_UNIT]).toBe(250n); // exactly staking_reserve_tokens
+    expect(poolPayout.assets[threadNft('stakingPool')]).toBe(1n);
+    // TopUpPool requires the continuing datum unchanged — the input's own
+    // datum is reused verbatim, never re-encoded.
+    expect(poolPayout.datumCbor).toBe(poolFixtureDatum as never);
+    // The pool gains a second asset, which raises its min-ada floor — the
+    // output tops the lovelace up rather than risking a below-minimum output.
+    expect(poolPayout.assets.lovelace).toBeGreaterThan(1_200_000n);
+
+    expect(plan.requiredSignerHashes).toEqual([fakeKeyHash(0x22)]);
+
+    // And the curve side still balances: both reserves leave it.
+    expect(plan.continuing.assets[TOKEN_UNIT]).toBe(650n); // 1,000 - (100+250)
   });
 });
 
