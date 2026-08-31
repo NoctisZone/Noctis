@@ -12,6 +12,19 @@ if ! compact --version 2>&1 | grep -qE '^compact [0-9]'; then
   exit 1
 fi
 
+# The toolchain version and the LANGUAGE version it speaks are two different
+# numbers, and only the second is what these contracts declare. Compiling with a
+# toolchain outside the pin fails with `language version X mismatch`, which names
+# the language version and not the toolchain that brought it — so check here and
+# say which version to install.
+PIN="$(grep -vE '^[[:space:]]*(#|$)' "$(dirname "$0")/../compact-toolchain.txt" | tail -1 | tr -d '[:space:]')"
+GOT="$(compact compile --version 2>/dev/null | tr -d '[:space:]')"
+if [ -n "$PIN" ] && [ "$PIN" != "$GOT" ]; then
+  echo "ERROR: Compact compiler is ${GOT:-unknown} but this project pins $PIN." >&2
+  echo "Run: compact update $PIN" >&2
+  exit 1
+fi
+
 for f in bonding_curve eligibility_gate treasury creator_escrow vesting lp_escrow cto_governance staking_pool; do
   compact compile --skip-zk "$f.compact" "compiled/$f"
 done

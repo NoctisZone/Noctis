@@ -1,0 +1,21 @@
+# The Compact toolchain this project compiles against.
+#
+# Pinned because the toolchain's version and the LANGUAGE version it speaks are
+# two different numbers, and only the second is what the contracts declare.
+# Every .compact file here carries `pragma language_version >= 0.16 && <= 0.23`,
+# and the published releases map like this:
+#
+#   toolchain 0.31.1  ->  language 0.23.0   <- this pin, the newest that fits
+#   toolchain 0.34.0  ->  language 0.26.0   <- outside the pragma
+#
+# CI used to install the latest toolchain and accept whatever language version
+# came with it, so the pragma's ceiling was enforced by nothing but the release
+# schedule. Both workflows now read this file, the same way the Cardano workflow
+# reads its compiler pin out of aiken.toml.
+#
+# Raising this means raising the pragma too, which means recompiling every PSM
+# and re-running the Compact suite against the new language version. That is a
+# deliberate piece of work, not a version bump.
+#
+# The last line is the version. Everything above it is a comment.
+0.31.1

@@ -53,10 +53,34 @@ jobs:
         run: |
           curl --proto '=https' --tlsv1.2 -LsSf https://github.com/midnightntwrk/compact/releases/latest/download/compact-installer.sh | sh
           echo "$HOME/.compact/bin" >> "$GITHUB_PATH"
-      - name: Install the Compact compiler
+      # Read the compiler pin from contracts/midnight/compact-toolchain.txt
+      # rather than taking whatever is newest, so the LANGUAGE version CI
+      # compiles against cannot drift away from the one the contracts' own
+      # pragma declares. Same discipline as the Cardano workflow, which reads
+      # its Aiken pin out of aiken.toml.
+      - name: Install the pinned Compact compiler
         run: |
           export PATH="$HOME/.compact/bin:$PATH"
-          compact update
+          version="$(grep -vE '^[[:space:]]*(#|$)' contracts/midnight/compact-toolchain.txt | tail -1 | tr -d '[:space:]')"
+          if [ -z "$version" ]; then
+            echo "Could not read the compiler pin from contracts/midnight/compact-toolchain.txt" >&2
+            exit 1
+          fi
+          echo "Using Compact toolchain $version (from compact-toolchain.txt)"
+          compact update "$version"
+
+      # A pin nothing checks is a comment. `compact update` resolves a partial
+      # version, so confirm what actually landed is what was asked for.
+      - name: Confirm the installed compiler matches the pin
+        run: |
+          export PATH="$HOME/.compact/bin:$PATH"
+          want="$(grep -vE '^[[:space:]]*(#|$)' contracts/midnight/compact-toolchain.txt | tail -1 | tr -d '[:space:]')"
+          got="$(compact compile --version | tr -d '[:space:]')"
+          echo "pinned: $want / installed: $got"
+          if [ "$want" != "$got" ]; then
+            echo "Compact compiler is $got but this project pins $want." >&2
+            exit 1
+          fi
       - name: Install workspace dependencies
         run: npm install
       - name: Typecheck contracts/midnight (compiles all 8 PSMs first, then tsc)
