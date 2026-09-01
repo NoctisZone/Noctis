@@ -33,7 +33,7 @@ export interface AdaUsdThresholdResult {
 
 /**
  * Computes the minimum lovelace needed to be worth `usdAmount` USD, using a
- * real Orcfax ADA/USD datum. Throws rather than fabricating a value if the
+ * real ADA/USD price. Throws rather than fabricating a value if the
  * real source is unavailable -- staleness itself is the caller's call
  * (ORACLE_STALENESS_MIN), this function surfaces `sources` for
  * that decision, same convention as usdToMinNightAtomic.

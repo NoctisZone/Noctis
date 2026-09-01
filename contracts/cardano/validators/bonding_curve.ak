@@ -1220,6 +1220,7 @@ fn staking_seeding_output_ok(self: Transaction, datum: BondingCurveDatum) -> Boo
                   datum.staking_reserve_tokens,
                   datum.staking_duration_days,
                   opened.last_update_ms,
+                  datum.governor_pub_key_hash,
                 ),
               }
             }
@@ -5364,6 +5365,7 @@ fn staking_genesis(datum: BondingCurveDatum, opened_at: Int) -> staking_pool_dat
     datum.staking_reserve_tokens,
     datum.staking_duration_days,
     opened_at,
+    datum.governor_pub_key_hash,
   )
 }
 

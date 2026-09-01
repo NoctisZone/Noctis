@@ -674,6 +674,9 @@ export async function buildGenesisDatums(input: BuildGenesisDatumsInput) {
     unallocated: 0n,
     last_update_ms: BigInt(input.mintedAtMs ?? Date.now()),
     exhausted_at: null,
+    // Who the flat claim charge is paid to. The same key the curve pays its
+    // own platform fees to, so the pool can charge without consulting it.
+    governor_pub_key_hash: input.governorPubKeyHashHex,
   };
 
   // 2026-08-03: the ZK anchor's own genesis datum — also never authored

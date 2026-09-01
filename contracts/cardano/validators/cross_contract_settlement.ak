@@ -45,6 +45,8 @@ const nft_policy = #"c0ffee"
 /// entitlements, which is ordinary and expected rather than contrived.
 const creator = #"11"
 
+const governor = #"22"
+
 const pool_script = #"cc"
 
 const vesting_script = #"ce"
@@ -97,6 +99,7 @@ fn pool_datum() -> staking_pool_datum.StakingPoolDatum {
     unallocated: 0,
     last_update_ms: 0,
     exhausted_at: Some(0),
+    governor_pub_key_hash: governor,
   }
 }
 
@@ -200,9 +203,25 @@ fn settlement_tx(payouts: List<Output>) -> Transaction {
   Transaction {
     ..placeholder,
     inputs: [pool_input, vesting_input],
-    outputs: list.concat([pool_continuing, vesting_continuing], payouts),
+    // The pool's claim charge. It is not what these tests are about, but the
+    // claim will not validate without it, and a settlement transaction in the
+    // wild would carry it too.
+    outputs: list.concat(
+      [pool_continuing, vesting_continuing, pool_claim_charge()],
+      payouts,
+    ),
     extra_signatories: [creator],
     validity_range: interval.between(claim_time - 100, claim_time + 100),
+  }
+}
+
+/// The staking pool's flat claim charge, tagged as settling the pool spend.
+fn pool_claim_charge() -> Output {
+  Output {
+    address: from_verification_key(governor),
+    value: assets.from_lovelace(staking_pool.min_platform_claim_fee_lovelace),
+    datum: InlineDatum(pool_ref),
+    reference_script: None,
   }
 }
 

@@ -173,9 +173,24 @@ async function unstake(params: { walletApi: WalletApi }): Promise<{ txHash: stri
   return requireSubmitter().unstakeWithWallet(params.walletApi);
 }
 
-/** Take what is owed and leave the position open. */
-async function claimRewards(params: { walletApi: WalletApi }): Promise<{ txHash: string }> {
-  return requireSubmitter().claimRewardsWithWallet(params.walletApi);
+/**
+ * Take what is owed and leave the position open.
+ *
+ * `platformClaimFeeLovelace` is the real dollar-equivalent of
+ * STAKING_CLAIM_FEE_USD. The page supplies it because the price lookup is
+ * server-side; the browser never prices anything itself. Accepted as a string
+ * as well as a bigint, since a value rendered into a data attribute arrives
+ * as one.
+ */
+async function claimRewards(params: {
+  walletApi: WalletApi;
+  platformClaimFeeLovelace: bigint | string;
+}): Promise<{ txHash: string }> {
+  const fee =
+    typeof params.platformClaimFeeLovelace === 'bigint'
+      ? params.platformClaimFeeLovelace
+      : BigInt(params.platformClaimFeeLovelace);
+  return requireSubmitter().claimRewardsWithWallet(params.walletApi, fee);
 }
 
 /**

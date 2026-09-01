@@ -526,6 +526,10 @@ export const StakingPoolDatumShape = Data.Object({
   last_update_ms: Data.Integer(),
   /// When `unallocated` first reached zero. A top-up clears it.
   exhausted_at: Data.Nullable(Data.Integer()),
+  /// Who the flat claim charge is paid to — the same key the curve pays its
+  /// own platform fees to. Last, matching the .ak field order, which appends
+  /// it so the five fields above keep the indices every redeemer rewrites.
+  governor_pub_key_hash: Data.Bytes(),
 });
 export type StakingPoolDatumData = Data.Static<typeof StakingPoolDatumShape>;
 export const StakingPoolDatumSchema = StakingPoolDatumShape as unknown as StakingPoolDatumData;

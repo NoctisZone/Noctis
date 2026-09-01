@@ -40,7 +40,16 @@ import type {
   UTxO,
   WalletApi,
 } from '@lucid-evolution/lucid';
-import { Blockfrost, CML, Constr, Data, getAddressDetails, Lucid, validatorToAddress } from '@lucid-evolution/lucid';
+import {
+  Blockfrost,
+  CML,
+  Constr,
+  credentialToAddress,
+  Data,
+  getAddressDetails,
+  Lucid,
+  validatorToAddress,
+} from '@lucid-evolution/lucid';
 import { bytesToHex, type CapProofStep, hexToBytes, recomputeCapRoot } from './cap-accumulator-tree.js';
 import { selectStakingPoolUtxo } from './launch-utxo-lookup.js';
 import { STAKING_POOL_REDEEMER } from './redeemer-indices.js';
@@ -81,6 +90,16 @@ function keyHashFromAddress(address: string): string {
  * builder has to restate the value.
  */
 const MIN_UTXO_LOVELACE = 2_000_000n;
+
+/**
+ * staking_pool.ak's own `min_platform_claim_fee_lovelace`.
+ *
+ * Mirrored here only so a fee below it fails with a legible message rather
+ * than as an opaque on-chain script failure. The contract is the authority;
+ * this is a courtesy check, and the same one
+ * `tier-a-claims-submitter.ts` performs before a creator-fee claim.
+ */
+const MIN_PLATFORM_CLAIM_FEE_LOVELACE = 200_000n;
 
 export interface StakingConfig {
   blockfrostProjectId: string;
@@ -538,7 +557,27 @@ export class StakingSubmitter {
   }
 
   /** Take what is owed and leave the position open. */
-  async claimCore(lucid: LucidEvolution, stakerAddress: string, nowMs = Date.now()) {
+  /**
+   * Claim accrued rewards.
+   *
+   * @param platformClaimFeeLovelace  The real dollar-equivalent of
+   *   STAKING_CLAIM_FEE_USD, computed by the CALLER via
+   *   `ada-price-oracle.ts`'s `usdToMinAdaLovelace()`. This class stays
+   *   oracle-agnostic, the same convention `tier-a-claims-submitter.ts`
+   *   already follows for the creator-fee claim. Must be at least the
+   *   contract's own floor.
+   *
+   *   It is a real output to the governor rather than a client convention,
+   *   because `ClaimRewards` takes no signature: anyone can build this
+   *   transaction themselves, so only the validator can make the charge stick.
+   */
+  async claimCore(lucid: LucidEvolution, stakerAddress: string, platformClaimFeeLovelace: bigint, nowMs = Date.now()) {
+    if (platformClaimFeeLovelace < MIN_PLATFORM_CLAIM_FEE_LOVELACE) {
+      throw new Error(
+        `platformClaimFeeLovelace (${platformClaimFeeLovelace}) is below the contract's own floor ` +
+          `(${MIN_PLATFORM_CLAIM_FEE_LOVELACE}) — the transaction would fail on-chain.`,
+      );
+    }
     const loaded = await this.loadPool();
     const vkh = keyHashFromAddress(stakerAddress);
     const { acc } = advance(loaded.datum, BigInt(nowMs));
@@ -556,7 +595,32 @@ export class StakingSubmitter {
       poolTokenDelta: -owed,
       payout: owed,
     }));
-    return (await this.payoutTo(lucid, loaded, stakerAddress, payout, tx)).complete();
+    const withPayout = await this.payoutTo(lucid, loaded, stakerAddress, payout, tx);
+    return this.chargeGovernor(loaded, platformClaimFeeLovelace, withPayout).complete();
+  }
+
+  /**
+   * The flat claim charge, paid to the governor the pool was opened with and
+   * tagged with the pool input like every other settlement output.
+   *
+   * The validator nets this rather than merely reading the address, so the
+   * charge has to be lovelace that really arrives — a transaction the governor
+   * itself funded would not satisfy it.
+   */
+  private chargeGovernor(
+    loaded: LoadedPool,
+    feeLovelace: bigint,
+    tx: ReturnType<LucidEvolution['newTx']>,
+  ): ReturnType<LucidEvolution['newTx']> {
+    const governorAddress = credentialToAddress(this.config.network, {
+      type: 'Key',
+      hash: loaded.datum.governor_pub_key_hash,
+    });
+    return tx.pay.ToAddressWithData(
+      governorAddress,
+      { kind: 'inline', value: settlementDatum(loaded.utxo) },
+      { lovelace: feeLovelace },
+    );
   }
 
   /** Add to the reward budget. Permissionless — anyone may. */
@@ -618,8 +682,8 @@ export class StakingSubmitter {
     return this.withWallet(walletApi, (lucid, address) => this.unstakeCore(lucid, address));
   }
 
-  claimRewardsWithWallet(walletApi: WalletApi): Promise<{ txHash: string }> {
-    return this.withWallet(walletApi, (lucid, address) => this.claimCore(lucid, address));
+  claimRewardsWithWallet(walletApi: WalletApi, platformClaimFeeLovelace: bigint): Promise<{ txHash: string }> {
+    return this.withWallet(walletApi, (lucid, address) => this.claimCore(lucid, address, platformClaimFeeLovelace));
   }
 
   topUpWithWallet(walletApi: WalletApi, amount: bigint): Promise<{ txHash: string }> {
@@ -651,8 +715,8 @@ export class StakingSubmitter {
     return this.withKey(keyHex, address, (lucid) => this.unstakeCore(lucid, address, nowMs));
   }
 
-  claimWithKey(keyHex: string, address: string, nowMs?: number) {
-    return this.withKey(keyHex, address, (lucid) => this.claimCore(lucid, address, nowMs));
+  claimWithKey(keyHex: string, address: string, platformClaimFeeLovelace: bigint, nowMs?: number) {
+    return this.withKey(keyHex, address, (lucid) => this.claimCore(lucid, address, platformClaimFeeLovelace, nowMs));
   }
 
   topUpWithKey(keyHex: string, address: string, amount: bigint, nowMs?: number) {

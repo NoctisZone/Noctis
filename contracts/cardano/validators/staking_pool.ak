@@ -99,6 +99,20 @@ pub const ms_per_day = 86_400_000
 /// it, claiming does not touch it.
 pub const unstake_lock_ms = 604_800_000
 
+/// STAKING_CLAIM_FEE_USD, as a floor rather than a peg.
+///
+/// Aiken has no in-circuit oracle, so a contract cannot know what a dollar is
+/// worth. This is the same deliberately conservative sanity floor both bonding
+/// curves already charge on a fee claim, at the same value: the real
+/// dollar-equivalent is computed off-chain from `integration/ada-usd-price.ts`
+/// and paid with margin above it in the normal case, while this refuses a
+/// claim that pays nothing at all.
+///
+/// It has to live on chain rather than in the submitter, because `ClaimRewards`
+/// takes no signature — see `platform_fee_paid`. A charge only the submitter
+/// applies is a charge anyone can decline by building their own transaction.
+pub const min_platform_claim_fee_lovelace = 200_000
+
 /// How long an exhausted pool waits for a top-up before it can be retired.
 pub const close_cooldown_ms = 7_776_000_000
 
@@ -288,6 +302,36 @@ fn tokens_in(value: assets.Value, pool: StakingPoolDatum) -> Int {
 /// one payment cannot answer two. The netting says the staker is genuinely
 /// better off, since an output at their own credential is also what their
 /// CHANGE looks like. See noctis/settlement for both in full.
+/// The flat charge on a claim, paid to the governor the pool was opened with.
+///
+/// Netted, not merely tagged, for exactly the reason `staker_paid` nets: an
+/// output addressed to the governor proves nothing on its own, because a
+/// builder can spend a UTXO the governor already holds and hand it straight
+/// back tagged. Only lovelace that really arrived from elsewhere counts.
+///
+/// A consequence worth stating: a transaction the governor itself funds cannot
+/// satisfy this, since its own fee outlay nets against what it receives. The
+/// claimer pays the charge, which is who it is a charge on.
+fn platform_fee_paid(
+  self: Transaction,
+  own_ref: OutputReference,
+  governor_vkh: VerificationKeyHash,
+) -> Bool {
+  let credential = from_verification_key(governor_vkh).payment_credential
+  and {
+    list.any(
+      self.outputs,
+      fn(output) {
+        and {
+          settlement.settles(output, own_ref),
+          output.address.payment_credential == credential,
+        }
+      },
+    ),
+    settlement.net_lovelace_gain(self, credential) >= min_platform_claim_fee_lovelace,
+  }
+}
+
 fn staker_paid(
   self: Transaction,
   own_ref: OutputReference,
@@ -494,6 +538,7 @@ validator staking_pool {
                       pool,
                     ) - owed,
                     staker_paid(self, own_ref, pool, staker_vkh, owed),
+                    platform_fee_paid(self, own_ref, pool.governor_pub_key_hash),
                     own_output.datum == InlineDatum(expected),
                     output_value_clean(own_output),
                   }
@@ -582,6 +627,8 @@ const other: VerificationKeyHash = #"ee"
 
 const creator: VerificationKeyHash = #"11"
 
+const governor: VerificationKeyHash = #"9f"
+
 const token_policy: PolicyId = #"33"
 
 const token_name: AssetName = "tok"
@@ -635,6 +682,7 @@ fn mock_pool() -> StakingPoolDatum {
     unallocated: 3_650_000,
     last_update_ms: opened_at,
     exhausted_at: None,
+    governor_pub_key_hash: governor,
   }
 }
 
@@ -676,6 +724,16 @@ fn payout_output(vkh: VerificationKeyHash, tokens: Int) -> Output {
   Output {
     address: from_verification_key(vkh),
     value: assets.from_asset(token_policy, token_name, tokens),
+    datum: InlineDatum(own_ref()),
+    reference_script: None,
+  }
+}
+
+/// The claim charge, tagged as settling the pool input like any other payout.
+fn fee_output(lovelace: Int) -> Output {
+  Output {
+    address: from_verification_key(governor),
+    value: assets.from_lovelace(lovelace),
     datum: InlineDatum(own_ref()),
     reference_script: None,
   }
@@ -928,6 +986,31 @@ fn run_claim(
   extra_inputs: List<Input>,
   extra_outputs: List<Output>,
 ) -> Bool {
+  run_claim_paying(
+    pool,
+    pool_tokens,
+    before,
+    now,
+    payout_to,
+    min_platform_claim_fee_lovelace,
+    extra_inputs,
+    extra_outputs,
+  )
+}
+
+/// The same claim with the charge varied. `fee == 0` omits the output
+/// entirely, which is the transaction a claimer building their own would
+/// produce.
+fn run_claim_paying(
+  pool: StakingPoolDatum,
+  pool_tokens: Int,
+  before: Position,
+  now: Int,
+  payout_to: VerificationKeyHash,
+  fee: Int,
+  extra_inputs: List<Input>,
+  extra_outputs: List<Output>,
+) -> Bool {
   let entries = [(staker, before)]
   let proof = stake_accumulator.proof_in(staker, entries)
   let (acc, unallocated) = advance(pool, now)
@@ -956,7 +1039,14 @@ fn run_claim(
     tx(
       list.concat([pool_input(pool, pool_tokens)], extra_inputs),
       list.concat(
-        [pool_output(next, pool_tokens - owed), payout_output(payout_to, owed)],
+        list.concat(
+          [pool_output(next, pool_tokens - owed), payout_output(payout_to, owed)],
+          if fee == 0 {
+            []
+          } else {
+            [fee_output(fee)]
+          },
+        ),
         extra_outputs,
       ),
       [],
@@ -975,6 +1065,76 @@ test claim_pays_a_days_rewards_without_any_signature() {
 test claim_cannot_be_redirected() {
   let (pool, before) = staked_pool()
   !run_claim(pool, 3_651_000, before, opened_at + ms_per_day, other, [], [])
+}
+
+/// The charge is enforced here rather than in the submitter for one reason:
+/// this redeemer takes no signature, so a claimer can always build the
+/// transaction themselves. A charge only our own client applies is a charge
+/// anyone can decline.
+test claim_refuses_a_transaction_that_pays_no_charge() {
+  let (pool, before) = staked_pool()
+  !run_claim_paying(pool, 3_651_000, before, opened_at + ms_per_day, staker, 0, [], [])
+}
+
+test claim_refuses_a_charge_below_the_floor() {
+  let (pool, before) = staked_pool()
+  !run_claim_paying(
+    pool,
+    3_651_000,
+    before,
+    opened_at + ms_per_day,
+    staker,
+    min_platform_claim_fee_lovelace - 1,
+    [],
+    [],
+  )
+}
+
+/// The floor is a minimum, not a target: paying exactly it is a valid claim.
+/// Without this the two tests above would still pass if the check were an
+/// impossible one, and the charge would simply have closed claiming.
+test claim_accepts_a_charge_exactly_at_the_floor() {
+  let (pool, before) = staked_pool()
+  run_claim_paying(
+    pool,
+    3_651_000,
+    before,
+    opened_at + ms_per_day,
+    staker,
+    min_platform_claim_fee_lovelace,
+    [],
+    [],
+  )
+}
+
+/// The change trick again, aimed at the charge rather than the payout: the
+/// governor's own lovelace, spent into the transaction and handed back tagged.
+/// Every balance is honest and the governor is no better off, which is what
+/// netting refuses and tagging alone would not.
+test claim_refuses_a_charge_that_is_only_the_governors_own_change() {
+  let (pool, before) = staked_pool()
+  let governor_input =
+    Input {
+      output_reference: OutputReference {
+        transaction_id: #"88",
+        output_index: 0,
+      },
+      output: Output {
+        address: from_verification_key(governor),
+        value: assets.from_lovelace(min_platform_claim_fee_lovelace),
+        datum: transaction.NoDatum,
+        reference_script: None,
+      },
+    }
+  !run_claim(
+    pool,
+    3_651_000,
+    before,
+    opened_at + ms_per_day,
+    staker,
+    [governor_input],
+    [],
+  )
 }
 
 /// The change trick: a builder who can get the staker's signature spends a

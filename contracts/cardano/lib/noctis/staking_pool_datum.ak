@@ -40,6 +40,18 @@ pub type StakingPoolDatum {
   unallocated: Int,
   last_update_ms: Int,
   exhausted_at: Option<Int>,
+  /// Who the flat claim charge is paid to. The same key the curve pays its
+  /// own platform fees to, carried here so the pool can charge without
+  /// consulting the curve that opened it.
+  ///
+  /// Declared LAST on purpose. Every redeemer rewrites the five fields above
+  /// it and none rewrites this one, and a record update walks the field list
+  /// to reach what it replaces — so appending leaves those five at the index
+  /// they already had. This datum groups its immutable terms first and its
+  /// moving state last, which is the opposite of the curve datum's ordering
+  /// rule; the reason is the same in both, and it is the update sites that
+  /// decide it, not the reading order.
+  governor_pub_key_hash: VerificationKeyHash,
 }
 
 /// The pool as the launch's mint transaction creates it: real, identified,
@@ -61,6 +73,7 @@ pub fn unfunded(
   reserve_tokens: Int,
   duration_days: Int,
   minted_at: Int,
+  governor_pub_key_hash: VerificationKeyHash,
 ) -> StakingPoolDatum {
   StakingPoolDatum {
     ..genesis(
@@ -72,6 +85,7 @@ pub fn unfunded(
       reserve_tokens,
       duration_days,
       minted_at,
+      governor_pub_key_hash,
     ),
     unallocated: 0,
   }
@@ -95,6 +109,7 @@ pub fn genesis(
   reserve_tokens: Int,
   duration_days: Int,
   opened_at: Int,
+  governor_pub_key_hash: VerificationKeyHash,
 ) -> StakingPoolDatum {
   StakingPoolDatum {
     launch_id,
@@ -109,6 +124,7 @@ pub fn genesis(
     unallocated: reserve_tokens,
     last_update_ms: opened_at,
     exhausted_at: None,
+    governor_pub_key_hash,
   }
 }
 

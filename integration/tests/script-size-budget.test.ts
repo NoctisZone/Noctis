@@ -214,17 +214,32 @@ for (const v of blueprint.validators) {
  *    the list measures 15,915 — 91 B cheaper for a strictly weaker mechanism
  *    (no second batcher, no rotation without a gap). Widening the datum type
  *    is what costs; the list on top of it is nearly free.
+ *
+ * Moved again by the staking pool's claim charge: staking_pool +294 for the
+ * check, its netting helper and the floor, and +22 on EACH curve for a field
+ * neither of them reads. Both curves author the pool's opening datum at
+ * graduation and pin it again at mint, so widening that shared type widened
+ * four call sites across two validators — the same shared-datum effect as the
+ * batcher allowlist and the payout-address collapse above.
+ *
+ * +22 rather than the +455 that allowlist field cost, and the difference is
+ * position again. This datum groups its immutable terms first and its moving
+ * state last, which is the opposite of the curve datum's layout, so the cheap
+ * end here is the BACK: appending leaves the five fields every redeemer
+ * rewrites at the indices they already had. The rule is the same in both — put
+ * the new field where the update sites are not — and it reads as opposite only
+ * because the two records are laid out opposite ways.
  */
 const RECORDED: Record<string, number> = {
-  bonding_curve: 12_877,
-  bonding_curve_tier_b: 14_956,
+  bonding_curve: 12_899,
+  bonding_curve_tier_b: 14_978,
   cto_governance: 7_962,
   cto_sybil_challenge: 2_123,
   curve_order: 1_775,
   launch_token_policy: 419,
   lp_escrow: 7_638,
   nhop_challenge: 2_093,
-  staking_pool: 5_153,
+  staking_pool: 5_447,
   token_metadata: 4_621,
   vesting: 5_762,
   zk_anchor: 2_634,
