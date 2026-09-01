@@ -2,7 +2,7 @@
   "name": "noctis-zone",
   "version": "0.1.0",
   "private": true,
-  "description": "Noctis Zone \u2014 token launchpad monorepo (Cardano L1 + Midnight Network)",
+  "description": "Noctis Zone — token launchpad monorepo (Cardano L1 + Midnight Network)",
   "scripts": {
     "prepare": "git config core.hooksPath .githooks",
     "postinstall": "patch-package"
@@ -20,5 +20,8 @@
   "repository": {
     "type": "git",
     "url": "https://github.com/NoctisZone/Noctis.git"
+  },
+  "overrides": {
+    "@midnight-ntwrk/onchain-runtime-v3": "3.0.0"
   }
 }

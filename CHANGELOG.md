@@ -25,6 +25,13 @@ Notable changes to the Noctis Zone, by release. Internal development history pre
 
 ### Changed
 
+- The Midnight packages resolve to exactly one copy of each. The wasm-bearing ones
+  carry their own object identity, so a second copy of the same package makes objects
+  minted by one unrecognisable to the other. `onchain-runtime-v3` is now named in the
+  root overrides and the ledger package is pinned to a single exact version rather than
+  a range, matching what the protocol package itself pins, so a fresh install resolves
+  one copy of each without relying on the lockfile to hold it there.
+
 - A public trade reaches a Cardano Launch curve as an order, applied against it in a
   batch, and the curve settles nothing else: it refuses a direct spend whatever shape it
   arrives in. A batch is built against one curve output, so a direct spend consumed that
