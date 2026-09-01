@@ -48,6 +48,7 @@ import {
   Data,
   getAddressDetails,
   Lucid,
+  slotToUnixTime,
   validatorToAddress,
 } from '@lucid-evolution/lucid';
 import { bytesToHex, type CapProofStep, hexToBytes, recomputeCapRoot } from './cap-accumulator-tree.js';
@@ -339,13 +340,24 @@ export class StakingSubmitter {
       if (poolBefore.launch_id !== this.config.launchIdHex) continue;
 
       const redeemers = await bf<Array<{ purpose: string; redeemer_data_hash: string }>>(`/txs/${tx_hash}/redeemers`);
-      const tx = await bf<{ valid_contract: boolean; block_time: number }>(`/txs/${tx_hash}`);
+      const tx = await bf<{ valid_contract: boolean; block_time: number; invalid_before: string | null }>(
+        `/txs/${tx_hash}`,
+      );
       if (!tx.valid_contract) continue;
+      // The time the VALIDATOR read, which is the validity range's lower bound
+      // — not `block_time`, which is when a block happened to be minted and has
+      // no bearing on what the script computed. Every position this replay
+      // rebuilds is derived from that instant, so taking the wrong one puts the
+      // whole tree behind a root the pool does not carry and makes every proof
+      // built from it unusable. A pool spend with no lower bound cannot have
+      // validated at all, so there is nothing to replay from one.
+      if (tx.invalid_before === null) continue;
+      const eventNowMs = BigInt(slotToUnixTime(this.config.network, Number(tx.invalid_before)));
 
       for (const r of redeemers) {
         if (r.purpose !== 'spend') continue;
         const { cbor } = await bf<{ cbor: string }>(`/scripts/datum/${r.redeemer_data_hash}/cbor`);
-        const event = decodePoolRedeemer(cbor, poolBefore, BigInt(tx.block_time) * 1000n);
+        const event = decodePoolRedeemer(cbor, poolBefore, eventNowMs);
         if (event) out.push(event);
       }
     }
@@ -412,7 +424,7 @@ export class StakingSubmitter {
     loaded: LoadedPool,
     stakerVkhHex: string,
     nowMs: number,
-    plan: (ctx: { acc: bigint; unallocated: bigint; before: StakePosition; owed: bigint }) => {
+    plan: (ctx: { acc: bigint; unallocated: bigint; before: StakePosition; owed: bigint; now: bigint }) => {
       redeemerIndex: number;
       extraRedeemerFields: Data[];
       after: StakePosition;
@@ -424,14 +436,23 @@ export class StakingSubmitter {
     },
   ): { tx: ReturnType<LucidEvolution['newTx']>; payout: bigint } {
     const { utxo, datum, positions } = loaded;
-    const now = BigInt(nowMs);
+    // `now` comes from the range's own lower bound, never from the raw clock:
+    // that bound is what the validator reads, and it derives the continuing
+    // datum from it field for field. The pool's own last update clamps how far
+    // back the range may open, because time may not run backwards on it.
+    const { from, to } = validityRangeFor(nowMs, Number(datum.last_update_ms));
+    const now = BigInt(from);
     const { acc, unallocated } = advance(datum, now);
     const key = hexToBytes(stakerVkhHex);
     const before = positions.get(key);
     const owed = owedAt(before, acc);
     const proof = positions.proofFor(key);
 
-    const step = plan({ acc, unallocated, before, owed });
+    // `now` is handed to the caller rather than left for it to recompute: any
+    // timestamp that ends up in the continuing datum has to be the one the
+    // validator reads, and a caller reaching for the clock again gets a
+    // different answer.
+    const step = plan({ acc, unallocated, before, owed, now });
 
     // The proof is verified locally against the root the pool actually
     // carries, before anything is submitted. On chain this failing is a script
@@ -465,7 +486,6 @@ export class StakingSubmitter {
     };
     if (poolTokens > 0n) poolAssets[tokenUnit] = poolTokens;
 
-    const { from, to } = validityRangeFor(nowMs);
     let tx = lucid
       .newTx()
       .collectFrom(
@@ -517,12 +537,14 @@ export class StakingSubmitter {
     if (amount <= 0n) throw new Error('Stake amount must be positive.');
     const loaded = await this.loadPool();
     const vkh = keyHashFromAddress(stakerAddress);
-    const { tx } = this.buildSpend(lucid, loaded, vkh, nowMs, ({ acc, before, owed }) => {
+    const { tx } = this.buildSpend(lucid, loaded, vkh, nowMs, ({ acc, before, owed, now }) => {
       const total = before.amount + amount + owed;
       return {
         redeemerIndex: STAKING_POOL_REDEEMER.Stake,
         extraRedeemerFields: [amount],
-        after: { amount: total, debt: debtAt(total, acc), since: BigInt(nowMs) },
+        // `since` is `now`, not the clock: the validator rebuilds this position
+        // from the range bound it reads and compares the whole root.
+        after: { amount: total, debt: debtAt(total, acc), since: now },
         totalStakedDelta: amount + owed,
         poolTokenDelta: amount,
         signer: stakerAddress,
@@ -538,7 +560,9 @@ export class StakingSubmitter {
     const before = loaded.positions.get(hexToBytes(vkh));
     if (before.amount <= 0n) throw new Error('This wallet has no open staking position in this pool.');
     const unlocksAt = before.since + UNSTAKE_LOCK_MS;
-    if (BigInt(nowMs) < unlocksAt) {
+    // Against the bound the validator reads, so a pre-check that passes here
+    // is not one the chain then refuses.
+    if (BigInt(validityRangeFor(nowMs, Number(loaded.datum.last_update_ms)).from) < unlocksAt) {
       throw new Error(
         `This position is locked until ${new Date(Number(unlocksAt)).toISOString()}. ` +
           'Adding to a stake restarts the lock; claiming rewards does not.',
@@ -580,7 +604,7 @@ export class StakingSubmitter {
     }
     const loaded = await this.loadPool();
     const vkh = keyHashFromAddress(stakerAddress);
-    const { acc } = advance(loaded.datum, BigInt(nowMs));
+    const { acc } = advance(loaded.datum, BigInt(validityRangeFor(nowMs, Number(loaded.datum.last_update_ms)).from));
     const before = loaded.positions.get(hexToBytes(vkh));
     if (before.amount <= 0n) throw new Error('This wallet has no open staking position in this pool.');
     if (owedAt(before, acc) <= 0n) throw new Error('Nothing has accrued on this position yet.');
@@ -627,7 +651,9 @@ export class StakingSubmitter {
   async topUpCore(lucid: LucidEvolution, funderAddress: string, amount: bigint, nowMs = Date.now()) {
     if (amount <= 0n) throw new Error('Top-up amount must be positive.');
     const { utxo, datum } = await this.findPoolUtxo(lucid);
-    const now = BigInt(nowMs);
+    // Same rule as buildSpend: the bound the validator reads, not the clock.
+    const { from, to } = validityRangeFor(nowMs, Number(datum.last_update_ms));
+    const now = BigInt(from);
     const { acc, unallocated } = advance(datum, now);
     const tokenUnit = datum.token_policy_id + datum.token_asset_name;
     const nextDatum: StakingPoolDatumData = {
@@ -639,7 +665,6 @@ export class StakingSubmitter {
       // starts again from scratch if this budget runs out in turn.
       exhausted_at: null,
     };
-    const { from, to } = validityRangeFor(nowMs);
     return lucid
       .newTx()
       .collectFrom([utxo], Data.to(new Constr(STAKING_POOL_REDEEMER.TopUpPool, [amount])))

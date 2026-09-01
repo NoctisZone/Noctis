@@ -69,6 +69,17 @@ Notable changes to the Noctis Zone, by release. Internal development history pre
   transaction declares that it needs another signature. Funding a staking pool
   needs no one's approval, so graduation no longer gathers a signature it never
   had to have, and the fee it carries matches the transaction it pays for.
+- Staking a position works against a live pool. Every timestamp a staking spend
+  writes is taken from the validity range the validator reads, rather than from the
+  builder's own clock, so the pool state a spend proposes is the one the contract
+  derives. A spend's range also opens behind the clock, because a node validates
+  against the chain tip's slot rather than wall-clock time, and it never opens
+  earlier than the pool's own last update.
+- The staking pool's position history is replayed from the time each spend was
+  validated at, which is what the contract itself used. Positions therefore rebuild
+  onto the root the pool actually carries, and the proofs built from them are
+  accepted. Reading a pool still re-derives that root and refuses to go on when it
+  disagrees.
 
 ---
 

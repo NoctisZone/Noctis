@@ -41,6 +41,14 @@ export const CLOSE_COOLDOWN_MS = 7_776_000_000n;
  */
 export const MAX_VALIDITY_RANGE_MS = 600_000;
 
+/**
+ * How far behind the clock a spend's validity range opens, to absorb the gap
+ * between wall-clock time and the chain tip's slot. Three minutes covers an
+ * ordinary quiet stretch on Cardano with room to spare, and costs only that
+ * much conservatism in accrual.
+ */
+export const TIP_LAG_MARGIN_MS = 180_000;
+
 /** Just the fields the arithmetic reads. */
 export interface PoolAccumulatorState {
   emission_per_day: bigint;
@@ -107,12 +115,30 @@ export function exhaustedAfter(current: bigint | null, unallocated: bigint, nowM
  * accept, with `nowMs` as its lower bound because that is what the validator
  * reads as the current time.
  *
- * Deliberately not centred on `nowMs`. A range starting earlier would have the
- * validator accrue against time that has not passed for the staker, and a
- * range starting later would not yet be valid.
+ * The bound is floored to the whole second, because that is what the chain
+ * reports it as: a validity start travels as a slot, and both networks' era
+ * start is itself a whole second. Callers must take their `now` from the
+ * `from` this returns rather than from `nowMs` — the datum the validator
+ * derives is pinned to the bound it reads, so a builder stamping the raw
+ * clock disagrees with it by up to 999 ms and the spend is refused.
+ *
+ * It also starts BEHIND `nowMs`. A node validates against the slot of the
+ * chain's tip, not against wall-clock time, and Cardano's block times are
+ * probabilistic — a quiet minute or two leaves the tip well short of the
+ * clock, and a range opening at "now" is then not yet valid. The margin only
+ * makes accrual conservative: the validator reads the lower bound as the
+ * current time, so it emits for slightly less elapsed time, and the next
+ * spend picks the remainder up.
+ *
+ * `notBeforeMs` is the pool's own `last_update_ms`. Time may not run backwards
+ * on the pool, so the margin is clamped rather than allowed to reach behind
+ * the last spend — otherwise two spends in quick succession would leave the
+ * second reaching back past the first.
  */
-export function validityRangeFor(nowMs: number): { from: number; to: number } {
-  return { from: nowMs, to: nowMs + MAX_VALIDITY_RANGE_MS - 1_000 };
+export function validityRangeFor(nowMs: number, notBeforeMs = 0): { from: number; to: number } {
+  const toWholeSecond = (ms: number) => Math.floor(ms / 1000) * 1000;
+  const from = Math.max(toWholeSecond(nowMs - TIP_LAG_MARGIN_MS), toWholeSecond(notBeforeMs));
+  return { from, to: from + MAX_VALIDITY_RANGE_MS - 1_000 };
 }
 
 /**

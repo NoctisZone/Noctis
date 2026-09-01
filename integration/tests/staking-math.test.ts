@@ -19,6 +19,7 @@ import {
   owedAt,
   type PoolAccumulatorState,
   runwayDaysRemaining,
+  TIP_LAG_MARGIN_MS,
   validityRangeFor,
 } from '../staking-math.js';
 
@@ -110,10 +111,42 @@ describe('exhaustion', () => {
 });
 
 describe('the validity range a spend carries', () => {
-  it('starts at now, because the validator reads the lower bound as now', () => {
-    const { from, to } = validityRangeFor(1_700_000_000_000);
-    expect(from).toBe(1_700_000_000_000);
-    expect(to - from).toBeLessThan(MAX_VALIDITY_RANGE_MS);
+  // The validator reads this range's LOWER BOUND as the current time and
+  // rebuilds the continuing datum from it. Every assertion here is about that
+  // one value, because a builder that derives a timestamp any other way writes
+  // a datum the pool refuses.
+  const CLOCK = 1_700_000_000_777; // deliberately not a whole second
+
+  it('opens on a whole second, because the bound travels as a slot', () => {
+    const { from } = validityRangeFor(CLOCK);
+    expect(from % 1000).toBe(0);
+    expect(from).toBe(1_699_999_820_000);
+  });
+
+  it('opens BEHIND the clock, so a lagging chain tip is already inside it', () => {
+    // A node validates against the tip's slot, not wall-clock time, and
+    // Cardano's block times are probabilistic — a range opening at "now" is
+    // refused outright the moment the tip falls behind.
+    const { from } = validityRangeFor(CLOCK);
+    expect(CLOCK - from).toBe(TIP_LAG_MARGIN_MS + 777);
+    expect(from).toBeLessThan(CLOCK);
+  });
+
+  it('never reaches back past the pool’s own last update', () => {
+    // Time may not run backwards on the pool, so two spends in quick
+    // succession must not have the second opening before the first landed.
+    const lastUpdate = CLOCK - 30_000;
+    const { from } = validityRangeFor(CLOCK, lastUpdate);
+    expect(from).toBe(1_699_999_970_000);
+    expect(from).toBeGreaterThanOrEqual(Math.floor(lastUpdate / 1000) * 1000 - 1);
+  });
+
+  it('stays inside the width the validator accepts', () => {
+    for (const clock of [CLOCK, 1_700_000_000_000, 1_788_252_082_493]) {
+      const { from, to } = validityRangeFor(clock);
+      expect(to - from).toBeLessThan(MAX_VALIDITY_RANGE_MS);
+      expect(to).toBeGreaterThan(clock);
+    }
   });
 });
 
