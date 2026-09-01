@@ -349,6 +349,17 @@ export class TierBGraduationSubmitter {
     ];
     const requiredSignerHashes: string[] = [];
 
+    // The window this whole graduation validates inside. Derived here, above
+    // the plan that declares it, because the staking pool reads its `now` off
+    // this range rather than off the clock that centres it.
+    const graduationHalfWindowMs = 240_000;
+    const validityFromMs = lockSealTimestampMs - graduationHalfWindowMs;
+    // What the chain reports that lower bound AS. A validity start travels as
+    // a slot, so it lands on a whole second; both networks' era start is a
+    // whole second too, which makes flooring to the second exact rather than
+    // approximate.
+    const rangeLowerBoundMs = BigInt(Math.floor(validityFromMs / 1000) * 1000);
+
     // ---- staking pool's own seeding spend (TopUpPool), staking launches ----
     // Same mechanism as the linear curve submitter — staking_pool.ak is SHARED
     // across both curve validators, so the pool spend is identical.
@@ -365,12 +376,20 @@ export class TierBGraduationSubmitter {
     // this lands.
     if (curveDatum.staking_enabled) {
       const { utxo: poolUtxo, datum: poolDatum } = await this.findStakingPoolUtxo(lucid);
-      const { acc, unallocated } = advance(poolDatum, BigInt(lockSealTimestampMs));
+      const { acc, unallocated } = advance(poolDatum, rangeLowerBoundMs);
       const seededDatum: StakingPoolDatumData = {
         ...poolDatum,
         acc_reward_per_token: acc,
         unallocated: unallocated + curveDatum.staking_reserve_tokens,
-        last_update_ms: BigInt(lockSealTimestampMs),
+        // NOT `lockSealTimestampMs`. The pool takes its own `now` from the
+        // validity range's LOWER bound, and pins this field to exactly that,
+        // so stamping the centre here leaves the two half a window apart and
+        // the pool refuses its own seeding. The curve is happy either way —
+        // it only asks that the timestamp fall INSIDE the range — which is
+        // why the two contracts have to be reconciled here rather than by
+        // either one of them. A unit test cannot see this: it builds the
+        // range and the datum from the same variable.
+        last_update_ms: rangeLowerBoundMs,
         exhausted_at: null,
       };
       companionInputs.push({
@@ -412,14 +431,20 @@ export class TierBGraduationSubmitter {
       companionInputs,
       requiredSignerHashes,
       // SealLock binds its timestamp to the range, so the range has to exist.
-      validity: { fromMs: lockSealTimestampMs - 240_000, toMs: lockSealTimestampMs + 240_000 },
+      validity: { fromMs: validityFromMs, toMs: lockSealTimestampMs + graduationHalfWindowMs },
     };
 
     const { spender, wallet, coSigners } = await this.meshParts(
       bondingCurveRef,
       governorPrivateKeyExtendedHex,
       governorAddress,
-      creator,
+      // Only when the plan actually declares a required signer. A witness the
+      // plan does not declare is one the fee was never sized for — Mesh counts
+      // the declared signers when it prices the transaction, and a signature
+      // appended afterwards makes the transaction bigger than the fee it
+      // carries, which the node refuses on submission rather than at build.
+      // Tying the two to the same list keeps them in step in both directions.
+      plan.requiredSignerHashes.length > 0 ? creator : undefined,
     );
     const txHash = await spender.submitGraduation(plan, wallet, coSigners);
 

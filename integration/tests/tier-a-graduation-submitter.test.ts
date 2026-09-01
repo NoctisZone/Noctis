@@ -596,7 +596,10 @@ describe('TierAGraduationSubmitter — staking-enabled launches', () => {
       stakingPoolUtxos: [{ datum: poolDatum(), assets: { lovelace: 1_200_000n } }],
     });
 
-    await submitter.graduateAndSealLp(REAL_EXTENDED_KEY_HEX, GOVERNOR_ADDR, 1000);
+    // Deliberately not a whole second, and deliberately not the value the
+    // pool will be pinned to — see the assertions on the clock below.
+    const sealAt = 1_700_000_000_777;
+    await submitter.graduateAndSealLp(REAL_EXTENDED_KEY_HEX, GOVERNOR_ADDR, sealAt);
 
     const plan = planOf(submitGraduation);
     const poolPayout = plan.payouts[1]!;
@@ -608,7 +611,19 @@ describe('TierAGraduationSubmitter — staking-enabled launches', () => {
 
     const opened = poolPayout.datumCbor as unknown as Record<string, unknown>;
     expect(opened.unallocated).toBe(250n);
-    expect(opened.last_update_ms).toBe(1000n);
+    // THE CLOCK. The pool derives its own `now` from the validity range's
+    // LOWER bound and pins this field to exactly that, while the curve only
+    // asks that the timestamp fall inside the range. So the two contracts
+    // agree on one value and one only, and it is not the wall clock that
+    // centres the window. A validity start travels as a slot, so that bound
+    // lands on a whole second.
+    const expectedNow = BigInt(Math.floor((sealAt - 240_000) / 1000) * 1000);
+    expect(expectedNow).toBe(1_699_999_760_000n);
+    expect(opened.last_update_ms).toBe(expectedNow);
+    expect(BigInt(Math.floor((plan.validity?.fromMs ?? 0) / 1000) * 1000)).toBe(expectedNow);
+    // The delta that matters: stamping the centre instead is what the chain
+    // refuses, so a revert has to fail here rather than merely look different.
+    expect(opened.last_update_ms).not.toBe(BigInt(sealAt));
     // Untouched by the top-up, and that is the point: the rate is fixed at
     // launch creation, so funding a pool extends its runway rather than
     // accelerating its payouts.

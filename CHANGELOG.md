@@ -57,6 +57,19 @@ Notable changes to the Noctis Zone, by release. Internal development history pre
   one" and reject the first cleanly. Both curves are smaller as a result and each fits
   in a single published reference script.
 
+### Fixed
+
+- A launch that opted into a staking pool now graduates. The pool takes its own
+  clock from the graduation transaction's validity range, while the curve only
+  requires that the same timestamp fall inside that range, so one value satisfies
+  both contracts and the seeding transaction now carries it. The pool is funded in
+  the same transaction that seeds the LP, on terms the curve derives for itself
+  field by field.
+- A graduation is signed by the wallet paying for it and by nobody else unless the
+  transaction declares that it needs another signature. Funding a staking pool
+  needs no one's approval, so graduation no longer gathers a signature it never
+  had to have, and the fee it carries matches the transaction it pays for.
+
 ---
 
 ## [1.0.0] - 2026-07-31

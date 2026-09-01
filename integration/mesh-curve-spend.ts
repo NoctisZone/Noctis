@@ -580,9 +580,14 @@ export class MeshCurveSpender {
    * Builds, signs and submits a graduation. Returns the transaction hash.
    *
    * `coSigners` add their witnesses after the funding wallet's — a companion
-   * redeemer that names a required signer beyond the fee payer (the staking
-   * pool's seeding does) gets its signature this way, and the witness sets
-   * merge rather than replace.
+   * redeemer that names a required signer beyond the fee payer gets its
+   * signature this way, and the witness sets merge rather than replace.
+   *
+   * Every co-signer passed here must be one the plan DECLARED in
+   * `requiredSignerHashes`. The fee is priced from the declared signers, so an
+   * extra witness appended afterwards leaves the transaction bigger than the
+   * fee it carries. The staking pool's seeding declares none: funding a pool
+   * is permissionless, so graduation needs no signature but the fee payer's.
    */
   async submitGraduation(
     plan: GraduationSpendPlan,

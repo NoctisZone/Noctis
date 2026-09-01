@@ -24,6 +24,8 @@ vi.mock('@lucid-evolution/lucid', async (importOriginal) => {
 });
 
 import { CML, credentialToAddress, Lucid } from '@lucid-evolution/lucid';
+import { bytesToHex } from '../cap-accumulator-tree.js';
+import { STAKE_EMPTY_ROOT } from '../stake-accumulator-tree.js';
 import { type ThreadNftRole, threadNftAssetName } from '../tier-a-schemas.js';
 import { TierBGraduationSubmitter } from '../tier-b-graduation-submitter.js';
 
@@ -66,6 +68,26 @@ function curveDatum(overrides: Record<string, unknown> = {}) {
     dv_claimed: [fakeKeyHash(0x88)],
     dv_settled: true,
     thread_nft_policy: THREAD_POLICY,
+    ...overrides,
+  };
+}
+
+const STAKE_EMPTY_ROOT_HEX = bytesToHex(STAKE_EMPTY_ROOT);
+
+function poolDatum(overrides: Record<string, unknown> = {}) {
+  return {
+    launch_id: LAUNCH_ID_HEX,
+    creator_pub_key_hash: fakeKeyHash(0x22),
+    token_policy_id: TOKEN_POLICY,
+    token_asset_name: TOKEN_ASSET_NAME,
+    thread_nft_policy: THREAD_POLICY,
+    emission_per_day: 25n,
+    stake_root: STAKE_EMPTY_ROOT_HEX,
+    acc_reward_per_token: 0n,
+    total_staked: 0n,
+    unallocated: 0n,
+    last_update_ms: 500n,
+    exhausted_at: null,
     ...overrides,
   };
 }
@@ -140,7 +162,7 @@ function nextTxHash() {
   return `grad-b-tx-${txHashCounter}`;
 }
 
-const addressRefs = { curve: '', lp: '', vesting: '' };
+const addressRefs = { curve: '', lp: '', vesting: '', stakingPool: '' };
 
 interface FixtureUtxo {
   datum: unknown;
@@ -172,6 +194,7 @@ function makeSubmitter(
     curveUtxos?: FixtureUtxo[];
     lpUtxos?: FixtureUtxo[];
     vestingUtxos?: FixtureUtxo[];
+    stakingPoolUtxos?: FixtureUtxo[];
   } = {},
 ) {
   const awaitTx = vi.fn().mockResolvedValue(true);
@@ -181,6 +204,8 @@ function makeSubmitter(
       if (address === addressRefs.curve) return Promise.resolve(asChainUtxos('bondingCurveTierB', opts.curveUtxos));
       if (address === addressRefs.lp) return Promise.resolve(asChainUtxos('lpEscrow', opts.lpUtxos));
       if (address === addressRefs.vesting) return Promise.resolve(asChainUtxos('vesting', opts.vestingUtxos));
+      if (address === addressRefs.stakingPool)
+        return Promise.resolve(asChainUtxos('stakingPool', opts.stakingPoolUtxos));
       return Promise.resolve([]);
     }),
     awaitTx,
@@ -204,6 +229,7 @@ function makeSubmitter(
   addressRefs.curve = (submitter as unknown as { bondingCurveAddress: string }).bondingCurveAddress;
   addressRefs.lp = (submitter as unknown as { lpEscrowAddress: string }).lpEscrowAddress;
   addressRefs.vesting = (submitter as unknown as { vestingAddress: string }).vestingAddress;
+  addressRefs.stakingPool = (submitter as unknown as { stakingPoolAddress: string }).stakingPoolAddress;
 
   // TX1 executes through mesh-curve-spend.ts, which is tested against real
   // transaction bytes in its own file — here the execution parts are stubbed
@@ -531,5 +557,64 @@ describe('TierBGraduationSubmitter.graduate (sequencing convenience wrapper)', (
     await expect(submitter.graduate(REAL_EXTENDED_KEY_HEX, GOVERNOR_ADDR, 1000)).rejects.toThrow(
       /graduateAndSealLp succeeded \(txHash: grad-b-tx-1\) but startVesting failed/,
     );
+  });
+});
+
+describe('TierBGraduationSubmitter — staking-enabled launches', () => {
+  // The quadratic curve seeds a staking pool exactly as the linear one does,
+  // and until this suite existed that whole path had no test here at all.
+  const stakingCurve = () =>
+    curveDatum({
+      staking_enabled: true,
+      staking_reserve_tokens: 250n,
+      lp_reserve_tokens: 100n,
+      total_raised: 5_000_000n,
+      creator_pub_key_hash: fakeKeyHash(0x22),
+    });
+
+  it('opens the pool on the clock BOTH contracts read, not the one that centres the window', async () => {
+    const { builder } = makeFakeTxBuilder();
+    const { submitter, submitGraduation } = makeSubmitter(builder, {
+      curveUtxos: [{ datum: stakingCurve(), assets: { lovelace: 20_000_000n, [TOKEN_UNIT]: 1_000n } }],
+      lpUtxos: [{ datum: lpDatum({ lp_token_amount: 100n }), assets: { lovelace: 2_000_000n } }],
+      stakingPoolUtxos: [{ datum: poolDatum(), assets: { lovelace: 1_200_000n } }],
+    });
+
+    // Deliberately not a whole second, and deliberately not the value the pool
+    // will be pinned to.
+    const sealAt = 1_700_000_000_777;
+    const result = await submitter.graduateAndSealLp(REAL_EXTENDED_KEY_HEX, GOVERNOR_ADDR, sealAt);
+    expect(result.stakingSeeded).toBe(true);
+
+    const plan = planOf(submitGraduation);
+    const poolInput = plan.companionInputs[1]!;
+    const topUp = poolInput.redeemerCbor as unknown as { index: number; fields: unknown[] };
+    expect(topUp.index).toBe(3); // STAKING_POOL_REDEEMER.TopUpPool
+    expect(topUp.fields).toEqual([250n]);
+    // TopUpPool is permissionless — funding a pool needs nobody's approval.
+    expect(plan.requiredSignerHashes).toEqual([]);
+
+    const poolPayout = plan.payouts[1]!;
+    expect(poolPayout.assets[TOKEN_UNIT]).toBe(250n);
+    expect(poolPayout.assets[threadNft('stakingPool')]).toBe(1n);
+
+    const opened = poolPayout.datumCbor as unknown as Record<string, unknown>;
+    expect(opened.unallocated).toBe(250n);
+    // The pool takes its own `now` from the validity range's LOWER bound and
+    // pins this field to exactly that, while the curve only asks that the
+    // timestamp fall inside the range. One value satisfies both, and it is
+    // not the wall clock the window is centred on.
+    const expectedNow = BigInt(Math.floor((sealAt - 240_000) / 1000) * 1000);
+    expect(expectedNow).toBe(1_699_999_760_000n);
+    expect(opened.last_update_ms).toBe(expectedNow);
+    expect(BigInt(Math.floor((plan.validity?.fromMs ?? 0) / 1000) * 1000)).toBe(expectedNow);
+    expect(opened.last_update_ms).not.toBe(BigInt(sealAt));
+
+    // The rate is fixed at launch creation: funding extends the runway rather
+    // than accelerating payouts.
+    expect(opened.emission_per_day).toBe(25n);
+    expect(opened.acc_reward_per_token).toBe(0n);
+    expect(opened.exhausted_at).toBeNull();
+    expect(plan.continuing.assets[TOKEN_UNIT]).toBe(650n); // 1,000 - (100 + 250)
   });
 });
