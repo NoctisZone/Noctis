@@ -12,8 +12,12 @@
 // and the widget reports nothing claimable no matter how much has vested —
 // a silent, total misreport rather than a visible error.
 
+import { credentialToAddress, credentialToRewardAddress } from '@lucid-evolution/lucid';
 import { describe, expect, it } from 'vitest';
-import { computeVestedToDate, type VestingScheduleFields } from '../widget/tier-a-dashboard-widget-entry.js';
+import NoctisTierADashboard, {
+  computeVestedToDate,
+  type VestingScheduleFields,
+} from '../widget/tier-a-dashboard-widget-entry.js';
 
 /** A real launch shape: 50M tokens over 180 days, started at a real instant. */
 const VEST_START_MS = 1_775_000_000_000;
@@ -79,5 +83,41 @@ describe('computeVestedToDate', () => {
 
   it('does not divide by zero when vest_days is zero', () => {
     expect(computeVestedToDate(datum({ vest_days: 0n }), BigInt(VEST_START_MS + DAY_MS))).toBe(0n);
+  });
+});
+
+// The widget is a plain object on `window`, wired up by the theme's own glue
+// JS. Nothing stops that glue calling a panel method before it has configured
+// the widget, and the difference between the two failures matters: a guard
+// names what the integrator forgot, where a bare null dereference names a
+// property on an object that should never have been null.
+describe('the configure() guard', () => {
+  it('refuses every panel method until configure() has run, and says so', async () => {
+    // A fresh module registry is not needed: `configure` has never been called
+    // in this file, so the module-level state is still its initial null.
+    await expect(NoctisTierADashboard.getVestingState()).rejects.toThrow(/configure\(\) must be called/);
+    await expect(NoctisTierADashboard.getCreatorFeesState()).rejects.toThrow(/configure\(\) must be called/);
+  });
+});
+
+describe('getPaymentKeyHash', () => {
+  it('reads the payment credential a base address carries in its own bytes', () => {
+    const hash = 'ab'.repeat(28);
+    const address = credentialToAddress('Preprod', { type: 'Key', hash });
+    expect(NoctisTierADashboard.getPaymentKeyHash(address)).toBe(hash);
+  });
+
+  it('returns null for a real address that simply carries no payment credential', () => {
+    // A reward address is well-formed and decodes cleanly; it just has no
+    // payment half. The theme compares the result against the launch's creator
+    // hash, so this has to read as "no match" rather than as a crash.
+    const reward = credentialToRewardAddress('Preprod', { type: 'Key', hash: 'cd'.repeat(28) });
+    expect(NoctisTierADashboard.getPaymentKeyHash(reward)).toBeNull();
+  });
+
+  it('throws on input that is not an address at all, rather than reporting no match', () => {
+    // Distinct from the case above: nothing was decoded, so "no match" would
+    // be a claim about an address that was never read.
+    expect(() => NoctisTierADashboard.getPaymentKeyHash('not-an-address')).toThrow();
   });
 });

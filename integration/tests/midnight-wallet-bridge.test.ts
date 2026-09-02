@@ -108,6 +108,23 @@ describe('buildMidnightWalletBridge — walletProvider.balanceTx', () => {
     expect(result).toBe('finalized-tx-sentinel');
   });
 
+  it('accepts a 0x-prefixed result, because a wallet is free to return one', async () => {
+    // The two forms have to decode to the same bytes: a prefix taken as data
+    // would shift every byte and deserialize garbage, and which form a wallet
+    // returns is its own choice rather than something we can require.
+    const tx = fakeTx(new Uint8Array([0x00]));
+    const connection = fakeConnection({
+      balanceUnsealedTransaction: vi.fn().mockResolvedValue({ tx: '0x0102ff' }),
+    });
+    transactionDeserializeFn.mockReturnValue('finalized-tx-sentinel');
+
+    const bridge = await buildMidnightWalletBridge(baseParams({ connection }));
+    await bridge.walletProvider.balanceTx(tx as never);
+
+    const [, , , bytesArg] = transactionDeserializeFn.mock.calls[0];
+    expect(Array.from(bytesArg as Uint8Array)).toEqual([0x01, 0x02, 0xff]);
+  });
+
   it('signals onFlowMessage with a signing message, then clears it (finally) on success', async () => {
     const tx = fakeTx(new Uint8Array([0x01]));
     transactionDeserializeFn.mockReturnValue('finalized-tx-sentinel');
