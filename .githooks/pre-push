@@ -130,20 +130,112 @@ if [ -f biome.json ] || [ -f biome.jsonc ]; then
   if command -v npx >/dev/null 2>&1; then
     echo "pre-push: running biome ci (same check as the Checks workflow)..."
     BIOME_LOG=$(mktemp 2>/dev/null || echo "./.biome-prepush.log")
+
+    # A real biome run always prints "Checked N files", whether it passes or
+    # fails. Its absence means the binary never executed — which is a broken
+    # toolchain, not a lint result, and the two must not be conflated.
+    biome_actually_ran() {
+      grep -q "Checked [0-9]* file" "$1" 2>/dev/null
+    }
+
+    # The Windows biome binary is unsigned, and Smart App Control decides
+    # whether to run an unsigned executable from a cloud reputation verdict
+    # that can change without the file or any local setting changing — it did
+    # exactly that on 2026-09-02, mid-project, blocking every push. WSL is not
+    # subject to it, so the Linux build of the SAME pinned version is the
+    # fallback. This keeps the gate running rather than skipping it, and it
+    # recovers on its own if the verdict flips back.
+    run_biome_via_wsl() {
+      _log=$1
+      command -v wsl.exe >/dev/null 2>&1 || return 127
+      _winpwd=$(pwd -W 2>/dev/null) || return 127
+      [ -n "$_winpwd" ] || return 127
+      # Version comes from the installed package, so the fallback can never
+      # silently lint with a different biome than the one CI uses.
+      _ver=$(sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' \
+        node_modules/@biomejs/biome/package.json 2>/dev/null | head -1)
+      [ -n "$_ver" ] || return 127
+      # Args are passed positionally: nesting quotes through `wsl.exe -e sh -c`
+      # is where this kind of shim usually breaks.
+      MSYS_NO_PATHCONV=1 wsl.exe -e sh -c '
+        ver=$1
+        winpwd=$2
+        if ! command -v node >/dev/null 2>&1; then
+          # nvm does not put node on a non-interactive PATH.
+          for d in "$HOME"/.nvm/versions/node/*/bin; do
+            [ -d "$d" ] && PATH="$d:$PATH"
+          done
+          export PATH
+        fi
+        command -v node >/dev/null 2>&1 || { echo "wsl fallback: no node in WSL"; exit 127; }
+        cache="$HOME/.cache/noctis-biome/$ver"
+        bin="$cache/node_modules/@biomejs/cli-linux-x64/biome"
+        if [ ! -x "$bin" ]; then
+          mkdir -p "$cache" || exit 127
+          cd "$cache" || exit 127
+          [ -f package.json ] || npm init -y >/dev/null 2>&1
+          npm install --silent --no-audit --no-fund "@biomejs/cli-linux-x64@$ver" >/dev/null 2>&1 \
+            || { echo "wsl fallback: could not install biome $ver in WSL"; exit 127; }
+          chmod +x "$bin" 2>/dev/null
+        fi
+        target=$(wslpath -a "$winpwd" 2>/dev/null) || { echo "wsl fallback: cannot translate $winpwd"; exit 127; }
+        cd "$target" || { echo "wsl fallback: cannot enter $target"; exit 127; }
+        exec "$bin" ci .
+      ' biome-fallback "$_ver" "$_winpwd" >"$_log" 2>&1
+    }
+
+    BIOME_ROUTE="windows"
     if ! npx --no-install biome ci . >"$BIOME_LOG" 2>&1; then
-      # `--no-install` failing can simply mean biome isn't installed locally,
-      # which should warn rather than block. A real lint failure must block.
-      if grep -qiE "could not determine executable|not found|npm ERR" "$BIOME_LOG"; then
-        echo "pre-push: WARNING — biome is not installed locally, skipping the lint gate."
-        echo "          Run 'npm install' so this check works; CI still enforces it."
-      else
-        echo ""
-        tail -30 "$BIOME_LOG"
-        cat <<'EOF'
+      BIOME_FAILED=1
+      if ! biome_actually_ran "$BIOME_LOG"; then
+        # It never ran. Either it is not installed, or something stopped the
+        # binary from executing at all.
+        if grep -qiE "could not determine executable|not found|npm ERR" "$BIOME_LOG"; then
+          echo "pre-push: WARNING — biome is not installed locally, skipping the lint gate."
+          echo "          Run 'npm install' so this check works; CI still enforces it."
+          BIOME_FAILED=0
+        else
+          echo "pre-push: the Windows biome binary would not execute; retrying under WSL..."
+          if run_biome_via_wsl "$BIOME_LOG" && biome_actually_ran "$BIOME_LOG"; then
+            echo "pre-push: biome ci passed (via WSL)."
+            BIOME_ROUTE="wsl"
+            BIOME_FAILED=0
+          elif biome_actually_ran "$BIOME_LOG"; then
+            # WSL ran it and it genuinely failed: that is a real lint failure.
+            BIOME_ROUTE="wsl"
+          else
+            echo ""
+            tail -20 "$BIOME_LOG"
+            cat <<'EOF'
 
 --------------------------------------------------------------------
-PUSH BLOCKED — biome ci failed. The Checks workflow runs this exact
-command, so this push would go red on GitHub.
+PUSH BLOCKED — the lint gate could not run at all.
+
+biome would not execute on Windows and the WSL fallback did not work
+either, so NOTHING checked this push. The Checks workflow still runs
+biome, so a lint problem would surface there instead.
+
+If Smart App Control is blocking node_modules\@biomejs\...\biome.exe,
+see Event Viewer > Applications and Services Logs > Microsoft >
+Windows > CodeIntegrity > Operational for the block record.
+
+Run the gate yourself before pushing, or fix the fallback.
+--------------------------------------------------------------------
+EOF
+            rm -f "$BIOME_LOG"
+            exit 1
+          fi
+        fi
+      fi
+
+      if [ "${BIOME_FAILED:-0}" = "1" ]; then
+        echo ""
+        tail -30 "$BIOME_LOG"
+        cat <<EOF
+
+--------------------------------------------------------------------
+PUSH BLOCKED — biome ci failed (route: $BIOME_ROUTE). The Checks
+workflow runs this exact command, so this push would go red on GitHub.
 
 Fix most of it automatically:   npx biome check --write .
 Some rules are "unsafe fixes" and must be applied by hand — biome
