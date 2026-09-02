@@ -261,7 +261,7 @@ describe('the validity range is the clock', () => {
     expect(from).toBeGreaterThanOrEqual(Number(h.datum.last_update_ms) - 1000);
   });
 
-  it("dates a new position by the range bound too, not by a second look at the clock", async () => {
+  it('dates a new position by the range bound too, not by a second look at the clock', async () => {
     const positions = new StakeAccumulator();
     const h = harness({ positions });
     await h.submitter.stakeCore(h.lucid as never, STAKER_ADDR, 1_000n, NOW_MS);

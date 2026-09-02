@@ -23,8 +23,8 @@
 // real one will not do for a sha256-derived candidate — those tests mock it,
 // and say so.
 
-import { describe, expect, it, vi } from 'vitest';
 import { PasswordValidationError, validatePassword } from '@midnight-ntwrk/midnight-js-utils';
+import { describe, expect, it, vi } from 'vitest';
 import {
   CTO_PASSWORD_DOMAIN,
   derivePasswordFromSignature,
@@ -60,7 +60,9 @@ describe('derivePasswordFromSignature', () => {
   });
 
   it('defaults to the DarkVeil domain when none is named', () => {
-    expect(derivePasswordFromSignature(SIGN_HEX)).toBe(derivePasswordFromSignature(SIGN_HEX, PASSWORD_DERIVATION_DOMAIN));
+    expect(derivePasswordFromSignature(SIGN_HEX)).toBe(
+      derivePasswordFromSignature(SIGN_HEX, PASSWORD_DERIVATION_DOMAIN),
+    );
   });
 
   it('clears the length floor the policy sets', () => {
@@ -81,7 +83,7 @@ describe('when the policy refuses a candidate', () => {
         validatePassword: vi.fn((pw: string) => {
           calls++;
           // Refuse the first two candidates, accept the third.
-          if (calls <= 2) throw new actual.PasswordValidationError('policy says no');
+          if (calls <= 2) throw new actual.PasswordValidationError('policy says no', 'insufficient_classes');
           return actual.validatePassword(pw);
         }),
       };
@@ -103,7 +105,7 @@ describe('when the policy refuses a candidate', () => {
       return {
         ...actual,
         validatePassword: vi.fn(() => {
-          throw new actual.PasswordValidationError('never acceptable');
+          throw new actual.PasswordValidationError('never acceptable', 'too_short');
         }),
       };
     });
@@ -158,6 +160,6 @@ describe('the exported domains', () => {
 
 describe('PasswordValidationError', () => {
   it('is the type the retry path keys on', () => {
-    expect(new PasswordValidationError('x')).toBeInstanceOf(Error);
+    expect(new PasswordValidationError('x', 'too_short')).toBeInstanceOf(Error);
   });
 });
