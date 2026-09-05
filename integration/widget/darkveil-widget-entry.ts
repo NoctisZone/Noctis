@@ -81,6 +81,13 @@ import { FetchZkConfigProvider } from '@midnight-ntwrk/midnight-js-fetch-zk-conf
 import { httpClientProofProvider } from '@midnight-ntwrk/midnight-js-http-client-proof-provider';
 import { createNoctisContractProviders } from '../contract-providers.js';
 import { type BuyFlowContractParams, cancelBuyCommit, revealBuyCommit, submitBuyCommit } from './buy-flow.js';
+import {
+  type ClaimBundle,
+  downloadClaimBundle,
+  fetchClaimBundle,
+  type NotIncluded,
+  parseSavedClaimBundle,
+} from './claim-bundle.js';
 import { type ClaimTierBParams, claimTierBTokens } from './claim-flow.js';
 import { buildMidnightWalletBridge } from './midnight-wallet-bridge.js';
 import {
@@ -366,8 +373,23 @@ function hexToBytes(hex: string): Uint8Array {
   return out;
 }
 
+/**
+ * A buyer's own claim record, from the platform, verified before it is handed
+ * over. The platform serves one buyer their own leaf and nothing else, which
+ * is what keeps the rest of the roster private; the record is also the
+ * thing the buyer is asked to save, because it cannot be rebuilt from the
+ * chain once the platform's copy is gone.
+ */
+async function fetchMyClaimBundle(launchId: string, cardanoAddress: string): Promise<ClaimBundle | NotIncluded> {
+  const { apiBase } = requireConfig();
+  return fetchClaimBundle(apiBase, launchId, cardanoAddress);
+}
+
 const NoctisDarkVeil = {
   configure,
+  fetchMyClaimBundle,
+  downloadClaimBundle,
+  parseSavedClaimBundle,
   listAvailableWallets,
   connectWallets,
   checkMyEligibility,

@@ -301,8 +301,7 @@ describe('checkNightBalance (check #2)', () => {
       ReturnType<typeof getUnshieldedNightBalance>
     >);
     priced(500n);
-    const { client } = fakeClient();
-    await expect(checkNightBalance('ws://indexer', REGISTRANT, client, 50)).resolves.toMatchObject({
+    await expect(checkNightBalance('ws://indexer', REGISTRANT, 50)).resolves.toMatchObject({
       eligible: true,
       balanceAtomic: 500n,
       minRequiredAtomic: 500n,
@@ -314,8 +313,7 @@ describe('checkNightBalance (check #2)', () => {
       ReturnType<typeof getUnshieldedNightBalance>
     >);
     priced(500n);
-    const { client } = fakeClient();
-    await expect(checkNightBalance('ws://indexer', REGISTRANT, client, 50)).resolves.toMatchObject({
+    await expect(checkNightBalance('ws://indexer', REGISTRANT, 50)).resolves.toMatchObject({
       eligible: false,
     });
   });
@@ -327,8 +325,7 @@ describe('checkNightBalance (check #2)', () => {
       ReturnType<typeof getUnshieldedNightBalance>
     >);
     priced(500n);
-    const { client } = fakeClient();
-    await expect(checkNightBalance('ws://indexer', REGISTRANT, client, 50)).resolves.toMatchObject({
+    await expect(checkNightBalance('ws://indexer', REGISTRANT, 50)).resolves.toMatchObject({
       sources: ['coingecko', 'kraken'],
     });
   });

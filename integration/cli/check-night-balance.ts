@@ -37,7 +37,6 @@
 // end-to-end" note in this codebase this session.
 // ============================================================================
 
-import { BlockfrostClient } from '../blockfrost-client.js';
 import { checkNightBalance } from '../eligibility-checker.js';
 import { parseJsonStdin, readStdin, requireFieldsStrict } from './cli-io.js';
 
@@ -50,24 +49,18 @@ interface CheckNightBalanceInput {
   /** Optional. Supply only when using Blockfrost's Midnight indexer (appended
    *  as ?project_id=). Blank = hit the free public Midnight indexer directly. */
   midnightBlockfrostProjectId?: string;
-  /** Cardano Blockfrost — needed for Orcfax's ADA/USD datum read. */
-  cardanoBlockfrostApiKey: string;
-  cardanoNetwork: 'preview' | 'preprod' | 'mainnet';
-  /** Omit to use ORCFAX_ADA_USD_PREPROD_CONFIG (the only verified config —
-   *  no confirmed mainnet Orcfax address exists yet, see internal tracking). */
+  // No Cardano fields: the balance comes from the Midnight indexer and the
+  // USD threshold from the public ADA/USD median plus Minswap's NIGHT/ADA
+  // pool. Neither needs Blockfrost. The caller may still send
+  // `cardanoBlockfrostApiKey`/`cardanoNetwork` from an older configuration;
+  // they are ignored.
 }
 
 async function main() {
   const raw = await readStdin();
   const input = parseJsonStdin<CheckNightBalanceInput>(raw);
 
-  requireFieldsStrict(input, [
-    'registrantAddress',
-    'minUsd',
-    'midnightIndexerWsUrl',
-    'cardanoBlockfrostApiKey',
-    'cardanoNetwork',
-  ]);
+  requireFieldsStrict(input, ['registrantAddress', 'minUsd', 'midnightIndexerWsUrl']);
 
   // The underlying getUnshieldedNightBalance connects to a BARE public
   // Midnight indexer WS URL with no auth. Blockfrost's Midnight indexer,
@@ -78,12 +71,7 @@ async function main() {
     ? `${input.midnightIndexerWsUrl}?project_id=${encodeURIComponent(input.midnightBlockfrostProjectId)}`
     : input.midnightIndexerWsUrl;
 
-  const blockfrostClient = new BlockfrostClient({
-    apiKey: input.cardanoBlockfrostApiKey,
-    network: input.cardanoNetwork,
-  });
-
-  const result = await checkNightBalance(indexerWsUrl, input.registrantAddress, blockfrostClient, input.minUsd);
+  const result = await checkNightBalance(indexerWsUrl, input.registrantAddress, input.minUsd);
 
   process.stdout.write(
     JSON.stringify({

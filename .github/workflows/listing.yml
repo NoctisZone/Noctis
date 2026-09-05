@@ -1,0 +1,73 @@
+name: Listing
+
+# The midnight-awesome-dapps listing has standing requirements that nothing
+# else checks: the attribution sentence near the top of README.md, the two
+# GitHub topics, an Apache-2.0 LICENSE, and the entry itself still pointing at
+# this repository. Each can be broken by an ordinary edit and stays broken
+# silently until someone upstream notices. This job makes the breakage loud.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - README.md
+      - LICENSE
+      - .github/workflows/listing.yml
+  schedule:
+    # Weekly, so a topic removed in the GitHub UI or an upstream edit to the
+    # listing is caught without waiting for the next README change.
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  listing:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Attribution sentence near the top of README.md
+        run: |
+          if ! head -n 15 README.md | grep -Fxq 'This project is built on the Midnight Network.'; then
+            echo '::error file=README.md::The line "This project is built on the Midnight Network." must appear, on its own line, within the first 15 lines of README.md.'
+            exit 1
+          fi
+
+      - name: LICENSE is Apache-2.0
+        run: |
+          if ! head -n 3 LICENSE | grep -q 'Apache License' || ! head -n 3 LICENSE | grep -q 'Version 2.0'; then
+            echo '::error file=LICENSE::LICENSE must be the Apache License, Version 2.0.'
+            exit 1
+          fi
+
+      - name: Repository topics include midnightntwrk and compact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          topics=$(gh api "repos/${GITHUB_REPOSITORY}/topics" --jq '.names[]')
+          echo "topics: $(echo "$topics" | tr '\n' ' ')"
+          for want in midnightntwrk compact; do
+            if ! echo "$topics" | grep -Fxq "$want"; then
+              echo "::error::Repository topic \"$want\" is not set."
+              exit 1
+            fi
+          done
+
+      - name: Upstream listing still points at this repository
+        run: |
+          line=$(curl -fsSL https://raw.githubusercontent.com/midnightntwrk/midnight-awesome-dapps/main/README.md | grep -i 'noctis' || true)
+          echo "upstream: ${line:-<no line found>}"
+          if [ -z "$line" ]; then
+            echo '::error::midnight-awesome-dapps no longer lists Noctis.'
+            exit 1
+          fi
+          if ! echo "$line" | grep -Fq "https://github.com/${GITHUB_REPOSITORY}"; then
+            echo "::error::The upstream entry does not link to https://github.com/${GITHUB_REPOSITORY}. If the repository moved, open a PR upstream."
+            exit 1
+          fi
+          if ! echo "$line" | grep -Fq 'https://noctis.zone'; then
+            echo '::error::The upstream entry no longer links to https://noctis.zone.'
+            exit 1
+          fi

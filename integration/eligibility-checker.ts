@@ -192,7 +192,6 @@ export async function checkStakeKeyMatch(
 export async function checkNightBalance(
   indexerWsUrl: string,
   registrantAddress: string,
-  _blockfrostClient: BlockfrostClient,
   minUsd: number,
 ): Promise<NightBalanceResult> {
   const [{ balance }, threshold] = await Promise.all([
@@ -258,7 +257,7 @@ export async function checkDarkVeilEligibility(
   const [walletAge, stakeKeyMatch, nightBalance, noDirectAdaFlow] = await Promise.all([
     checkWalletAge(client, registrantAddress, options.minWalletAgeDays, currentTime),
     checkStakeKeyMatch(client, registrantAddress, creatorAddress),
-    checkNightBalance(options.indexerWsUrl, registrantAddress, client, options.minNightUsd),
+    checkNightBalance(options.indexerWsUrl, registrantAddress, options.minNightUsd),
     checkNoDirectAdaFlow(client, registrantAddress, creatorAddress, options.adaFlowLookbackDays, currentTime),
   ]);
   return {
