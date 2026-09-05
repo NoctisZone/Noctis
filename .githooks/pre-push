@@ -62,10 +62,15 @@ for RANGE in $REMOTE_REF_BASE; do
   # "not in a doc, not in a code comment, not in a commit message".
   BOTH=$(printf '%s\n%s\n' "$DIFF" "$MSGS")
 
+  # A third argument of "case" makes the match case-sensitive. Tracker IDs are
+  # always upper-case; matched case-insensitively, the T-AUDIT shape also hit
+  # ordinary prose such as "can't-do-this".
   check() {
     label="$1"
     pattern="$2"
-    hits=$(printf '%s\n' "$BOTH" | grep -nEi "$pattern" | head -5)
+    flags="-nEi"
+    [ "${3:-}" = "case" ] && flags="-nE"
+    hits=$(printf '%s\n' "$BOTH" | grep $flags "$pattern" | head -5)
     if [ -n "$hits" ]; then
       echo "BLOCKED [$label] in $RANGE:"
       echo "$hits" | cut -c1-160
@@ -93,7 +98,7 @@ for RANGE in $REMOTE_REF_BASE; do
     "C:\\\\+Users\\\\+[A-Za-z]|/home/jinx|/mnt/c/Users|AppData[\\\\/]+Local[\\\\/]+Temp"
 
   check "internal issue-tracker ID" \
-    "\b(T[0-9]{1,3}|D[0-9]{1,2}|MN-[0-9]+|T-[A-Z][A-Z-]+|C-[0-9]+)\b"
+    "\b(T[0-9]{1,3}|D[0-9]{1,2}|MN-[0-9]+|T-[A-Z][A-Z-]+|C-[0-9]+)\b" case
 done
 
 if [ "$FAIL" = "1" ]; then
