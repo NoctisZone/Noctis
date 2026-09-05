@@ -148,8 +148,20 @@ function compileTreasury(witnesses: TreasuryWitnesses) {
   );
 }
 
-function compileCtoGovernance(witnesses: CtoGovernanceWitnesses) {
-  return CompiledContractOps.make('cto_governance', asEffectContract<PrivateState>(CtoGovernanceContract)).pipe(
+/**
+ * Exported for the same reason as `compileEligibilityGate`: the deferred-circuit
+ * delivery CLI needs the compiled contract to insert verifier keys against.
+ *
+ * @param deferCircuits Circuits the DEPLOY should leave out, to be added by
+ * maintenance update afterwards — cto_governance carries 25 circuits and a
+ * deploy naming every one exceeds the block's write budget.
+ */
+export function compileCtoGovernance(witnesses: CtoGovernanceWitnesses, deferCircuits: readonly string[] = []) {
+  const contract =
+    deferCircuits.length === 0
+      ? CtoGovernanceContract
+      : deferCircuitsForDeploy(CtoGovernanceContract, deferCircuits).contract;
+  return CompiledContractOps.make('cto_governance', asEffectContract<PrivateState>(contract)).pipe(
     CompiledContractOps.withWitnesses(witnesses),
     CompiledContractOps.withCompiledFileAssets(`${COMPILED_ASSETS_ROOT}/cto_governance`),
   );
@@ -755,17 +767,17 @@ export class NoctisMidnightClient {
       attestorKeys: [Uint8Array, Uint8Array, Uint8Array];
       attestThreshold: bigint;
     },
-    balanceLeafAmount = 0n,
-    balanceProof: MerkleProofEntry[] = [],
+    deferCircuits: readonly string[] = [],
   ): Promise<PsmRecord> {
-    const witnesses = ctoGovernanceWitnesses(
-      this.userSecretKey,
-      balanceLeafAmount,
-      balanceProof,
-      this.governorSecretKey,
-    );
-    const compiled = compileCtoGovernance(witnesses);
+    // A deploy casts no vote, so the leaf witnesses are empty; a voter
+    // connects later with their own leaf via connectCtoGovernance.
+    const witnesses = ctoGovernanceWitnesses(this.userSecretKey, 0n, [], this.governorSecretKey);
+    const compiled = compileCtoGovernance(witnesses, deferCircuits);
     const deployed = await deployContract(this.remembering(providers), {
+      // Derived, not sampled, for the same reason as the eligibility gate:
+      // the maintenance updates that deliver deferred circuits must be
+      // signed by a key that survives this process.
+      signingKey: deriveContractSigningKey(this.governorSecretKey.bytes, args.launchId),
       compiledContract: compiled,
       args: [
         args.launchId,
@@ -784,7 +796,7 @@ export class NoctisMidnightClient {
       ],
     });
     this.ctoGovernance = deployed;
-    return toRecord(deployed);
+    return toRecord(deployed, deferCircuits);
   }
 
   /**
@@ -1598,6 +1610,24 @@ export class NoctisLaunchManager {
   async castVote(proposalId: Uint8Array, support: boolean, currentTimestamp: bigint) {
     const cto = required(this.client.ctoGovernance, 'cto_governance');
     return cto.callTx.castVote(proposalId, support, currentTimestamp);
+  }
+
+  /** Closes a ballot once its window has passed; permissionless. */
+  async finalizeCtoProposal(proposalId: Uint8Array, currentTimestamp: bigint) {
+    const cto = required(this.client.ctoGovernance, 'cto_governance');
+    return cto.callTx.finalizeProposal(proposalId, currentTimestamp);
+  }
+
+  /**
+   * Executes a passed proposal on the governance contract ALONE. A Cardano
+   * Launch keeps its curve, escrow, vesting and LP on Cardano, where the
+   * redirect is applied by the Cardano execute submitter against the anchored
+   * result — so there is nothing else on Midnight to trigger. Midnight Launch
+   * uses `executeCtoProposal`, which also triggers its Midnight PSMs.
+   */
+  async executeCtoProposalGovernanceOnly(proposalId: Uint8Array) {
+    const cto = required(this.client.ctoGovernance, 'cto_governance');
+    return cto.callTx.executeProposal(proposalId);
   }
 
   /**

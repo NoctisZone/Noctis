@@ -637,6 +637,48 @@ const deployEligibilityGateCliConfig = {
 	logLevel: "info",
 };
 
+// CTO governance on Midnight: the governance contract's deploy, and the one
+// action CLI that publishes snapshots, files proposals, casts votes,
+// finalizes and executes. Same packages:external treatment as the DarkVeil
+// CLIs above and for the same reason.
+const deployCtoGovernanceCliConfig = {
+	entryPoints: [join(__dirname, "cli/deploy-cto-governance.ts")],
+	outfile: join(__dirname, "cli/dist/deploy-cto-governance.mjs"),
+	bundle: true,
+	platform: "node",
+	packages: "external",
+	format: "esm",
+	target: "node20",
+	sourcemap,
+	logLevel: "info",
+};
+
+const ctoGovernanceActionCliConfig = {
+	entryPoints: [join(__dirname, "cli/cto-governance-action.ts")],
+	outfile: join(__dirname, "cli/dist/cto-governance-action.mjs"),
+	bundle: true,
+	platform: "node",
+	packages: "external",
+	format: "esm",
+	target: "node20",
+	sourcemap,
+	logLevel: "info",
+};
+
+// Pure: builds the balance-snapshot bundle voters prove against. Pulls the
+// compact runtime for the hashes, so it takes the same external treatment.
+const buildCtoSnapshotBundleCliConfig = {
+	entryPoints: [join(__dirname, "cli/build-cto-snapshot-bundle.ts")],
+	outfile: join(__dirname, "cli/dist/build-cto-snapshot-bundle.mjs"),
+	bundle: true,
+	platform: "node",
+	packages: "external",
+	format: "esm",
+	target: "node20",
+	sourcemap,
+	logLevel: "info",
+};
+
 // Registers a wallet's NIGHT UTXOs for DUST generation, which every wallet
 // needs once before it can pay for anything. Builds on midnight-server-wallet.ts
 // exactly as the deploy CLI above does, so it inherits the same unbundlable
@@ -1017,6 +1059,9 @@ async function run() {
 		deployEligibilityGateCliConfig,
 		deliverDeferredCircuitsCliConfig,
 		darkVeilActionCliConfig,
+		deployCtoGovernanceCliConfig,
+		ctoGovernanceActionCliConfig,
+		buildCtoSnapshotBundleCliConfig,
 		midnightRegisterDustCliConfig,
 		midnightSyncWalletsCliConfig,
 		buildDvAllowlistBundleCliConfig,

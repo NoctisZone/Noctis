@@ -18,6 +18,14 @@
 
 import type { PublicDataProvider } from '@midnight-ntwrk/midnight-js-types';
 import {
+  type Ledger as CtoGovernanceLedger,
+  CtoState,
+  ledger as decodeCtoGovernanceLedger,
+  type Proposal,
+  ProposalState,
+  ProposalType,
+} from '../contracts/midnight/compiled/cto_governance/contract/index.js';
+import {
   type DarkVeilState,
   ledger as decodeEligibilityGateLedger,
   type Ledger as EligibilityGateLedger,
@@ -25,7 +33,119 @@ import {
   type LaunchPhase,
 } from '../contracts/midnight/compiled/eligibility_gate/contract/index.js';
 
-export type { EligibilityGateLedger };
+export type { CtoGovernanceLedger, EligibilityGateLedger };
+
+export async function readCtoGovernanceLedger(
+  publicDataProvider: PublicDataProvider,
+  contractAddress: string,
+): Promise<CtoGovernanceLedger> {
+  const contractState = await publicDataProvider.queryContractState(contractAddress);
+  if (contractState === null) {
+    throw new Error(
+      `No contract found at ${contractAddress}. Check the address and that the indexer is following the same network the contract was deployed to.`,
+    );
+  }
+  return decodeCtoGovernanceLedger(contractState.data);
+}
+
+export interface CtoProposalSummary {
+  proposalIdHex: string;
+  proposalType: string;
+  state: string;
+  proposerKeyHex: string;
+  descriptionHashHex: string;
+  startTimestamp: string;
+  endTimestamp: string;
+  yesVotes: string;
+  noVotes: string;
+  voterCount: string;
+  creatorYesVotes: string;
+  creatorNoVotes: string;
+  balanceSnapshotRootHex: string;
+  bond: string | null;
+}
+
+export interface CtoGovernanceSnapshot {
+  ctoState: string;
+  communityWalletHex: string;
+  hasClaimableBalance: boolean;
+  lastCreatorActivity: string;
+  lastProposalEnd: string;
+  proposalCount: string;
+  activeProposalCount: string;
+  balanceSnapshotRootHex: string;
+  lastSnapshotTimestamp: string;
+  snapshotRound: string;
+  pendingSnapshotRootHex: string;
+  pendingSnapshotOpenedAt: string;
+  snapshotApprovalsThisRound: number;
+  proposals: CtoProposalSummary[];
+}
+
+const enumName = (table: Record<string, string | number>, value: number) =>
+  (Object.entries(table).find(([, v]) => v === value)?.[0] ?? String(value)) as string;
+const hex = (b: Uint8Array) => Buffer.from(b).toString('hex');
+
+export function summarizeCtoProposal(idHex: string, p: Proposal, bond: bigint | null): CtoProposalSummary {
+  return {
+    proposalIdHex: idHex,
+    proposalType: enumName(ProposalType, p.proposalType),
+    state: enumName(ProposalState, p.state),
+    proposerKeyHex: hex(p.proposerKey),
+    descriptionHashHex: hex(p.descriptionHash),
+    startTimestamp: p.startTimestamp.toString(),
+    endTimestamp: p.endTimestamp.toString(),
+    yesVotes: p.yesVotes.toString(),
+    noVotes: p.noVotes.toString(),
+    voterCount: p.voterCount.toString(),
+    creatorYesVotes: p.creatorYesVotes.toString(),
+    creatorNoVotes: p.creatorNoVotes.toString(),
+    balanceSnapshotRootHex: hex(p.balanceSnapshotRoot),
+    bond: bond === null ? null : bond.toString(),
+  };
+}
+
+/**
+ * The published governance state, JSON-ready. Proposal ids are what the
+ * off-chain side keys everything on (vote, finalize, execute, relay), and
+ * they are only discoverable by walking the map — the contract has no
+ * enumeration circuit — so this is where they surface.
+ */
+export function summarizeCtoGovernance(ledger: CtoGovernanceLedger): CtoGovernanceSnapshot {
+  const round = ledger.snapshotRound;
+  let approvals = 0;
+  for (const [, approvedRound] of ledger.snapshotApprovals) {
+    if (approvedRound === round) approvals += 1;
+  }
+  const proposals: CtoProposalSummary[] = [];
+  for (const [id, proposal] of ledger.proposals) {
+    const bond = ledger.proposalBonds.member(id) ? ledger.proposalBonds.lookup(id) : null;
+    proposals.push(summarizeCtoProposal(hex(id), proposal, bond));
+  }
+  return {
+    ctoState: enumName(CtoState, ledger.ctoState),
+    communityWalletHex: hex(ledger.communityWallet),
+    hasClaimableBalance: ledger.hasClaimableBalance,
+    lastCreatorActivity: ledger.lastCreatorActivity.toString(),
+    lastProposalEnd: ledger.lastProposalEnd.toString(),
+    proposalCount: ledger.proposalCount.toString(),
+    activeProposalCount: ledger.activeProposalCount.toString(),
+    balanceSnapshotRootHex: hex(ledger.balanceSnapshotRoot),
+    lastSnapshotTimestamp: ledger.lastSnapshotTimestamp.toString(),
+    snapshotRound: round.toString(),
+    pendingSnapshotRootHex: hex(ledger.pendingSnapshotRoot),
+    pendingSnapshotOpenedAt: ledger.pendingSnapshotOpenedAt.toString(),
+    snapshotApprovalsThisRound: approvals,
+    proposals,
+  };
+}
+
+export async function readCtoGovernanceSnapshot(
+  publicDataProvider: PublicDataProvider,
+  contractAddress: string,
+): Promise<CtoGovernanceSnapshot> {
+  return summarizeCtoGovernance(await readCtoGovernanceLedger(publicDataProvider, contractAddress));
+}
 
 /**
  * Reads and decodes the whole published ledger of a Cardano Launch eligibility gate.

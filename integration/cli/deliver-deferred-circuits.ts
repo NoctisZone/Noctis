@@ -45,13 +45,14 @@ import { indexerPublicDataProvider } from '@midnight-ntwrk/midnight-js-indexer-p
 import { levelPrivateStateProvider } from '@midnight-ntwrk/midnight-js-level-private-state-provider';
 import { setNetworkId } from '@midnight-ntwrk/midnight-js-network-id';
 import { NodeZkConfigProvider } from '@midnight-ntwrk/midnight-js-node-zk-config-provider';
+import { Contract as CtoGovernanceContract } from '../../contracts/midnight/compiled/cto_governance/contract/index.js';
 import {
   ledger as decodeEligibilityGateLedger,
   Contract as EligibilityGateContract,
 } from '../../contracts/midnight/compiled/eligibility_gate/contract/index.js';
 import { fromHex32 } from '../eligibility-gate-deploy-args.js';
 import { describeError } from '../error-detail.js';
-import { compileEligibilityGate } from '../midnight-client.js';
+import { compileCtoGovernance, compileEligibilityGate } from '../midnight-client.js';
 import { deriveContractSigningKey, operationNames } from '../midnight-deploy-subset.js';
 import { deliverCircuits, planCircuitDelivery, verifyDeliveredCircuits } from '../midnight-maintenance.js';
 import {
@@ -67,11 +68,20 @@ import { ephemeralPrivateStatePassword, inMemoryLevelFactory } from '../private-
 import { assertZkConfigMatchesBuild } from '../zk-config-fingerprint.js';
 import { jsonSafe, parseJsonStdin, readStdin, requireFieldsFalsy } from './cli-io.js';
 
+type DeployedContractKind = 'eligibility_gate' | 'cto_governance';
+
 interface Input extends SnapshotCliInput {
   network: MidnightNetwork;
   governorSecretHex: string;
   walletSeedHex: string;
-  /** Optional: cross-checked against the id the contract itself publishes. */
+  /**
+   * Which contract sits at the address. Defaults to the eligibility gate.
+   * The governance contract publishes no launch id (its `launchId` ledger
+   * field is sealed and unexported), so for it `launchIdHex` is REQUIRED —
+   * the signing key is derived from it and cannot be recovered from chain.
+   */
+  contract?: DeployedContractKind;
+  /** Optional for the gate: cross-checked against the id the contract itself publishes. */
   launchIdHex?: string;
   contractAddress: string;
   zkConfigBasePath: string;
@@ -123,11 +133,19 @@ function bytesEqual(a: Uint8Array, b: Uint8Array): boolean {
  * a list kept alongside it — a hand-kept list is one that can disagree with
  * the contract it describes.
  */
-function definedCircuits(): string[] {
+function definedCircuits(kind: DeployedContractKind): string[] {
   // `provableCircuits` is the set that gets a verifier key, and the same list
   // the SDK's own contract executable reads — so this is the source the deploy
   // uses rather than a restatement of it that could drift.
-  return Object.keys(new EligibilityGateContract(UNUSED_WITNESSES).provableCircuits).sort();
+  const contract =
+    kind === 'cto_governance'
+      ? new CtoGovernanceContract(UNUSED_WITNESSES)
+      : new EligibilityGateContract(UNUSED_WITNESSES);
+  return Object.keys(contract.provableCircuits).sort();
+}
+
+function compiledFor(kind: DeployedContractKind) {
+  return kind === 'cto_governance' ? compileCtoGovernance(UNUSED_WITNESSES) : compileEligibilityGate(UNUSED_WITNESSES);
 }
 
 async function main() {
@@ -155,6 +173,13 @@ async function main() {
   // Optional: the contract publishes its own, and this is only cross-checked
   // against it. Supplying it is a way to assert which launch is being
   // completed, not a way to decide it.
+  const kind: DeployedContractKind = input.contract ?? 'eligibility_gate';
+  if (kind !== 'eligibility_gate' && kind !== 'cto_governance') {
+    throw new Error(`contract must be "eligibility_gate" or "cto_governance", got ${JSON.stringify(input.contract)}.`);
+  }
+  if (kind === 'cto_governance' && !input.launchIdHex) {
+    throw new Error('launchIdHex is required for cto_governance: the contract publishes no launch id to read it from.');
+  }
   const launchId = input.launchIdHex ? fromHex32(input.launchIdHex, 'launchIdHex') : undefined;
 
   const netDefaults =
@@ -168,7 +193,7 @@ async function main() {
     );
   }
 
-  const expected = definedCircuits();
+  const expected = definedCircuits(kind);
 
   const serverWallet = await buildServerWallet(
     walletSeed,
@@ -215,12 +240,21 @@ async function main() {
     // is written from the id sealed at construction and can only ever be that
     // id. Half the authority is derived from it, so taking it from the chain
     // rather than from an argument means it cannot be given wrongly.
-    const onChainLaunchId = decodeEligibilityGateLedger(contractState.data).fairLaunchCert.launchId;
-    if (launchId && !bytesEqual(launchId, onChainLaunchId)) {
-      throw new Error(
-        `launchIdHex does not match the launch this contract was sealed to (${toHex(onChainLaunchId)}). ` +
-          'Either the address or the launch id belongs to a different launch.',
-      );
+    let signingLaunchId: Uint8Array;
+    if (kind === 'eligibility_gate') {
+      const onChainLaunchId = decodeEligibilityGateLedger(contractState.data).fairLaunchCert.launchId;
+      if (launchId && !bytesEqual(launchId, onChainLaunchId)) {
+        throw new Error(
+          `launchIdHex does not match the launch this contract was sealed to (${toHex(onChainLaunchId)}). ` +
+            'Either the address or the launch id belongs to a different launch.',
+        );
+      }
+      signingLaunchId = onChainLaunchId;
+    } else {
+      // Refused above when absent, so this is the caller's word: the same id
+      // the deploy was given, or the derived key will not match and the
+      // update is refused by the chain rather than by us.
+      signingLaunchId = launchId as Uint8Array;
     }
 
     // The authority the deploy sealed in, recomputed from the governor secret
@@ -228,7 +262,7 @@ async function main() {
     // which is exactly why this key is derived rather than sampled.
     await privateStateProvider.setSigningKey(
       input.contractAddress,
-      deriveContractSigningKey(governorSecret, onChainLaunchId),
+      deriveContractSigningKey(governorSecret, signingLaunchId),
     );
 
     const plan = planCircuitDelivery(operationNames(contractState), expected);
@@ -256,7 +290,7 @@ async function main() {
       `${plan.present.length} of ${expected.length} circuits on chain; ${plan.missing.length} missing; delivering ${toDeliver.length}\n`,
     );
 
-    const compiled = compileEligibilityGate(UNUSED_WITNESSES);
+    const compiled = compiledFor(kind);
 
     const delivered = await deliverCircuits(providers, compiled, input.contractAddress, toDeliver, {
       onProgress: (message) => process.stderr.write(`${message}\n`),
