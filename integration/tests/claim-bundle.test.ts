@@ -221,3 +221,23 @@ describe('the saved file', () => {
     expect(() => parseSavedClaimBundle(tampered)).toThrow(/not a usable claim record/);
   });
 });
+
+describe('fetchClaimBundle with a wallet-control proof', () => {
+  it('carries the proof in the query', async () => {
+    const urls: string[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) => {
+        urls.push(url);
+        return { ok: true, status: 200, json: async () => ({ ...realBundle(), included: true }), text: async () => '' };
+      }),
+    );
+    await fetchClaimBundle('https://site/wp-json/np/v1', 'launch-1', 'addr_test1buyer', {
+      stake_address: 'stake_test1abc',
+      signature: 'sig',
+      key: 'key',
+    });
+    expect(urls[0]).toMatch(/&stake_address=stake_test1abc&signature=sig&key=key$/);
+    vi.unstubAllGlobals();
+  });
+});

@@ -301,3 +301,13 @@ module.exports = [
 		devtool,
 	},
 ];
+
+// The CTO governance widget shares every build concern the DarkVeil widget
+// has (same SDK, same wasm, same shims) and differs only in its entry, so it
+// is that configuration with a different entry and filename.
+module.exports.push({
+	...module.exports[0],
+	name: "cto-widget",
+	entry: path.resolve(__dirname, "widget/cto-widget-entry.ts"),
+	output: { ...module.exports[0].output, filename: "cto-widget.bundle.js" },
+});

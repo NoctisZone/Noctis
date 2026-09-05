@@ -20,6 +20,7 @@
 // where a save prompt appears is the claim front-end's decision.
 
 import { hashDvLeaf, hashDvNode } from '../dv-allocation-tree.js';
+import { type WalletControlProof, withProofQuery } from './wallet-control.js';
 
 export interface ClaimBundleProofStep {
   siblingHex: string;
@@ -105,10 +106,13 @@ export async function fetchClaimBundle(
   restBase: string,
   launchId: string,
   cardanoAddress: string,
+  /** Proof the caller controls the address — the server refuses the lookup without it (the record is private). */
+  proof?: WalletControlProof,
 ): Promise<ClaimBundle | NotIncluded> {
-  const url = `${restBase.replace(/\/$/, '')}/darkveil/allocation-proof?launch_id=${encodeURIComponent(
+  const bare = `${restBase.replace(/\/$/, '')}/darkveil/allocation-proof?launch_id=${encodeURIComponent(
     launchId,
   )}&cardano_address=${encodeURIComponent(cardanoAddress)}`;
+  const url = proof ? withProofQuery(bare, proof) : bare;
 
   const res = await fetch(url, { headers: { Accept: 'application/json' } });
   if (!res.ok) {

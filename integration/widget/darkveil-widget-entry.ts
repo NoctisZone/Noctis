@@ -80,6 +80,7 @@ import type { ContractProviders } from '@midnight-ntwrk/midnight-js-contracts';
 import { FetchZkConfigProvider } from '@midnight-ntwrk/midnight-js-fetch-zk-config-provider';
 import { httpClientProofProvider } from '@midnight-ntwrk/midnight-js-http-client-proof-provider';
 import { createNoctisContractProviders } from '../contract-providers.js';
+import { signCardanoData } from '../wallet-connection.js';
 import { type BuyFlowContractParams, cancelBuyCommit, revealBuyCommit, submitBuyCommit } from './buy-flow.js';
 import {
   type ClaimBundle,
@@ -98,6 +99,12 @@ import {
   registerOnChain,
   submitRegistrationIntent,
 } from './registration-flow.js';
+import {
+  proveWalletControl,
+  proveWalletControlFrom,
+  type SigningWalletApi,
+  type WalletControlProof,
+} from './wallet-control.js';
 import { type DarkVeilSession, listAvailableWallets, startDarkVeilSession } from './wallet-session.js';
 
 // ============================================================================
@@ -380,9 +387,27 @@ function hexToBytes(hex: string): Uint8Array {
  * thing the buyer is asked to save, because it cannot be rebuilt from the
  * chain once the platform's copy is gone.
  */
-async function fetchMyClaimBundle(launchId: string, cardanoAddress: string): Promise<ClaimBundle | NotIncluded> {
+/**
+ * The buyer's own claim record. The server hands it out only behind proof of
+ * wallet control, so the caller supplies the wallet to sign with: the raw
+ * CIP-30 API object the page's wallet connection exposes, or nothing when the
+ * widget session's own Cardano wallet is connected.
+ */
+async function fetchMyClaimBundle(
+  launchId: string,
+  cardanoAddress: string,
+  walletApi?: SigningWalletApi,
+): Promise<ClaimBundle | NotIncluded> {
   const { apiBase } = requireConfig();
-  return fetchClaimBundle(apiBase, launchId, cardanoAddress);
+  let proof: WalletControlProof;
+  if (walletApi) {
+    proof = await proveWalletControl(apiBase, walletApi);
+  } else if (session) {
+    proof = await proveWalletControlFrom(apiBase, session.cardano, signCardanoData);
+  } else {
+    throw new Error('Looking up a claim record needs a connected Cardano wallet to prove it is yours.');
+  }
+  return fetchClaimBundle(apiBase, launchId, cardanoAddress, proof);
 }
 
 const NoctisDarkVeil = {
@@ -410,6 +435,10 @@ declare global {
 
 if (typeof window !== 'undefined') {
   window.NoctisDarkVeil = NoctisDarkVeil;
+  // The bundle instantiates wasm asynchronously, so this line runs AFTER a
+  // deferred glue script that merely follows it in the document. The glue
+  // waits for this event when the object is not there yet.
+  window.dispatchEvent(new CustomEvent('noctis-darkveil-ready'));
 }
 
 export default NoctisDarkVeil;

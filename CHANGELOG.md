@@ -8,6 +8,16 @@ Notable changes to the Noctis Zone, by release. Internal development history pre
 
 ### Added
 
+- A browser widget for CTO governance. A holder's Cardano wallet derives their
+  launch-scoped voting identity and proves control of the address the snapshot
+  names; a Midnight wallet pays for and submits the vote. Registration accepts
+  only a server answer that derives the identity this wallet holds, a fetched
+  snapshot leaf is re-verified against the published root before it is used, and
+  the page can tell whether this identity has already voted from the public
+  nullifier set alone.
+- One client-side implementation of the wallet-control handshake the platform's
+  private endpoints require, usable from a raw CIP-30 wallet API or a built
+  connection, with the same action-scoped binding the server verifies.
 - Midnight wallets can be replayed to a spendable DUST balance across process
   restarts. Each sub-wallet's sync state is snapshotted every 30 seconds while the
   replay is still running, encrypted with AES-256-GCM under a PBKDF2-derived key,
@@ -69,6 +79,8 @@ Notable changes to the Noctis Zone, by release. Internal development history pre
 
 ### Fixed
 
+- The DarkVeil claim-record fetch carries the wallet-control proof the server
+  requires; the widget signs the challenge through the wallet it is given.
 - A launch that opted into a staking pool now graduates. The pool takes its own
   clock from the graduation transaction's validity range, while the curve only
   requires that the same timestamp fall inside that range, so one value satisfies

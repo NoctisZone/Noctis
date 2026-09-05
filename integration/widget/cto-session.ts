@@ -51,6 +51,10 @@ export interface CtoSession {
    *  castVote will see as proposerKey/voterKey. Scoped per launch, so a
    *  voter's key on one ballot cannot be matched to their key on another. */
   getIdentityPublicKey(launchId: Uint8Array): Promise<UserPublicKey>;
+  /** The raw CIP-8 signature and key over the master message — what the
+   *  server needs to verify a voter registration and re-derive the same
+   *  identity. Cached with the signature itself: one wallet prompt. */
+  getMasterSignatureMaterial(): Promise<{ signature: string; key: string }>;
 }
 
 /** Detects available Cardano wallets for a CTO connect UI to list. */
@@ -67,25 +71,25 @@ export function listAvailableCardanoWallets(): WalletInfo[] {
 export async function startCtoSession(cardanoWalletId: string): Promise<CtoSession> {
   const cardano = await connectCardanoWallet(cardanoWalletId);
 
-  const getMasterSignature = async (): Promise<string> => {
+  const getMasterSignature = async (): Promise<{ signature: string; key: string }> => {
     const payloadHex = toUtf8Hex(CTO_MASTER_SIGNATURE_DOMAIN);
-    const { signature } = await signCardanoData(cardanoWalletId, cardano.address, payloadHex);
-    return signature;
+    return signCardanoData(cardanoWalletId, cardano.address, payloadHex);
   };
 
   // Same in-flight-promise caching as wallet-session.ts's own
   // getCachedSignature, and for the same reason (concurrent cache misses
   // must await one wallet prompt, not several).
-  let signaturePromise: Promise<string> | null = null;
-  function getCachedSignature(): Promise<string> {
-    if (signaturePromise === null) {
-      signaturePromise = getMasterSignature().catch((err) => {
-        signaturePromise = null;
+  let materialPromise: Promise<{ signature: string; key: string }> | null = null;
+  function getMasterSignatureMaterial(): Promise<{ signature: string; key: string }> {
+    if (materialPromise === null) {
+      materialPromise = getMasterSignature().catch((err) => {
+        materialPromise = null;
         throw err;
       });
     }
-    return signaturePromise;
+    return materialPromise;
   }
+  const getCachedSignature = async (): Promise<string> => (await getMasterSignatureMaterial()).signature;
 
   const privateStore = createCtoPrivateStore({
     accountId: cardano.address,
@@ -117,5 +121,5 @@ export async function startCtoSession(cardanoWalletId: string): Promise<CtoSessi
     return deriveUserPublicKey(identity.userSecretKey, DOMAINS.CTO_USER, launchId);
   }
 
-  return { cardano, privateStore, getIdentity, getIdentityPublicKey };
+  return { cardano, privateStore, getIdentity, getIdentityPublicKey, getMasterSignatureMaterial };
 }

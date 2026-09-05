@@ -14,10 +14,10 @@
 // ============================================================================
 
 import type { ContractProviders } from '@midnight-ntwrk/midnight-js-contracts';
-import { sha256 } from '@noble/hashes/sha2.js';
 import type { MerkleProofEntry } from '../../contracts/midnight/witnesses.js';
 import { NoctisLaunchManager, NoctisMidnightClient } from '../midnight-client.js';
 import { type CardanoWalletConnection, signCardanoData } from '../wallet-connection.js';
+import { buildBinds } from './wallet-control.js';
 import type { DarkVeilSession } from './wallet-session.js';
 
 function bytesToHex(bytes: Uint8Array): string {
@@ -138,9 +138,6 @@ async function buildDarkVeilAuthProof(
  * signature collected for any other purpose is rejected and no parameter can
  * be substituted between signing and submission.
  */
-function buildBinds(action: string, params: string[]): string {
-  return bytesToHex(sha256(new TextEncoder().encode([action, ...params].join('|'))));
-}
 
 export async function submitRegistrationIntent(
   apiBase: string,
