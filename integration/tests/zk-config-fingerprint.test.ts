@@ -21,7 +21,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { zkConfigFingerprint, zkConfigLines } from '../zk-config-fingerprint.js';
+import { checkZkConfigAgainst, zkConfigFingerprint, zkConfigLines } from '../zk-config-fingerprint.js';
 
 const made: string[] = [];
 
@@ -154,5 +154,57 @@ describe('zkConfigFingerprint', () => {
     expect(lines.filter((l) => l.startsWith('contract-info:'))).toHaveLength(1);
     expect(lines).toContainEqual(expect.stringMatching(/^keys\/checkCap\.verifier:[0-9a-f]{64}$/));
     expect(lines).toContainEqual('keys/checkCap.prover:len=4');
+  });
+});
+
+// ---- the guard, per contract ---------------------------------------------
+//
+// A bundle carries one fingerprint per compiled contract, and a CLI names the
+// contract it proves against. The gate's artifacts must not vouch for
+// governance's, and a build that carried no artifacts for a contract must say
+// so rather than wave that contract through.
+
+describe('checkZkConfigAgainst', () => {
+  it('is silent when the build recorded nothing (running from source)', () => {
+    expect(() => checkZkConfigAgainst(undefined, makeTree(), 'cto_governance')).not.toThrow();
+  });
+
+  it('accepts the tree whose fingerprint the build recorded for that contract', () => {
+    const base = makeTree();
+    const expected = { cto_governance: zkConfigFingerprint(base) };
+    expect(() => checkZkConfigAgainst(expected, base, 'cto_governance')).not.toThrow();
+  });
+
+  it("refuses when the build's entry for that contract is a different tree", () => {
+    const base = makeTree();
+    const other = makeTree({ verifiers: { 'checkCap.verifier': 'W' } });
+    const expected = { cto_governance: zkConfigFingerprint(other) };
+    expect(() => checkZkConfigAgainst(expected, base, 'cto_governance')).toThrow(
+      /different compiled cto_governance artifacts/,
+    );
+  });
+
+  it('refuses when the build carries a guard for the OTHER contract only', () => {
+    const base = makeTree();
+    const expected = { eligibility_gate: zkConfigFingerprint(base) };
+    expect(() => checkZkConfigAgainst(expected, base, 'cto_governance')).toThrow(
+      /no compiled Compact artifacts for cto_governance[\s\S]*guard for: eligibility_gate/,
+    );
+  });
+
+  it("does not let one contract's fingerprint satisfy the other", () => {
+    const base = makeTree();
+    const fp = zkConfigFingerprint(base);
+    // Identical trees under both names: each name is checked against its own entry.
+    const expected = { eligibility_gate: fp, cto_governance: 'not-this' };
+    expect(() => checkZkConfigAgainst(expected, base, 'cto_governance')).toThrow(/different compiled cto_governance/);
+    expect(() => checkZkConfigAgainst(expected, base, 'eligibility_gate')).not.toThrow();
+  });
+
+  it('reports an unreadable path as unreadable, never as a match', () => {
+    const expected = { cto_governance: 'anything' };
+    expect(() => checkZkConfigAgainst(expected, join(tmpdir(), 'noctis-zk-does-not-exist'), 'cto_governance')).toThrow(
+      /could not be read/,
+    );
   });
 });

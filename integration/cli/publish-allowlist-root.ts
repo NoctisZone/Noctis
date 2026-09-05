@@ -114,7 +114,7 @@ async function main() {
   // so it is delivered by hand and can be absent or a generation behind while
   // every other check passes. Failing here names the artifacts; failing later
   // names a proof.
-  assertZkConfigMatchesBuild(input.zkConfigBasePath);
+  assertZkConfigMatchesBuild(input.zkConfigBasePath, 'eligibility_gate');
 
   // Same principle: cheap checks before expensive ones.
   await assertProofServerReachable(input.proofServerUrl);

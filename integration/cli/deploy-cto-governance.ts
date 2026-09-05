@@ -78,7 +78,7 @@ async function main() {
   // the field rather than a refused deploy.
   const args = resolveCtoGovernanceDeployArgs(input);
 
-  assertZkConfigMatchesBuild(input.zkConfigBasePath);
+  assertZkConfigMatchesBuild(input.zkConfigBasePath, 'cto_governance');
   await assertProofServerReachable(input.proofServerUrl);
   setNetworkId(input.network);
 

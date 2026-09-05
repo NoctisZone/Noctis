@@ -163,7 +163,11 @@ async function main() {
   // Cheap checks before expensive ones: the artifacts are delivered by hand and
   // can be a generation behind while everything else passes, and a proof server
   // that is not there costs minutes to discover once proving has started.
-  assertZkConfigMatchesBuild(input.zkConfigBasePath);
+  const kind: DeployedContractKind = input.contract ?? 'eligibility_gate';
+  if (kind !== 'eligibility_gate' && kind !== 'cto_governance') {
+    throw new Error(`contract must be "eligibility_gate" or "cto_governance", got ${JSON.stringify(input.contract)}.`);
+  }
+  assertZkConfigMatchesBuild(input.zkConfigBasePath, kind);
   await assertProofServerReachable(input.proofServerUrl);
 
   setNetworkId(input.network);
@@ -173,10 +177,6 @@ async function main() {
   // Optional: the contract publishes its own, and this is only cross-checked
   // against it. Supplying it is a way to assert which launch is being
   // completed, not a way to decide it.
-  const kind: DeployedContractKind = input.contract ?? 'eligibility_gate';
-  if (kind !== 'eligibility_gate' && kind !== 'cto_governance') {
-    throw new Error(`contract must be "eligibility_gate" or "cto_governance", got ${JSON.stringify(input.contract)}.`);
-  }
   if (kind === 'cto_governance' && !input.launchIdHex) {
     throw new Error('launchIdHex is required for cto_governance: the contract publishes no launch id to read it from.');
   }

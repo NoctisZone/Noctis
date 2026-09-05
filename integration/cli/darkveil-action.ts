@@ -196,7 +196,7 @@ async function main() {
 
   // Cheap checks before expensive ones — the artifacts are delivered by hand
   // and a missing proof server otherwise costs minutes to discover.
-  assertZkConfigMatchesBuild(input.zkConfigBasePath);
+  assertZkConfigMatchesBuild(input.zkConfigBasePath, 'eligibility_gate');
   if (input.action !== 'read') await assertProofServerReachable(input.proofServerUrl);
 
   setNetworkId(input.network);

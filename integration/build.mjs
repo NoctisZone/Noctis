@@ -979,8 +979,7 @@ function blueprintFingerprint() {
  * and refusing to build there would be wrong. It is announced loudly rather
  * than silently, because a bundle built without it carries no guard.
  */
-function zkConfigFingerprint() {
-	const base = join(__dirname, "..", "contracts", "midnight", "compiled_realzk", "eligibility_gate");
+function zkConfigFingerprintOf(base) {
 	let info;
 	try {
 		info = JSON.parse(readFileSync(join(base, "compiler", "contract-info.json"), "utf8"));
@@ -1014,16 +1013,40 @@ function zkConfigFingerprint() {
 	return createHash("sha256").update(lines.sort().join("\n"), "utf8").digest("hex");
 }
 
+/**
+ * One fingerprint per compiled contract under compiled_realzk/, keyed by the
+ * directory's name. A CLI names the contract it proves against and is held to
+ * that entry only, so the gate's artifacts cannot vouch for governance's and
+ * the reverse. Returns undefined when the tree is absent or holds nothing.
+ */
+function zkConfigFingerprints() {
+	const root = join(__dirname, "..", "contracts", "midnight", "compiled_realzk");
+	let names;
+	try {
+		names = readdirSync(root).sort();
+	} catch {
+		return undefined;
+	}
+	const out = {};
+	for (const name of names) {
+		const fp = zkConfigFingerprintOf(join(root, name));
+		if (fp) out[name] = fp;
+	}
+	return Object.keys(out).length ? out : undefined;
+}
+
 async function run() {
 	const fingerprint = blueprintFingerprint();
 	console.log(`blueprint fingerprint: ${fingerprint}`);
-	const zkFingerprint = zkConfigFingerprint();
-	if (zkFingerprint) {
-		console.log(`zk config fingerprint: ${zkFingerprint}`);
+	const zkFingerprints = zkConfigFingerprints();
+	if (zkFingerprints) {
+		for (const [name, fp] of Object.entries(zkFingerprints)) {
+			console.log(`zk config fingerprint (${name}): ${fp}`);
+		}
 	} else {
 		console.warn(
-			"zk config fingerprint: NOT COMPUTED — contracts/midnight/compiled_realzk/eligibility_gate " +
-				"is absent, so bundles from this build carry no ZK artifact guard. Fine for a checkout " +
+			"zk config fingerprint: NOT COMPUTED — contracts/midnight/compiled_realzk/ holds no compiled " +
+				"contract, so bundles from this build carry no ZK artifact guard. Fine for a checkout " +
 				"without the artifacts; not fine for a build you intend to deploy.",
 		);
 	}
@@ -1101,7 +1124,7 @@ async function run() {
 				// text "undefined" — so without this the build throws outright on
 				// any checkout that does not carry the hand-shipped ZK artifacts,
 				// which is every CI run.
-				__ZK_CONFIG_FINGERPRINT__: JSON.stringify(zkFingerprint) ?? "undefined",
+				__ZK_CONFIG_FINGERPRINTS__: JSON.stringify(zkFingerprints) ?? "undefined",
 			},
 		}));
 

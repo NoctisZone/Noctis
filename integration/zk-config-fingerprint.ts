@@ -119,20 +119,45 @@ export function zkConfigFingerprint(basePath: string): string {
   return createHash('sha256').update(zkConfigLines(basePath).join('\n'), 'utf8').digest('hex');
 }
 
-/** Injected by build.mjs. Absent when running from source (tsx, vitest). */
-declare const __ZK_CONFIG_FINGERPRINT__: string | undefined;
+/**
+ * Injected by build.mjs: one fingerprint per compiled contract, keyed by the
+ * artifact directory's name under `compiled_realzk/`. Absent when running from
+ * source (tsx, vitest), and absent from a bundle built on a checkout that
+ * carried no artifacts at all.
+ */
+declare const __ZK_CONFIG_FINGERPRINTS__: Record<string, string> | undefined;
+
+/** The compiled-artifact directories a bundle can carry a guard for. */
+export type ZkConfigContract = 'eligibility_gate' | 'cto_governance';
 
 /**
- * Throws if the ZK artifacts on disk are not the ones this bundle was built
- * for.
+ * The comparison itself, separated from the injected value so it can be
+ * tested: given what the build recorded, does the tree at `basePath` hold the
+ * artifacts this code was built against for `contract`?
  *
- * Silent when running from source — there is no build step to disagree with,
- * and the directory being read IS the one the code was written against.
+ * Silent when `expected` is undefined — there is no build to disagree with.
+ * Throws when the build recorded fingerprints but none for this contract: that
+ * bundle was built on a checkout missing these artifacts, and a guard covering
+ * the other contract is no guard for this one.
  */
-export function assertZkConfigMatchesBuild(basePath: string): void {
-  const expected = typeof __ZK_CONFIG_FINGERPRINT__ === 'string' ? __ZK_CONFIG_FINGERPRINT__ : undefined;
+export function checkZkConfigAgainst(
+  expected: Record<string, string> | undefined,
+  basePath: string,
+  contract: ZkConfigContract,
+): void {
   if (!expected) {
     return;
+  }
+
+  const want = expected[contract];
+  if (typeof want !== 'string') {
+    const guarded = Object.keys(expected).sort().join(', ') || '(none)';
+    throw new Error(
+      `This CLI was built on a checkout with no compiled Compact artifacts for ${contract}, so it cannot vouch for the ones it just read.\n` +
+        `  path: ${basePath}\n` +
+        `  contracts this build carries a guard for: ${guarded}\n` +
+        `Rebuild the CLI bundles on a checkout that holds contracts/midnight/compiled_realzk/${contract} and ship both together.`,
+    );
   }
 
   let actual: string;
@@ -148,17 +173,32 @@ export function assertZkConfigMatchesBuild(basePath: string): void {
     );
   }
 
-  if (actual === expected) {
+  if (actual === want) {
     return;
   }
 
   throw new Error(
-    'This CLI was built against different compiled Compact artifacts than the ones it just read.\n' +
+    `This CLI was built against different compiled ${contract} artifacts than the ones it just read.\n` +
       `  path: ${basePath}\n` +
-      `  expected fingerprint: ${expected}\n` +
+      `  expected fingerprint: ${want}\n` +
       `  actual fingerprint:   ${actual}\n` +
       'Proving against artifacts that do not match the contract this code expects produces a proof ' +
       'for the wrong circuit. Copy the compiled_realzk tree and the CLI bundles across together — ' +
       'they are a pair, and neither is git-tracked.',
   );
+}
+
+/**
+ * Throws if the ZK artifacts on disk are not the ones this bundle was built
+ * for. `contract` names which compiled contract the path is expected to hold.
+ *
+ * Silent when running from source — there is no build step to disagree with,
+ * and the directory being read IS the one the code was written against.
+ */
+export function assertZkConfigMatchesBuild(basePath: string, contract: ZkConfigContract): void {
+  const expected =
+    typeof __ZK_CONFIG_FINGERPRINTS__ === 'object' && __ZK_CONFIG_FINGERPRINTS__ !== null
+      ? __ZK_CONFIG_FINGERPRINTS__
+      : undefined;
+  checkZkConfigAgainst(expected, basePath, contract);
 }

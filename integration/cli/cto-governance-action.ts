@@ -244,7 +244,7 @@ async function main() {
     ? deriveUserSecretFromSeed(fromHex32(input.voterSeedHex, 'voterSeedHex'))
     : attestorSecret;
 
-  assertZkConfigMatchesBuild(zkConfigBasePath);
+  assertZkConfigMatchesBuild(zkConfigBasePath, 'cto_governance');
   await assertProofServerReachable(proofServerUrl);
   const { relayUrl, indexerHttpUrl, indexerWsUrl } = networkUrls(input, proofServerUrl);
 

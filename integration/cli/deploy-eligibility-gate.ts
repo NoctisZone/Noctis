@@ -137,7 +137,7 @@ async function main() {
   ]);
 
   // Before the wallet, the network, or anything that costs time or money.
-  assertZkConfigMatchesBuild(input.zkConfigBasePath);
+  assertZkConfigMatchesBuild(input.zkConfigBasePath, 'eligibility_gate');
 
   // Same principle: cheap checks before expensive ones.
   await assertProofServerReachable(input.proofServerUrl);

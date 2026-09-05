@@ -25,6 +25,9 @@ Notable changes to the Noctis Zone, by release. Internal development history pre
 
 ### Changed
 
+- The compiled-artifact guard records one fingerprint per compiled Compact contract, and each
+  CLI is held to the artifacts of the contract it proves against. A build that carries no
+  artifacts for a contract says so rather than proving against whatever it is pointed at.
 - The Midnight packages resolve to exactly one copy of each. The wasm-bearing ones
   carry their own object identity, so a second copy of the same package makes objects
   minted by one unrecognisable to the other. `onchain-runtime-v3` is now named in the
