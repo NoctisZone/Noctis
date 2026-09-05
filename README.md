@@ -53,9 +53,9 @@ phase on Midnight settling to an SPL token and to the XRP Ledger respectively.
 > **A note on the code.** Validators, CLI entry points and stored launch records
 > use the original `tier_a` / `tier_b` / `tier_c` identifiers, and those names are
 > load-bearing — a deployed validator's hash depends on them. Read `tier_b` as a
-> Cardano Launch and `tier_c` as a Midnight Launch. `tier_a` is the earlier
-> linear-curve, no-DarkVeil path: still supported for launches that already use
-> it, no longer offered when creating one.
+> Cardano Launch and `tier_c` as a Midnight Launch. `tier_a` was the earlier
+> linear-curve, no-DarkVeil path, retired on 2026-09-05: no launch is created or
+> shown on it, and its validator leaves the build with the next validator release.
 
 ---
 

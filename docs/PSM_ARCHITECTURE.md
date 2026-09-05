@@ -101,7 +101,9 @@ Shared Midnight PSMs used by both Cardano Launch and Midnight Launch, unaffected
 
 ## 3. Launch Types
 
-### The linear curve (legacy)
+### The linear curve (legacy, retired 2026-09-05)
+
+Retired: no launch is created or shown on it, and its validator leaves the build with the next validator release. Kept here as the record of what it was.
 
 **Target:** Simple launches that don't need privacy. Community tokens, meme coins, public fundraises.
 

@@ -9,10 +9,10 @@ High-level structural diagrams for the protocol. For full contract specs, consta
 > built). The code underneath still uses the original `tier_a` / `tier_b` /
 > `tier_c` identifiers and cannot stop — a deployed validator's hash depends on
 > its name, and stored launch records carry the letter. Read `tier_b` as a
-> Cardano Launch and `tier_c` as a Midnight Launch throughout. `tier_a` is the
-> earlier linear-curve, no-DarkVeil path: still supported for launches that
-> already run on it, no longer offered when creating one, which is why the two
-> Cardano columns this file used to carry are now a single one.
+> Cardano Launch and `tier_c` as a Midnight Launch throughout. `tier_a` was the
+> earlier linear-curve, no-DarkVeil path, retired on 2026-09-05: no launch is
+> created or shown on it, and its validator leaves the build with the next
+> validator release, which is why this file carries a single Cardano column.
 >
 > **Recent structural changes:** the Cardano launch lifecycle was proven
 > end-to-end on real Preprod (mint → buy → graduate → vest → stall/buyback) and
@@ -117,9 +117,9 @@ NOCTIS ZONE
 
 **Reading this diagram:** a Cardano Launch's public bonding curve is **Aiken on Cardano** (`bonding_curve_tier_b.ak`, quadratic, ADA-priced) — DarkVeil registration and private buying stay on Midnight as one **merged** PSM (Eligibility Gate + DarkVeil, Phase 2 2026-07-11 — the two were originally standalone; merging them let the ratio-based NIGHT bond refund logic reach both circuits). A DarkVeil purchase's actual ADA payment and token delivery happen back on Cardano, via `ClaimDarkVeilTokens` on the curve contract (2026-07-11) — a privacy-preserving Merkle-root claim, never a plaintext per-registrant list. A Midnight Launch's Eligibility Gate + DarkVeil + Bonding Curve are **one merged Compact contract** — Compact has no working cross-contract call mechanism, so folding the three source files into one deployed contract with a shared `cumulativePurchases` ledger was the only way to make the 5% cumulative cap real across both the DarkVeil and public phases.
 
-Creator Fee Escrow and Vesting are always separate contracts — CLAUDE.md explicitly warns against conflating a creator's trade-fee income with their token vesting schedule. A Cardano Launch's Creator Fee Escrow is a single balance accrued entirely in the Cardano curve contract, and its vesting runs on `vesting.ak`, a validator shared with the earlier linear-curve path rather than a Midnight PSM.
+Creator Fee Escrow and Vesting are always separate contracts — CLAUDE.md explicitly warns against conflating a creator's trade-fee income with their token vesting schedule. A Cardano Launch's Creator Fee Escrow is a single balance accrued entirely in the Cardano curve contract, and its vesting runs on `vesting.ak`, a Cardano validator rather than a Midnight PSM.
 
-The earlier linear-curve path (`bonding_curve.ak`) is not drawn separately any more. It is Aiken-only — it never touches Midnight, because it has no DarkVeil phase — and every other contract in the left-hand column is the same one a Cardano Launch uses.
+The retired linear-curve path (`bonding_curve.ak`) is not drawn. It was Aiken-only — it never touched Midnight, because it had no DarkVeil phase — and it leaves the build with the next validator release.
 
 ---
 
@@ -575,28 +575,27 @@ Community takeover (CTO) governance, shared infrastructure across every launch t
 
 ## Contract Reference
 
-A launch is named for the chain its token settles on. The **linear** column is
-the earlier no-DarkVeil path — still supported for launches already running on
-it, no longer offered when creating one.
+A launch is named for the chain its token settles on. The earlier linear-curve
+path was retired on 2026-09-05 and is no longer listed; its validator leaves the
+build with the next validator release.
 
-| Contract | Cardano Launch | Midnight Launch | (linear) | Execution layer |
-|---|---|---|---|---|
-| Eligibility Gate PSM | ✓ merged with DarkVeil into `eligibility_gate.compact` | ✓ merged into the Bonding Curve | — | Midnight |
-| DarkVeil PSM | ✓ merged with Eligibility Gate | ✓ merged into the Bonding Curve | — | Midnight |
-| Bonding Curve (quadratic, Aiken) | ✓ ADA, incl. `ClaimDarkVeilTokens` DV settlement | — | — | Cardano L1 (Aiken) |
-| Bonding Curve (quadratic, merged Compact) | — | ✓ NIGHT | — | Midnight |
-| Bonding Curve (linear, Aiken) | — | — | ✓ ADA | Cardano L1 (Aiken) |
-| Creator Fee Escrow | ✓ accrues in the Cardano curve's own balance | ✓ PSM | ✓ in the curve | Cardano L1 / Midnight |
-| Vesting | ✓ `vesting.ak` | ✓ PSM | ✓ `vesting.ak` | Cardano L1 (Aiken) / Midnight |
-| Treasury PSM | ✓ | ✓ (+ forfeited-bond routing) | ✓ | Midnight |
-| LP Escrow Contract | ✓ | — | ✓ | Cardano L1 (Aiken; whitelist governance via team multisig + 72h public notice) |
-| Midnight LP Escrow PSM | — | ✓ | — | Midnight |
-| CTO Governance Contract | ✓ | ✓ | ✓ | Cardano L1 (Aiken; a Midnight Launch anchors via relay; open-relay anchor) |
-| ZK Anchor Contract | ✓ | ✓ | — | Cardano L1 (Aiken; a Midnight Launch anchors via relay — Cardano-side submission real via Lucid Evolution) |
-| N-Hop Challenge Contract | ✓ | — | — | Cardano L1 (`nhop_challenge.ak` — an ADA-denominated bond cannot be Midnight-native, the same reasoning that moved the public curve to Cardano) |
-| CTO Sybil-Challenge Contract | ✓ | ✓ | ✓ | Cardano L1 (`cto_sybil_challenge.ak` — bonded, governor-adjudicated secondary defence against a creator voting through wallets other than their registered `creatorKey` to evade `maxVoterCap`; a structural adaptation of `nhop_challenge.ak`) |
-| Staking Rewards Pool | ✓ `staking_pool.ak` | ✓ `staking_pool.compact` | ✓ `staking_pool.ak` | Cardano L1 (Aiken) / Midnight — optional per launch; see the Staking Rewards Pool section |
-| Token Metadata (CIP-68 logo) | ✓ | not yet built | ✓ | Cardano L1 (`token_metadata.ak` — mutable, creator/CTO-controlled reference-NFT metadata, decoupled from the platform's own time-locked minting policy) |
+| Contract | Cardano Launch | Midnight Launch | Execution layer |
+|---|---|---|---|
+| Eligibility Gate PSM | ✓ merged with DarkVeil into `eligibility_gate.compact` | ✓ merged into the Bonding Curve | Midnight |
+| DarkVeil PSM | ✓ merged with Eligibility Gate | ✓ merged into the Bonding Curve | Midnight |
+| Bonding Curve (quadratic, Aiken) | ✓ ADA, incl. `ClaimDarkVeilTokens` DV settlement | — | Cardano L1 (Aiken) |
+| Bonding Curve (quadratic, merged Compact) | — | ✓ NIGHT | Midnight |
+| Creator Fee Escrow | ✓ accrues in the Cardano curve's own balance | ✓ PSM | Cardano L1 / Midnight |
+| Vesting | ✓ `vesting.ak` | ✓ PSM | Cardano L1 (Aiken) / Midnight |
+| Treasury PSM | ✓ | ✓ (+ forfeited-bond routing) | Midnight |
+| LP Escrow Contract | ✓ | — | Cardano L1 (Aiken; whitelist governance via team multisig + 72h public notice) |
+| Midnight LP Escrow PSM | — | ✓ | Midnight |
+| CTO Governance Contract | ✓ | ✓ | Cardano L1 (Aiken; a Midnight Launch anchors via relay; open-relay anchor) |
+| ZK Anchor Contract | ✓ | ✓ | Cardano L1 (Aiken; a Midnight Launch anchors via relay — Cardano-side submission real via Lucid Evolution) |
+| N-Hop Challenge Contract | ✓ | — | Cardano L1 (`nhop_challenge.ak` — an ADA-denominated bond cannot be Midnight-native, the same reasoning that moved the public curve to Cardano) |
+| CTO Sybil-Challenge Contract | ✓ | ✓ | Cardano L1 (`cto_sybil_challenge.ak` — bonded, governor-adjudicated secondary defence against a creator voting through wallets other than their registered `creatorKey` to evade `maxVoterCap`; a structural adaptation of `nhop_challenge.ak`) |
+| Staking Rewards Pool | ✓ `staking_pool.ak` | ✓ `staking_pool.compact` | Cardano L1 (Aiken) / Midnight — optional per launch; see the Staking Rewards Pool section |
+| Token Metadata (CIP-68 logo) | ✓ | not yet built | Cardano L1 (`token_metadata.ak` — mutable, creator/CTO-controlled reference-NFT metadata, decoupled from the platform's own time-locked minting policy) |
 
 **CTO fee-redirect (2026-07-12) — applies across every row above with a fee/token stream:** until this fix, none of the three bonding curve contracts, Creator Fee Escrow, Vesting, or LP Escrow had any CTO-awareness at all — a passed CTO vote never actually redirected the creator fee, unvested tokens, or LP trading fees to the community wallet, regardless of what `cto_governance`'s own vote-tallying logic said. Fixed by adding the same `ctoTriggered`/community-wallet pattern (`TriggerCTO`/`DissolveCTO` or `triggerCTO`/`dissolveCTO`) to every one of them. Each contract's own trigger must still be called as a separate, off-chain-orchestrated transaction after a vote passes — no cross-contract call mechanism exists to do this atomically.
 

@@ -6,6 +6,13 @@ Notable changes to the Noctis Zone, by release. Internal development history pre
 
 ## [Unreleased]
 
+### Removed
+
+- The linear-curve launch path's two browser widgets: the live-curve buy widget
+  and the post-graduation creator dashboard. The path is retired: no launch is
+  created or shown on it, and its validator leaves the build with the next
+  validator release.
+
 ### Added
 
 - A browser widget for CTO governance. A holder's Cardano wallet derives their

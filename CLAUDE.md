@@ -209,9 +209,10 @@ load-bearing and must not be renamed: a deployed validator's hash depends on its
 name, and the letter is written into every existing launch record. Read `tier_b`
 as a Cardano Launch and `tier_c` as a Midnight Launch.
 
-`tier_a` is the earlier **linear-curve, no-DarkVeil path**. It is still supported
-for launches already running on it and is not offered when creating one, so it is
-not a launch option and is not listed as one below.
+`tier_a` was the earlier **linear-curve, no-DarkVeil path**, **retired on
+2026-09-05**: no launch is created or shown on it. Its validator, and
+`token_metadata.ak`'s decode of its datum, leave the build with the next pooled
+validator pass. It is not a launch option and is not listed as one below.
 
 | | Cardano Launch | Midnight Launch |
 |---|---|---|
@@ -258,11 +259,10 @@ private phase is in scope for a non-Midnight chain at all.
 - Platform pays all user DUST — a higher per-launch DUST budget than a Cardano Launch, since the entire curve is on Midnight
 - **Privacy level:** Maximum. Buys, LP position, and token ownership all on Midnight private execution.
 
-### The linear curve (legacy path, `tier_a`)
-- Chain: Cardano L1 only, no Midnight dependency — it has no DarkVeil phase to run there
-- Curve: Linear (P = P₀ + k·x)
-- Cap: 5% cumulative per wallet key, the same Merkle accumulator the quadratic curve uses — weaker in practice, because nothing here raises the cost of using a second wallet: there is no DarkVeil eligibility check or N-hop challenge behind it
-- Shares `lp_escrow.ak`, `vesting.ak`, `staking_pool.ak`, `cto_governance.ak` and `token_metadata.ak` with a Cardano Launch — only the curve validator differs
+### The linear curve (`tier_a`, retired 2026-09-05)
+- Retired by decision on 2026-09-05, ahead of the next pooled validator pass so that pass carries neither its validator nor its browser widgets. No launch is created or shown on it; the site's three test records on it were removed the same day.
+- What it was: Cardano L1 only with no Midnight dependency (no DarkVeil phase); linear pricing (P = P₀ + k·x); the same 5% per-wallet-key cap accumulator as the quadratic curve, weaker in practice because nothing raised the cost of a second wallet.
+- Still in the tree until that pass: `bonding_curve.ak`, and `token_metadata.ak`'s decode of its datum (re-pointed at the quadratic curve in the same pass). The `tier-a-` prefix on several integration modules — the schemas, mint, genesis-datum and chain-state-reader code every Cardano launch uses — is historical naming, not linear-curve code: rename, do not delete.
 
 > ⚠️ **Midnight Launch is design-complete but build-blocked pending resolution of the Midnight Fungible Token Standard, Midnight Launch Graduation and DEX, Midnight Launch Trade Fee Currency and Conversion, and Midnight LP Escrow PSM Design open issues (see MIDNIGHT LAUNCH — OPEN ISSUES below).** Do not scaffold Midnight Launch contracts until those issues are resolved. both Cardano curves are unaffected.
 
@@ -356,7 +356,7 @@ Private forever:
 | Contract | Used by | Purpose |
 |----------|---------|---------|
 | ZK Anchor Contract | B + C | Receives and stores ZK proof bundles from Midnight PSMs. For Cardano Launch, the relayer now also anchors a `dv_allocation_root` (a Merkle root over each registrant's private allocation, not a plaintext list — 2026-07-11) so the Cardano bonding curve can verify DarkVeil claims without ever publishing the full registrant roster — see Bonding Curve Contract (Cardano Launch) below. |
-| Bonding Curve Contract (linear) | legacy path only | Linear pricing, cumulative per-wallet-key cap via the same Merkle accumulator the quadratic curve uses (`lib/noctis/cap_accumulator.ak`); weaker only in that nothing here raises the cost of a second wallet. `contracts/cardano/bonding_curve.ak` |
+| Bonding Curve Contract (linear) | retired 2026-09-05 | Linear pricing, cumulative per-wallet-key cap via the same Merkle accumulator the quadratic curve uses (`lib/noctis/cap_accumulator.ak`); weaker only in that nothing here raises the cost of a second wallet. `contracts/cardano/bonding_curve.ak` |
 | Bonding Curve Contract (Cardano Launch) | **B only** | Quadratic pricing, cumulative per-wallet-key cap enforced by the Merkle accumulator in the datum (one 32-byte `cap_root`, a proof per trade). `contracts/cardano/bonding_curve_tier_b.ak` — see the Cardano Launch curve migration and DarkVeil claim settlement resolutions above |
 | LP Escrow Contract | **A + B** | 1-year LP lock, migration logic, fee routing, no withdraw |
 | CTO Governance Contract | **A + B + C** | Vote proposals, private ballot anchoring, pass/fail enforcement |
@@ -364,7 +364,7 @@ Private forever:
 
 > **Midnight Launch LP note:** Midnight Launch does not use the Cardano LP Escrow contract. LP permanence is enforced by the Midnight LP Escrow PSM instead. The 365-day lock and no-withdraw invariant apply equally — it is the same policy, different execution environment.
 
-> **Legacy-path note:** the linear curve gets the same LP Escrow and CTO Governance contracts a Cardano Launch uses — the same invariants, just without the Midnight/DarkVeil components. This was a gap in an earlier version of this table (previously read "B only" / "B + C"); the How It Works page has always promised "1-year LP lock at graduation" and "CTO governance protection" as core features on all three tiers, so the table was corrected to match, not the other way around.
+> **Retired-path note (historical):** the linear curve got the same LP Escrow and CTO Governance contracts a Cardano Launch uses — the same invariants, just without the Midnight/DarkVeil components. This was a gap in an earlier version of this table (previously read "B only" / "B + C"); the How It Works page has always promised "1-year LP lock at graduation" and "CTO governance protection" as core features on all three tiers, so the table was corrected to match, not the other way around.
 
 ### Data Flow — Cardano Launch
 ```
@@ -979,7 +979,7 @@ noctis/
 │ │ ├── vesting.compact
 │ │ └── treasury.compact
 │ ├── cardano/ ← Aiken contracts
-│ │ ├── bonding_curve.ak ← legacy path only, linear
+│ │ ├── bonding_curve.ak ← retired linear path; leaves with the next pooled validator pass
 │ │ ├── bonding_curve_tier_b.ak ← Cardano Launch, quadratic (moved from Midnight to Cardano/Aiken, 2026-07-09)
 │ │ ├── lp_escrow.ak
 │ │ ├── cto_governance.ak
