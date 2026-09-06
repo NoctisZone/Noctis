@@ -15,6 +15,15 @@ Notable changes to the Noctis Zone, by release. Internal development history pre
 
 ### Added
 
+- A new Aiken package, `contracts/cardano-dex`, for an own trading venue for
+  graduated launches: a constant-product pool whose datum carries a creator fee
+  slot and a platform fee slot, so the creator's post-graduation share is charged
+  on every trade against the pool. The pool validator is ported from Splash's
+  royalty pool (CC0-1.0; provenance in the package's NOTICE) and keeps Splash's
+  datum layout, so their royalty-withdraw validator, vendored unchanged, applies
+  as is. One arm is new: a passed community-takeover vote can redirect the
+  creator's fee key, which Splash's own governance action does not allow. Separate
+  from `contracts/cardano`; no deployed validator's hash changes.
 - A browser widget for CTO governance. A holder's Cardano wallet derives their
   launch-scoped voting identity and proves control of the address the snapshot
   names; a Midnight wallet pays for and submits the vote. Registration accepts

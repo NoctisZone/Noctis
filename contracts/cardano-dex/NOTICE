@@ -1,0 +1,23 @@
+Noctis Zone — Cardano venue contracts (contracts/cardano-dex)
+
+This package contains code derived from Splash Protocol's `splash-core`
+repository (https://github.com/splashprotocol/splash-core), authored by the
+Spectrum / Splash team:
+
+  lib/splash/plutus.ak                          vendored unchanged
+  lib/splash/value_ext.ak                       vendored unchanged
+  lib/splash/rational.ak                        vendored unchanged
+  lib/splash/royalty_pool/single_royalty_pool.ak vendored unchanged
+  lib/splash/orders/royalty_withdraw.ak         vendored unchanged
+  validators/royalty_pool/single_royalty_withdraw_pool.ak  vendored unchanged
+  validators/royalty_pool/pool.ak               ported from
+      plutarch-validators/WhalePoolsDex/PContracts/PRoyaltyPool.hs (Plutarch)
+      to Aiken, with a Noctis-specific royalty-redirect arm added
+
+splash-core is published under CC0-1.0 (repository LICENSE, reproduced in
+vendor/LICENSE.splash-core); its Aiken packages declare Apache-2.0 in their
+manifests. This package follows the Apache-2.0 terms for the derived files:
+the licence text is retained, this notice records the origin, and modified
+files are marked as such in their headers.
+
+Everything else in this package is (c) Noctis Zone, Apache-2.0.
