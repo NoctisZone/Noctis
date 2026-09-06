@@ -25,16 +25,12 @@ use cardano/assets.{ada_asset_name, ada_policy_id}
 use cardano/transaction.{
   InlineDatum, Input, Output, OutputReference, Transaction,
 }
+use noctisswap/orders.{Apply, OrderAction, Refund}
 use noctisswap/pool_state.{is_ada}
 use splash/orders/royalty_withdraw.{RoyaltyWithdrawConfig, WithdrawData}
 use splash/plutus.{Asset}
 use splash/royalty_pool/single_royalty_pool.{SingleRoyaltyPoolConfig}
 use splash/value_ext.{asset_quantity_of}
-
-pub type OrderAction {
-  Apply { pool_in_ix: Int, order_in_ix: Int, reward_out_ix: Int }
-  Refund
-}
 
 validator withdraw_order {
   spend(

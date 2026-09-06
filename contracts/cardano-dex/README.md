@@ -23,6 +23,9 @@ creator's key. See `NOTICE` for the exact provenance and licence terms.
 | `validators/royalty_pool/pool.ak` | ported from `PRoyaltyPool.hs` (Plutarch) | Aiken port with tests; adds the `RedirectRoyalty` arm |
 | `validators/royalty_pool/withdraw_order.ak` | ported from `PRoyaltyWithdrawOrder.hs` (Plutarch) | the creator's claim request; payout address derived from the pool's royalty key |
 | `validators/royalty_pool/treasury.ak` | ours, informed by `PRoyaltyDAOV1.hs` | the platform slot: withdraw to the platform wallet, adjust the treasury fee within a band |
+| `validators/royalty_pool/deposit_order.ak` | ported from `PRoyaltyDeposit.hs` (Plutarch) | a request to add liquidity; the placer's side of a deposit |
+| `validators/royalty_pool/redeem_order.ak` | ported from `PRoyaltyRedeem.hs` (Plutarch) | a request to remove liquidity; the placer's side of a redeem |
+| `lib/noctisswap/orders.ak` | ours, layouts after Splash's `DepositConfig`/`RedeemConfig` | the order action and request types, and the reward-address rule |
 | `validators/royalty_pool/redirect.ak` | ours | the governance side of a royalty redirect: grants the pool's redirect withdrawal only against the launch's own CTO governance record |
 | `lib/noctisswap/pool_state.ak` | ours | shared datum and value readers |
 | `lib/noctisswap/launch_records.ak` | ours | field-for-field mirrors of the launch package's governance and escrow records, and the thread NFT naming |
@@ -55,6 +58,10 @@ pool guarded by this script without modification.
 - **The platform slot has its own small script** instead of Splash's multisig
   DAO action: withdraw to the platform wallet, or move `treasury_fee` within
   `[0, max_treasury_fee]`, each bumping the nonce and touching nothing else.
+- **Deposit and redeem requests name the pool's own assets.** A request whose
+  assets are not the pool's is refused outright, and a deposit's collateral is
+  checked back to the placer on every fill, not only when ADA is the surplus
+  side. Both are tightenings over the Plutarch source.
 
 ## Fee model
 
@@ -66,10 +73,9 @@ values set at creation, not constants of the validator.
 
 ## Not here yet
 
-Order validator and batcher (Splash's executor is unlicensed and is not used),
-the graduation transaction that mints a launch's pool NFT and seeds the pool,
-deposit and redeem order validators, and the escrow integration. The build plan
-tracks these.
+Spot-order validator and batcher (Splash's executor is unlicensed and is not
+used), the graduation transaction that mints a launch's pool NFT and seeds the
+pool, and the escrow integration. The build plan tracks these.
 
 ## Build and test
 
