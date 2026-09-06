@@ -206,12 +206,9 @@ fn has_withdrawal(self: Transaction, cred: Credential) -> Bool {
 }
 
 /// `royalty_withdraw_vh`: script hash of the royalty-withdraw validator, which
-/// Splash hardcodes and Noctis parameterises. `cto_governance_cred`: the
+/// Splash hardcodes and Noctis parameterises. `redirect_cred`: the
 /// credential whose withdrawal authorises a royalty redirect.
-validator pool(
-  royalty_withdraw_vh: ByteArray,
-  cto_governance_cred: Credential,
-) {
+validator pool(royalty_withdraw_vh: ByteArray, redirect_cred: Credential) {
   spend(
     datum: Option<SingleRoyaltyPoolConfig>,
     redeemer: PoolRedeemer,
@@ -258,7 +255,7 @@ validator pool(
       has_withdrawal(self, Script(royalty_withdraw_vh))
     } else if redeemer.action == action_redirect_royalty {
       and {
-        has_withdrawal(self, cto_governance_cred),
+        has_withdrawal(self, redirect_cred),
         redirect_config_ok(cfg, succ_cfg),
         successor.value == self_out.value,
       }

@@ -23,7 +23,9 @@ creator's key. See `NOTICE` for the exact provenance and licence terms.
 | `validators/royalty_pool/pool.ak` | ported from `PRoyaltyPool.hs` (Plutarch) | Aiken port with tests; adds the `RedirectRoyalty` arm |
 | `validators/royalty_pool/withdraw_order.ak` | ported from `PRoyaltyWithdrawOrder.hs` (Plutarch) | the creator's claim request; payout address derived from the pool's royalty key |
 | `validators/royalty_pool/treasury.ak` | ours, informed by `PRoyaltyDAOV1.hs` | the platform slot: withdraw to the platform wallet, adjust the treasury fee within a band |
+| `validators/royalty_pool/redirect.ak` | ours | the governance side of a royalty redirect: grants the pool's redirect withdrawal only against the launch's own CTO governance record |
 | `lib/noctisswap/pool_state.ak` | ours | shared datum and value readers |
+| `lib/noctisswap/launch_records.ak` | ours | field-for-field mirrors of the launch package's governance and escrow records, and the thread NFT naming |
 
 Splash ships the pool validator itself only in Plutarch (Haskell). The Aiken
 package in their tree holds the withdraw path and the datum types. The port keeps
@@ -34,9 +36,16 @@ pool guarded by this script without modification.
 
 - **`RedirectRoyalty` (action 5).** Splash's DAO action cannot change the royalty
   key. A passed community-takeover vote must redirect the creator's fee stream,
-  so this arm changes `royalty_pub_key` (and bumps the nonce) when the CTO
-  governance credential's withdrawal is present in the transaction, and changes
-  nothing else.
+  so this arm changes `royalty_pub_key` (and bumps the nonce) when the redirect
+  script's withdrawal is present in the transaction, and changes nothing else.
+- **The redirect script decides whether and where.** It reads the launch's CTO
+  governance record as a reference input: a takeover needs the record in the
+  triggered state and the new key hashing to the community wallet it names; a
+  dissolve needs the dissolved state and the new key hashing to the creator's
+  fee-recipient key as the LP escrow records it. The pool is bound to its launch
+  through its NFT, which is a thread NFT of the launch under the platform's
+  thread NFT policy, the same policy the governance and escrow records carry
+  their own NFTs under. One pool per redirect transaction.
 - **Parameters instead of constants.** The royalty-withdraw script hash and the
   withdraw-request script hash are validator parameters here; Splash compiles
   them in.
@@ -58,9 +67,8 @@ values set at creation, not constants of the validator.
 ## Not here yet
 
 Order validator and batcher (Splash's executor is unlicensed and is not used),
-the pool factory that lets only a launch's graduation transaction create a pool,
-deposit and redeem order validators, the governance-side script that grants the
-redirect withdrawal on a passed vote, and the escrow integration. The build plan
+the graduation transaction that mints a launch's pool NFT and seeds the pool,
+deposit and redeem order validators, and the escrow integration. The build plan
 tracks these.
 
 ## Build and test
