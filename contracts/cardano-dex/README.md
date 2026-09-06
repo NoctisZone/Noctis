@@ -19,8 +19,11 @@ creator's key. See `NOTICE` for the exact provenance and licence terms.
 | File | Origin | Status |
 |---|---|---|
 | `lib/splash/*.ak`, `lib/splash/royalty_pool/single_royalty_pool.ak`, `lib/splash/orders/royalty_withdraw.ak` | splash-core `validators_v3` (Aiken) | vendored unchanged; compiles on stdlib v3.1.0 |
-| `validators/royalty_pool/single_royalty_withdraw_pool.ak` | splash-core `validators_v3` (Aiken) | vendored unchanged; still hardcodes Splash's withdraw-request script hash, to be parameterised before deployment |
+| `validators/royalty_pool/single_royalty_withdraw_pool.ak` | splash-core `validators_v3` (Aiken) | vendored; the request script hash is now a validator parameter |
 | `validators/royalty_pool/pool.ak` | ported from `PRoyaltyPool.hs` (Plutarch) | Aiken port with tests; adds the `RedirectRoyalty` arm |
+| `validators/royalty_pool/withdraw_order.ak` | ported from `PRoyaltyWithdrawOrder.hs` (Plutarch) | the creator's claim request; payout address derived from the pool's royalty key |
+| `validators/royalty_pool/treasury.ak` | ours, informed by `PRoyaltyDAOV1.hs` | the platform slot: withdraw to the platform wallet, adjust the treasury fee within a band |
+| `lib/noctisswap/pool_state.ak` | ours | shared datum and value readers |
 
 Splash ships the pool validator itself only in Plutarch (Haskell). The Aiken
 package in their tree holds the withdraw path and the datum types. The port keeps
@@ -34,8 +37,15 @@ pool guarded by this script without modification.
   so this arm changes `royalty_pub_key` (and bumps the nonce) when the CTO
   governance credential's withdrawal is present in the transaction, and changes
   nothing else.
-- **Parameters instead of constants.** The royalty-withdraw script hash is a
-  validator parameter here; Splash compiles it in.
+- **Parameters instead of constants.** The royalty-withdraw script hash and the
+  withdraw-request script hash are validator parameters here; Splash compiles
+  them in.
+- **The creator's payout address is derived, not declared.** A claim request
+  carries no destination; the reward must go to the key hash of the pool's
+  `royalty_pub_key`. A CTO redirect of that key moves the payout with it.
+- **The platform slot has its own small script** instead of Splash's multisig
+  DAO action: withdraw to the platform wallet, or move `treasury_fee` within
+  `[0, max_treasury_fee]`, each bumping the nonce and touching nothing else.
 
 ## Fee model
 
@@ -49,7 +59,8 @@ values set at creation, not constants of the validator.
 
 Order validator and batcher (Splash's executor is unlicensed and is not used),
 the pool factory that lets only a launch's graduation transaction create a pool,
-deposit and redeem order validators, and the escrow integration. The build plan
+deposit and redeem order validators, the governance-side script that grants the
+redirect withdrawal on a passed vote, and the escrow integration. The build plan
 tracks these.
 
 ## Build and test

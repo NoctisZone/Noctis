@@ -93,7 +93,13 @@ validator royalty_withdraw_pool {
     }
 
     expect order_conf: RoyaltyWithdrawConfig = order_datum
-    let RoyaltyWithdrawConfig { withdraw_data: wd, signature, additional_bytes }
+    let  
+        RoyaltyWithdrawConfig {
+          withdraw_data: wd,
+          signature,
+          additional_bytes,
+          ..
+        }
       = order_conf
 
     let  

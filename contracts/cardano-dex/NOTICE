@@ -8,11 +8,19 @@ Spectrum / Splash team:
   lib/splash/value_ext.ak                       vendored unchanged
   lib/splash/rational.ak                        vendored unchanged
   lib/splash/royalty_pool/single_royalty_pool.ak vendored unchanged
-  lib/splash/orders/royalty_withdraw.ak         vendored unchanged
-  validators/royalty_pool/single_royalty_withdraw_pool.ak  vendored unchanged
+  lib/splash/orders/royalty_withdraw.ak         vendored, modified: a trailing
+      `owner` field on the request datum (the signed part is unchanged)
+  validators/royalty_pool/single_royalty_withdraw_pool.ak  vendored, modified:
+      the request script hash became a validator parameter
   validators/royalty_pool/pool.ak               ported from
       plutarch-validators/WhalePoolsDex/PContracts/PRoyaltyPool.hs (Plutarch)
       to Aiken, with a Noctis-specific royalty-redirect arm added
+  validators/royalty_pool/withdraw_order.ak     ported from
+      plutarch-validators/WhalePoolsDex/PContracts/PRoyaltyWithdrawOrder.hs,
+      with the payout address derived from the pool's royalty key
+  validators/royalty_pool/treasury.ak           Noctis, informed by
+      plutarch-validators/WhalePoolsDex/PContracts/PRoyaltyDAOV1.hs
+  lib/noctisswap/pool_state.ak                  Noctis
 
 splash-core is published under CC0-1.0 (repository LICENSE, reproduced in
 vendor/LICENSE.splash-core); its Aiken packages declare Apache-2.0 in their
