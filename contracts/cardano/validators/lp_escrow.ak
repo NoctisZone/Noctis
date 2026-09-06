@@ -274,7 +274,16 @@ fn cto_vote_verified(
     // policy (no attacker can mint it) and preserved in cto_governance.ak's
     // continuing output on every spend, so only the real governance UTXO
     // can ever carry it.
-    assets.quantity_of(cto_ref_input.output.value, datum.thread_nft_policy, datum.launch_id) == 1,
+    // Named with the governance role tag, exactly as cto_governance.ak
+    // preserves it and the genesis mint creates it.
+    assets.quantity_of(
+      cto_ref_input.output.value,
+      datum.thread_nft_policy,
+      thread_nft.thread_asset_name(
+        thread_nft.role_cto_governance,
+        datum.launch_id,
+      ),
+    ) == 1,
     cto_datum.launch_id == datum.launch_id,
     executed.proposal_type == proposal_type,
     executed.outcome == Passed,
@@ -611,7 +620,13 @@ validator lp_escrow {
           // bound is what pins the declared value to now. Any redeemer that
           // accepts a caller-declared timestamp needs both halves.
           validity_range_is_narrow(self.validity_range, max_validity_range_width),
-          seeded_ada > 0,
+          // The position is the LP token named in the datum, and there must
+          // be some. ADA may or may not arrive with it: a venue pool takes
+          // the whole raise and the escrow holds only the pool's LQ token,
+          // so `seeded_ada` is zero on that path and positive when the escrow
+          // holds raw reserves.
+          seeded_ada >= 0,
+          datum.lp_token_amount > 0,
           lp_value_received(self, own_ref, datum, seeded_ada),
           // The sealed LP position can't be padded with junk assets.
           lp_own_output_clean(self, own_ref),
@@ -1008,10 +1023,17 @@ fn mock_cto_ref_input(
     output_reference: OutputReference { transaction_id: #"cd", output_index: 0 },
     output: Output {
       address: cto_address,
-      // Fix: genuine governance UTXO carries its per-launch thread NFT
-      // (policy = the escrow datum's thread_nft_policy `#"c0ffee"`,
-      // asset_name = launch_id); cto_vote_verified now requires it.
-      value: assets.from_asset(#"c0ffee", cto_datum.launch_id, 1),
+      // The genuine governance UTXO carries its per-launch thread NFT
+      // (policy = the escrow datum's thread_nft_policy `#"c0ffee"`, named
+      // with the governance role tag); cto_vote_verified requires it.
+      value: assets.from_asset(
+        #"c0ffee",
+        thread_nft.thread_asset_name(
+          thread_nft.role_cto_governance,
+          cto_datum.launch_id,
+        ),
+        1,
+      ),
       datum: InlineDatum(cto_datum),
       reference_script: None,
     },
@@ -1278,7 +1300,9 @@ test seal_lock_fails_if_already_sealed() {
   )
 }
 
-test seal_lock_rejects_zero_seeded_ada() {
+/// A venue graduation seals the escrow with the pool's LQ token alone: the
+/// raise went into the pool, so no ADA arrives and `seeded_ada` is zero.
+test seal_lock_accepts_an_lq_only_position() {
   let datum = mock_datum(Cancelled, 0)
   let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
   let own_address = from_verification_key(#"cc")
@@ -1309,6 +1333,49 @@ test seal_lock_rejects_zero_seeded_ada() {
       ..transaction.placeholder,
       inputs: [own_input],
       outputs: [continuing_output],
+      validity_range: interval.between(400, 600),
+    }
+
+  lp_escrow.spend(
+    Some(datum),
+    SealLock { timestamp: 500, seeded_ada: 0 },
+    own_ref,
+    self,
+  )
+}
+
+/// Identical, except the datum names an empty position and none arrives:
+/// a seal must lock something.
+test seal_lock_rejects_an_empty_position() {
+  let datum =
+    LpEscrowDatum { ..mock_datum(Cancelled, 0), lp_token_amount: 0 }
+  let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
+  let own_address = from_verification_key(#"cc")
+  let own_input =
+    Input {
+      output_reference: own_ref,
+      output: Output {
+        address: own_address,
+        value: assets.merge(mock_thread_nft(), assets.from_lovelace(2_000_000)),
+        datum: InlineDatum(datum),
+        reference_script: None,
+      },
+    }
+  let new_datum =
+    LpEscrowDatum { ..datum, lock_timestamp: 500, lp_state: Locked }
+  let continuing_output =
+    Output {
+      address: own_address,
+      value: assets.merge(mock_thread_nft(), assets.from_lovelace(2_000_000)),
+      datum: InlineDatum(new_datum),
+      reference_script: None,
+    }
+  let self =
+    Transaction {
+      ..transaction.placeholder,
+      inputs: [own_input],
+      outputs: [continuing_output],
+      validity_range: interval.between(400, 600),
     }
 
   !lp_escrow.spend(

@@ -315,6 +315,13 @@ pub type BondingCurveTierBDatum {
   // registration closed, by the one party who knows who registered.
   dv_claim_window: Int,
   dv_settlement_window: Int,
+  // The venue's factory policy. At graduation it mints this launch's pool
+  // NFT and LQ token, and `Graduate` seeds the output that carries the pool
+  // NFT with the raise and the LP reserve; the LP escrow, sealed in the same
+  // transaction, holds the LQ position instead of raw reserves. Declared at
+  // genesis and never rewritten, so it sits at the back with the other
+  // read-only terms.
+  pool_nft_policy: PolicyId,
 }
 
 /// One order inside a batch. The order's own UTXO holds the funds being spent
@@ -1171,26 +1178,18 @@ fn active_fee_recipient(datum: BondingCurveTierBDatum) -> VerificationKeyHash {
   }
 }
 
-/// Fix (2026-07-17): same bug, same fix, as the linear curve's bonding_curve.ak
-/// own `lp_seeding_output_ok` — see that file's comment for the full
-/// on-chain-reproduced/aiken-tx-simulate-isolated/unit-test-confirmed
-/// explanation. Exact lovelace equality against `lp_ada` alone can never
-/// be satisfied against a real, already-funded lp_escrow genesis UTXO;
-/// `>=` is correct since `graduation_funds_left_curve`/`lp_value_received`
-/// already enforce the exact amounts on each side independently.
-/// **These outputs must carry NO stake credential.** `Graduate` is
-/// permissionless — the condition is the authorization — so whoever submits it
-/// chooses the addresses it creates. Matching only the payment credential lets
-/// them attach a staking credential of their own to the LP escrow, which then
-/// delegates locked LP to their pool for the whole 365-day lock, and survives
-/// every later escrow spend because `lp_escrow.ak` matches its continuing
-/// output by full address. The same applies to the staking pool's own reserve.
+/// The graduation seeds the venue pool: the output that carries this launch's
+/// pool NFT, minted by the factory policy in this same transaction, receives
+/// the whole raise and the LP reserve. The factory pins that output to the
+/// pool script at a bare address and checks the pool's opening datum, so this
+/// side needs only the value and the NFT. `>=` on lovelace because the pool
+/// output also carries its own minimum ADA; `graduation_funds_left_curve`
+/// enforces the exact amount on the curve's side.
 ///
-/// `None` rather than a credential named in the datum: an honest graduation
-/// already builds a bare script address, so this costs nothing today, and
-/// delegating protocol LP deliberately would be a feature with a datum field
-/// behind it rather than something any submitter may decide.
-fn lp_seeding_output_ok(
+/// Four assets at most: lovelace, the launch token, the pool NFT and the
+/// pool's own LQ balance. A padded pool output would carry the padding for
+/// the pool's whole life, since the pool validator holds its asset count.
+fn pool_seeding_output_ok(
   self: Transaction,
   datum: BondingCurveTierBDatum,
   lp_ada: Int,
@@ -1198,20 +1197,15 @@ fn lp_seeding_output_ok(
   list.any(
     self.outputs,
     fn(output) {
-      output.address.payment_credential == datum.lp_escrow_credential && output.address.stake_credential == None && assets.lovelace_of(
+      assets.quantity_of(
         output.value,
-      ) >= lp_ada && assets.quantity_of(
+        datum.pool_nft_policy,
+        thread_nft.thread_asset_name(thread_nft.role_pool, datum.launch_id),
+      ) == 1 && assets.lovelace_of(output.value) >= lp_ada && assets.quantity_of(
         output.value,
         datum.token_policy_id,
         datum.token_asset_name,
-      ) == datum.lp_reserve_tokens && assets.quantity_of(
-        output.value,
-        datum.thread_nft_policy,
-        thread_nft.thread_asset_name(
-          thread_nft.role_lp_escrow,
-          datum.launch_id,
-        ),
-      ) == 1 && output_value_clean(output, 3)
+      ) == datum.lp_reserve_tokens && output_value_clean(output, 4)
     },
   )
 }
@@ -1931,7 +1925,7 @@ validator bonding_curve_tier_b {
           // same way, so it needs the same guard.
           datum.total_raised > 0,
           graduation_funds_left_curve(self, own_ref, datum, datum.total_raised),
-          lp_seeding_output_ok(self, datum, datum.total_raised),
+          pool_seeding_output_ok(self, datum, datum.total_raised),
           staking_seeding_output_ok(self, datum),
           // The curve's own post-graduation output can't be padded.
           curve_own_output_clean(self, own_ref),
@@ -2036,6 +2030,16 @@ fn mock_lp_escrow_nft() -> assets.Value {
   assets.from_asset(
     #"c0ffee",
     thread_nft.thread_asset_name(thread_nft.role_lp_escrow, #"01"),
+    1,
+  )
+}
+
+/// The pool NFT the venue's factory mints at graduation, under the datum's
+/// pool_nft_policy (#"0f").
+fn mock_pool_nft() -> assets.Value {
+  assets.from_asset(
+    #"0f",
+    thread_nft.thread_asset_name(thread_nft.role_pool, #"01"),
     1,
   )
 }
@@ -2205,6 +2209,7 @@ fn mock_datum(
     // The one key every batch fixture below signs with, so a fixture that
     // wants to test the allowlist changes exactly this line and nothing else.
     batcher_allowlist: [#"ba"],
+    pool_nft_policy: #"0f",
   }
 }
 
@@ -5482,7 +5487,7 @@ test tier_b_graduate_succeeds_with_correct_lp_seeding() {
   let lp_output =
     Output {
       address: lp_address,
-      value: assets.merge(mock_lp_escrow_nft(), assets.merge(
+      value: assets.merge(mock_pool_nft(), assets.merge(
         assets.from_lovelace(98_000),
         assets.from_asset(#"33", "tok", 150),
       )),
@@ -5500,19 +5505,14 @@ test tier_b_graduate_succeeds_with_correct_lp_seeding() {
   bonding_curve_tier_b.spend(Some(datum), Graduate, own_ref, self)
 }
 
-/// Identical to the passing graduation above, except the LP escrow output
-/// carries a STAKING CREDENTIAL. Everything else is right — correct script,
-/// correct ada, correct tokens, correct thread NFT.
-///
-/// `Graduate` is permissionless, so whoever submits it picks that credential.
-/// It would delegate the locked LP to their own pool for the whole 365-day
-/// lock, and `lp_escrow.ak` matches its continuing output by full address, so
-/// every later spend would preserve it rather than notice it.
-test tier_b_graduate_rejects_lp_output_carrying_a_staking_credential() {
+/// Identical to the passing graduation above, except the pool output holds
+/// one launch token short of the LP reserve. Everything else is right:
+/// correct pool NFT, enough ADA, clean value.
+test tier_b_graduate_rejects_pool_output_short_of_the_reserve() {
   let datum = graduation_datum()
   let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
   let own_address = from_verification_key(#"cc")
-  let lp_address = from_verification_key(#"ff") |> with_delegation_key(#"5a")
+  let lp_address = from_verification_key(#"ff")
   let base_lovelace = 5_000_000 + 98_000
   let own_input =
     Input {
@@ -5547,8 +5547,68 @@ test tier_b_graduate_rejects_lp_output_carrying_a_staking_credential() {
   let lp_output =
     Output {
       address: lp_address,
-      value: assets.merge(mock_lp_escrow_nft(), assets.merge(
+      value: assets.merge(mock_pool_nft(), assets.merge(
         assets.from_lovelace(98_000),
+        assets.from_asset(#"33", "tok", 149),
+      )),
+      datum: transaction.NoDatum,
+      reference_script: None,
+    }
+  let self =
+    Transaction {
+      ..transaction.placeholder,
+      inputs: [own_input],
+      outputs: [continuing_output, lp_output],
+      // Graduate is permissionless — deliberately no extra_signatories.
+    }
+
+  !bonding_curve_tier_b.spend(Some(datum), Graduate, own_ref, self)
+}
+
+/// Identical to the passing graduation above, except the pool output holds
+/// one lovelace short of the raise. Everything else is right: correct pool
+/// NFT, the whole LP reserve, clean value.
+test tier_b_graduate_rejects_pool_output_short_of_the_raise() {
+  let datum = graduation_datum()
+  let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
+  let own_address = from_verification_key(#"cc")
+  let lp_address = from_verification_key(#"ff")
+  let base_lovelace = 5_000_000 + 98_000
+  let own_input =
+    Input {
+      output_reference: own_ref,
+      output: Output {
+        address: own_address,
+        value: assets.merge(mock_curve_nft(), assets.merge(
+          assets.from_lovelace(base_lovelace),
+          assets.from_asset(#"33", "tok", 150),
+        )),
+        datum: InlineDatum(datum),
+        reference_script: None,
+      },
+    }
+  let new_datum =
+    BondingCurveTierBDatum {
+      ..datum,
+      total_raised: 0,
+      lp_seeded: True,
+      staking_seeded: True,
+    }
+  let continuing_output =
+    Output {
+      address: own_address,
+      value: assets.merge(mock_curve_nft(), assets.merge(
+        assets.from_lovelace(base_lovelace - 98_000),
+        assets.from_asset(#"33", "tok", 0),
+      )),
+      datum: InlineDatum(new_datum),
+      reference_script: None,
+    }
+  let lp_output =
+    Output {
+      address: lp_address,
+      value: assets.merge(mock_pool_nft(), assets.merge(
+        assets.from_lovelace(97_999),
         assets.from_asset(#"33", "tok", 150),
       )),
       datum: transaction.NoDatum,
@@ -5565,7 +5625,7 @@ test tier_b_graduate_rejects_lp_output_carrying_a_staking_credential() {
   !bonding_curve_tier_b.spend(Some(datum), Graduate, own_ref, self)
 }
 
-test tier_b_graduate_rejects_padded_lp_output() {
+test tier_b_graduate_rejects_padded_pool_output() {
   // Identical to tier_b_graduate_succeeds_with_correct_lp_seeding,
   // except the new lp_escrow genesis output carries one extra, unrelated
   // junk asset. Graduate is permissionless, so ANYONE could otherwise pad
@@ -5608,13 +5668,19 @@ test tier_b_graduate_rejects_padded_lp_output() {
   let lp_output =
     Output {
       address: lp_address,
-      value: assets.merge(mock_lp_escrow_nft(), assets.merge(
+      value: assets.merge(mock_pool_nft(), assets.merge(
         assets.merge(
           assets.from_lovelace(98_000),
           assets.from_asset(#"33", "tok", 150),
         ),
         // Junk asset from an unrelated policy — the padding attack.
-        assets.from_asset(#"deadbeef", "spam", 1),
+        // Two junk assets: a pool output legitimately carries four (lovelace,
+        // the launch token, the pool NFT and its LQ balance), so one extra is
+        // the first the count can refuse.
+        assets.merge(
+          assets.from_asset(#"deadbeef", "spam", 1),
+          assets.from_asset(#"deadbeef", "eggs", 1),
+        ),
       )),
       datum: transaction.NoDatum,
       reference_script: None,
@@ -5668,7 +5734,7 @@ test tier_b_graduate_rejects_before_graduated() {
   let lp_output =
     Output {
       address: lp_address,
-      value: assets.merge(mock_lp_escrow_nft(), assets.merge(
+      value: assets.merge(mock_pool_nft(), assets.merge(
         assets.from_lovelace(98_000),
         assets.from_asset(#"33", "tok", 150),
       )),
@@ -5725,7 +5791,7 @@ test tier_b_graduate_rejects_if_already_seeded() {
   let lp_output =
     Output {
       address: lp_address,
-      value: assets.merge(mock_lp_escrow_nft(), assets.merge(
+      value: assets.merge(mock_pool_nft(), assets.merge(
         assets.from_lovelace(98_000),
         assets.from_asset(#"33", "tok", 150),
       )),
@@ -5819,7 +5885,7 @@ test tier_b_graduate_succeeds_with_lp_and_staking_seeding() {
   let lp_output =
     Output {
       address: lp_address,
-      value: assets.merge(mock_lp_escrow_nft(), assets.merge(
+      value: assets.merge(mock_pool_nft(), assets.merge(
         assets.from_lovelace(98_000),
         assets.from_asset(#"33", "tok", 150),
       )),
@@ -5927,8 +5993,8 @@ test tier_b_spend_rejects_tier_a_role_thread_nft() {
 }
 
 /// Identical to tier_b_graduate_succeeds_with_lp_and_staking_seeding except
-/// the lp_escrow destination carries no thread NFT.
-test tier_b_graduate_rejects_lp_output_without_thread_nft() {
+/// the pool destination carries no pool NFT.
+test tier_b_graduate_rejects_pool_output_without_pool_nft() {
   let datum = staking_graduation_datum()
   let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
   let own_address = from_verification_key(#"cc")
@@ -5974,7 +6040,7 @@ test tier_b_graduate_rejects_lp_output_without_thread_nft() {
   let lp_output =
     Output {
       address: lp_address,
-      // The one change: no thread NFT on the destination.
+      // The one change: no pool NFT on the destination.
       value: assets.merge(
         assets.from_lovelace(98_000),
         assets.from_asset(#"33", "tok", 150),
@@ -5989,7 +6055,7 @@ test tier_b_graduate_rejects_lp_output_without_thread_nft() {
         mock_staking_pool_nft(),
         assets.from_asset(#"33", "tok", 250),
       ),
-      datum: transaction.NoDatum,
+      datum: InlineDatum(staking_genesis(datum, graduation_time)),
       reference_script: None,
     }
   let self =
@@ -6054,7 +6120,7 @@ test tier_b_graduate_rejects_staking_output_without_thread_nft() {
     Output {
       address: lp_address,
       value: assets.merge(
-        mock_lp_escrow_nft(),
+        mock_pool_nft(),
         assets.merge(
           assets.from_lovelace(98_000),
           assets.from_asset(#"33", "tok", 150),
@@ -6125,7 +6191,7 @@ test tier_b_graduate_rejects_missing_staking_output_when_enabled() {
   let lp_output =
     Output {
       address: lp_address,
-      value: assets.merge(mock_lp_escrow_nft(), assets.merge(
+      value: assets.merge(mock_pool_nft(), assets.merge(
         assets.from_lovelace(98_000),
         assets.from_asset(#"33", "tok", 150),
       )),
@@ -6181,7 +6247,7 @@ test tier_b_graduate_succeeds_without_staking_output_when_disabled() {
   let lp_output =
     Output {
       address: lp_address,
-      value: assets.merge(mock_lp_escrow_nft(), assets.merge(
+      value: assets.merge(mock_pool_nft(), assets.merge(
         assets.from_lovelace(98_000),
         assets.from_asset(#"33", "tok", 150),
       )),

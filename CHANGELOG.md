@@ -22,8 +22,13 @@ Notable changes to the Noctis Zone, by release. Internal development history pre
   royalty pool (CC0-1.0; provenance in the package's NOTICE) and keeps Splash's
   datum layout, so their royalty-withdraw validator, vendored unchanged, applies
   as is. One arm is new: a passed community-takeover vote can redirect the
-  creator's fee key, which Splash's own governance action does not allow. Separate
-  from `contracts/cardano`; no deployed validator's hash changes.
+  creator's fee key, which Splash's own governance action does not allow. A
+  separate package; the venue's own scripts change no deployed validator's hash.
+  The package also carries the creator's claim request, a platform treasury
+  script, the governance-side redirect script, deposit, redeem and swap requests,
+  and the pool factory: one minting policy that creates a launch's pool NFT and
+  LQ token only in that launch's graduation transaction, on the authority of the
+  launch's own LP escrow.
 - A browser widget for CTO governance. A holder's Cardano wallet derives their
   launch-scoped voting identity and proves control of the address the snapshot
   names; a Midnight wallet pays for and submits the vote. Registration accepts
@@ -51,6 +56,16 @@ Notable changes to the Noctis Zone, by release. Internal development history pre
 
 ### Changed
 
+- A Cardano Launch graduates onto the venue. The curve's `Graduate` seeds the
+  output that carries the launch's pool NFT, minted by the venue's factory
+  policy in the same transaction, with the whole raise and the LP reserve; the
+  LP escrow seals holding the pool's LQ token as its position, named in its
+  genesis datum; the curve datum names the factory policy. Three validator
+  hashes change (the Cardano Launch curve, the LP escrow and vesting) and ship
+  with the next validator release. The genesis builder takes the factory
+  policy id as a required input.
+- The LP escrow and vesting validators look the governance record's thread NFT
+  up under its role-tagged name, as the record carries it.
 - The compiled-artifact guard records one fingerprint per compiled Compact contract, and each
   CLI is held to the artifacts of the contract it proves against. A build that carries no
   artifacts for a contract says so rather than proving against whatever it is pointed at.

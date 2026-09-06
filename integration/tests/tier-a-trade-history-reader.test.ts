@@ -61,6 +61,7 @@ async function curveDatum() {
     tokenName: 'Test Token',
     tokenDescription: 'A launch built only to drive the history reader.',
     threadNftPolicyIdHex: 'ff'.repeat(28),
+    poolNftPolicyIdHex: 'ee'.repeat(28),
     basePrice: 3,
     maxPrice: 75,
     vestDays: 90,

@@ -33,11 +33,12 @@
 //     transaction deposits exactly datum.lp_token_amount of
 //     (datum.lp_token_policy_id, datum.lp_token_name); SealLock's own
 //     equality check on new_datum never updates those 3 fields, meaning
-//     they must ALREADY be correct at GENESIS, not set later. Concretely:
-//     lp_token_policy_id/lp_token_name = the launch's own token identity,
-//     lp_token_amount = lp_reserve_tokens (same figure bonding_curve's own
-//     lp_reserve_tokens field holds) — confirmed by reading lp_value_received()
-//     directly, not assumed from the "15% of supply" prose alone.
+//     they must ALREADY be correct at GENESIS, not set later. Concretely,
+//     for a Cardano Launch the position is the venue pool's LQ token:
+//     lp_token_policy_id = the factory policy, lp_token_name = the LQ role
+//     tag + launch id, lp_token_amount = VENUE_INITIAL_LQ, all of which the
+//     factory checks at the pool mint. The retired linear path keeps the
+//     launch's own token identity with lp_reserve_tokens as the amount.
 //
 // launch_id scheme (fresh decision, 2026-07-17, restated explicitly here
 // since it wasn't preserved verbatim across a context compaction earlier
@@ -103,8 +104,10 @@ import {
   type TokenMetadataDatumData,
   TokenMetadataDatumSchema,
   threadNftAssetNames,
+  VENUE_INITIAL_LQ,
   type VestingDatumData,
   VestingDatumSchema,
+  venueAssetName,
   type ZkAnchorDatumData,
   ZkAnchorDatumSchema,
 } from './tier-a-schemas.js';
@@ -226,6 +229,14 @@ export interface BuildGenesisDatumsInput {
   // now also used below to build the real genesis cto_governance UTXO/datum.
   threadNftPolicyIdHex: string;
 
+  // The venue's factory policy id (PolicyId, 28-byte hex): the minting policy
+  // that creates this launch's pool NFT and LQ token at graduation. Written
+  // into the Cardano Launch curve datum (pool_nft_policy), and it decides the
+  // LP escrow's position (the LQ token under this policy). Required: a launch
+  // minted without it has no pool to graduate onto. Derive it from the venue
+  // blueprint with the deployed parameters, never type it in.
+  poolNftPolicyIdHex: string;
+
   // Phase G (2026-07-28): genesis inputs for the NEW 4th genesis output —
   // the initial cto_governance UTXO itself (previously only this validator's
   // SCRIPT HASH was embedded into the other 3 datums as a reference
@@ -320,6 +331,7 @@ export async function buildGenesisDatums(input: BuildGenesisDatumsInput) {
     'maxPrice',
     'vestDays',
     'threadNftPolicyIdHex',
+    'poolNftPolicyIdHex',
     'bondPayoutPubKeyHashHex',
   ]);
 
@@ -564,6 +576,7 @@ export async function buildGenesisDatums(input: BuildGenesisDatumsInput) {
           // has to be asked for rather than arrived at.
           dv_claim_window: BigInt(dvClaimWindowMs),
           dv_settlement_window: BigInt(dvSettlementWindowMs),
+          pool_nft_policy: input.poolNftPolicyIdHex,
         }
       : {
           ...sharedCurveFields,
@@ -602,9 +615,12 @@ export async function buildGenesisDatums(input: BuildGenesisDatumsInput) {
     multisig_signers: [input.governorPubKeyHashHex], // confirmed decision 2026-07-17: governor only, 1-of-1
     multisig_threshold: 1n,
     pending_dex_change: null,
-    lp_token_policy_id: input.tokenPolicyIdHex,
-    lp_token_name: tokenAssetNameHex,
-    lp_token_amount: BigInt(lpReserveTokens),
+    // The position the seal must find. Cardano Launch: the venue pool's LQ
+    // token, minted by the factory at graduation. Linear path: the launch's
+    // own token, seeded as raw reserves.
+    lp_token_policy_id: tier === 'B' ? input.poolNftPolicyIdHex : input.tokenPolicyIdHex,
+    lp_token_name: tier === 'B' ? venueAssetName('lq', launchIdHex) : tokenAssetNameHex,
+    lp_token_amount: tier === 'B' ? VENUE_INITIAL_LQ : BigInt(lpReserveTokens),
     cto_governance_credential: ctoGovernanceCredential,
     thread_nft_policy: threadNftPolicyId,
     last_migration_timestamp: 0n, // never migrated at genesis

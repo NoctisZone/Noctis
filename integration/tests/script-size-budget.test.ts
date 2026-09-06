@@ -232,16 +232,16 @@ for (const v of blueprint.validators) {
  */
 const RECORDED: Record<string, number> = {
   bonding_curve: 12_899,
-  bonding_curve_tier_b: 14_978,
+  bonding_curve_tier_b: 14_953,
   cto_governance: 7_962,
   cto_sybil_challenge: 2_123,
   curve_order: 1_775,
   launch_token_policy: 419,
-  lp_escrow: 7_638,
+  lp_escrow: 7_675,
   nhop_challenge: 2_093,
   staking_pool: 5_447,
   token_metadata: 4_621,
-  vesting: 5_762,
+  vesting: 5_786,
   zk_anchor: 2_634,
 };
 

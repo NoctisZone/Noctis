@@ -301,8 +301,12 @@ notes in `CLAUDE.md` for the same off-chain-computed, on-chain-verified shape.
 │ total_raised ADA (Option A, all net-of-fee principal)        │
 │ + lp_reserve_tokens (20% of TOTAL_SUPPLY, held in the        │
 │ curve's own UTXO since deploy, untouched by BuyTokens)       │
-│ → to the launch's own lp_escrow_credential (fixed at         │
-│ deploy, can't be redirected)                                 │
+│ → into the venue POOL output: the one carrying the launch's  │
+│ pool NFT, minted by the venue's factory policy (named in     │
+│ the curve datum as pool_nft_policy) in this same tx. The     │
+│ factory pins that output to the pool script at a bare        │
+│ address and checks the pool's opening datum; the curve       │
+│ checks the value and the NFT.                                │
 │                                                              │
 │ Curve is NOT fully consumed — creator/treasury/ops fee       │
 │ accumulators stay claimable after, same as always (Stream A) │
@@ -314,9 +318,12 @@ notes in `CLAUDE.md` for the same off-chain-computed, on-chain-verified shape.
 │ SealLock (reworked) — also PERMISSIONLESS now.               │
 │ Governor-signature requirement replaced with a real value    │
 │ check (lp_value_received): the continuing output must        │
-│ actually hold the seeded ADA + exactly lp_token_amount of    │
-│ the launch token, verified from the LP escrow's OWN side —   │
-│ neither redeemer has to trust the other's bookkeeping.       │
+│ actually hold exactly lp_token_amount of the LP token the    │
+│ datum names — for a Cardano Launch the pool's LQ token,      │
+│ minted by the factory in this same transaction — plus any    │
+│ seeded ADA (zero on the venue path: the raise went into the  │
+│ pool). Verified from the LP escrow's OWN side; neither       │
+│ redeemer has to trust the other's bookkeeping.               │
 │                                                              │
 │ lp_state: Cancelled → Locked, 365-day clock starts           │
 └──────────────────────────────────────────────────────────────┘

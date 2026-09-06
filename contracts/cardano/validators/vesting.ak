@@ -288,7 +288,16 @@ fn cto_vote_verified(
     // policy (no attacker can mint it) and preserved in cto_governance.ak's
     // continuing output on every spend, so only the real governance UTXO
     // can ever carry it.
-    assets.quantity_of(cto_ref_input.output.value, datum.thread_nft_policy, datum.launch_id) == 1,
+    // Named with the governance role tag, exactly as cto_governance.ak
+    // preserves it and the genesis mint creates it.
+    assets.quantity_of(
+      cto_ref_input.output.value,
+      datum.thread_nft_policy,
+      thread_nft.thread_asset_name(
+        thread_nft.role_cto_governance,
+        datum.launch_id,
+      ),
+    ) == 1,
     cto_datum.launch_id == datum.launch_id,
     executed.proposal_type == proposal_type,
     executed.outcome == Passed,
@@ -606,7 +615,14 @@ validator vesting {
           // datum would drain the vesting reserve. The genuine per-launch
           // governance thread NFT (policy = thread_nft_policy, asset_name =
           // launch_id) can only ever sit in the real governance UTXO.
-          assets.quantity_of(cto_ref_input.output.value, datum.thread_nft_policy, datum.launch_id) == 1,
+          assets.quantity_of(
+            cto_ref_input.output.value,
+            datum.thread_nft_policy,
+            thread_nft.thread_asset_name(
+              thread_nft.role_cto_governance,
+              datum.launch_id,
+            ),
+          ) == 1,
           cto_datum.launch_id == datum.launch_id,
           executed.proposal_type == FundAllocation,
           executed.outcome == Passed,
@@ -789,11 +805,18 @@ fn mock_cto_ref_input(
     output_reference: OutputReference { transaction_id: #"cd", output_index: 0 },
     output: Output {
       address: cto_address,
-      // Fix: genuine governance UTXO carries its per-launch thread NFT
-      // (policy = the vesting datum's thread_nft_policy `#"c0ffee"`,
-      // asset_name = launch_id); cto_vote_verified / ClaimCommunityAllocation
-      // now require it.
-      value: assets.from_asset(#"c0ffee", cto_datum.launch_id, 1),
+      // The genuine governance UTXO carries its per-launch thread NFT
+      // (policy = the vesting datum's thread_nft_policy `#"c0ffee"`, named
+      // with the governance role tag); cto_vote_verified and
+      // ClaimCommunityAllocation require it.
+      value: assets.from_asset(
+        #"c0ffee",
+        thread_nft.thread_asset_name(
+          thread_nft.role_cto_governance,
+          cto_datum.launch_id,
+        ),
+        1,
+      ),
       datum: InlineDatum(cto_datum),
       reference_script: None,
     },

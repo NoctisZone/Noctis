@@ -47,6 +47,15 @@ pub const role_staking_pool: ByteArray = #"05"
 
 pub const role_zk_anchor: ByteArray = #"06"
 
+/// Reserved for the venue package (`contracts/cardano-dex`), whose factory
+/// mints a launch's pool NFT and LQ token under its own policy with these
+/// tags. They are not thread NFTs and the genesis mint never creates them;
+/// they are listed here so no launch role can ever be given the same byte,
+/// and so the curve can name the pool output it seeds at graduation.
+pub const role_pool: ByteArray = #"10"
+
+pub const role_lq: ByteArray = #"11"
+
 /// The asset name this launch's thread NFT carries for a given role.
 ///
 /// Truncating to 31 bytes is what makes room for the role tag inside
@@ -115,6 +124,23 @@ test matches_typescript_implementation() {
     thread_asset_name(role_vesting, launch_id) == #"04aebfbc87161850827e5620fa667e98c533a419298bbed1a8fff960f1b9e2fa",
     thread_asset_name(role_staking_pool, launch_id) == #"05aebfbc87161850827e5620fa667e98c533a419298bbed1a8fff960f1b9e2fa",
     thread_asset_name(role_zk_anchor, launch_id) == #"06aebfbc87161850827e5620fa667e98c533a419298bbed1a8fff960f1b9e2fa",
+  }
+}
+
+/// The venue's tags sit outside the launch range, and the pool and LQ names
+/// differ from each other.
+test venue_roles_do_not_collide() {
+  let launch_id =
+    #"0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20"
+  and {
+    thread_asset_name(role_pool, launch_id) != thread_asset_name(
+      role_zk_anchor,
+      launch_id,
+    ),
+    thread_asset_name(role_pool, launch_id) != thread_asset_name(
+      role_lq,
+      launch_id,
+    ),
   }
 }
 
