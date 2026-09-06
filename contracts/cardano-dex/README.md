@@ -48,9 +48,9 @@ pool guarded by this script without modification.
   triggered state and the new key hashing to the community wallet it names; a
   dissolve needs the dissolved state and the new key hashing to the creator's
   fee-recipient key as the LP escrow records it. The pool is bound to its launch
-  through its NFT, which is a thread NFT of the launch under the platform's
-  thread NFT policy, the same policy the governance and escrow records carry
-  their own NFTs under. One pool per redirect transaction.
+  through its NFT, minted by the factory with the pool role tag and the launch
+  id in its name, while the governance and escrow records carry their own NFTs
+  under the platform's thread NFT policy. One pool per redirect transaction.
 - **Parameters instead of constants.** The royalty-withdraw script hash and the
   withdraw-request script hash are validator parameters here; Splash compiles
   them in.
@@ -60,16 +60,19 @@ pool guarded by this script without modification.
 - **The platform slot has its own small script** instead of Splash's multisig
   DAO action: withdraw to the platform wallet, or move `treasury_fee` within
   `[0, max_treasury_fee]`, each bumping the nonce and touching nothing else.
-- **The factory is the LQ minting policy.** Splash mints LQ under policies
-  served from its own infrastructure. Here the pool NFT is the launch's thread
-  NFT with the pool role tag, minted under the platform's thread NFT policy in
-  the graduation transaction, and the LQ policy mints exactly once alongside
-  it. At that mint it checks the whole opening shape: the pool output at the
-  pool script, the platform fee schedule and empty counters in the datum, the
-  treasury script as the DAO, a royalty key that hashes to the creator's fee
-  recipient as the LP escrow records it, and the escrow sealed in the same
-  transaction holding the entire opening position. The lock therefore holds
-  the LP position from the pool's first block.
+- **The factory is one minting policy.** Splash mints LQ under policies served
+  from its own infrastructure. Here one policy mints the pool NFT and the LQ
+  token together, named with the pool and LQ role tags and the launch id, and
+  its authority is the launch's own LP escrow: the escrow's thread NFT is
+  minted once at genesis and the escrow leaves its unsealed state only once.
+  Graduation therefore stays permissionless, as the curve's own graduation is,
+  and no platform signature can withhold a pool. At the mint it checks the
+  whole opening shape: the pool output at the pool script, the platform fee
+  schedule and empty counters in the datum, the treasury script as the DAO, a
+  royalty key that hashes to the creator's fee recipient as the LP escrow
+  records it, and the escrow sealed in the same transaction holding the entire
+  opening position. The lock holds the LP position from the pool's first
+  block.
 - **One order per pool spend, and no skim.** A swap request meets the pool
   alone (exactly two inputs), so the pool's fee slices are taken on the whole
   of what the order trades; orders cannot net against each other inside a

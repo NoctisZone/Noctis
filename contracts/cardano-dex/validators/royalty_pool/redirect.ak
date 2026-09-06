@@ -17,12 +17,11 @@
 ////     the creator's fee-recipient key as the launch's LP escrow records it,
 ////     read from a second reference input.
 ////
-//// Binding the pool to the launch: the pool NFT is a thread NFT of the launch,
-//// minted under the platform's thread NFT policy with the pool role tag and the
-//// launch id in its name. The governance and escrow records carry their own
-//// role's NFT under the same policy. A record of another launch, a record at
-//// the right address with a home-made datum, or a pool whose NFT is not the
-//// platform's, cannot pass.
+//// Binding the pool to the launch: the pool NFT is minted by the factory policy
+//// with the pool role tag and the launch id in its name, and the governance
+//// and escrow records carry their own role's NFT under the platform's thread
+//// NFT policy. A record of another launch, a record at the right address with
+//// a home-made datum, or a pool whose NFT is not the factory's, cannot pass.
 ////
 //// One pool per transaction: exactly one input sits at the redirected pool's
 //// payment credential, so this one withdrawal cannot cover a second pool.
@@ -57,10 +56,12 @@ fn record_at(reference_inputs: List<Input>, cred: Credential) -> Input {
 }
 
 /// `thread_nft_policy`: the platform's thread NFT policy, under which every
-/// launch record and every pool NFT is minted. `cto_governance_cred` and
-/// `lp_escrow_cred`: the launch package's governance and escrow validators.
+/// launch record's NFT is minted. `pool_nft_policy`: the factory policy that
+/// mints pool NFTs. `cto_governance_cred` and `lp_escrow_cred`: the launch
+/// package's governance and escrow validators.
 validator redirect(
   thread_nft_policy: PolicyId,
+  pool_nft_policy: PolicyId,
   cto_governance_cred: Credential,
   lp_escrow_cred: Credential,
 ) {
@@ -91,7 +92,7 @@ validator redirect(
     expect cto: CtoGovernanceDatum = cto_raw
     let launch_id = cto.launch_id
     let bound = and {
-      prev.pool_nft.policy == thread_nft_policy,
+      prev.pool_nft.policy == pool_nft_policy,
       prev.pool_nft.name == thread_asset_name(role_pool, launch_id),
       assets.quantity_of(
         cto_ref.output.value,
@@ -137,6 +138,8 @@ validator redirect(
 // ---------------------------------------------------------------------------
 
 const thread_policy: PolicyId = #"7e"
+
+const factory_policy: PolicyId = #"7c"
 
 const launch: ByteArray =
   #"0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20"
@@ -307,6 +310,7 @@ fn tx(
 fn run(redeemer: RedirectAction, t: Transaction) -> Bool {
   redirect.withdraw(
     thread_policy,
+    factory_policy,
     cto_cred(),
     lp_cred(),
     redeemer,
@@ -316,7 +320,7 @@ fn run(redeemer: RedirectAction, t: Transaction) -> Bool {
 }
 
 fn our_pool() -> Asset {
-  pool_nft(thread_policy, launch)
+  pool_nft(factory_policy, launch)
 }
 
 fn triggered() -> Input {
@@ -397,7 +401,7 @@ test takeover_of_a_pool_of_another_launch_fails() fail {
   run(
     Takeover { pool_in_ix: 0 },
     tx(
-      pool_nft(thread_policy, other_launch),
+      pool_nft(factory_policy, other_launch),
       creator_key,
       community_key,
       [triggered()],
@@ -406,7 +410,7 @@ test takeover_of_a_pool_of_another_launch_fails() fail {
 }
 
 /// A pool whose NFT is named exactly right but minted under a policy that is
-/// not the platform's, presented against the genuine governance record, so
+/// not the factory's, presented against the genuine governance record, so
 /// only the policy comparison rejects it.
 test takeover_under_a_foreign_policy_fails() fail {
   run(
@@ -417,7 +421,7 @@ test takeover_under_a_foreign_policy_fails() fail {
 
 test takeover_with_two_pools_in_one_transaction_fails() fail {
   let second = pool_input(
-    pool_nft(thread_policy, other_launch),
+    pool_nft(factory_policy, other_launch),
     creator_key,
     #"02",
   )

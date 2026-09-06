@@ -139,10 +139,13 @@ pub const role_cto_governance: ByteArray = #"00"
 
 pub const role_lp_escrow: ByteArray = #"03"
 
-/// NoctisSwap's own role: the pool NFT of a graduated launch's pool, so that a
-/// pool is bound to its launch by the same policy and naming as the launch's
-/// other records. Chosen outside the launch package's range.
+/// NoctisSwap's own roles, chosen outside the launch package's range. The pool
+/// NFT and the pool's LQ token are both minted by the factory policy, named
+/// with these tags and the launch id, so a pool is bound to its launch by the
+/// same naming as the launch's other records.
 pub const role_pool: ByteArray = #"10"
+
+pub const role_lq: ByteArray = #"11"
 
 pub fn thread_asset_name(role: ByteArray, launch_id: ByteArray) -> ByteArray {
   bytearray.concat(role, bytearray.take(launch_id, 31))

@@ -1,15 +1,17 @@
 //// NoctisSwap: the pool factory, as the LQ minting policy.
 ////
 //// A pool comes into being in a launch's graduation transaction and nowhere
-//// else. The pool NFT is the launch's thread NFT with the pool role tag, minted
-//// under the platform's thread NFT policy, which only the governor signs. This
-//// policy mints the pool's LQ token, named the same as the pool NFT, and it is
-//// the place the new pool's shape is checked:
+//// else. This policy mints both the pool NFT and the pool's LQ token, named
+//// with the pool and LQ role tags and the launch id, and its authority is the
+//// launch's own LP escrow: the escrow's thread NFT is minted once at genesis,
+//// and the escrow can be spent from its unsealed state only once. So the
+//// graduation stays permissionless, as the curve's own Graduate is, and no
+//// platform signature can withhold a pool.
 ////
-////   Create — exactly `max_lq_cap` LQ of the launch's name is minted, and one
-////     pool NFT of that name under the thread policy alongside; one output at
-////     the pool script carries the NFT, keeps `max_lq_cap - initial_lq` LQ, holds
-////     ADA and one launch token and nothing else, and its datum is the platform
+////   Create — exactly one pool NFT and `max_lq_cap` LQ of the launch's names
+////     are minted and nothing else under this policy; one output at the pool
+////     script carries the NFT, keeps `max_lq_cap - initial_lq` LQ, holds ADA
+////     and one launch token and nothing else, and its datum is the platform
 ////     schedule exactly: the two fees and the pool fee, empty counters, the
 ////     treasury script as the DAO, the platform's treasury address, a nonce of
 ////     zero, and a royalty key that hashes to the creator's fee recipient as
@@ -31,7 +33,7 @@ use cardano/transaction.{
   InlineDatum, Input, Output, OutputReference, Transaction,
 }
 use noctisswap/launch_records.{
-  Locked, LpEscrowDatum, role_lp_escrow, role_pool, thread_asset_name,
+  Locked, LpEscrowDatum, role_lp_escrow, role_lq, role_pool, thread_asset_name,
 }
 use noctisswap/pool_state.{is_ada, max_lq_cap}
 use splash/plutus.{Asset}
@@ -45,8 +47,8 @@ pub type MintAction {
 
 const ada: Asset = Asset { policy: ada_policy_id, name: ada_asset_name }
 
-/// `thread_nft_policy`: the platform's thread NFT policy. `pool_vh`: the pool
-/// validator. `treasury_cred`, `treasury_address`: the platform's treasury
+/// `thread_nft_policy`: the platform's thread NFT policy, under which the
+/// escrow's NFT was minted at genesis. `pool_vh`: the pool validator. `treasury_cred`, `treasury_address`: the platform's treasury
 /// script and wallet. The three fee numerators are the platform schedule.
 /// `initial_lq`: the size of the escrowed position every pool opens with.
 validator pool_mint(
@@ -64,9 +66,10 @@ validator pool_mint(
     when redeemer is {
       Burn -> list.all(own_minted, fn(p) { p.2nd < 0 })
       Create { launch_id, pool_out_ix, escrow_out_ix } -> {
-        let name = thread_asset_name(role_pool, launch_id)
-        let nft = Asset { policy: thread_nft_policy, name }
-        let lq = Asset { policy: own_policy, name }
+        let nft_name = thread_asset_name(role_pool, launch_id)
+        let lq_name = thread_asset_name(role_lq, launch_id)
+        let nft = Asset { policy: own_policy, name: nft_name }
+        let lq = Asset { policy: own_policy, name: lq_name }
         let escrow_nft_name = thread_asset_name(role_lp_escrow, launch_id)
 
         expect Some(pool_out) = list.at(self.outputs, pool_out_ix)
@@ -108,8 +111,7 @@ validator pool_mint(
         }
 
         and {
-          own_minted == [Pair(name, max_lq_cap)],
-          assets.quantity_of(self.mint, thread_nft_policy, name) == 1,
+          own_minted == [Pair(nft_name, 1), Pair(lq_name, max_lq_cap)],
           pool_out.address.payment_credential == Script(pool_vh),
           cfg == expected,
           !is_ada(cfg.pool_y),
@@ -128,7 +130,7 @@ validator pool_mint(
           escrow_before.lock_timestamp == 0,
           escrow.lock_timestamp > 0,
           escrow.lp_token_policy_id == own_policy,
-          escrow.lp_token_name == name,
+          escrow.lp_token_name == lq_name,
           escrow.lp_token_amount == initial_lq,
           asset_quantity_of(escrow_out.value, lq) == initial_lq,
         }
@@ -169,12 +171,16 @@ fn treasury() -> Credential {
   Script(#"0c")
 }
 
-fn name() -> ByteArray {
+fn nft_name() -> ByteArray {
   thread_asset_name(role_pool, launch)
 }
 
+fn name() -> ByteArray {
+  thread_asset_name(role_lq, launch)
+}
+
 fn nft() -> Asset {
-  Asset { policy: thread_policy, name: name() }
+  Asset { policy: lq_policy, name: nft_name() }
 }
 
 fn lq() -> Asset {
@@ -205,7 +211,7 @@ fn pool_value() -> Value {
   assets.from_lovelace(20_000_000_000)
     |> assets.add(token.policy, token.name, 200_000_000)
     |> assets.add(lq_policy, name(), max_lq_cap - initial)
-    |> assets.add(thread_policy, name(), 1)
+    |> assets.add(lq_policy, nft_name(), 1)
 }
 
 fn pool_out(
@@ -282,7 +288,7 @@ fn escrow_out(datum: LpEscrowDatum, value: Value) -> Output {
 
 fn mint_value() -> Value {
   assets.from_asset(lq_policy, name(), max_lq_cap)
-    |> assets.add(thread_policy, name(), 1)
+    |> assets.add(lq_policy, nft_name(), 1)
 }
 
 fn tx(
@@ -354,7 +360,7 @@ test minting_a_second_name_fails() fail {
 
 test minting_less_than_the_cap_fails() fail {
   let mint = assets.from_asset(lq_policy, name(), max_lq_cap - 1)
-    |> assets.add(thread_policy, name(), 1)
+    |> assets.add(lq_policy, nft_name(), 1)
   let pool = pool_out(
     pool_cfg(),
     pool_value() |> assets.add(lq_policy, name(), -1),
@@ -434,7 +440,7 @@ test pool_with_ada_on_both_sides_fails() fail {
   let value = assets.from_lovelace(20_000_000_000)
     |> assets.add(token.policy, token.name, 200_000_000)
     |> assets.add(lq_policy, name(), max_lq_cap - initial)
-    |> assets.add(thread_policy, name(), 1)
+    |> assets.add(lq_policy, nft_name(), 1)
   run(
     create(),
     Transaction {
@@ -617,7 +623,7 @@ test pool_without_ada_fails() fail {
   let value = assets.from_asset(token.policy, token.name, 200_000_000)
     |> assets.add(#"dd", #"6a756e6b", 1)
     |> assets.add(lq_policy, name(), max_lq_cap - initial)
-    |> assets.add(thread_policy, name(), 1)
+    |> assets.add(lq_policy, nft_name(), 1)
   run(
     create(),
     Transaction {
@@ -635,7 +641,7 @@ test pool_without_the_token_fails() fail {
   let value = assets.from_lovelace(20_000_000_000)
     |> assets.add(#"dd", #"6a756e6b", 1)
     |> assets.add(lq_policy, name(), max_lq_cap - initial)
-    |> assets.add(thread_policy, name(), 1)
+    |> assets.add(lq_policy, nft_name(), 1)
   run(
     create(),
     Transaction {
