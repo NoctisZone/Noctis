@@ -26,6 +26,7 @@ creator's key. See `NOTICE` for the exact provenance and licence terms.
 | `validators/royalty_pool/deposit_order.ak` | ported from `PRoyaltyDeposit.hs` (Plutarch) | a request to add liquidity; the placer's side of a deposit |
 | `validators/royalty_pool/redeem_order.ak` | ported from `PRoyaltyRedeem.hs` (Plutarch) | a request to remove liquidity; the placer's side of a redeem |
 | `lib/noctisswap/orders.ak` | ours, layouts after Splash's `DepositConfig`/`RedeemConfig` | the order action and request types, and the reward-address rule |
+| `validators/royalty_pool/pool_mint.ak` | ours | the pool factory as the LQ minting policy: a pool is created only in a launch's graduation transaction, and its opening shape is checked at the mint |
 | `validators/royalty_pool/redirect.ak` | ours | the governance side of a royalty redirect: grants the pool's redirect withdrawal only against the launch's own CTO governance record |
 | `lib/noctisswap/pool_state.ak` | ours | shared datum and value readers |
 | `lib/noctisswap/launch_records.ak` | ours | field-for-field mirrors of the launch package's governance and escrow records, and the thread NFT naming |
@@ -58,6 +59,16 @@ pool guarded by this script without modification.
 - **The platform slot has its own small script** instead of Splash's multisig
   DAO action: withdraw to the platform wallet, or move `treasury_fee` within
   `[0, max_treasury_fee]`, each bumping the nonce and touching nothing else.
+- **The factory is the LQ minting policy.** Splash mints LQ under policies
+  served from its own infrastructure. Here the pool NFT is the launch's thread
+  NFT with the pool role tag, minted under the platform's thread NFT policy in
+  the graduation transaction, and the LQ policy mints exactly once alongside
+  it. At that mint it checks the whole opening shape: the pool output at the
+  pool script, the platform fee schedule and empty counters in the datum, the
+  treasury script as the DAO, a royalty key that hashes to the creator's fee
+  recipient as the LP escrow records it, and the escrow sealed in the same
+  transaction holding the entire opening position. The lock therefore holds
+  the LP position from the pool's first block.
 - **Deposit and redeem requests name the pool's own assets.** A request whose
   assets are not the pool's is refused outright, and a deposit's collateral is
   checked back to the placer on every fill, not only when ADA is the surplus
@@ -74,8 +85,9 @@ values set at creation, not constants of the validator.
 ## Not here yet
 
 Spot-order validator and batcher (Splash's executor is unlicensed and is not
-used), the graduation transaction that mints a launch's pool NFT and seeds the
-pool, and the escrow integration. The build plan tracks these.
+used), and the launch package's side of the graduation transaction (the curve
+seeding the pool output instead of raw reserves), which rides the launch
+package's next validator pass. The build plan tracks these.
 
 ## Build and test
 
