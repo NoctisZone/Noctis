@@ -26,6 +26,7 @@ creator's key. See `NOTICE` for the exact provenance and licence terms.
 | `validators/royalty_pool/deposit_order.ak` | ported from `PRoyaltyDeposit.hs` (Plutarch) | a request to add liquidity; the placer's side of a deposit |
 | `validators/royalty_pool/redeem_order.ak` | ported from `PRoyaltyRedeem.hs` (Plutarch) | a request to remove liquidity; the placer's side of a redeem |
 | `lib/noctisswap/orders.ak` | ours, layouts after Splash's `DepositConfig`/`RedeemConfig` | the order action and request types, and the reward-address rule |
+| `validators/royalty_pool/swap_order.ak` | ours, informed by `PSwap.hs` (Plutarch) and `limit_order.ak` (Aiken) | a swap request: price floor, partial fills, pro-rata executor fee, permitted executors, and a no-skim rule |
 | `validators/royalty_pool/pool_mint.ak` | ours | the pool factory as the LQ minting policy: a pool is created only in a launch's graduation transaction, and its opening shape is checked at the mint |
 | `validators/royalty_pool/redirect.ak` | ours | the governance side of a royalty redirect: grants the pool's redirect withdrawal only against the launch's own CTO governance record |
 | `lib/noctisswap/pool_state.ak` | ours | shared datum and value readers |
@@ -69,6 +70,15 @@ pool guarded by this script without modification.
   recipient as the LP escrow records it, and the escrow sealed in the same
   transaction holding the entire opening position. The lock therefore holds
   the LP position from the pool's first block.
+- **One order per pool spend, and no skim.** A swap request meets the pool
+  alone (exactly two inputs), so the pool's fee slices are taken on the whole
+  of what the order trades; orders cannot net against each other inside a
+  transaction and pay the creator and the platform on the difference only.
+  What leaves the pool reaches the placer in full and what enters the pool is
+  exactly the part being traded, so the executor earns the agreed fee and
+  nothing else. Throughput comes from chaining transactions, as Splash's own
+  executor does. Splash's newer batch design trades that guarantee for an
+  executor spread; this package does not.
 - **Deposit and redeem requests name the pool's own assets.** A request whose
   assets are not the pool's is refused outright, and a deposit's collateral is
   checked back to the placer on every fill, not only when ADA is the surplus
@@ -84,10 +94,10 @@ values set at creation, not constants of the validator.
 
 ## Not here yet
 
-Spot-order validator and batcher (Splash's executor is unlicensed and is not
-used), and the launch package's side of the graduation transaction (the curve
-seeding the pool output instead of raw reserves), which rides the launch
-package's next validator pass. The build plan tracks these.
+The batcher (Splash's executor is unlicensed and is not used), and the launch
+package's side of the graduation transaction (the curve seeding the pool output
+instead of raw reserves), which rides the launch package's next validator
+pass. The build plan tracks these.
 
 ## Build and test
 

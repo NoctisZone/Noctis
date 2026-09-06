@@ -7,6 +7,7 @@
 use aiken/crypto.{VerificationKeyHash}
 use cardano/address.{Address, Inline, VerificationKey}
 use splash/plutus.{Asset}
+use splash/rational.{Rational}
 
 /// Apply is what an executor does; Refund is what the placer does.
 pub type OrderAction {
@@ -37,6 +38,32 @@ pub type RedeemConfig {
   ex_fee: Int,
   reward_pkh: VerificationKeyHash,
   stake_pkh: Option<VerificationKeyHash>,
+}
+
+/// A swap request against one pool. The placer trades `tradable_input` of
+/// `input` for `output` at no worse than `base_price` (output per input),
+/// pays the executor `ex_fee` lovelace for the whole order, pro rata on a
+/// partial fill, and accepts no partial fill smaller than
+/// `min_marginal_output`. An empty `permitted_executors` means anyone may fill.
+pub type SwapConfig {
+  pool_nft: Asset,
+  input: Asset,
+  output: Asset,
+  tradable_input: Int,
+  base_price: Rational,
+  min_marginal_output: Int,
+  ex_fee: Int,
+  reward_pkh: VerificationKeyHash,
+  stake_pkh: Option<VerificationKeyHash>,
+  permitted_executors: List<VerificationKeyHash>,
+}
+
+/// Fill names the pool, the order and the order's successor: the placer's
+/// reward output when the order completes, or the continuing order when it
+/// fills in part.
+pub type SwapAction {
+  Fill { pool_in_ix: Int, order_in_ix: Int, successor_ix: Int }
+  Cancel
 }
 
 /// The reward must go to exactly the address the placer named: their payment
