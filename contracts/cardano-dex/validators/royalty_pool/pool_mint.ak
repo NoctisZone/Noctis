@@ -10,7 +10,9 @@
 ////
 ////   Create — exactly one pool NFT and `max_lq_cap` LQ of the launch's names
 ////     are minted and nothing else under this policy; one output at the pool
-////     script carries the NFT, keeps `max_lq_cap - initial_lq` LQ, holds ADA
+////     script's bare address (no stake part: whoever submits the graduation
+////     must not delegate the pool's ADA for the pool's whole life) carries
+////     the NFT, keeps `max_lq_cap - initial_lq` LQ, holds ADA
 ////     and one launch token and nothing else, and its datum is the platform
 ////     schedule exactly: the two fees and the pool fee, empty counters, the
 ////     treasury script as the DAO, the platform's treasury address, a nonce of
@@ -112,7 +114,10 @@ validator pool_mint(
 
         and {
           own_minted == [Pair(nft_name, 1), Pair(lq_name, max_lq_cap)],
-          pool_out.address.payment_credential == Script(pool_vh),
+          pool_out.address == Address {
+            payment_credential: Script(pool_vh),
+            stake_credential: None,
+          },
           cfg == expected,
           !is_ada(cfg.pool_y),
           blake2b_224(cfg.royalty_pub_key) == escrow.fee_recipient_pub_key_hash,
@@ -383,6 +388,25 @@ test pool_at_another_script_fails() fail {
     Transaction {
       ..good(),
       outputs: [pool, escrow_out(escrow_datum(1_000), escrow_value(initial))],
+    },
+  )
+}
+
+/// The pool validator preserves its address on every spend, so a stake part
+/// attached here would delegate the reserves to the submitter for good.
+test pool_at_a_staked_address_fails() fail {
+  let staked = Output {
+    ..pool_out(pool_cfg(), pool_value(), Script(pool_hash)),
+    address: Address {
+      payment_credential: Script(pool_hash),
+      stake_credential: Some(Inline(Script(#"5a"))),
+    },
+  }
+  run(
+    create(),
+    Transaction {
+      ..good(),
+      outputs: [staked, escrow_out(escrow_datum(1_000), escrow_value(initial))],
     },
   )
 }
