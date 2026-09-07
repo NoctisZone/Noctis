@@ -58,16 +58,19 @@ const ada: Asset = Asset { policy: ada_policy_id, name: ada_asset_name }
 
 /// `thread_nft_policy`: the platform's thread NFT policy, under which the
 /// escrow's NFT was minted at genesis. `pool_vh`: the pool validator.
-/// `redirect_cred`: the governance redirect script, written into every pool's
+/// `redirect_vh`: the governance redirect script, written into every pool's
 /// datum as the second DAO entry so that the pool itself is not parameterised
-/// by it. `treasury_cred`, `treasury_address`: the platform's treasury script
-/// and wallet. The three fee numerators are the platform schedule.
+/// by it. `treasury_vh`, `treasury_address`: the platform's treasury script
+/// and wallet. Both are script hashes rather than credentials: the pool's
+/// delegating arms are authorised by a withdrawal at these, and only a script
+/// runs when one is withdrawn from, so the factory can write no other kind.
+/// The three fee numerators are the platform schedule.
 /// `initial_lq`: the size of the escrowed position every pool opens with.
 validator pool_mint(
   thread_nft_policy: PolicyId,
   pool_vh: ScriptHash,
-  redirect_cred: Credential,
-  treasury_cred: Credential,
+  redirect_vh: ScriptHash,
+  treasury_vh: ScriptHash,
   treasury_address: ByteArray,
   fee_num: Int,
   treasury_fee: Int,
@@ -154,7 +157,7 @@ validator pool_mint(
           treasury_y: 0,
           royalty_x: 0,
           royalty_y: 0,
-          dao_policy: [Inline(treasury_cred), Inline(redirect_cred)],
+          dao_policy: [Inline(Script(treasury_vh)), Inline(Script(redirect_vh))],
           treasury_address,
           royalty_pub_key: cfg.royalty_pub_key,
           nonce: 0,
@@ -228,12 +231,20 @@ const token: Asset = Asset { policy: #"bb", name: #"746f6b656e" }
 
 const initial: Int = 1_000_000_000
 
+fn treasury_vh() -> ScriptHash {
+  #"0c"
+}
+
 fn treasury() -> Credential {
-  Script(#"0c")
+  Script(treasury_vh())
+}
+
+fn redirect_vh() -> ScriptHash {
+  #"0e"
 }
 
 fn redirect() -> Credential {
-  Script(#"0e")
+  Script(redirect_vh())
 }
 
 fn nft_name() -> ByteArray {
@@ -412,8 +423,8 @@ fn run(redeemer: MintAction, t: Transaction) -> Bool {
   pool_mint.mint(
     thread_policy,
     pool_hash,
-    redirect(),
-    treasury(),
+    redirect_vh(),
+    treasury_vh(),
     #"ee",
     99_700,
     100,

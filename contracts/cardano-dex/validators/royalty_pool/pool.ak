@@ -18,6 +18,8 @@
 ////     other datum field is unchanged.
 ////   3 DAOAction — a withdrawal from the first `dao_policy` credential is
 ////     present in the transaction, and the DAO script decides how much moves.
+////     That entry must be a SCRIPT credential: a withdrawal at a script runs
+////     it, so requiring the script form is what makes the delegation real.
 ////     What it may never do is decided here: liquidity is untouched, only the
 ////     treasury counters and the treasury fee may change in the datum — the
 ////     nonce included, since it is the creator's replay protection and not the
@@ -29,8 +31,9 @@
 ////     to change).
 ////   5 RedirectRoyalty (Noctis addition) — a withdrawal from the governance
 ////     credential is present, the second `dao_policy` entry, which the factory
-////     writes at creation; the successor datum equals the current one except
-////     `royalty_pub_key` (replaced) and `nonce` (+1); the pool value is unchanged.
+////     writes at creation and which must likewise be a script; the successor
+////     datum equals the current one except `royalty_pub_key` (replaced) and
+////     `nonce` (+1); the pool value is unchanged.
 ////     Splash's DAO action deliberately cannot change the royalty key. A passed
 ////     community-takeover vote has to, so this arm exists.
 ////
@@ -42,7 +45,7 @@
 
 use aiken/collection/list
 use aiken/collection/pairs
-use cardano/address.{Address, Credential, Inline, Script}
+use cardano/address.{Address, Credential, Inline, Script, VerificationKey}
 use cardano/assets.{Value, ada_asset_name, ada_policy_id}
 use cardano/transaction.{
   InlineDatum, Input, Output, OutputReference, Transaction,
@@ -229,6 +232,9 @@ fn find_pool_output(nft: Asset, outputs: List<Output>) -> Output {
   out
 }
 
+/// Presence of a withdrawal at `cred`. Every caller passes a script
+/// credential, which is what gives this its force: a withdrawal at a script
+/// runs that script, so the presence of one is evidence the script approved.
 fn has_withdrawal(self: Transaction, cred: Credential) -> Bool {
   pairs.has_key(self.withdrawals, cred)
 }
@@ -289,7 +295,7 @@ validator pool(royalty_withdraw_vh: ByteArray) {
         swap_config_ok(cfg, succ_cfg, dx, dy),
       }
     } else if redeemer.action == action_dao {
-      expect Some(Inline(dao_cred)) = list.head(cfg.dao_policy)
+      expect Some(Inline(Script(dao_vh))) = list.head(cfg.dao_policy)
       // The DAO script decides how much the platform takes. These are the
       // things no treasury action may do, held here so that a pool spent under
       // this action keeps its own shape whatever runs at that credential.
@@ -300,7 +306,7 @@ validator pool(royalty_withdraw_vh: ByteArray) {
         treasury_fee: succ_cfg.treasury_fee,
       }
       and {
-        has_withdrawal(self, dao_cred),
+        has_withdrawal(self, Script(dao_vh)),
         expected == succ_cfg,
         dlq == 0,
         // Both states are read under the OLD datum, so a reserve delta is
@@ -315,9 +321,9 @@ validator pool(royalty_withdraw_vh: ByteArray) {
     } else if redeemer.action == action_withdraw_royalty {
       has_withdrawal(self, Script(royalty_withdraw_vh))
     } else if redeemer.action == action_redirect_royalty {
-      expect Some(Inline(redirect_cred)) = list.at(cfg.dao_policy, 1)
+      expect Some(Inline(Script(redirect_vh))) = list.at(cfg.dao_policy, 1)
       and {
-        has_withdrawal(self, redirect_cred),
+        has_withdrawal(self, Script(redirect_vh)),
         redirect_config_ok(cfg, succ_cfg),
         successor.value == self_out.value,
       }
@@ -1227,5 +1233,93 @@ test tx_successor_holding_no_lq_token_fails() fail {
       ],
       outputs: [successor],
     },
+  )
+}
+
+
+fn key_cred() -> Credential {
+  VerificationKey(#"c0")
+}
+
+fn dao_tx_shaped(
+  prev: SingleRoyaltyPoolConfig,
+  next: SingleRoyaltyPoolConfig,
+  x: Int,
+  y: Int,
+  lq: Int,
+  cred: Credential,
+) -> Transaction {
+  let pool_in =
+    Input {
+      output_reference: own_ref(),
+      output: Output {
+        address: pool_address(),
+        value: pool_value(prev, 100_000_000, 100_000_000, 50_000_000),
+        datum: InlineDatum(prev),
+        reference_script: None,
+      },
+    }
+  let pool_out =
+    Output {
+      address: pool_address(),
+      value: pool_value(prev, x, y, lq),
+      datum: InlineDatum(next),
+      reference_script: None,
+    }
+  Transaction {
+    ..transaction.placeholder,
+    inputs: [pool_in],
+    outputs: [pool_out],
+    withdrawals: [Pair(cred, 0)],
+  }
+}
+
+/// The shaper reproduces the passing DAO transition, so the two rejections
+/// below differ from a valid one by the credential alone.
+test dao_through_the_shaper_passes() {
+  let prev = dao_cfg()
+  let next = SingleRoyaltyPoolConfig { ..prev, treasury_x: 0, treasury_y: 0 }
+  pool.spend(
+    #"0b",
+    Some(prev),
+    PoolRedeemer { action: action_dao, self_ix: 0 },
+    own_ref(),
+    dao_tx_shaped(prev, next, 95_000_000, 99_999_300, 50_000_000, Script(#"dd")),
+  )
+}
+
+/// A withdrawal at a payment key runs no script, so it is no evidence that
+/// anything approved the transition. Both delegating arms require the script
+/// form of the credential they read.
+test dao_authorised_by_a_payment_key_withdrawal_fails() fail {
+  let prev =
+    SingleRoyaltyPoolConfig {
+      ..dao_cfg(),
+      dao_policy: [Inline(key_cred()), Inline(Script(#"0c"))],
+    }
+  let next = SingleRoyaltyPoolConfig { ..prev, treasury_x: 0, treasury_y: 0 }
+  pool.spend(
+    #"0b",
+    Some(prev),
+    PoolRedeemer { action: action_dao, self_ix: 0 },
+    own_ref(),
+    dao_tx_shaped(prev, next, 95_000_000, 99_999_300, 50_000_000, key_cred()),
+  )
+}
+
+test redirect_authorised_by_a_payment_key_withdrawal_fails() fail {
+  let prev =
+    SingleRoyaltyPoolConfig {
+      ..sample_cfg(),
+      dao_policy: [Inline(Script(#"dd")), Inline(key_cred())],
+    }
+  let next =
+    SingleRoyaltyPoolConfig { ..prev, royalty_pub_key: #"01", nonce: 1 }
+  pool.spend(
+    #"0b",
+    Some(prev),
+    PoolRedeemer { action: action_redirect_royalty, self_ix: 0 },
+    own_ref(),
+    redirect_tx_from(prev, next, key_cred()),
   )
 }
