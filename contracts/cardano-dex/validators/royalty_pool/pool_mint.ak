@@ -8,7 +8,10 @@
 //// graduation stays permissionless, as the curve's own Graduate is, and no
 //// platform signature can withhold a pool.
 ////
-////   Create — exactly one pool NFT and `max_lq_cap` LQ of the launch's names
+////   Create — the launch's curve is spent in the same transaction under its
+////     own `Graduate` redeemer, so the curve's rule for a pool output runs
+////     beside this one; exactly one pool NFT and `max_lq_cap` LQ of the
+////     launch's names
 ////     are minted and nothing else under this policy; one output at the pool
 ////     script's bare address (no stake part: whoever submits the graduation
 ////     must not delegate the pool's ADA for the pool's whole life) carries
@@ -27,17 +30,19 @@
 //// Splash mints its LQ under policies served from its own infrastructure; this
 //// is the Noctis replacement.
 
+use aiken/builtin
 use aiken/collection/dict
 use aiken/collection/list
+use aiken/collection/pairs
 use aiken/crypto.{ScriptHash, blake2b_224}
 use cardano/address.{Address, Credential, Inline, Script, VerificationKey}
 use cardano/assets.{PolicyId, Value, ada_asset_name, ada_policy_id}
 use cardano/transaction.{
-  InlineDatum, Input, Output, OutputReference, Transaction,
+  InlineDatum, Input, Output, OutputReference, Spend, Transaction,
 }
 use noctisswap/launch_records.{
-  Locked, LpEscrowDatum, role_bonding_curve, role_lp_escrow, role_lq, role_pool,
-  thread_asset_name,
+  Locked, LpEscrowDatum, graduate_redeemer_index, role_bonding_curve,
+  role_lp_escrow, role_lq, role_pool, thread_asset_name,
 }
 use noctisswap/pool_state.{is_ada, max_lq_cap}
 use splash/plutus.{Asset}
@@ -100,22 +105,42 @@ validator pool_mint(
         expect InlineDatum(escrow_in_raw) = escrow_in.output.datum
         expect escrow_before: LpEscrowDatum = escrow_in_raw
 
-        // A pool opens only in the launch's own graduation transaction. The
-        // curve's record must be spent here, which is what makes the curve's
-        // validator run alongside this policy and hold the pool output to the
-        // whole raise and the reserve it is owed. Without this the escrow's
-        // seal would authorise itself: the position it seals is minted here,
-        // so nothing else would tie either to the launch actually graduating.
-        let curve_spent = list.any(
-          self.inputs,
-          fn(i) {
-            assets.quantity_of(
-              i.output.value,
-              thread_nft_policy,
-              thread_asset_name(role_bonding_curve, launch_id),
-            ) == 1
-          },
-        )
+        // A pool opens only in the launch's own GRADUATION, and the redeemer
+        // is what says so. Spending the curve makes its validator run, but a
+        // validator runs under one redeemer at a time, and it is `Graduate`
+        // that holds a pool output to the whole raise, the exact token reserve
+        // and four assets. Every other way of spending the curve leaves that
+        // rule unrun while still putting the curve's record in the inputs, so
+        // the record alone is not evidence of a graduation — the redeemer is.
+        //
+        // This is also what binds `pool_y` to the launch's own token: the
+        // curve's rule demands its reserve in the pool output, and the
+        // four-asset cap below leaves no room for a second one.
+        //
+        // Without this the escrow's seal would authorise itself, since the
+        // position it seals is minted here.
+        let curve_graduates = when
+          list.find(
+            self.inputs,
+            fn(i) {
+              assets.quantity_of(
+                i.output.value,
+                thread_nft_policy,
+                thread_asset_name(role_bonding_curve, launch_id),
+              ) == 1
+            },
+          )
+        is {
+          Some(curve_in) ->
+            when
+              pairs.get_first(self.redeemers, Spend(curve_in.output_reference))
+            is {
+              Some(curve_redeemer) ->
+                builtin.un_constr_data(curve_redeemer).1st == graduate_redeemer_index
+              None -> False
+            }
+          None -> False
+        }
 
         let expected = SingleRoyaltyPoolConfig {
           pool_nft: nft,
@@ -137,7 +162,7 @@ validator pool_mint(
 
         and {
           own_minted == [Pair(nft_name, 1), Pair(lq_name, max_lq_cap)],
-          curve_spent,
+          curve_graduates,
           pool_out.address == Address {
             payment_credential: Script(pool_vh),
             stake_credential: None,
@@ -331,12 +356,22 @@ fn mint_value() -> Value {
     |> assets.add(lq_policy, nft_name(), 1)
 }
 
-/// The launch's bonding curve, spent in the same transaction. Its own
-/// validator holds the pool output to the raise and the reserve; here it is
-/// only the record that proves the graduation is real.
+fn curve_ref() -> OutputReference {
+  OutputReference { transaction_id: #"c0", output_index: 0 }
+}
+
+/// The curve's own `Graduate` redeemer, as it reaches this policy: plain data
+/// carrying constructor index 8 and no fields.
+fn graduate() -> Data {
+  builtin.constr_data(graduate_redeemer_index, [])
+}
+
+/// The launch's bonding curve, spent in the same transaction under `Graduate`.
+/// Its own validator holds the pool output to the raise and the reserve; here
+/// it is the redeemer that proves the graduation is real.
 fn curve_in() -> Input {
   Input {
-    output_reference: OutputReference { transaction_id: #"c0", output_index: 0 },
+    output_reference: curve_ref(),
     output: Output {
       address: Address {
         payment_credential: Script(#"0c"),
@@ -365,6 +400,7 @@ fn tx(
     inputs: [escrow_before, curve_in()],
     outputs: [pool, escrow],
     mint,
+    redeemers: [Pair(Spend(curve_ref()), graduate())],
   }
 }
 
@@ -761,6 +797,24 @@ test graduation_with_another_launchs_curve_fails() fail {
 }
 
 /// The sealed position must come back to the escrow it was spent from.
+/// The curve is spent, and its record is right there in the inputs — but under
+/// a redeemer that is not `Graduate`, so the curve's rule for a pool output
+/// never runs. Only the constructor index differs from the passing graduation.
+test graduation_under_another_curve_redeemer_fails() fail {
+  let buy: Data = builtin.constr_data(1, [])
+  run(
+    create(),
+    Transaction { ..good(), redeemers: [Pair(Spend(curve_ref()), buy)] },
+  )
+}
+
+/// The curve's record is among the inputs with no redeemer entry of its own,
+/// which is how it would appear if it were sitting at a wallet address rather
+/// than being spent from the curve script.
+test graduation_with_no_redeemer_for_the_curve_fails() fail {
+  run(create(), Transaction { ..good(), redeemers: [] })
+}
+
 test escrow_returning_to_another_address_fails() fail {
   let elsewhere = Output {
     ..escrow_out(escrow_datum(1_000), escrow_value(initial)),

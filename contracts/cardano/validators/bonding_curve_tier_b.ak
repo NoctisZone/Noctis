@@ -79,6 +79,7 @@
 // against BondingCurveTierBDatum instead.
 // ============================================================================
 
+use aiken/builtin
 use aiken/collection/list
 use aiken/crypto.{VerificationKeyHash, blake2b_256}
 use aiken/interval
@@ -3960,6 +3961,17 @@ fn run_set_batchers(
   signer: VerificationKeyHash,
 ) -> Bool {
   run_set_batchers_keeping(datum, batchers, signer, 5_000_000)
+}
+
+/// The venue's pool factory will not open a pool unless the curve is spent
+/// under this exact redeemer, and it can only recognise it by constructor
+/// index, because a redeemer crosses that package boundary as plain data.
+/// Reordering this enum would therefore change what a graduation means to the
+/// venue with nothing here for a compiler to catch, so the value is pinned:
+/// the venue's `graduate_redeemer_index` must equal this.
+test graduate_is_constructor_eight() {
+  let redeemer: Data = Graduate
+  builtin.un_constr_data(redeemer).1st == 8
 }
 
 test set_batcher_allowlist_is_the_governors_and_is_bounded() {

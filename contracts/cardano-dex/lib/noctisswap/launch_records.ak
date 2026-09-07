@@ -138,9 +138,20 @@ pub type LpEscrowDatum {
 pub const role_cto_governance: ByteArray = #"00"
 
 /// The Cardano Launch bonding curve. The factory requires this record to be
-/// spent in the transaction that opens a pool, which is what ties a pool's
-/// creation to a real graduation.
+/// spent in the transaction that opens a pool, under the curve's own
+/// `Graduate` redeemer, which is what ties a pool's creation to a real
+/// graduation.
 pub const role_bonding_curve: ByteArray = #"02"
+
+/// The constructor index of the launch curve's `Graduate` redeemer.
+///
+/// A redeemer crosses the package boundary as plain data, so the factory can
+/// only recognise a graduation by the constructor the curve was spent under.
+/// This value is read from the launch package's compiled blueprint, never
+/// counted from its source, and the launch package carries a test pinning it —
+/// so reordering that enum breaks there, in the package that owns it, rather
+/// than quietly changing what a graduation means here.
+pub const graduate_redeemer_index: Int = 8
 
 pub const role_lp_escrow: ByteArray = #"03"
 
