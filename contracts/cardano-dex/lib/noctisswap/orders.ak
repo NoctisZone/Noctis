@@ -4,8 +4,10 @@
 //// the action carries its indices inside the constructor rather than beside
 //// it, which is the one departure from their `OrderRedeemer`.
 
+use aiken/collection/list
 use aiken/crypto.{VerificationKeyHash}
 use cardano/address.{Address, Inline, VerificationKey}
+use cardano/assets.{Value, ada_policy_id}
 use splash/plutus.{Asset}
 use splash/rational.{Rational}
 
@@ -66,6 +68,29 @@ pub type SwapAction {
   Cancel
 }
 
+/// An order UTxO holds only the assets its own type names, plus ADA — which
+/// every order carries for the executor's fee and its own minimum, and which
+/// each validator accounts for in its own arithmetic.
+///
+/// Every value rule in these validators is an inequality over a named set: the
+/// request's assets, its LQ, the pool's NFT. This rule is what makes that set
+/// the whole of the order, so every asset an order holds is measured by one of
+/// them. A request assembled with anything else can only be refunded, which
+/// puts the discipline where the order is built: our own front end and
+/// batcher.
+pub fn only_named_assets(value: Value, named: List<Asset>) -> Bool {
+  list.all(
+    assets.flatten(value),
+    fn(entry) {
+      let (policy, name, _quantity) = entry
+      policy == ada_policy_id || list.any(
+        named,
+        fn(a) { a.policy == policy && a.name == name },
+      )
+    },
+  )
+}
+
 /// The reward must go to exactly the address the placer named: their payment
 /// key, and their stake key or none. A script or pointer stake part never
 /// matches.
@@ -104,4 +129,31 @@ test reward_address_refuses_an_unexpected_stake_key() {
     stake_credential: Some(Inline(VerificationKey(#"02"))),
   }
   !reward_address_ok(addr, #"01", None)
+}
+
+test an_order_holding_only_what_it_names_is_accepted() {
+  let named = Asset { policy: #"bb", name: #"746f6b656e" }
+  let v = assets.from_lovelace(3_000_000) |> assets.add(#"bb", #"746f6b656e", 5)
+  only_named_assets(v, [named])
+}
+
+test an_order_carrying_a_stray_asset_is_refused() {
+  let named = Asset { policy: #"bb", name: #"746f6b656e" }
+  let v = assets.from_lovelace(3_000_000)
+    |> assets.add(#"bb", #"746f6b656e", 5)
+    |> assets.add(#"99", #"7374726179", 1)
+  !only_named_assets(v, [named])
+}
+
+/// Two assets under one policy are two different names, so naming one does not
+/// admit the other.
+test a_sibling_asset_name_under_a_named_policy_is_refused() {
+  let named = Asset { policy: #"bb", name: #"746f6b656e" }
+  let v = assets.from_lovelace(3_000_000) |> assets.add(#"bb", #"6f74686572", 5)
+  !only_named_assets(v, [named])
+}
+
+/// ADA is never a stray: every order holds it for the fee and the minimum.
+test ada_alone_satisfies_an_order_that_names_no_asset() {
+  only_named_assets(assets.from_lovelace(3_000_000), [])
 }

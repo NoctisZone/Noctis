@@ -22,6 +22,10 @@
 ////   Partial fills. The order may continue at its own address with a smaller
 ////     `tradable_input` and a fee reduced no more than pro rata, every other
 ////     field unchanged, and no fill smaller than `min_marginal_output`.
+////   Nothing unmeasured. The order holds only the two assets it trades and
+////     ADA, and a continuation may hold no more than the order it came from,
+////     so no asset rides along that none of the rules above measures and the
+////     next fill is never jammed by a token left behind.
 ////   Executors. If the order names any, one of them signs.
 ////   Cancel. Signed by the placer.
 ////
@@ -35,7 +39,9 @@ use cardano/assets.{Value, ada_asset_name, ada_policy_id}
 use cardano/transaction.{
   InlineDatum, Input, Output, OutputReference, Transaction,
 }
-use noctisswap/orders.{Cancel, Fill, SwapAction, SwapConfig, reward_address_ok}
+use noctisswap/orders.{
+  Cancel, Fill, SwapAction, SwapConfig, only_named_assets, reward_address_ok,
+}
 use noctisswap/pool_state.{PoolState, is_ada, max_lq_cap, read_pool_state}
 use splash/plutus.{Asset}
 use splash/rational.{Rational}
@@ -136,6 +142,7 @@ validator swap_order {
             next == expected,
             next.tradable_input > 0,
             next.ex_fee >= 0,
+            only_named_assets(next_value, [cfg.input, cfg.output]),
             fee_removed * cfg.tradable_input <= traded * cfg.ex_fee,
             output_delta + lovelace_fee_adjust(cfg.output, fee_removed) >= cfg.min_marginal_output,
           }
@@ -155,6 +162,7 @@ validator swap_order {
           order_in.output_reference == own_ref,
           list.length(self.inputs) == 2,
           asset_quantity_of(pool_in.output.value, cfg.pool_nft) == 1,
+          only_named_assets(self_value, [cfg.input, cfg.output]),
           direction_ok,
           executor_ok(cfg.permitted_executors, self.extra_signatories),
           traded > 0,
@@ -642,5 +650,58 @@ test cancel_without_the_placer_fails() fail {
     buy(),
     Cancel,
     Transaction { ..transaction.placeholder, extra_signatories: [#"0c"] },
+  )
+}
+
+/// The passing transaction with one token nobody named added to the request.
+/// Every other figure is the passing case, so only the residual rule can
+/// reject it — the point of building it this way rather than by hand.
+fn with_a_stray_in_the_request(t: Transaction) -> Transaction {
+  expect [order_in, ..rest] = t.inputs
+  let out = order_in.output
+  Transaction {
+    ..t,
+    inputs: [
+      Input {
+        ..order_in,
+        output: Output {
+          ..out,
+          value: out.value |> assets.add(#"99", #"7374726179", 1),
+        },
+      },
+      ..rest
+    ],
+  }
+}
+
+/// The same shaper on the other side: a stray on the continuation the order
+/// leaves behind. Nothing else moves, so only the successor's residual rule
+/// can reject it — and without that rule an executor could park a token on the
+/// continuation, either to collect on the next fill or to jam it.
+fn with_a_stray_on_the_successor(t: Transaction) -> Transaction {
+  expect [pool_out, successor] = t.outputs
+  Transaction {
+    ..t,
+    outputs: [
+      pool_out,
+      Output {
+        ..successor,
+        value: successor.value |> assets.add(#"99", #"7374726179", 1),
+      },
+    ],
+  }
+}
+
+test swap_carrying_an_asset_it_does_not_name_fails() fail {
+  run(buy(), fill(), with_a_stray_in_the_request(full_buy(976_372, 1_000_000)))
+}
+
+test partial_fill_leaving_a_stray_on_the_continuation_fails() fail {
+  run(
+    buy(),
+    fill(),
+    with_a_stray_on_the_successor(
+      partial_buy(600_000, 600_000, 394_000, 2_200_000, order_address()),
+    ),
   )
 }

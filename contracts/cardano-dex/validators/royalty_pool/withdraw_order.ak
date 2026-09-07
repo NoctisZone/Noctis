@@ -15,7 +15,8 @@
 ////     and request, so a second request cannot satisfy the same pool spend);
 ////     the pool input carries the NFT the request names; the reward output goes
 ////     to the creator's key, holds at least the requested amounts, and leaves
-////     the executor exactly `ex_fee` of the request's ADA.
+////     the executor exactly `ex_fee` of the request's ADA. A claim request
+////     carries ADA and nothing else.
 ////   Refund — signed by the key that placed the request.
 
 use aiken/collection/list
@@ -25,7 +26,7 @@ use cardano/assets.{ada_asset_name, ada_policy_id}
 use cardano/transaction.{
   InlineDatum, Input, Output, OutputReference, Transaction,
 }
-use noctisswap/orders.{Apply, OrderAction, Refund}
+use noctisswap/orders.{Apply, OrderAction, Refund, only_named_assets}
 use noctisswap/pool_state.{is_ada}
 use splash/orders/royalty_withdraw.{RoyaltyWithdrawConfig, WithdrawData}
 use splash/plutus.{Asset}
@@ -74,6 +75,7 @@ validator withdraw_order {
           list.length(self.inputs) == 2,
           asset_quantity_of(pool_in.output.value, pool_nft) == 1,
           pool_cfg.pool_nft == pool_nft,
+          only_named_assets(order_out.value, []),
           reward_out.address.payment_credential == creator,
           withdraw_royalty_x <= x_out,
           withdraw_royalty_y <= y_out,
@@ -267,5 +269,35 @@ test refund_without_the_owner_fails() fail {
     Refund,
     own_ref(),
     Transaction { ..transaction.placeholder, extra_signatories: [#"0e"] },
+  )
+}
+
+/// The passing transaction with one token nobody named added to the request.
+/// Every other figure is the passing case, so only the residual rule can
+/// reject it — the point of building it this way rather than by hand.
+fn with_a_stray_in_the_request(t: Transaction) -> Transaction {
+  expect [order_in, ..rest] = t.inputs
+  let out = order_in.output
+  Transaction {
+    ..t,
+    inputs: [
+      Input {
+        ..order_in,
+        output: Output {
+          ..out,
+          value: out.value |> assets.add(#"99", #"7374726179", 1),
+        },
+      },
+      ..rest
+    ],
+  }
+}
+
+test claim_request_carrying_an_asset_it_does_not_name_fails() fail {
+  withdraw_order.spend(
+    Some(request(1_000_000)),
+    apply(),
+    own_ref(),
+    with_a_stray_in_the_request(apply_tx(creator_address(), 12_000_000, False)),
   )
 }

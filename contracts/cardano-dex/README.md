@@ -93,6 +93,16 @@ pool guarded by this script without modification.
   nothing else. Throughput comes from chaining transactions, as Splash's own
   executor does. Splash's newer batch design trades that guarantee for an
   executor spread; this package does not.
+- **An order carries only what it names.** Every value rule in the four order
+  validators is an inequality over a named set: the assets the request trades,
+  its LQ, the pool's own. Each order is therefore held to carrying exactly
+  those and ADA — which every order holds for the executor's fee and its own
+  minimum, and which each validator accounts for in its own arithmetic — and a
+  swap's continuation to the same set, so nothing rides along that none of the
+  rules measures and no token can be left on a continuation to block the next
+  fill. A request assembled with anything else is refundable rather than
+  fillable, which puts the discipline where the order is built: our own front
+  end and batcher.
 - **Deposit and redeem requests name the pool's own assets.** A request whose
   assets are not the pool's is refused outright, and a deposit's collateral is
   checked back to the placer on every fill, not only when ADA is the surplus

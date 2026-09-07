@@ -10,13 +10,15 @@
 ////     assets are the request's; the reward goes to exactly the placer's
 ////     address; it carries at least the LQ the smaller side of the deposit
 ////     buys at the pool's current ratio; when the two sides are unequal, the
-////     surplus of the larger side comes back in the reward; and the ADA the
-////     placer set aside for the reward output comes back with it.
+////     surplus of the larger side comes back in the reward; the request
+////     carries nothing but those two assets and ADA; and the ADA the placer
+////     set aside for the reward output comes back with it.
 ////   Refund — signed by the placer.
 ////
-//// The last two of Apply's rules are Noctis additions to the Plutarch source:
-//// the request's assets must be the pool's own, and the collateral is checked
-//// on every deposit rather than only when ADA is the surplus side.
+//// Three of Apply's rules are Noctis additions to the Plutarch source: the
+//// request's assets must be the pool's own, the request holds nothing beyond
+//// them and ADA, and the collateral is checked on every deposit rather than
+//// only when ADA is the surplus side.
 
 use aiken/collection/list
 use aiken/math
@@ -26,7 +28,8 @@ use cardano/transaction.{
   InlineDatum, Input, Output, OutputReference, Transaction,
 }
 use noctisswap/orders.{
-  Apply, DepositConfig, OrderAction, Refund, reward_address_ok,
+  Apply, DepositConfig, OrderAction, Refund, only_named_assets,
+  reward_address_ok,
 }
 use noctisswap/pool_state.{is_ada, max_lq_cap, read_pool_state}
 use splash/plutus.{Asset}
@@ -144,6 +147,7 @@ validator deposit_order {
           cfg.x == pool_cfg.pool_x,
           cfg.y == pool_cfg.pool_y,
           cfg.lq == pool_cfg.pool_lq,
+          only_named_assets(order_value, [cfg.x, cfg.y]),
           reward_address_ok(reward_out.address, cfg.reward_pkh, cfg.stake_pkh),
           math.min(min_x, min_y) <= asset_quantity_of(reward, cfg.lq),
           surplus_returned,
@@ -508,5 +512,40 @@ test refund_without_the_placer_fails() fail {
   run(
     Refund,
     Transaction { ..transaction.placeholder, extra_signatories: [#"0c"] },
+  )
+}
+
+/// The passing transaction with one token nobody named added to the request.
+/// Every other figure is the passing case, so only the residual rule can
+/// reject it — the point of building it this way rather than by hand.
+fn with_a_stray_in_the_request(t: Transaction) -> Transaction {
+  expect [order_in, ..rest] = t.inputs
+  let out = order_in.output
+  Transaction {
+    ..t,
+    inputs: [
+      Input {
+        ..order_in,
+        output: Output {
+          ..out,
+          value: out.value |> assets.add(#"99", #"7374726179", 1),
+        },
+      },
+      ..rest
+    ],
+  }
+}
+
+test deposit_carrying_an_asset_it_does_not_name_fails() fail {
+  run(
+    apply(),
+    with_a_stray_in_the_request(
+      tx(
+        order_input(10_000_000),
+        pool_input(pool_value()),
+        reward(placer_address(), balanced_reward()),
+        False,
+      ),
+    ),
   )
 }

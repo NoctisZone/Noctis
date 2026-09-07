@@ -11,10 +11,12 @@
 ////     assets are the request's; the reward goes to exactly the placer's
 ////     address; each asset in the reward is at least the LQ's share of the
 ////     pool's net reserves; and the ADA the request held beyond the executor's
-////     fee comes back on top of any ADA the pool pays out.
+////     fee comes back on top of any ADA the pool pays out; and the request
+////     holds nothing but its LQ and ADA.
 ////   Refund — signed by the placer.
 ////
-//// The assets-are-the-pool's rule is a Noctis addition to the Plutarch source.
+//// The assets-are-the-pool's rule and the holds-nothing-else rule are Noctis
+//// additions to the Plutarch source.
 
 use aiken/collection/list
 use cardano/address.{Address, Inline, Script, VerificationKey}
@@ -23,7 +25,7 @@ use cardano/transaction.{
   InlineDatum, Input, Output, OutputReference, Transaction,
 }
 use noctisswap/orders.{
-  Apply, OrderAction, RedeemConfig, Refund, reward_address_ok,
+  Apply, OrderAction, RedeemConfig, Refund, only_named_assets, reward_address_ok,
 }
 use noctisswap/pool_state.{is_ada, max_lq_cap, read_pool_state}
 use splash/plutus.{Asset}
@@ -91,6 +93,7 @@ validator redeem_order {
           cfg.x == pool_cfg.pool_x,
           cfg.y == pool_cfg.pool_y,
           cfg.lq == pool_cfg.pool_lq,
+          only_named_assets(order_value, [cfg.lq]),
           reward_address_ok(reward_out.address, cfg.reward_pkh, cfg.stake_pkh),
           min_return(in_lq, pool.reserves_x, pool.liquidity) <= out_x,
           min_return(in_lq, pool.reserves_y, pool.liquidity) <= out_y,
@@ -410,5 +413,39 @@ test refund_without_the_placer_fails() fail {
   run(
     Refund,
     Transaction { ..transaction.placeholder, extra_signatories: [#"0c"] },
+  )
+}
+
+/// The passing transaction with one token nobody named added to the request.
+/// Every other figure is the passing case, so only the residual rule can
+/// reject it — the point of building it this way rather than by hand.
+fn with_a_stray_in_the_request(t: Transaction) -> Transaction {
+  expect [order_in, ..rest] = t.inputs
+  let out = order_in.output
+  Transaction {
+    ..t,
+    inputs: [
+      Input {
+        ..order_in,
+        output: Output {
+          ..out,
+          value: out.value |> assets.add(#"99", #"7374726179", 1),
+        },
+      },
+      ..rest
+    ],
+  }
+}
+
+test redeem_carrying_an_asset_it_does_not_name_fails() fail {
+  run(
+    apply(),
+    with_a_stray_in_the_request(
+      tx(
+        pool_input(pool_value()),
+        reward(placer_address(), fair_reward()),
+        False,
+      ),
+    ),
   )
 }
