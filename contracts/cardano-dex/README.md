@@ -100,23 +100,25 @@ pool guarded by this script without modification.
 
 ## Parameters and deployment order
 
-Applying a parameter fixes a validator's hash, and three of the venue scripts
+Applying a parameter fixes a validator's hash, and four of the venue scripts
 take another one's hash, so they are applied in this order:
 
-1. `pool(royalty_withdraw_vh)` — the royalty-withdraw validator's hash.
-2. `redirect(thread_nft_policy, pool_vh, cto_governance_cred, lp_escrow_cred)`
+1. `royalty_withdraw_pool(withdraw_request_vh)` — the hash of
+   `withdraw_order`, which takes no parameters and is therefore already fixed.
+2. `pool(royalty_withdraw_vh)` — the hash from step 1.
+3. `redirect(thread_nft_policy, pool_vh, cto_governance_cred, lp_escrow_cred)`
    and `treasury(authority, max_treasury_fee, pool_vh)` — both take the pool
-   validator's hash from step 1, alongside the platform's thread NFT policy and
+   validator's hash from step 2, alongside the platform's thread NFT policy and
    the launch package's governance and escrow validators.
-3. `pool_mint(thread_nft_policy, pool_vh, redirect_cred, treasury_cred, …)` —
-   the pool from step 1 and the redirect script from step 2. The factory writes
+4. `pool_mint(thread_nft_policy, pool_vh, redirect_cred, treasury_cred, …)` —
+   the pool from step 2 and the redirect script from step 3. The factory writes
    the redirect credential into every pool's datum as the second `dao_policy`
    entry, which is what keeps the pool's own hash independent of the redirect
    script's.
 
-The order validators take no parameters at all. A launch's genesis records the
-factory's policy id in its curve and escrow datums, so the venue's hashes are
-final before any launch is minted against them.
+The four order validators take no parameters at all. A launch's genesis records
+the factory's policy id in its curve and escrow datums, so the venue's hashes
+are final before any launch is minted against them.
 
 ## Fee model
 
