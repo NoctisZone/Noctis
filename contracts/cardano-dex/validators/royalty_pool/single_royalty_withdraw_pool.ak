@@ -1,3 +1,27 @@
+//// WHY THIS SCRIPT DOES NOT PIN THE POOL'S ADDRESS, unlike `treasury.ak` and
+//// `redirect.ak`, which both take `pool_vh` and check it.
+////
+//// It cannot: `pool` already takes THIS script's hash as its parameter, so
+//// taking the pool's hash here would make each script's hash depend on the
+//// other's and neither could be compiled. That cycle is a real one that was
+//// hit and removed once already; do not close the asymmetry by reintroducing
+//// it.
+////
+//// What carries the weight instead, and all three parts are load-bearing:
+////
+////   * Exactly two inputs. The pool and the request, nothing else — so no
+////     decoy can absorb this script's validation while a second pool moves.
+////   * The pool's own validator checks that the input it is spending holds
+////     the NFT its datum names, and the pool's action 4 is what summons this
+////     script, so the two always run together on the same input.
+////   * The NFT named in the datum must be the one the creator signed over,
+////     and the continuing output must hold it. A pool-shaped UTxO carrying a
+////     look-alike token therefore fails against the signature, which no
+////     attacker can produce for a different pool.
+////
+//// Relaxing any of the three turns the others into partial cover rather than
+//// a complete one.
+
 use aiken/builtin
 use aiken/collection/list
 use aiken/crypto.{blake2b_224}
