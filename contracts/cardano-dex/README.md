@@ -62,10 +62,14 @@ pool guarded by this script without modification.
   the input it names must sit at the pool validator's address and hold the NFT
   its datum names, and exactly one input sits there. The pool's own DAO arm
   keeps its shape independently — liquidity untouched, only the treasury
-  counters, the treasury fee and the nonce free to move, neither counter below
-  zero, and whatever leaves matched to a counter — instead of Splash's multisig
+  counters and the treasury fee free to move, neither counter below zero, and
+  whatever leaves matched to a counter — instead of Splash's multisig
   DAO action: withdraw to the platform wallet, or move `treasury_fee` within
-  `[0, max_treasury_fee]`, each bumping the nonce and touching nothing else.
+  `[0, max_treasury_fee]` and below what the pool's own schedule can carry,
+  touching nothing else. Neither action moves the pool nonce: that is replay
+  protection for the creator's signed royalty claim, and moving it would cancel
+  a claim the creator had already signed. The redirect arm still bumps it, and
+  must — a replaced key's old signatures have to die with it.
 - **The factory is one minting policy.** Splash mints LQ under policies served
   from its own infrastructure. Here one policy mints the pool NFT and the LQ
   token together, named with the pool and LQ role tags and the launch id, and

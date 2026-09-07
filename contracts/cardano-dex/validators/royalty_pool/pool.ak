@@ -19,10 +19,11 @@
 ////   3 DAOAction — a withdrawal from the first `dao_policy` credential is
 ////     present in the transaction, and the DAO script decides how much moves.
 ////     What it may never do is decided here: liquidity is untouched, only the
-////     treasury counters, the treasury fee and the nonce may change in the
-////     datum, neither counter ends below zero, and whatever leaves the pool
-////     comes out of a treasury counter rather than out of the reserves or the
-////     creator's slot.
+////     treasury counters and the treasury fee may change in the datum — the
+////     nonce included, since it is the creator's replay protection and not the
+////     platform's — neither counter ends below zero, and whatever leaves the
+////     pool comes out of a treasury counter rather than out of the reserves or
+////     the creator's slot.
 ////   4 WithdrawRoyalty — a withdrawal from the royalty-withdraw script is present;
 ////     that script decides the rest (it permits only `royalty_x/y` and `nonce`
 ////     to change).
@@ -285,7 +286,6 @@ validator pool(royalty_withdraw_vh: ByteArray) {
         treasury_x: succ_cfg.treasury_x,
         treasury_y: succ_cfg.treasury_y,
         treasury_fee: succ_cfg.treasury_fee,
-        nonce: succ_cfg.nonce,
       }
       and {
         has_withdrawal(self, dao_cred),
@@ -812,12 +812,7 @@ fn run_dao(next: SingleRoyaltyPoolConfig, x: Int, y: Int, lq: Int) -> Bool {
 /// Both slots emptied: the pool's holdings fall by exactly what the counters
 /// give up.
 fn dao_drained() -> SingleRoyaltyPoolConfig {
-  SingleRoyaltyPoolConfig {
-    ..dao_cfg(),
-    treasury_x: 0,
-    treasury_y: 0,
-    nonce: 1,
-  }
+  SingleRoyaltyPoolConfig { ..dao_cfg(), treasury_x: 0, treasury_y: 0 }
 }
 
 test tx_dao_withdrawal_of_the_treasury_passes() {
@@ -853,7 +848,6 @@ test tx_dao_that_drives_a_counter_below_zero_fails() fail {
     ..dao_cfg(),
     treasury_x: -1_000_000,
     treasury_y: 0,
-    nonce: 1,
   }
   run_dao(over, 94_000_000, 99_999_300, 50_000_000)
 }
@@ -864,9 +858,20 @@ test tx_dao_that_drives_the_token_counter_below_zero_fails() fail {
     ..dao_cfg(),
     treasury_x: 0,
     treasury_y: -300,
-    nonce: 1,
   }
   run_dao(over, 95_000_000, 99_999_000, 50_000_000)
+}
+
+/// The nonce is what the creator's royalty signature is bound to, so a
+/// treasury action that moved it would cancel a claim already signed. The
+/// redirect arm still bumps it, and must: a replaced key's old signatures have
+/// to die with it.
+test tx_dao_that_bumps_the_nonce_fails() fail {
+  let bumped = SingleRoyaltyPoolConfig {
+    ..dao_drained(),
+    nonce: dao_cfg().nonce + 1,
+  }
+  run_dao(bumped, 95_000_000, 99_999_300, 50_000_000)
 }
 
 test tx_dao_that_moves_liquidity_fails() fail {

@@ -11,15 +11,22 @@
 //// this script speaks for one real pool and no other.
 ////
 //// Two actions, both authorised by `authority` (a key: its signature; a
-//// script: its withdrawal), both bumping the pool nonce and changing nothing
-//// else in the datum:
+//// script: its withdrawal), and neither touching the pool nonce. That nonce is
+//// replay protection for the creator's signed royalty claim, whose signature
+//// covers it: a treasury action consumes no such signature, so it has nothing
+//// to replay-guard, and moving it would only cancel a claim the creator had
+//// already signed. Both actions change nothing else in the datum:
 ////
 ////   Withdraw — the treasury counters go down by exactly what leaves the pool
 ////     value, never below zero; an output at `treasury_address` receives
 ////     exactly that; liquidity, the token count and any token-to-token lovelace
 ////     are unchanged.
-////   SetTreasuryFee — `treasury_fee` becomes `new_fee`, within
-////     `[0, max_treasury_fee]`; the pool value is unchanged. This is the
+////   SetTreasuryFee — `treasury_fee` becomes `new_fee`, which must differ from
+////     the current one, sit within `[0, max_treasury_fee]`, and leave the pool
+////     fee something to work with: `new_fee + royalty_fee < fee_num`, read from
+////     the pool's own datum. The deployed ceiling is one flat number shared by
+////     every pool and knows nothing of a given pool's schedule, so the datum is
+////     the second and tighter bound. The pool value is unchanged. This is the
 ////     "DAO-adjustable within a published band" of the fee decision.
 
 use aiken/collection/list
@@ -107,7 +114,6 @@ validator treasury(
           ..prev,
           treasury_x: next.treasury_x,
           treasury_y: next.treasury_y,
-          nonce: prev.nonce + 1,
         }
         expect Some(t_out) = list.at(self.outputs, treasury_out_ix)
         and {
@@ -131,14 +137,16 @@ validator treasury(
         }
       }
       SetTreasuryFee { new_fee, .. } -> {
-        let expected = SingleRoyaltyPoolConfig {
-          ..prev,
-          treasury_fee: new_fee,
-          nonce: prev.nonce + 1,
-        }
+        let expected = SingleRoyaltyPoolConfig { ..prev, treasury_fee: new_fee }
         and {
           new_fee >= 0,
           new_fee <= max_treasury_fee,
+          // The schedule must still leave the pool a fee to price against.
+          // Read from the datum, because the deployed ceiling is one number
+          // shared by every pool and knows nothing of this pool's numerators.
+          new_fee + prev.royalty_fee < prev.fee_num,
+          // A fee set that changes no fee is not an administrative act.
+          new_fee != prev.treasury_fee,
           expected == next,
           successor.value == pool_out_in.value,
         }
@@ -255,7 +263,7 @@ fn withdraw_tx(
 }
 
 fn drained() -> SingleRoyaltyPoolConfig {
-  SingleRoyaltyPoolConfig { ..cfg(), treasury_x: 0, treasury_y: 0, nonce: 10 }
+  SingleRoyaltyPoolConfig { ..cfg(), treasury_x: 0, treasury_y: 0 }
 }
 
 fn withdraw() -> TreasuryAction {
@@ -313,12 +321,7 @@ test withdraw_that_pays_less_than_it_takes_fails() fail {
 }
 
 test withdraw_below_zero_fails() fail {
-  let over = SingleRoyaltyPoolConfig {
-    ..cfg(),
-    treasury_x: -1,
-    treasury_y: 0,
-    nonce: 10,
-  }
+  let over = SingleRoyaltyPoolConfig { ..cfg(), treasury_x: -1, treasury_y: 0 }
   let tx = Transaction {
     ..transaction.placeholder,
     inputs: [pool_input(cfg(), 100_000_000, 100_000_000)],
@@ -337,15 +340,18 @@ test withdraw_below_zero_fails() fail {
   )
 }
 
-test withdraw_without_the_nonce_bump_fails() fail {
-  let stale = SingleRoyaltyPoolConfig { ..cfg(), treasury_x: 0, treasury_y: 0 }
+/// The nonce belongs to the creator's signed claim, not to the platform's
+/// housekeeping: moving it here would cancel a claim already signed, for the
+/// price of a transaction fee.
+test withdraw_that_bumps_the_nonce_fails() fail {
+  let bumped = SingleRoyaltyPoolConfig { ..drained(), nonce: cfg().nonce + 1 }
   treasury.withdraw(
     VerificationKey(platform_key),
     500,
     #"0a",
     withdraw(),
     Script(#"0c"),
-    signed_by(withdraw_tx(stale, platform_key, 5_000_000, 700), platform_key),
+    signed_by(withdraw_tx(bumped, platform_key, 5_000_000, 700), platform_key),
   )
 }
 
@@ -385,7 +391,6 @@ test withdraw_from_a_pool_at_a_key_address_fails() fail {
     ..theirs,
     treasury_x: 0,
     treasury_y: 0,
-    nonce: 10,
   }
   let decoy = Input {
     output_reference: OutputReference { transaction_id: #"03", output_index: 0 },
@@ -450,7 +455,7 @@ fn set_fee_tx(next: SingleRoyaltyPoolConfig) -> Transaction {
 }
 
 test set_fee_within_the_band_passes() {
-  let next = SingleRoyaltyPoolConfig { ..cfg(), treasury_fee: 300, nonce: 10 }
+  let next = SingleRoyaltyPoolConfig { ..cfg(), treasury_fee: 300 }
   treasury.withdraw(
     VerificationKey(platform_key),
     500,
@@ -462,7 +467,7 @@ test set_fee_within_the_band_passes() {
 }
 
 test set_fee_above_the_band_fails() fail {
-  let next = SingleRoyaltyPoolConfig { ..cfg(), treasury_fee: 501, nonce: 10 }
+  let next = SingleRoyaltyPoolConfig { ..cfg(), treasury_fee: 501 }
   treasury.withdraw(
     VerificationKey(platform_key),
     500,
@@ -474,7 +479,7 @@ test set_fee_above_the_band_fails() fail {
 }
 
 test set_fee_that_moves_value_fails() fail {
-  let next = SingleRoyaltyPoolConfig { ..cfg(), treasury_fee: 300, nonce: 10 }
+  let next = SingleRoyaltyPoolConfig { ..cfg(), treasury_fee: 300 }
   let tx = Transaction {
     ..transaction.placeholder,
     inputs: [pool_input(cfg(), 100_000_000, 100_000_000)],
@@ -490,8 +495,50 @@ test set_fee_that_moves_value_fails() fail {
   )
 }
 
+/// The deployed ceiling is set above the schedule on purpose here, so only the
+/// datum's own numerators can decide. One below the bound.
+test set_fee_just_inside_the_schedule_passes() {
+  let next = SingleRoyaltyPoolConfig { ..cfg(), treasury_fee: 98_699 }
+  treasury.withdraw(
+    VerificationKey(platform_key),
+    99_000,
+    #"0a",
+    SetTreasuryFee { pool_in_ix: 0, new_fee: 98_699 },
+    Script(#"0c"),
+    signed_by(set_fee_tx(next), platform_key),
+  )
+}
+
+/// One further and the schedule leaves the pool nothing to price a swap
+/// against. Inside the deployed ceiling, so the datum band is the only thing
+/// that refuses it.
+test set_fee_that_leaves_the_pool_no_fee_fails() fail {
+  let next = SingleRoyaltyPoolConfig { ..cfg(), treasury_fee: 98_700 }
+  treasury.withdraw(
+    VerificationKey(platform_key),
+    99_000,
+    #"0a",
+    SetTreasuryFee { pool_in_ix: 0, new_fee: 98_700 },
+    Script(#"0c"),
+    signed_by(set_fee_tx(next), platform_key),
+  )
+}
+
+/// Setting the fee to what it already is satisfied every other rule.
+test set_fee_to_its_current_value_fails() fail {
+  let next = SingleRoyaltyPoolConfig { ..cfg(), treasury_fee: 100 }
+  treasury.withdraw(
+    VerificationKey(platform_key),
+    500,
+    #"0a",
+    SetTreasuryFee { pool_in_ix: 0, new_fee: 100 },
+    Script(#"0c"),
+    signed_by(set_fee_tx(next), platform_key),
+  )
+}
+
 test set_fee_by_a_script_authority_needs_its_withdrawal() {
-  let next = SingleRoyaltyPoolConfig { ..cfg(), treasury_fee: 300, nonce: 10 }
+  let next = SingleRoyaltyPoolConfig { ..cfg(), treasury_fee: 300 }
   let tx = Transaction {
     ..set_fee_tx(next),
     withdrawals: [Pair(Script(#"0e"), 0)],
