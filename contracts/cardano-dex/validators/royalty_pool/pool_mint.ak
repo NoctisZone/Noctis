@@ -41,7 +41,7 @@ use cardano/transaction.{
   InlineDatum, Input, Output, OutputReference, Spend, Transaction,
 }
 use noctisswap/launch_records.{
-  Locked, LpEscrowDatum, graduate_redeemer_index, role_bonding_curve,
+  Locked, LpEscrowDatum, graduate_redeemer_index, role_bonding_curve_tier_b,
   role_lp_escrow, role_lq, role_pool, thread_asset_name,
 }
 use noctisswap/pool_state.{fee_den, is_ada, max_lq_cap}
@@ -142,7 +142,7 @@ validator pool_mint(
               assets.quantity_of(
                 i.output.value,
                 thread_nft_policy,
-                thread_asset_name(role_bonding_curve, launch_id),
+                thread_asset_name(role_bonding_curve_tier_b, launch_id),
               ) == 1
             },
           )
@@ -411,7 +411,7 @@ fn curve_in() -> Input {
       value: assets.from_lovelace(20_000_000_000)
         |> assets.add(
             thread_policy,
-            thread_asset_name(role_bonding_curve, launch),
+            thread_asset_name(role_bonding_curve_tier_b, launch),
             1,
           ),
       datum: transaction.NoDatum,
@@ -893,7 +893,7 @@ test graduation_with_another_launchs_curve_fails() fail {
       value: assets.from_lovelace(20_000_000_000)
         |> assets.add(
             thread_policy,
-            thread_asset_name(role_bonding_curve, other_launch),
+            thread_asset_name(role_bonding_curve_tier_b, other_launch),
             1,
           ),
     },
