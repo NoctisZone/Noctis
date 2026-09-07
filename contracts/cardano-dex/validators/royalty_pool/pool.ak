@@ -368,6 +368,16 @@ validator pool(royalty_withdraw_vh: ByteArray) {
       // — which is unchanged, so every rule below is satisfied by a transaction
       // that never touches the pool at all.
       asset_quantity_of(self_out.value, cfg.pool_nft) == 1,
+      // ...and it is the only input that does, so one continuing output
+      // always answers for exactly one pool. The successor is located by
+      // searching for that NFT, and a second unit of it is not mintable,
+      // which is what already made this true — the count is the pool's own
+      // line on it, rather than a property borrowed from the factory. The
+      // two validators the pool delegates to each keep their own equivalent.
+      list.count(
+        self.inputs,
+        fn(i) { asset_quantity_of(i.output.value, cfg.pool_nft) == 1 },
+      ) == 1,
       no_more_tokens,
       script_preserved,
       lovelace_t2t_preserved,
@@ -1321,5 +1331,34 @@ test redirect_authorised_by_a_payment_key_withdrawal_fails() fail {
     PoolRedeemer { action: action_redirect_royalty, self_ix: 0 },
     own_ref(),
     redirect_tx_from(prev, next, key_cred()),
+  )
+}
+
+
+/// The passing swap with one delta: a second input carrying the same pool
+/// NFT. Both spends resolve their continuing output by searching for that
+/// NFT, so without the count above each would validate against the one
+/// successor and the second pool's balance would be unaccounted for.
+test a_second_input_holding_the_pool_nft_fails() fail {
+  let twin =
+    Input {
+      output_reference: OutputReference {
+        transaction_id: #"09",
+        output_index: 0,
+      },
+      output: Output {
+        address: pool_address(),
+        value: pool_value(sample_cfg(), 100_000_000, 100_000_000, 50_000_000),
+        datum: InlineDatum(sample_cfg()),
+        reference_script: None,
+      },
+    }
+  let base = swap_tx(swapped_cfg(), 976_372)
+  pool.spend(
+    #"0b",
+    Some(sample_cfg()),
+    PoolRedeemer { action: action_swap, self_ix: 0 },
+    own_ref(),
+    Transaction { ..base, inputs: list.concat(base.inputs, [twin]) },
   )
 }
