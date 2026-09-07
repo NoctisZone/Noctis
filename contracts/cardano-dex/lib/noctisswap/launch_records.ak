@@ -141,7 +141,12 @@ pub const role_cto_governance: ByteArray = #"00"
 /// spent in the transaction that opens a pool, under the curve's own
 /// `Graduate` redeemer, which is what ties a pool's creation to a real
 /// graduation.
-pub const role_bonding_curve: ByteArray = #"02"
+///
+/// Named for the launch package's own identifier for this tag, because that
+/// package spends `role_bonding_curve` on a different one — `#"01"`, the
+/// retired linear curve. A venue only ever meets the Cardano Launch curve, so
+/// the shorter name would read naturally here and mean the other thing there.
+pub const role_bonding_curve_tier_b: ByteArray = #"02"
 
 /// The constructor index of the launch curve's `Graduate` redeemer.
 ///

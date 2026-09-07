@@ -23,8 +23,16 @@
 ////     zero, and a royalty key that hashes to the creator's fee recipient as
 ////     the launch's LP escrow records it. The escrow is spent in the same
 ////     transaction from its unsealed state and comes back holding `initial_lq`
-////     LQ, with its datum naming that position. That is the whole of the LP
-////     lock: the escrow holds the position from the first block of the pool.
+////     LQ, with its datum naming that position — so the escrow holds the
+////     position from the pool's first block, with no window in between.
+////     That timing is what this policy establishes; it is not the whole of
+////     the escrow's datum. Five of the eighteen fields are pinned here (the
+////     launch id, a lock timestamp moving off zero, and the three naming the
+////     position); `lp_escrow.ak`'s `SealLock`, in the launch package, pins
+////     the rest byte for byte. The two interlock: `SealLock` is the only arm
+////     anywhere that writes `lock_timestamp` and it requires the input's to
+////     be zero, so requiring zero before and non-zero after is what forces
+////     `SealLock` to be the arm that ran.
 ////   Burn — only burning.
 ////
 //// Splash mints its LQ under policies served from its own infrastructure; this
@@ -41,7 +49,7 @@ use cardano/transaction.{
   InlineDatum, Input, Output, OutputReference, Spend, Transaction,
 }
 use noctisswap/launch_records.{
-  Locked, LpEscrowDatum, graduate_redeemer_index, role_bonding_curve,
+  Locked, LpEscrowDatum, graduate_redeemer_index, role_bonding_curve_tier_b,
   role_lp_escrow, role_lq, role_pool, thread_asset_name,
 }
 use noctisswap/pool_state.{is_ada, max_lq_cap}
@@ -137,7 +145,7 @@ validator pool_mint(
               assets.quantity_of(
                 i.output.value,
                 thread_nft_policy,
-                thread_asset_name(role_bonding_curve, launch_id),
+                thread_asset_name(role_bonding_curve_tier_b, launch_id),
               ) == 1
             },
           )
@@ -402,7 +410,7 @@ fn curve_in() -> Input {
       value: assets.from_lovelace(20_000_000_000)
         |> assets.add(
             thread_policy,
-            thread_asset_name(role_bonding_curve, launch),
+            thread_asset_name(role_bonding_curve_tier_b, launch),
             1,
           ),
       datum: transaction.NoDatum,
@@ -816,7 +824,7 @@ test graduation_with_another_launchs_curve_fails() fail {
       value: assets.from_lovelace(20_000_000_000)
         |> assets.add(
             thread_policy,
-            thread_asset_name(role_bonding_curve, other_launch),
+            thread_asset_name(role_bonding_curve_tier_b, other_launch),
             1,
           ),
     },
