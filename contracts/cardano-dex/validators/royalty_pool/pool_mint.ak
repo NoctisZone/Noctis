@@ -29,13 +29,14 @@
 use aiken/collection/dict
 use aiken/collection/list
 use aiken/crypto.{ScriptHash, blake2b_224}
-use cardano/address.{Address, Credential, Inline, Script}
+use cardano/address.{Address, Credential, Inline, Script, VerificationKey}
 use cardano/assets.{PolicyId, Value, ada_asset_name, ada_policy_id}
 use cardano/transaction.{
   InlineDatum, Input, Output, OutputReference, Transaction,
 }
 use noctisswap/launch_records.{
-  Locked, LpEscrowDatum, role_lp_escrow, role_lq, role_pool, thread_asset_name,
+  Locked, LpEscrowDatum, role_bonding_curve, role_lp_escrow, role_lq, role_pool,
+  thread_asset_name,
 }
 use noctisswap/pool_state.{is_ada, max_lq_cap}
 use splash/plutus.{Asset}
@@ -94,6 +95,24 @@ validator pool_mint(
         expect InlineDatum(escrow_in_raw) = escrow_in.output.datum
         expect escrow_before: LpEscrowDatum = escrow_in_raw
 
+        // A pool opens only in the launch's own graduation transaction. The
+        // curve's record must be spent here, which is what makes the curve's
+        // validator run alongside this policy and hold the pool output to the
+        // whole raise and the reserve it is owed. Without this the escrow's
+        // seal would authorise itself: the position it seals is minted here,
+        // so nothing else would tie either to the launch actually graduating.
+        let curve_spent =
+          list.any(
+            self.inputs,
+            fn(i) {
+              assets.quantity_of(
+                i.output.value,
+                thread_nft_policy,
+                thread_asset_name(role_bonding_curve, launch_id),
+              ) == 1
+            },
+          )
+
         let expected = SingleRoyaltyPoolConfig {
           pool_nft: nft,
           pool_x: ada,
@@ -114,13 +133,21 @@ validator pool_mint(
 
         and {
           own_minted == [Pair(nft_name, 1), Pair(lq_name, max_lq_cap)],
+          curve_spent,
           pool_out.address == Address {
             payment_credential: Script(pool_vh),
             stake_credential: None,
           },
+          // The escrow comes back to the address it was spent from, so this
+          // policy does not lean on the launch package's seal to keep the
+          // position where it belongs.
+          escrow_out.address == escrow_in.output.address,
           cfg == expected,
           !is_ada(cfg.pool_y),
-          blake2b_224(cfg.royalty_pub_key) == escrow.fee_recipient_pub_key_hash,
+          // Read from the record that was spent, not from the datum written
+          // in this transaction, so the creator's key comes from the launch's
+          // own escrow rather than from whoever submits the graduation.
+          blake2b_224(cfg.royalty_pub_key) == escrow_before.fee_recipient_pub_key_hash,
           asset_quantity_of(pool_out.value, nft) == 1,
           asset_quantity_of(pool_out.value, lq) == max_lq_cap - initial_lq,
           assets.lovelace_of(pool_out.value) > 0,
@@ -296,6 +323,29 @@ fn mint_value() -> Value {
     |> assets.add(lq_policy, nft_name(), 1)
 }
 
+/// The launch's bonding curve, spent in the same transaction. Its own
+/// validator holds the pool output to the raise and the reserve; here it is
+/// only the record that proves the graduation is real.
+fn curve_in() -> Input {
+  Input {
+    output_reference: OutputReference { transaction_id: #"c0", output_index: 0 },
+    output: Output {
+      address: Address {
+        payment_credential: Script(#"0c"),
+        stake_credential: None,
+      },
+      value: assets.from_lovelace(20_000_000_000)
+        |> assets.add(
+            thread_policy,
+            thread_asset_name(role_bonding_curve, launch),
+            1,
+          ),
+      datum: transaction.NoDatum,
+      reference_script: None,
+    },
+  }
+}
+
 fn tx(
   pool: Output,
   escrow: Output,
@@ -304,7 +354,7 @@ fn tx(
 ) -> Transaction {
   Transaction {
     ..transaction.placeholder,
-    inputs: [escrow_before],
+    inputs: [escrow_before, curve_in()],
     outputs: [pool, escrow],
     mint,
   }
@@ -637,7 +687,78 @@ test escrow_left_unsealed_fails() fail {
 test escrow_that_was_already_sealed_fails() fail {
   run(
     create(),
-    Transaction { ..good(), inputs: [escrow_in(escrow_datum(500))] },
+    Transaction { ..good(), inputs: [escrow_in(escrow_datum(500)), curve_in()] },
+  )
+}
+
+/// A pool opens only alongside the launch's own graduation. Without the
+/// curve's record among the inputs the escrow's seal would be authorising
+/// itself, since the position it seals is minted in this same transaction.
+test graduation_without_the_curve_fails() fail {
+  run(create(), Transaction { ..good(), inputs: [escrow_in(escrow_datum(0))] })
+}
+
+/// The curve of another launch does not stand in for this one's.
+test graduation_with_another_launchs_curve_fails() fail {
+  let other_curve =
+    Input {
+      ..curve_in(),
+      output: Output {
+        ..curve_in().output,
+        value: assets.from_lovelace(20_000_000_000)
+          |> assets.add(
+              thread_policy,
+              thread_asset_name(role_bonding_curve, other_launch),
+              1,
+            ),
+      },
+    }
+  run(
+    create(),
+    Transaction { ..good(), inputs: [escrow_in(escrow_datum(0)), other_curve] },
+  )
+}
+
+/// The sealed position must come back to the escrow it was spent from.
+test escrow_returning_to_another_address_fails() fail {
+  let elsewhere =
+    Output {
+      ..escrow_out(escrow_datum(1_000), escrow_value(initial)),
+      address: Address {
+        payment_credential: VerificationKey(#"a7"),
+        stake_credential: None,
+      },
+    }
+  run(
+    create(),
+    tx(
+      pool_out(pool_cfg(), pool_value(), Script(pool_hash)),
+      elsewhere,
+      escrow_in(escrow_datum(0)),
+      mint_value(),
+    ),
+  )
+}
+
+/// The creator's key is read from the record that was spent, so rewriting the
+/// fee recipient in the datum this transaction authors changes nothing.
+test royalty_key_taken_from_the_written_datum_fails() fail {
+  let stranger_key = #"a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7"
+  let hijacked =
+    SingleRoyaltyPoolConfig { ..pool_cfg(), royalty_pub_key: stranger_key }
+  let rewritten =
+    LpEscrowDatum {
+      ..escrow_datum(1_000),
+      fee_recipient_pub_key_hash: blake2b_224(stranger_key),
+    }
+  run(
+    create(),
+    tx(
+      pool_out(hijacked, pool_value(), Script(pool_hash)),
+      escrow_out(rewritten, escrow_value(initial)),
+      escrow_in(escrow_datum(0)),
+      mint_value(),
+    ),
   )
 }
 

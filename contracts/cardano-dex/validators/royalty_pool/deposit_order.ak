@@ -61,9 +61,20 @@ pub fn change_ok(
   other_side_lq: Int,
   surplus_reserves: Int,
   liquidity: Int,
+  collateral_ada: Int,
 ) -> Bool {
   let excess = ( surplus_side_lq - other_side_lq ) * surplus_reserves / liquidity
-  excess <= asset_quantity_of(reward, surplus_asset)
+  // The placer is owed the change AND their collateral back. When the surplus
+  // side is ADA the two are paid out of one balance, so the change is measured
+  // against what is left once the collateral is set aside — the same way
+  // redeem's payout subtracts it before comparing. Measuring each against the
+  // whole balance would let the larger of the two cover both.
+  let available = if is_ada(surplus_asset) {
+    asset_quantity_of(reward, surplus_asset) - collateral_ada
+  } else {
+    asset_quantity_of(reward, surplus_asset)
+  }
+  excess <= available
 }
 
 validator deposit_order {
@@ -112,6 +123,7 @@ validator deposit_order {
             min_x,
             pool.reserves_y,
             pool.liquidity,
+            cfg.collateral_ada,
           )
         } else {
           change_ok(
@@ -121,6 +133,7 @@ validator deposit_order {
             min_y,
             pool.reserves_x,
             pool.liquidity,
+            cfg.collateral_ada,
           )
         }
 
@@ -318,6 +331,37 @@ test lopsided_deposit_keeping_the_surplus_fails() fail {
       False,
     ),
   )
+}
+
+// The surplus side above is the token. These three put it on the ADA side,
+// where the change and the collateral are paid out of one balance: the order
+// holds 13,000,000 lovelace and 5,000,000 of the token, so the ADA side buys
+// 100,000 LQ against the token side's 50,000 and the placer is owed 5,000,000
+// of change on top of the 2,000,000 collateral.
+
+fn ada_surplus_reward(lovelace: Int) -> Value {
+  assets.from_lovelace(lovelace) |> assets.add(lq.policy, lq.name, 50_000)
+}
+
+fn ada_surplus_tx(lovelace: Int) -> Transaction {
+  tx(
+    order_input(5_000_000),
+    pool_input(pool_value()),
+    reward(placer_address(), ada_surplus_reward(lovelace)),
+    False,
+  )
+}
+
+test ada_surplus_deposit_returns_the_change_and_the_collateral() {
+  run(apply(), ada_surplus_tx(7_000_000))
+}
+
+test ada_surplus_deposit_keeping_the_collateral_fails() fail {
+  run(apply(), ada_surplus_tx(5_000_000))
+}
+
+test ada_surplus_deposit_one_lovelace_short_fails() fail {
+  run(apply(), ada_surplus_tx(6_999_999))
 }
 
 test short_lq_fails() fail {

@@ -109,12 +109,29 @@ pub fn swap_ok(
   royalty_fee: Int,
 ) -> Bool {
   let net = fee_num - treasury_fee - royalty_fee
-  if dx > 0 {
-    let dxf = dx * net
-    -dy * ( rx0 * fee_den + dxf ) <= ry0 * dxf
-  } else {
-    let dyf = dy * net
-    -dx * ( ry0 * fee_den + dyf ) <= rx0 * dyf
+  and {
+    // The schedule must leave something after both slices, and the pool must
+    // hold a reserve on each side to price against. These three are what keep
+    // the bracket below a sum of positive terms: the comparison is then always
+    // a ceiling on what may leave, it can never turn into a floor, and the
+    // output it permits is strictly less than the reserve. A separate rule
+    // holding each side above zero would be redundant for that reason, so
+    // there isn't one.
+    net > 0,
+    rx0 > 0,
+    ry0 > 0,
+    // A swap has an input side and an output side. The branch is chosen by
+    // which side is the input, not by the sign of one delta, so a move that
+    // takes from both sides has no branch to fall into.
+    if dx > 0 {
+      let dxf = dx * net
+      dy <= 0 && -dy * ( rx0 * fee_den + dxf ) <= ry0 * dxf
+    } else if dy > 0 {
+      let dyf = dy * net
+      -dx * ( ry0 * fee_den + dyf ) <= rx0 * dyf
+    } else {
+      False
+    },
   }
 }
 
@@ -344,6 +361,75 @@ test swap_y_direction_at_the_bound() {
     t_fee_010,
     r_fee_100,
   )
+}
+
+/// A pool holding 100M a side of which 55M a side is earmarked as uncollected
+/// fees, so the net reserves are 45M. The same value movement an undrifted
+/// pool refuses must be refused here too: it takes from both sides and gives
+/// nothing, which is not a swap however the reserves are netted.
+test swap_taking_from_both_sides_on_a_drifted_pool_fails() {
+  !swap_ok(
+    45_000_000,
+    45_000_000,
+    -82_779_852,
+    -99_999_999,
+    fee_num_030,
+    t_fee_010,
+    r_fee_100,
+  )
+}
+
+/// A trade with no input side at all takes without giving.
+test swap_with_no_input_side_fails() {
+  !swap_ok(100_000_000, 100_000_000, 0, 0, fee_num_030, t_fee_010, r_fee_100)
+}
+
+/// A move that adds to both sides has no output side, so it is not a swap.
+test swap_adding_to_both_sides_fails() {
+  !swap_ok(
+    100_000_000,
+    100_000_000,
+    1_000_000,
+    1_000_000,
+    fee_num_030,
+    t_fee_010,
+    r_fee_100,
+  )
+}
+
+/// A pool whose net reserve on the input side has reached zero cannot price a
+/// trade: one unit would otherwise buy the whole of the other side.
+test swap_from_an_empty_reserve_fails() {
+  !swap_ok(
+    0,
+    100_000_000,
+    1,
+    -100_000_000,
+    fee_num_030,
+    t_fee_010,
+    r_fee_100,
+  )
+}
+
+/// Nor can a pool whose net reserve has gone below zero.
+test swap_from_a_negative_reserve_fails() {
+  !swap_ok(
+    100_000_000,
+    -1,
+    -100_000_000,
+    1,
+    fee_num_030,
+    t_fee_010,
+    r_fee_100,
+  )
+}
+
+/// A schedule whose slices leave nothing has no price to quote, and the
+/// comparison stops bounding the output by the reserve. Here a treasury slice
+/// of 99,000 leaves the net numerator negative, and 150 of the Y side would
+/// leave a pool holding only 100 of it.
+test swap_on_an_inverted_schedule_fails() {
+  !swap_ok(100, 100, 100_000, -150, fee_num_030, 99_000, r_fee_100)
 }
 
 /// 1,000,000 in at 1.00% owes exactly 10,000 to the royalty counter.

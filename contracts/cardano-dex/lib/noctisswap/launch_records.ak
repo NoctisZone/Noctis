@@ -137,6 +137,11 @@ pub type LpEscrowDatum {
 /// launch id. The launch package owns tags 00 to 06.
 pub const role_cto_governance: ByteArray = #"00"
 
+/// The Cardano Launch bonding curve. The factory requires this record to be
+/// spent in the transaction that opens a pool, which is what ties a pool's
+/// creation to a real graduation.
+pub const role_bonding_curve: ByteArray = #"02"
+
 pub const role_lp_escrow: ByteArray = #"03"
 
 /// NoctisSwap's own roles, chosen outside the launch package's range. The pool
