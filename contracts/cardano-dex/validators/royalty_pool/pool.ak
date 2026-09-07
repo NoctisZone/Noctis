@@ -21,8 +21,9 @@
 ////   4 WithdrawRoyalty — a withdrawal from the royalty-withdraw script is present;
 ////     that script decides the rest (it permits only `royalty_x/y` and `nonce`
 ////     to change).
-////   5 RedirectRoyalty (Noctis addition) — a withdrawal from the CTO governance
-////     credential is present; the successor datum equals the current one except
+////   5 RedirectRoyalty (Noctis addition) — a withdrawal from the governance
+////     credential is present, the second `dao_policy` entry, which the factory
+////     writes at creation; the successor datum equals the current one except
 ////     `royalty_pub_key` (replaced) and `nonce` (+1); the pool value is unchanged.
 ////     Splash's DAO action deliberately cannot change the royalty key. A passed
 ////     community-takeover vote has to, so this arm exists.
@@ -223,9 +224,12 @@ fn has_withdrawal(self: Transaction, cred: Credential) -> Bool {
 }
 
 /// `royalty_withdraw_vh`: script hash of the royalty-withdraw validator, which
-/// Splash hardcodes and Noctis parameterises. `redirect_cred`: the
-/// credential whose withdrawal authorises a royalty redirect.
-validator pool(royalty_withdraw_vh: ByteArray, redirect_cred: Credential) {
+/// Splash hardcodes and Noctis parameterises. The credential whose withdrawal
+/// authorises a royalty redirect is not a parameter: it is the second
+/// `dao_policy` entry of the datum, written by the factory, so the pool's hash
+/// does not depend on the redirect script's and the three venue scripts can
+/// be applied in order — the pool, then the redirect script, then the factory.
+validator pool(royalty_withdraw_vh: ByteArray) {
   spend(
     datum: Option<SingleRoyaltyPoolConfig>,
     redeemer: PoolRedeemer,
@@ -271,6 +275,7 @@ validator pool(royalty_withdraw_vh: ByteArray, redirect_cred: Credential) {
     } else if redeemer.action == action_withdraw_royalty {
       has_withdrawal(self, Script(royalty_withdraw_vh))
     } else if redeemer.action == action_redirect_royalty {
+      expect Some(Inline(redirect_cred)) = list.at(cfg.dao_policy, 1)
       and {
         has_withdrawal(self, redirect_cred),
         redirect_config_ok(cfg, succ_cfg),
@@ -400,28 +405,12 @@ test swap_adding_to_both_sides_fails() {
 /// A pool whose net reserve on the input side has reached zero cannot price a
 /// trade: one unit would otherwise buy the whole of the other side.
 test swap_from_an_empty_reserve_fails() {
-  !swap_ok(
-    0,
-    100_000_000,
-    1,
-    -100_000_000,
-    fee_num_030,
-    t_fee_010,
-    r_fee_100,
-  )
+  !swap_ok(0, 100_000_000, 1, -100_000_000, fee_num_030, t_fee_010, r_fee_100)
 }
 
 /// Nor can a pool whose net reserve has gone below zero.
 test swap_from_a_negative_reserve_fails() {
-  !swap_ok(
-    100_000_000,
-    -1,
-    -100_000_000,
-    1,
-    fee_num_030,
-    t_fee_010,
-    r_fee_100,
-  )
+  !swap_ok(100_000_000, -1, -100_000_000, 1, fee_num_030, t_fee_010, r_fee_100)
 }
 
 /// A schedule whose slices leave nothing has no price to quote, and the
@@ -463,7 +452,7 @@ fn sample_cfg() -> SingleRoyaltyPoolConfig {
     treasury_y: 0,
     royalty_x: 0,
     royalty_y: 0,
-    dao_policy: [Inline(Script(#"dd"))],
+    dao_policy: [Inline(Script(#"dd")), Inline(Script(#"0c"))],
     treasury_address: #"ee",
     royalty_pub_key: #"ff",
     nonce: 0,
@@ -656,7 +645,6 @@ fn swapped_cfg() -> SingleRoyaltyPoolConfig {
 test tx_swap_at_the_bound_passes() {
   pool.spend(
     #"0b",
-    Script(#"0c"),
     Some(sample_cfg()),
     PoolRedeemer { action: action_swap, self_ix: 0 },
     own_ref(),
@@ -667,7 +655,6 @@ test tx_swap_at_the_bound_passes() {
 test tx_swap_one_past_the_bound_fails() fail {
   pool.spend(
     #"0b",
-    Script(#"0c"),
     Some(sample_cfg()),
     PoolRedeemer { action: action_swap, self_ix: 0 },
     own_ref(),
@@ -683,7 +670,6 @@ test tx_swap_skimming_the_creator_fails() fail {
   }
   pool.spend(
     #"0b",
-    Script(#"0c"),
     Some(sample_cfg()),
     PoolRedeemer { action: action_swap, self_ix: 0 },
     own_ref(),
@@ -700,7 +686,6 @@ test tx_swap_that_rewrites_the_royalty_key_fails() fail {
   }
   pool.spend(
     #"0b",
-    Script(#"0c"),
     Some(sample_cfg()),
     PoolRedeemer { action: action_swap, self_ix: 0 },
     own_ref(),
@@ -709,7 +694,14 @@ test tx_swap_that_rewrites_the_royalty_key_fails() fail {
 }
 
 fn redirect_tx(next: SingleRoyaltyPoolConfig, cred: Credential) -> Transaction {
-  let prev = sample_cfg()
+  redirect_tx_from(sample_cfg(), next, cred)
+}
+
+fn redirect_tx_from(
+  prev: SingleRoyaltyPoolConfig,
+  next: SingleRoyaltyPoolConfig,
+  cred: Credential,
+) -> Transaction {
   let value = pool_value(prev, 100_000_000, 100_000_000, 50_000_000)
   let pool_in = Input {
     output_reference: own_ref(),
@@ -742,7 +734,6 @@ test tx_redirect_with_governance_withdrawal_passes() {
   }
   pool.spend(
     #"0b",
-    Script(#"0c"),
     Some(sample_cfg()),
     PoolRedeemer { action: action_redirect_royalty, self_ix: 0 },
     own_ref(),
@@ -758,7 +749,6 @@ test tx_redirect_without_governance_withdrawal_fails() fail {
   }
   pool.spend(
     #"0b",
-    Script(#"0c"),
     Some(sample_cfg()),
     PoolRedeemer { action: action_redirect_royalty, self_ix: 0 },
     own_ref(),
@@ -774,10 +764,30 @@ test tx_redirect_dressed_as_a_swap_fails() fail {
   }
   pool.spend(
     #"0b",
-    Script(#"0c"),
     Some(sample_cfg()),
     PoolRedeemer { action: action_swap, self_ix: 0 },
     own_ref(),
     redirect_tx(next, Script(#"0c")),
+  )
+}
+
+/// Only the datum differs from the passing redirect: it carries a single
+/// `dao_policy` entry, so there is no governance credential to look for.
+test tx_redirect_on_a_pool_without_a_governance_entry_fails() fail {
+  let prev = SingleRoyaltyPoolConfig {
+    ..sample_cfg(),
+    dao_policy: [Inline(Script(#"dd"))],
+  }
+  let next = SingleRoyaltyPoolConfig {
+    ..prev,
+    royalty_pub_key: #"01",
+    nonce: 1,
+  }
+  pool.spend(
+    #"0b",
+    Some(prev),
+    PoolRedeemer { action: action_redirect_royalty, self_ix: 0 },
+    own_ref(),
+    redirect_tx_from(prev, next, Script(#"0c")),
   )
 }

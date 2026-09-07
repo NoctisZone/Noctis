@@ -15,7 +15,8 @@
 ////     the NFT, keeps `max_lq_cap - initial_lq` LQ, holds ADA
 ////     and one launch token and nothing else, and its datum is the platform
 ////     schedule exactly: the two fees and the pool fee, empty counters, the
-////     treasury script as the DAO, the platform's treasury address, a nonce of
+////     treasury script and the governance redirect script as the two DAO
+////     entries, the platform's treasury address, a nonce of
 ////     zero, and a royalty key that hashes to the creator's fee recipient as
 ////     the launch's LP escrow records it. The escrow is spent in the same
 ////     transaction from its unsealed state and comes back holding `initial_lq`
@@ -51,12 +52,16 @@ pub type MintAction {
 const ada: Asset = Asset { policy: ada_policy_id, name: ada_asset_name }
 
 /// `thread_nft_policy`: the platform's thread NFT policy, under which the
-/// escrow's NFT was minted at genesis. `pool_vh`: the pool validator. `treasury_cred`, `treasury_address`: the platform's treasury
-/// script and wallet. The three fee numerators are the platform schedule.
+/// escrow's NFT was minted at genesis. `pool_vh`: the pool validator.
+/// `redirect_cred`: the governance redirect script, written into every pool's
+/// datum as the second DAO entry so that the pool itself is not parameterised
+/// by it. `treasury_cred`, `treasury_address`: the platform's treasury script
+/// and wallet. The three fee numerators are the platform schedule.
 /// `initial_lq`: the size of the escrowed position every pool opens with.
 validator pool_mint(
   thread_nft_policy: PolicyId,
   pool_vh: ScriptHash,
+  redirect_cred: Credential,
   treasury_cred: Credential,
   treasury_address: ByteArray,
   fee_num: Int,
@@ -101,17 +106,16 @@ validator pool_mint(
         // whole raise and the reserve it is owed. Without this the escrow's
         // seal would authorise itself: the position it seals is minted here,
         // so nothing else would tie either to the launch actually graduating.
-        let curve_spent =
-          list.any(
-            self.inputs,
-            fn(i) {
-              assets.quantity_of(
-                i.output.value,
-                thread_nft_policy,
-                thread_asset_name(role_bonding_curve, launch_id),
-              ) == 1
-            },
-          )
+        let curve_spent = list.any(
+          self.inputs,
+          fn(i) {
+            assets.quantity_of(
+              i.output.value,
+              thread_nft_policy,
+              thread_asset_name(role_bonding_curve, launch_id),
+            ) == 1
+          },
+        )
 
         let expected = SingleRoyaltyPoolConfig {
           pool_nft: nft,
@@ -125,7 +129,7 @@ validator pool_mint(
           treasury_y: 0,
           royalty_x: 0,
           royalty_y: 0,
-          dao_policy: [Inline(treasury_cred)],
+          dao_policy: [Inline(treasury_cred), Inline(redirect_cred)],
           treasury_address,
           royalty_pub_key: cfg.royalty_pub_key,
           nonce: 0,
@@ -203,6 +207,10 @@ fn treasury() -> Credential {
   Script(#"0c")
 }
 
+fn redirect() -> Credential {
+  Script(#"0e")
+}
+
 fn nft_name() -> ByteArray {
   thread_asset_name(role_pool, launch)
 }
@@ -232,7 +240,7 @@ fn pool_cfg() -> SingleRoyaltyPoolConfig {
     treasury_y: 0,
     royalty_x: 0,
     royalty_y: 0,
-    dao_policy: [Inline(treasury())],
+    dao_policy: [Inline(treasury()), Inline(redirect())],
     treasury_address: #"ee",
     royalty_pub_key: creator_key,
     nonce: 0,
@@ -368,6 +376,7 @@ fn run(redeemer: MintAction, t: Transaction) -> Bool {
   pool_mint.mint(
     thread_policy,
     pool_hash,
+    redirect(),
     treasury(),
     #"ee",
     99_700,
@@ -497,6 +506,39 @@ test pool_with_another_dao_fails() fail {
       ..pool_cfg(),
       dao_policy: [Inline(Script(#"0d"))],
     },
+    pool_value(),
+    Script(pool_hash),
+  )
+  run(
+    create(),
+    Transaction {
+      ..good(),
+      outputs: [pool, escrow_out(escrow_datum(1_000), escrow_value(initial))],
+    },
+  )
+}
+
+test pool_with_another_governance_entry_fails() fail {
+  let pool = pool_out(
+    SingleRoyaltyPoolConfig {
+      ..pool_cfg(),
+      dao_policy: [Inline(treasury()), Inline(Script(#"0d"))],
+    },
+    pool_value(),
+    Script(pool_hash),
+  )
+  run(
+    create(),
+    Transaction {
+      ..good(),
+      outputs: [pool, escrow_out(escrow_datum(1_000), escrow_value(initial))],
+    },
+  )
+}
+
+test pool_without_a_governance_entry_fails() fail {
+  let pool = pool_out(
+    SingleRoyaltyPoolConfig { ..pool_cfg(), dao_policy: [Inline(treasury())] },
     pool_value(),
     Script(pool_hash),
   )
@@ -700,19 +742,18 @@ test graduation_without_the_curve_fails() fail {
 
 /// The curve of another launch does not stand in for this one's.
 test graduation_with_another_launchs_curve_fails() fail {
-  let other_curve =
-    Input {
-      ..curve_in(),
-      output: Output {
-        ..curve_in().output,
-        value: assets.from_lovelace(20_000_000_000)
-          |> assets.add(
-              thread_policy,
-              thread_asset_name(role_bonding_curve, other_launch),
-              1,
-            ),
-      },
-    }
+  let other_curve = Input {
+    ..curve_in(),
+    output: Output {
+      ..curve_in().output,
+      value: assets.from_lovelace(20_000_000_000)
+        |> assets.add(
+            thread_policy,
+            thread_asset_name(role_bonding_curve, other_launch),
+            1,
+          ),
+    },
+  }
   run(
     create(),
     Transaction { ..good(), inputs: [escrow_in(escrow_datum(0)), other_curve] },
@@ -721,14 +762,13 @@ test graduation_with_another_launchs_curve_fails() fail {
 
 /// The sealed position must come back to the escrow it was spent from.
 test escrow_returning_to_another_address_fails() fail {
-  let elsewhere =
-    Output {
-      ..escrow_out(escrow_datum(1_000), escrow_value(initial)),
-      address: Address {
-        payment_credential: VerificationKey(#"a7"),
-        stake_credential: None,
-      },
-    }
+  let elsewhere = Output {
+    ..escrow_out(escrow_datum(1_000), escrow_value(initial)),
+    address: Address {
+      payment_credential: VerificationKey(#"a7"),
+      stake_credential: None,
+    },
+  }
   run(
     create(),
     tx(
@@ -744,13 +784,14 @@ test escrow_returning_to_another_address_fails() fail {
 /// fee recipient in the datum this transaction authors changes nothing.
 test royalty_key_taken_from_the_written_datum_fails() fail {
   let stranger_key = #"a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7"
-  let hijacked =
-    SingleRoyaltyPoolConfig { ..pool_cfg(), royalty_pub_key: stranger_key }
-  let rewritten =
-    LpEscrowDatum {
-      ..escrow_datum(1_000),
-      fee_recipient_pub_key_hash: blake2b_224(stranger_key),
-    }
+  let hijacked = SingleRoyaltyPoolConfig {
+    ..pool_cfg(),
+    royalty_pub_key: stranger_key,
+  }
+  let rewritten = LpEscrowDatum {
+    ..escrow_datum(1_000),
+    fee_recipient_pub_key_hash: blake2b_224(stranger_key),
+  }
   run(
     create(),
     tx(

@@ -47,10 +47,11 @@ pool guarded by this script without modification.
   governance record as a reference input: a takeover needs the record in the
   triggered state and the new key hashing to the community wallet it names; a
   dissolve needs the dissolved state and the new key hashing to the creator's
-  fee-recipient key as the LP escrow records it. The pool is bound to its launch
-  through its NFT, minted by the factory with the pool role tag and the launch
-  id in its name, while the governance and escrow records carry their own NFTs
-  under the platform's thread NFT policy. One pool per redirect transaction.
+  fee-recipient key as the LP escrow records it. The pool is the input at the
+  pool validator's address that holds the NFT its datum names, and that name
+  carries the launch id; the governance and escrow records carry their own
+  NFTs under the platform's thread NFT policy. One pool per redirect
+  transaction: exactly one input at the pool script.
 - **Parameters instead of constants.** The royalty-withdraw script hash and the
   withdraw-request script hash are validator parameters here; Splash compiles
   them in.
@@ -68,7 +69,8 @@ pool guarded by this script without modification.
   Graduation therefore stays permissionless, as the curve's own graduation is,
   and no platform signature can withhold a pool. At the mint it checks the
   whole opening shape: the pool output at the pool script, the platform fee
-  schedule and empty counters in the datum, the treasury script as the DAO, a
+  schedule and empty counters in the datum, the treasury and redirect scripts
+  as the two DAO entries, a
   royalty key that hashes to the creator's fee recipient as the LP escrow
   records it, and the escrow sealed in the same transaction holding the entire
   opening position. The lock holds the LP position from the pool's first
@@ -86,6 +88,26 @@ pool guarded by this script without modification.
   assets are not the pool's is refused outright, and a deposit's collateral is
   checked back to the placer on every fill, not only when ADA is the surplus
   side. Both are tightenings over the Plutarch source.
+
+## Parameters and deployment order
+
+Applying a parameter fixes a validator's hash, and three of the venue scripts
+take another one's hash, so they are applied in this order:
+
+1. `pool(royalty_withdraw_vh)` — the royalty-withdraw validator's hash.
+2. `redirect(thread_nft_policy, pool_vh, cto_governance_cred, lp_escrow_cred)`
+   — the pool validator's hash from step 1, with the platform's thread NFT
+   policy and the launch package's governance and escrow validators.
+3. `pool_mint(thread_nft_policy, pool_vh, redirect_cred, treasury_cred, …)` —
+   the pool from step 1 and the redirect script from step 2. The factory writes
+   the redirect credential into every pool's datum as the second `dao_policy`
+   entry, which is what keeps the pool's own hash independent of the redirect
+   script's.
+
+`treasury(authority, max_treasury_fee)` and the order validators depend on
+none of these. A launch's genesis records the factory's policy id in its curve
+and escrow datums, so the venue's hashes are final before any launch is minted
+against them.
 
 ## Fee model
 

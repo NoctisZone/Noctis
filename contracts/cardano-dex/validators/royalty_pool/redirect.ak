@@ -17,18 +17,21 @@
 ////     the creator's fee-recipient key as the launch's LP escrow records it,
 ////     read from a second reference input.
 ////
-//// Binding the pool to the launch: the pool NFT is minted by the factory policy
-//// with the pool role tag and the launch id in its name, and the governance
-//// and escrow records carry their own role's NFT under the platform's thread
-//// NFT policy. A record of another launch, a record at the right address with
-//// a home-made datum, or a pool whose NFT is not the factory's, cannot pass.
+//// Binding the pool to the launch: the pool is the input at the pool
+//// validator's address (a parameter of this script) that holds the NFT its
+//// own datum names, and that NFT's name carries the pool role tag and the
+//// launch id. The governance and escrow records carry their own role's NFT
+//// under the platform's thread NFT policy. A record of another launch, a
+//// record at the right address with a home-made datum, or a pool named by a
+//// datum that sits anywhere but the pool script, cannot pass.
 ////
-//// One pool per transaction: exactly one input sits at the redirected pool's
-//// payment credential, so this one withdrawal cannot cover a second pool.
+//// One pool per transaction: exactly one input sits at the pool script, so
+//// this one withdrawal cannot cover a second pool, and the pool the redeemer
+//// names is the pool being spent.
 
 use aiken/collection/list
-use aiken/crypto.{blake2b_224}
-use cardano/address.{Address, Credential, Script}
+use aiken/crypto.{ScriptHash, blake2b_224}
+use cardano/address.{Address, Credential, Script, VerificationKey}
 use cardano/assets.{PolicyId, ada_asset_name, ada_policy_id}
 use cardano/transaction.{
   InlineDatum, Input, Output, OutputReference, Transaction,
@@ -56,12 +59,12 @@ fn record_at(reference_inputs: List<Input>, cred: Credential) -> Input {
 }
 
 /// `thread_nft_policy`: the platform's thread NFT policy, under which every
-/// launch record's NFT is minted. `pool_nft_policy`: the factory policy that
-/// mints pool NFTs. `cto_governance_cred` and `lp_escrow_cred`: the launch
-/// package's governance and escrow validators.
+/// launch record's NFT is minted. `pool_vh`: the pool validator, whose address
+/// is where a pool lives. `cto_governance_cred` and `lp_escrow_cred`: the
+/// launch package's governance and escrow validators.
 validator redirect(
   thread_nft_policy: PolicyId,
-  pool_nft_policy: PolicyId,
+  pool_vh: ScriptHash,
   cto_governance_cred: Credential,
   lp_escrow_cred: Credential,
 ) {
@@ -81,7 +84,7 @@ validator redirect(
     expect next: SingleRoyaltyPoolConfig = next_raw
     let new_key_hash = blake2b_224(next.royalty_pub_key)
 
-    let pool_cred = pool_in.output.address.payment_credential
+    let pool_cred = Script(pool_vh)
     let one_pool = list.count(
       self.inputs,
       fn(i) { i.output.address.payment_credential == pool_cred },
@@ -92,7 +95,8 @@ validator redirect(
     expect cto: CtoGovernanceDatum = cto_raw
     let launch_id = cto.launch_id
     let bound = and {
-      prev.pool_nft.policy == pool_nft_policy,
+      pool_in.output.address.payment_credential == pool_cred,
+      asset_quantity_of(pool_in.output.value, prev.pool_nft) == 1,
       prev.pool_nft.name == thread_asset_name(role_pool, launch_id),
       assets.quantity_of(
         cto_ref.output.value,
@@ -140,6 +144,8 @@ validator redirect(
 const thread_policy: PolicyId = #"7e"
 
 const factory_policy: PolicyId = #"7c"
+
+const pool_hash: ScriptHash = #"0a"
 
 const launch: ByteArray =
   #"0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20"
@@ -272,21 +278,31 @@ fn lp_record() -> Input {
   record(lp_cred(), with_nft(role_lp_escrow, launch), lp_datum(launch))
 }
 
-fn pool_input(nft: Asset, key: ByteArray, tx_id: ByteArray) -> Input {
+fn pool_input_shaped(
+  cred: Credential,
+  value: assets.Value,
+  nft: Asset,
+  key: ByteArray,
+  tx_id: ByteArray,
+) -> Input {
   Input {
     output_reference: OutputReference { transaction_id: tx_id, output_index: 0 },
     output: Output {
-      address: at(Script(#"0a")),
-      value: pool_value(nft),
+      address: at(cred),
+      value,
       datum: InlineDatum(pool_cfg(nft, key, 3)),
       reference_script: None,
     },
   }
 }
 
+fn pool_input(nft: Asset, key: ByteArray, tx_id: ByteArray) -> Input {
+  pool_input_shaped(Script(pool_hash), pool_value(nft), nft, key, tx_id)
+}
+
 fn pool_output(nft: Asset, new_key: ByteArray) -> Output {
   Output {
-    address: at(Script(#"0a")),
+    address: at(Script(pool_hash)),
     value: pool_value(nft),
     datum: InlineDatum(pool_cfg(nft, new_key, 4)),
     reference_script: None,
@@ -310,7 +326,7 @@ fn tx(
 fn run(redeemer: RedirectAction, t: Transaction) -> Bool {
   redirect.withdraw(
     thread_policy,
-    factory_policy,
+    pool_hash,
     cto_cred(),
     lp_cred(),
     redeemer,
@@ -409,13 +425,66 @@ test takeover_of_a_pool_of_another_launch_fails() fail {
   )
 }
 
-/// A pool whose NFT is named exactly right but minted under a policy that is
-/// not the factory's, presented against the genuine governance record, so
-/// only the policy comparison rejects it.
-test takeover_under_a_foreign_policy_fails() fail {
+/// The decoy attack this script exists to refuse, and the reason the pool is
+/// named by its address rather than by the policy of the NFT its datum
+/// mentions.
+///
+/// The redeemer names an input at the attacker's own key address, holding an
+/// NFT of the attacker's own minting under the right name, with a datum that
+/// names that NFT. Its successor is the attacker's own output. Meanwhile a
+/// genuine pool sits at the pool script, so exactly one input is there and
+/// the count alone cannot tell the two apart.
+///
+/// Every other rule holds: the count, the NFT in the named input's value, the
+/// role tag and launch id in its name, the genuine governance record, and a
+/// new key hashing to the community wallet. The address is the single delta,
+/// so it is the address pin that rejects.
+test takeover_named_from_a_key_address_while_a_real_pool_rides_along_fails() fail {
+  let decoy = pool_nft(#"7f", launch)
+  let base = tx(our_pool(), creator_key, community_key, [triggered()])
   run(
     Takeover { pool_in_ix: 0 },
-    tx(pool_nft(#"7f", launch), creator_key, community_key, [triggered()]),
+    Transaction {
+      ..base,
+      inputs: [
+        pool_input_shaped(
+          VerificationKey(#"a7"),
+          pool_value(decoy),
+          decoy,
+          creator_key,
+          #"01",
+        ),
+        pool_input(our_pool(), creator_key, #"02"),
+      ],
+      outputs: [
+        pool_output(decoy, community_key),
+        pool_output(our_pool(), community_key),
+      ],
+    },
+  )
+}
+
+/// At the pool script with the right datum, but the NFT that datum names is
+/// not in the input's value. The successor still carries it, so the search
+/// for the successor is not what rejects.
+test takeover_of_an_input_without_the_pool_nft_fails() fail {
+  let base = tx(our_pool(), creator_key, community_key, [triggered()])
+  let without_nft = assets.from_lovelace(100_000_000)
+    |> assets.add(#"bb", #"746f6b656e", 100_000_000)
+  run(
+    Takeover { pool_in_ix: 0 },
+    Transaction {
+      ..base,
+      inputs: [
+        pool_input_shaped(
+          Script(pool_hash),
+          without_nft,
+          our_pool(),
+          creator_key,
+          #"01",
+        ),
+      ],
+    },
   )
 }
 
