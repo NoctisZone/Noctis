@@ -300,6 +300,17 @@ validator pool(royalty_withdraw_vh: ByteArray) {
     let valid = if redeemer.action == action_swap {
       and {
         dlq == 0,
+        // The fees are numerators over `fee_den`, and this arm is the only
+        // place that denominator is used: `swap_ok` prices the output side by
+        // `net / fee_den`, and `slice_ok` credits each counter
+        // `input * fee / fee_den`. A numerator above the denominator would
+        // credit a counter more than the input it was taken from, and
+        // `read_pool_state` nets the counters out of holdings, so the reserves
+        // it reports would fall below zero while every other rule here held.
+        // `net > 0` inside `swap_ok` bounds the schedule from below; this is
+        // the bound from above. Held here rather than over every action so a
+        // pool is never frozen by it — liquidity can still be redeemed out.
+        cfg.fee_num <= fee_den,
         swap_ok(
           s0.reserves_x,
           s0.reserves_y,
@@ -1264,7 +1275,6 @@ test tx_successor_holding_no_lq_token_fails() fail {
   )
 }
 
-
 fn key_cred() -> Credential {
   VerificationKey(#"c0")
 }
@@ -1277,23 +1287,21 @@ fn dao_tx_shaped(
   lq: Int,
   cred: Credential,
 ) -> Transaction {
-  let pool_in =
-    Input {
-      output_reference: own_ref(),
-      output: Output {
-        address: pool_address(),
-        value: pool_value(prev, 100_000_000, 100_000_000, 50_000_000),
-        datum: InlineDatum(prev),
-        reference_script: None,
-      },
-    }
-  let pool_out =
-    Output {
+  let pool_in = Input {
+    output_reference: own_ref(),
+    output: Output {
       address: pool_address(),
-      value: pool_value(prev, x, y, lq),
-      datum: InlineDatum(next),
+      value: pool_value(prev, 100_000_000, 100_000_000, 50_000_000),
+      datum: InlineDatum(prev),
       reference_script: None,
-    }
+    },
+  }
+  let pool_out = Output {
+    address: pool_address(),
+    value: pool_value(prev, x, y, lq),
+    datum: InlineDatum(next),
+    reference_script: None,
+  }
   Transaction {
     ..transaction.placeholder,
     inputs: [pool_in],
@@ -1320,11 +1328,10 @@ test dao_through_the_shaper_passes() {
 /// anything approved the transition. Both delegating arms require the script
 /// form of the credential they read.
 test dao_authorised_by_a_payment_key_withdrawal_fails() fail {
-  let prev =
-    SingleRoyaltyPoolConfig {
-      ..dao_cfg(),
-      dao_policy: [Inline(key_cred()), Inline(Script(#"0c"))],
-    }
+  let prev = SingleRoyaltyPoolConfig {
+    ..dao_cfg(),
+    dao_policy: [Inline(key_cred()), Inline(Script(#"0c"))],
+  }
   let next = SingleRoyaltyPoolConfig { ..prev, treasury_x: 0, treasury_y: 0 }
   pool.spend(
     #"0b",
@@ -1336,13 +1343,15 @@ test dao_authorised_by_a_payment_key_withdrawal_fails() fail {
 }
 
 test redirect_authorised_by_a_payment_key_withdrawal_fails() fail {
-  let prev =
-    SingleRoyaltyPoolConfig {
-      ..sample_cfg(),
-      dao_policy: [Inline(Script(#"dd")), Inline(key_cred())],
-    }
-  let next =
-    SingleRoyaltyPoolConfig { ..prev, royalty_pub_key: #"01", nonce: 1 }
+  let prev = SingleRoyaltyPoolConfig {
+    ..sample_cfg(),
+    dao_policy: [Inline(Script(#"dd")), Inline(key_cred())],
+  }
+  let next = SingleRoyaltyPoolConfig {
+    ..prev,
+    royalty_pub_key: #"01",
+    nonce: 1,
+  }
   pool.spend(
     #"0b",
     Some(prev),
@@ -1352,25 +1361,20 @@ test redirect_authorised_by_a_payment_key_withdrawal_fails() fail {
   )
 }
 
-
 /// The passing swap with one delta: a second input carrying the same pool
 /// NFT. Both spends resolve their continuing output by searching for that
 /// NFT, so without the count above each would validate against the one
 /// successor and the second pool's balance would be unaccounted for.
 test a_second_input_holding_the_pool_nft_fails() fail {
-  let twin =
-    Input {
-      output_reference: OutputReference {
-        transaction_id: #"09",
-        output_index: 0,
-      },
-      output: Output {
-        address: pool_address(),
-        value: pool_value(sample_cfg(), 100_000_000, 100_000_000, 50_000_000),
-        datum: InlineDatum(sample_cfg()),
-        reference_script: None,
-      },
-    }
+  let twin = Input {
+    output_reference: OutputReference { transaction_id: #"09", output_index: 0 },
+    output: Output {
+      address: pool_address(),
+      value: pool_value(sample_cfg(), 100_000_000, 100_000_000, 50_000_000),
+      datum: InlineDatum(sample_cfg()),
+      reference_script: None,
+    },
+  }
   let base = swap_tx(swapped_cfg(), 976_372)
   pool.spend(
     #"0b",
@@ -1380,7 +1384,6 @@ test a_second_input_holding_the_pool_nft_fails() fail {
     Transaction { ..base, inputs: list.concat(base.inputs, [twin]) },
   )
 }
-
 
 /// The four assets a graduation really leaves in the pool: ADA, the launch
 /// token, the pool's own LQ, and its NFT. Built without reference to the
@@ -1398,27 +1401,22 @@ fn cfg_naming(y: Asset) -> SingleRoyaltyPoolConfig {
 }
 
 /// One lovelace in, `tok_out` of the launch token out.
-fn one_lovelace_in_tx(
-  cfg: SingleRoyaltyPoolConfig,
-  tok_out: Int,
-) -> Transaction {
-  let pool_in =
-    Input {
-      output_reference: own_ref(),
-      output: Output {
-        address: pool_address(),
-        value: four_asset_value(100_000_000, 200_000_000),
-        datum: InlineDatum(cfg),
-        reference_script: None,
-      },
-    }
-  let pool_out =
-    Output {
+fn one_lovelace_in_tx(cfg: SingleRoyaltyPoolConfig, tok_out: Int) -> Transaction {
+  let pool_in = Input {
+    output_reference: own_ref(),
+    output: Output {
       address: pool_address(),
-      value: four_asset_value(100_000_001, 200_000_000 - tok_out),
+      value: four_asset_value(100_000_000, 200_000_000),
       datum: InlineDatum(cfg),
       reference_script: None,
-    }
+    },
+  }
+  let pool_out = Output {
+    address: pool_address(),
+    value: four_asset_value(100_000_001, 200_000_000 - tok_out),
+    datum: InlineDatum(cfg),
+    reference_script: None,
+  }
   Transaction {
     ..transaction.placeholder,
     inputs: [pool_in],
@@ -1440,16 +1438,92 @@ fn run_one_lovelace_in(cfg: SingleRoyaltyPoolConfig, tok_out: Int) -> Bool {
 /// The two rejections below differ from it only in which asset `pool_y`
 /// names, and in taking the reserve that naming leaves unmeasured.
 test a_lovelace_paid_into_an_honest_pool_passes() {
-  run_one_lovelace_in(cfg_naming(Asset { policy: #"bb", name: #"746f6b656e" }), 0)
+  run_one_lovelace_in(
+    cfg_naming(Asset { policy: #"bb", name: #"746f6b656e" }),
+    0,
+  )
 }
 
 /// The pool prices what leaves against what it names. A datum naming the
 /// pool's own LQ as its second asset would leave the launch token measured by
 /// nothing, so the reserve could go out against a lovelace.
 test swap_on_a_pool_naming_its_own_lq_as_pool_y_fails() fail {
-  run_one_lovelace_in(cfg_naming(Asset { policy: #"cc", name: #"6c71" }), 199_999_999)
+  run_one_lovelace_in(
+    cfg_naming(Asset { policy: #"cc", name: #"6c71" }),
+    199_999_999,
+  )
 }
 
 test swap_on_a_pool_naming_its_own_nft_as_pool_y_fails() fail {
-  run_one_lovelace_in(cfg_naming(Asset { policy: #"aa", name: #"6e6674" }), 199_999_999)
+  run_one_lovelace_in(
+    cfg_naming(Asset { policy: #"aa", name: #"6e6674" }),
+    199_999_999,
+  )
+}
+
+/// A schedule whose numerators sit above the denominator. `net` is still
+/// positive, which is all `swap_ok` asks of it, but it is ten times
+/// `fee_den`.
+fn schedule_above_the_denominator() -> SingleRoyaltyPoolConfig {
+  SingleRoyaltyPoolConfig {
+    ..sample_cfg(),
+    fee_num: 20_000_000,
+    treasury_fee: 19_000_000,
+    royalty_fee: 0,
+  }
+}
+
+fn swap_on(
+  cfg: SingleRoyaltyPoolConfig,
+  next: SingleRoyaltyPoolConfig,
+  x_out: Int,
+  y_out: Int,
+) -> Bool {
+  let pool_in = Input {
+    output_reference: own_ref(),
+    output: Output {
+      address: pool_address(),
+      value: pool_value(cfg, 100_000_000, 100_000_000, 50_000_000),
+      datum: InlineDatum(cfg),
+      reference_script: None,
+    },
+  }
+  let pool_out = Output {
+    address: pool_address(),
+    value: pool_value(cfg, x_out, y_out, 50_000_000),
+    datum: InlineDatum(next),
+    reference_script: None,
+  }
+  pool.spend(
+    #"0b",
+    Some(cfg),
+    PoolRedeemer { action: action_swap, self_ix: 0 },
+    own_ref(),
+    Transaction {
+      ..transaction.placeholder,
+      inputs: [pool_in],
+      outputs: [pool_out],
+    },
+  )
+}
+
+/// The shaper builds a real swap on the real schedule, so the rejection
+/// below differs from it in the fee numerators alone.
+test swap_through_the_schedule_shaper_passes() {
+  let cfg = sample_cfg()
+  let next = SingleRoyaltyPoolConfig {
+    ..cfg,
+    treasury_x: 1_000,
+    royalty_x: 10_000,
+  }
+  swap_on(cfg, next, 101_000_000, 100_000_000 - 976_372)
+}
+
+/// Nine times the output a constant product allows, and a treasury counter
+/// credited a hundred and ninety times the input it came from — which leaves
+/// the pool's own reserve reading below zero.
+test swap_on_a_schedule_above_the_denominator_fails() fail {
+  let cfg = schedule_above_the_denominator()
+  let next = SingleRoyaltyPoolConfig { ..cfg, treasury_x: 190_000_000 }
+  swap_on(cfg, next, 101_000_000, 100_000_000 - 9_090_909)
 }

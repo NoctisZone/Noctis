@@ -23,16 +23,8 @@
 ////     zero, and a royalty key that hashes to the creator's fee recipient as
 ////     the launch's LP escrow records it. The escrow is spent in the same
 ////     transaction from its unsealed state and comes back holding `initial_lq`
-////     LQ, with its datum naming that position — so the escrow holds the
-////     position from the pool's first block, with no window in between.
-////     That timing is what this policy establishes; it is not the whole of
-////     the escrow's datum. Five of the eighteen fields are pinned here (the
-////     launch id, a lock timestamp moving off zero, and the three naming the
-////     position); `lp_escrow.ak`'s `SealLock`, in the launch package, pins
-////     the rest byte for byte. The two interlock: `SealLock` is the only arm
-////     anywhere that writes `lock_timestamp` and it requires the input's to
-////     be zero, so requiring zero before and non-zero after is what forces
-////     `SealLock` to be the arm that ran.
+////     LQ, with its datum naming that position. That is the whole of the LP
+////     lock: the escrow holds the position from the first block of the pool.
 ////   Burn — only burning.
 ////
 //// Splash mints its LQ under policies served from its own infrastructure; this
@@ -49,10 +41,10 @@ use cardano/transaction.{
   InlineDatum, Input, Output, OutputReference, Spend, Transaction,
 }
 use noctisswap/launch_records.{
-  Locked, LpEscrowDatum, graduate_redeemer_index, role_bonding_curve_tier_b,
+  Locked, LpEscrowDatum, graduate_redeemer_index, role_bonding_curve,
   role_lp_escrow, role_lq, role_pool, thread_asset_name,
 }
-use noctisswap/pool_state.{is_ada, max_lq_cap}
+use noctisswap/pool_state.{fee_den, is_ada, max_lq_cap}
 use splash/plutus.{Asset}
 use splash/royalty_pool/single_royalty_pool.{SingleRoyaltyPoolConfig}
 use splash/value_ext.{asset_quantity_of, v_len}
@@ -76,7 +68,12 @@ const ada: Asset = Asset { policy: ada_policy_id, name: ada_asset_name }
 /// authority from the first `dao_policy` entry and its governance authority
 /// from the second, so one script standing in both slots would let either
 /// action be authorised by the other's script. The three fee numerators are
-/// the platform schedule.
+/// the platform schedule, and are checked against `fee_den` here: the pool
+/// prices every swap and credits every counter as a fraction over that
+/// denominator, so a numerator at or above it is not a fee. They are fixed in
+/// this factory's hash and in the datum of every pool it mints, and no arm
+/// anywhere can raise `fee_num` or lower it afterwards, so this is the only
+/// place the schedule can be held to being one.
 /// `initial_lq`: the size of the escrowed position every pool opens with.
 validator pool_mint(
   thread_nft_policy: PolicyId,
@@ -145,7 +142,7 @@ validator pool_mint(
               assets.quantity_of(
                 i.output.value,
                 thread_nft_policy,
-                thread_asset_name(role_bonding_curve_tier_b, launch_id),
+                thread_asset_name(role_bonding_curve, launch_id),
               ) == 1
             },
           )
@@ -195,6 +192,10 @@ validator pool_mint(
           !is_ada(cfg.pool_y),
           cfg.pool_y != cfg.pool_lq,
           cfg.pool_y != cfg.pool_nft,
+          treasury_fee >= 0,
+          royalty_fee >= 0,
+          treasury_fee + royalty_fee < fee_num,
+          fee_num <= fee_den,
           // Read from the record that was spent, not from the datum written
           // in this transaction, so the creator's key comes from the launch's
           // own escrow rather than from whoever submits the graduation.
@@ -410,7 +411,7 @@ fn curve_in() -> Input {
       value: assets.from_lovelace(20_000_000_000)
         |> assets.add(
             thread_policy,
-            thread_asset_name(role_bonding_curve_tier_b, launch),
+            thread_asset_name(role_bonding_curve, launch),
             1,
           ),
       datum: transaction.NoDatum,
@@ -440,6 +441,74 @@ fn create() -> MintAction {
 
 fn run(redeemer: MintAction, t: Transaction) -> Bool {
   run_with_authorities(redirect_vh(), treasury_vh(), redeemer, t)
+}
+
+fn run_with_schedule(
+  fee_num: Int,
+  treasury_fee: Int,
+  royalty_fee: Int,
+  redeemer: MintAction,
+  t: Transaction,
+) -> Bool {
+  pool_mint.mint(
+    thread_policy,
+    pool_hash,
+    redirect_vh(),
+    treasury_vh(),
+    #"ee",
+    fee_num,
+    treasury_fee,
+    royalty_fee,
+    initial,
+    redeemer,
+    lq_policy,
+    t,
+  )
+}
+
+/// The graduation the suite already accepts, reached through the schedule
+/// shaper, so each rejection below differs from it by the schedule alone.
+fn graduation_on(fee_num: Int, treasury_fee: Int, royalty_fee: Int) -> Bool {
+  let cfg = SingleRoyaltyPoolConfig {
+    ..pool_cfg(),
+    fee_num,
+    treasury_fee,
+    royalty_fee,
+  }
+  run_with_schedule(
+    fee_num,
+    treasury_fee,
+    royalty_fee,
+    create(),
+    Transaction {
+      ..good(),
+      outputs: [
+        pool_out(cfg, pool_value(), Script(pool_hash)),
+        escrow_out(escrow_datum(1_000), escrow_value(initial)),
+      ],
+    },
+  )
+}
+
+test graduation_through_the_schedule_shaper_passes() {
+  graduation_on(99_700, 100, 1_000)
+}
+
+test factory_with_a_numerator_above_the_denominator_fails() fail {
+  graduation_on(20_000_000, 19_000_000, 0)
+}
+
+/// A negative slice raises `net` above `fee_num`, so a swap would price
+/// better than the schedule reads. The pool's own arithmetic refuses such a
+/// swap; refusing the pool at creation is what stops it being minted at all.
+test factory_with_a_negative_slice_fails() fail {
+  graduation_on(99_700, -1_000, 1_000)
+}
+
+/// A schedule that leaves nothing after both slices. `swap_ok`'s `net > 0`
+/// refuses every swap on such a pool, so it would open unusable.
+test factory_whose_slices_exhaust_the_fee_fails() fail {
+  graduation_on(1_100, 100, 1_000)
 }
 
 fn run_with_authorities(
@@ -824,7 +893,7 @@ test graduation_with_another_launchs_curve_fails() fail {
       value: assets.from_lovelace(20_000_000_000)
         |> assets.add(
             thread_policy,
-            thread_asset_name(role_bonding_curve_tier_b, other_launch),
+            thread_asset_name(role_bonding_curve, other_launch),
             1,
           ),
     },
@@ -970,18 +1039,16 @@ test burn_that_mints_fails() fail {
   )
 }
 
-
 /// The pool tells its treasury authority from its governance authority by
 /// position alone, so one script in both slots would let each action be
 /// authorised by the other's script. The datum in this fixture names that
 /// same script twice, so the transition is the one such a factory would
 /// really produce and the only thing left to refuse it is the rule above.
 test factory_naming_one_script_for_both_authorities_fails() fail {
-  let doubled =
-    SingleRoyaltyPoolConfig {
-      ..pool_cfg(),
-      dao_policy: [Inline(treasury()), Inline(treasury())],
-    }
+  let doubled = SingleRoyaltyPoolConfig {
+    ..pool_cfg(),
+    dao_policy: [Inline(treasury()), Inline(treasury())],
+  }
   run_with_authorities(
     treasury_vh(),
     treasury_vh(),
@@ -994,7 +1061,6 @@ test factory_naming_one_script_for_both_authorities_fails() fail {
     ),
   )
 }
-
 
 /// `pool_y` is the one datum field the factory copies from whoever submits
 /// the graduation rather than deriving. Graduation is permissionless, so it
