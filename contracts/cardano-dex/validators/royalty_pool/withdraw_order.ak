@@ -14,14 +14,15 @@
 ////   Apply — this is the request the redeemer names; exactly two inputs (pool
 ////     and request, so a second request cannot satisfy the same pool spend);
 ////     the pool input carries the NFT the request names; the reward output goes
-////     to the creator's key, holds at least the requested amounts, and leaves
-////     the executor exactly `ex_fee` of the request's ADA. A claim request
-////     carries ADA and nothing else.
+////     to the creator's key — delegated by the creator or not at all —
+////     holds at least the requested amounts, and leaves the executor exactly
+////     `ex_fee` of the request's ADA. The amounts claimed are non-negative,
+////     and a claim request carries ADA and nothing else.
 ////   Refund — signed by the key that placed the request.
 
 use aiken/collection/list
 use aiken/crypto.{blake2b_224}
-use cardano/address.{Address, Script, VerificationKey}
+use cardano/address.{Address, Credential, Inline, Script, VerificationKey}
 use cardano/assets.{ada_asset_name, ada_policy_id}
 use cardano/transaction.{
   InlineDatum, Input, Output, OutputReference, Transaction,
@@ -61,6 +62,16 @@ validator withdraw_order {
         expect pool_cfg: SingleRoyaltyPoolConfig = pool_datum_raw
 
         let creator = VerificationKey(blake2b_224(pool_cfg.royalty_pub_key))
+        // The creator may delegate their own payout; nobody else may choose
+        // where it is delegated. Nothing in the pool datum names a stake key,
+        // so the only credential this can be held to is the one already
+        // derived from `royalty_pub_key`: in practice the payout goes to an
+        // address with no stake part at all.
+        let stake_ok = when reward_out.address.stake_credential is {
+          None -> True
+          Some(Inline(c)) -> c == creator
+          _ -> False
+        }
         let x_out = asset_quantity_of(reward_out.value, pool_cfg.pool_x)
         let y_out = asset_quantity_of(reward_out.value, pool_cfg.pool_y)
         let non_withdraw_ada = if is_ada(pool_cfg.pool_x) {
@@ -77,6 +88,9 @@ validator withdraw_order {
           pool_cfg.pool_nft == pool_nft,
           only_named_assets(order_out.value, []),
           reward_out.address.payment_credential == creator,
+          stake_ok,
+          withdraw_royalty_x >= 0,
+          withdraw_royalty_y >= 0,
           withdraw_royalty_x <= x_out,
           withdraw_royalty_y <= y_out,
           assets.lovelace_of(order_out.value) - non_withdraw_ada == ex_fee,
@@ -116,18 +130,22 @@ fn pool_cfg() -> SingleRoyaltyPoolConfig {
   }
 }
 
-fn request(ex_fee: Int) -> RoyaltyWithdrawConfig {
+fn request_for(ex_fee: Int, x: Int, y: Int) -> RoyaltyWithdrawConfig {
   RoyaltyWithdrawConfig {
     withdraw_data: WithdrawData {
       pool_nft: Asset { policy: #"aa", name: #"6e6674" },
-      withdraw_royalty_x: 10_000_000,
-      withdraw_royalty_y: 0,
+      withdraw_royalty_x: x,
+      withdraw_royalty_y: y,
       ex_fee,
     },
     signature: #"",
     additional_bytes: #"",
     owner: #"0d",
   }
+}
+
+fn request(ex_fee: Int) -> RoyaltyWithdrawConfig {
+  request_for(ex_fee, 10_000_000, 0)
 }
 
 fn own_ref() -> OutputReference {
@@ -299,5 +317,79 @@ test claim_request_carrying_an_asset_it_does_not_name_fails() fail {
     apply(),
     own_ref(),
     with_a_stray_in_the_request(apply_tx(creator_address(), 12_000_000, False)),
+  )
+}
+
+/// The creator's payout address with a stake part put on it by whoever
+/// assembled the transaction.
+fn creator_address_with_stake(c: Credential) -> Address {
+  Address {
+    payment_credential: VerificationKey(blake2b_224(creator_key)),
+    stake_credential: Some(Inline(c)),
+  }
+}
+
+/// The payment key is still the creator's, so the money is theirs either way;
+/// only the delegation is someone else's choice. That is the whole delta from
+/// the passing case.
+test claim_delegated_to_another_partys_stake_key_fails() fail {
+  withdraw_order.spend(
+    Some(request(1_000_000)),
+    apply(),
+    own_ref(),
+    apply_tx(
+      creator_address_with_stake(VerificationKey(#"e0")),
+      12_000_000,
+      False,
+    ),
+  )
+}
+
+/// A script stake part is refused by the same rule.
+test claim_delegated_to_a_script_fails() fail {
+  withdraw_order.spend(
+    Some(request(1_000_000)),
+    apply(),
+    own_ref(),
+    apply_tx(creator_address_with_stake(Script(#"e1")), 12_000_000, False),
+  )
+}
+
+/// The one stake credential the pool datum can hold a payout to: the creator's
+/// own, derived from the same key the payment side is.
+test claim_delegated_by_the_creator_passes() {
+  withdraw_order.spend(
+    Some(request(1_000_000)),
+    apply(),
+    own_ref(),
+    apply_tx(
+      creator_address_with_stake(VerificationKey(blake2b_224(creator_key))),
+      12_000_000,
+      False,
+    ),
+  )
+}
+
+/// A claim for a negative amount on the ADA side. The reward is sized so the
+/// executor's fee still comes out exactly right — 1,999,999 − (−1) is the
+/// 2,000,000 of non-withdrawn ADA a 3 ADA request with a 1 ADA fee needs — so
+/// every other rule is satisfied and only the lower bound is left to reject
+/// it.
+test claim_for_a_negative_ada_amount_fails() fail {
+  withdraw_order.spend(
+    Some(request_for(1_000_000, -1, 0)),
+    apply(),
+    own_ref(),
+    apply_tx(creator_address(), 1_999_999, False),
+  )
+}
+
+/// The same on the token side, where the fee arithmetic is untouched.
+test claim_for_a_negative_token_amount_fails() fail {
+  withdraw_order.spend(
+    Some(request_for(1_000_000, 10_000_000, -1)),
+    apply(),
+    own_ref(),
+    apply_tx(creator_address(), 12_000_000, False),
   )
 }

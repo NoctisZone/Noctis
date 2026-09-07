@@ -197,7 +197,7 @@ validator royalty_withdraw_pool(withdraw_request_vh: ByteArray) {
     let correct_tokens_qty_in_pool = prev_len == new_len
     let pool_identity = asset_quantity_of(new_value, prev_pool_nft) == 1
 
-    let royalty_withdraw_ok = withdraw_x <= prev_rx && withdraw_y <= prev_ry && new_rx == prev_rx - withdraw_x && new_ry == prev_ry - withdraw_y && prev_lq_val == new_lq_val && prev_x_val - withdraw_x == new_x_val && prev_y_val - withdraw_y == new_y_val
+    let royalty_withdraw_ok = withdraw_x >= 0 && withdraw_y >= 0 && withdraw_x <= prev_rx && withdraw_y <= prev_ry && new_rx == prev_rx - withdraw_x && new_ry == prev_ry - withdraw_y && prev_lq_val == new_lq_val && prev_x_val - withdraw_x == new_x_val && prev_y_val - withdraw_y == new_y_val
 
     let correct_lovelace_token2token = prev_lovelace_token2token == new_lovelace_token2token
 
@@ -330,7 +330,7 @@ fn pool_address() -> Address {
   Address { payment_credential: Script(#"0a"), stake_credential: None }
 }
 
-fn request(at: Credential) -> Input {
+fn request_signed(at: Credential, wd: WithdrawData, sig: ByteArray) -> Input {
   Input {
     output_reference: OutputReference { transaction_id: #"01", output_index: 0 },
     output: Output {
@@ -338,8 +338,8 @@ fn request(at: Credential) -> Input {
       value: assets.from_lovelace(4_000_000),
       datum: InlineDatum(
         RoyaltyWithdrawConfig {
-          withdraw_data: claim(),
-          signature: creator_signature,
+          withdraw_data: wd,
+          signature: sig,
           additional_bytes: #"",
           owner: #"c0",
         },
@@ -347,6 +347,10 @@ fn request(at: Credential) -> Input {
       reference_script: None,
     },
   }
+}
+
+fn request(at: Credential) -> Input {
+  request_signed(at, claim(), creator_signature)
 }
 
 fn pool_in(nonce: Int) -> Input {
@@ -421,4 +425,86 @@ test claim_signed_over_another_nonce_fails() fail {
 /// The request must sit at a script at all; a key address cannot hold one.
 test claim_from_a_key_address_fails() fail {
   run(request_vh, VerificationKey(#"a7"), 3)
+}
+
+// ---------------------------------------------------------------------------
+// A claim cannot run backwards.
+//
+// Both payloads below came out of the compiler the same way the first one did,
+// and are signed from the same fixed, fake seed. Each transaction builds the
+// pool transition its claim actually asks for — a negative amount raises the
+// counter and pays INTO the pool — so every delta rule is satisfied and the
+// lower bound is the only thing left that can reject it.
+// ---------------------------------------------------------------------------
+
+/// Over the payload for a claim of −1 on the ADA side.
+const negative_x_signature: ByteArray =
+  #"dc531aee8e137c7616661a76529eded7627a9917b62fa5bd2647c7b1297a2a59c0ecfa60be6ef184a6f1b9969fcf47a4106e0ed838b0c4610ca93c962a966a07"
+
+/// Over the payload for a claim of −1 on the token side.
+const negative_y_signature: ByteArray =
+  #"cbfb5831936e724fd6aff9af7f024b722dc94887df4004ccabf3112be8d035b3d8b5921b303316784f1dd850f0b375e5d54e34f22f8da7f3126fda8a8175ef0a"
+
+fn backwards_claim_tx(
+  wd: WithdrawData,
+  sig: ByteArray,
+  rx: Int,
+  ry: Int,
+  lovelace: Int,
+  y: Int,
+) -> Transaction {
+  Transaction {
+    ..transaction.placeholder,
+    inputs: [request_signed(Script(request_vh), wd, sig), pool_in(3)],
+    outputs: [
+      Output {
+        address: pool_address(),
+        value: pool_value(lovelace, y),
+        datum: InlineDatum(
+          SingleRoyaltyPoolConfig {
+            ..pool_cfg(3),
+            royalty_x: rx,
+            royalty_y: ry,
+            nonce: 4,
+          },
+        ),
+        reference_script: None,
+      },
+    ],
+  }
+}
+
+fn run_tx(t: Transaction) -> Bool {
+  royalty_withdraw_pool.withdraw(
+    request_vh,
+    RoyaltyWithdrawRedeemer { pool_in_ix: 1, order_in_ix: 0, hash: False },
+    Script(#"0b"),
+    t,
+  )
+}
+
+test claim_for_a_negative_ada_amount_fails() fail {
+  run_tx(
+    backwards_claim_tx(
+      WithdrawData { ..claim(), withdraw_royalty_x: -1 },
+      negative_x_signature,
+      5_000_001,
+      500,
+      100_000_001,
+      100_000_000 - 200,
+    ),
+  )
+}
+
+test claim_for_a_negative_token_amount_fails() fail {
+  run_tx(
+    backwards_claim_tx(
+      WithdrawData { ..claim(), withdraw_royalty_y: -1 },
+      negative_y_signature,
+      4_000_000,
+      701,
+      100_000_000 - 1_000_000,
+      100_000_001,
+    ),
+  )
 }
