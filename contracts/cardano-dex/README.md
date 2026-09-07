@@ -66,9 +66,11 @@ pool guarded by this script without modification.
   keeps its shape independently — liquidity untouched, only the treasury
   counters and the treasury fee free to move, neither counter below zero, and
   whatever leaves matched to a counter — instead of Splash's multisig
-  DAO action: withdraw to the platform wallet, or move `treasury_fee` within
-  `[0, max_treasury_fee]` and below what the pool's own schedule can carry,
-  touching nothing else. Neither action moves the pool nonce: that is replay
+  DAO action: withdraw to the key the pool's datum names — a payout may carry
+  ADA beyond what the pool paid, so a token-only withdrawal can meet its own
+  minimum from the platform's own inputs, and no other surplus is allowed — or
+  move `treasury_fee` within `[0, max_treasury_fee]` and below what the pool's
+  own schedule can carry, touching nothing else. Neither action moves the pool nonce: that is replay
   protection for the creator's signed royalty claim, and moving it would cancel
   a claim the creator had already signed. The redirect arm still bumps it, and
   must — a replaced key's old signatures have to die with it.

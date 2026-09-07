@@ -18,9 +18,11 @@
 //// already signed. Both actions change nothing else in the datum:
 ////
 ////   Withdraw — the treasury counters go down by exactly what leaves the pool
-////     value, never below zero; an output at `treasury_address` receives
-////     exactly that; liquidity, the token count and any token-to-token lovelace
-////     are unchanged.
+////     value, never below zero; an output at the key `treasury_address` names
+////     receives it — exactly, except on the ADA side, where the payout may
+////     carry more than the pool paid so that a token-only withdrawal can meet
+////     its own minimum out of the platform's inputs; liquidity, the token
+////     count and any token-to-token lovelace are unchanged.
 ////   SetTreasuryFee — `treasury_fee` becomes `new_fee`, which must differ from
 ////     the current one, sit within `[0, max_treasury_fee]`, and leave the pool
 ////     fee something to work with: `new_fee + royalty_fee < fee_num`, read from
@@ -37,7 +39,7 @@ use cardano/assets.{PolicyId, Value, ada_asset_name, ada_policy_id}
 use cardano/transaction.{
   InlineDatum, Input, Output, OutputReference, Transaction,
 }
-use noctisswap/pool_state.{lovelace_t2t}
+use noctisswap/pool_state.{is_ada, lovelace_t2t}
 use splash/plutus.{Asset}
 use splash/royalty_pool/single_royalty_pool.{SingleRoyaltyPoolConfig}
 use splash/value_ext.{asset_quantity_of, v_len}
@@ -51,13 +53,6 @@ fn authorised(self: Transaction, authority: Credential) -> Bool {
   when authority is {
     VerificationKey(h) -> list.has(self.extra_signatories, h)
     Script(_) -> pairs.has_key(self.withdrawals, authority)
-  }
-}
-
-fn credential_hash(cred: Credential) -> ByteArray {
-  when cred is {
-    VerificationKey(h) -> h
-    Script(h) -> h
   }
 }
 
@@ -116,6 +111,21 @@ validator treasury(
           treasury_y: next.treasury_y,
         }
         expect Some(t_out) = list.at(self.outputs, treasury_out_ix)
+        // The payout's ADA side is a floor, not an exact figure. A withdrawal
+        // that draws only the token side moves no ADA out of the pool, but its
+        // output still needs the minimum ADA to exist at all, and that comes
+        // from the platform's own inputs. The pool's own delta is exact either
+        // way, just above, so whatever exceeds the delta here came from the
+        // platform rather than the pool. The other side stays exact: nothing
+        // makes a token surplus necessary.
+        let paid_ok = fn(asset: Asset, delta: Int) -> Bool {
+          let paid = asset_quantity_of(t_out.value, asset)
+          if is_ada(asset) {
+            paid >= -delta
+          } else {
+            paid == -delta
+          }
+        }
         and {
           expected == next,
           next.treasury_x >= 0,
@@ -131,9 +141,11 @@ validator treasury(
             pool_out_in.value,
             prev.pool_y,
           ) == dy,
-          credential_hash(t_out.address.payment_credential) == prev.treasury_address,
-          asset_quantity_of(t_out.value, prev.pool_x) == -dx,
-          asset_quantity_of(t_out.value, prev.pool_y) == -dy,
+          t_out.address.payment_credential == VerificationKey(
+            prev.treasury_address,
+          ),
+          paid_ok(prev.pool_x, dx),
+          paid_ok(prev.pool_y, dy),
         }
       }
       SetTreasuryFee { new_fee, .. } -> {
@@ -229,16 +241,17 @@ fn pool_output(c: SingleRoyaltyPoolConfig, x: Int, y: Int) -> Output {
   }
 }
 
-fn payout(to: ByteArray, x: Int, y: Int) -> Output {
+fn payout_at(c: Credential, x: Int, y: Int) -> Output {
   Output {
-    address: Address {
-      payment_credential: VerificationKey(to),
-      stake_credential: None,
-    },
+    address: Address { payment_credential: c, stake_credential: None },
     value: assets.from_lovelace(x) |> assets.add(#"bb", #"746f6b656e", y),
     datum: transaction.NoDatum,
     reference_script: None,
   }
+}
+
+fn payout(to: ByteArray, x: Int, y: Int) -> Output {
+  payout_at(VerificationKey(to), x, y)
 }
 
 fn signed_by(tx: Transaction, key: ByteArray) -> Transaction {
@@ -246,20 +259,31 @@ fn signed_by(tx: Transaction, key: ByteArray) -> Transaction {
 }
 
 /// Withdraw the whole ADA treasury (5 ADA) and 700 of the token.
+fn withdraw_tx_shaped(
+  next: SingleRoyaltyPoolConfig,
+  pool_x: Int,
+  pool_y: Int,
+  out: Output,
+) -> Transaction {
+  Transaction {
+    ..transaction.placeholder,
+    inputs: [pool_input(cfg(), 100_000_000, 100_000_000)],
+    outputs: [pool_output(next, pool_x, pool_y), out],
+  }
+}
+
 fn withdraw_tx(
   next: SingleRoyaltyPoolConfig,
   to: ByteArray,
   x_paid: Int,
   y_paid: Int,
 ) -> Transaction {
-  Transaction {
-    ..transaction.placeholder,
-    inputs: [pool_input(cfg(), 100_000_000, 100_000_000)],
-    outputs: [
-      pool_output(next, 100_000_000 - 5_000_000, 100_000_000 - 700),
-      payout(to, x_paid, y_paid),
-    ],
-  }
+  withdraw_tx_shaped(
+    next,
+    100_000_000 - 5_000_000,
+    100_000_000 - 700,
+    payout(to, x_paid, y_paid),
+  )
 }
 
 fn drained() -> SingleRoyaltyPoolConfig {
@@ -550,5 +574,81 @@ test set_fee_by_a_script_authority_needs_its_withdrawal() {
     SetTreasuryFee { pool_in_ix: 0, new_fee: 300 },
     Script(#"0c"),
     tx,
+  )
+}
+
+/// A script whose hash is the platform's key hash. A payout address is a
+/// credential, not a bare hash, and the two are different addresses however
+/// the bytes compare.
+test withdraw_to_a_script_sharing_the_platform_key_hash_fails() fail {
+  treasury.withdraw(
+    VerificationKey(platform_key),
+    500,
+    #"0a",
+    withdraw(),
+    Script(#"0c"),
+    signed_by(
+      withdraw_tx_shaped(
+        drained(),
+        100_000_000 - 5_000_000,
+        100_000_000 - 700,
+        payout_at(Script(platform_key), 5_000_000, 700),
+      ),
+      platform_key,
+    ),
+  )
+}
+
+/// Only the token counter moves, so the pool pays no ADA at all — and the
+/// payout still needs its own minimum to exist as a UTxO. The pool's ADA side
+/// is untouched here, which is what makes the surplus provably the platform's
+/// rather than the pool's.
+test token_only_withdrawal_carrying_its_own_minimum_ada_passes() {
+  treasury.withdraw(
+    VerificationKey(platform_key),
+    500,
+    #"0a",
+    withdraw(),
+    Script(#"0c"),
+    signed_by(
+      withdraw_tx_shaped(
+        SingleRoyaltyPoolConfig { ..cfg(), treasury_y: 0 },
+        100_000_000,
+        100_000_000 - 700,
+        payout(platform_key, 2_000_000, 700),
+      ),
+      platform_key,
+    ),
+  )
+}
+
+/// The token side is exact, so a payout one token short of the counter it
+/// settles is refused — the ADA side's floor is not a general licence.
+test withdraw_short_on_the_token_side_fails() fail {
+  treasury.withdraw(
+    VerificationKey(platform_key),
+    500,
+    #"0a",
+    withdraw(),
+    Script(#"0c"),
+    signed_by(
+      withdraw_tx(drained(), platform_key, 5_000_000, 699),
+      platform_key,
+    ),
+  )
+}
+
+/// And a token surplus is refused too: nothing makes one necessary.
+test withdraw_paying_more_tokens_than_it_takes_fails() fail {
+  treasury.withdraw(
+    VerificationKey(platform_key),
+    500,
+    #"0a",
+    withdraw(),
+    Script(#"0c"),
+    signed_by(
+      withdraw_tx(drained(), platform_key, 5_000_000, 701),
+      platform_key,
+    ),
   )
 }
