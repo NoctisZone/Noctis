@@ -7,20 +7,24 @@
 //// hit and removed once already; do not close the asymmetry by reintroducing
 //// it.
 ////
-//// What carries the weight instead, and all three parts are load-bearing:
+//// What carries the weight instead, and every part is load-bearing:
 ////
+////   * The input this script names must itself hold the NFT its own datum
+////     names. Identity comes from the pool's own token rather than from its
+////     address, which needs no parameter and so no cycle — the same thing
+////     `redirect.ak` requires of the input it names.
 ////   * Exactly two inputs. The pool and the request, nothing else — so no
 ////     decoy can absorb this script's validation while a second pool moves.
-////   * The pool's own validator checks that the input it is spending holds
-////     the NFT its datum names, and the pool's action 4 is what summons this
-////     script, so the two always run together on the same input.
 ////   * The NFT named in the datum must be the one the creator signed over,
 ////     and the continuing output must hold it. A pool-shaped UTxO carrying a
 ////     look-alike token therefore fails against the signature, which no
 ////     attacker can produce for a different pool.
 ////
-//// Relaxing any of the three turns the others into partial cover rather than
-//// a complete one.
+//// The pool's own validator independently checks the NFT on the input it
+//// spends, and its action 4 is what summons this script, so on a real pool
+//// the two run together on the same input. That is a second reading of the
+//// same fact, not a substitute for the first rule above: this script names
+//// its input by index, and only the first rule ties that index to a pool.
 
 use aiken/builtin
 use aiken/collection/list
@@ -221,6 +225,11 @@ validator royalty_withdraw_pool(withdraw_request_vh: ByteArray) {
     let correct_tokens_qty_in_pool = prev_len == new_len
     let pool_identity = asset_quantity_of(new_value, prev_pool_nft) == 1
 
+    // The INPUT named by `pool_in_ix`, not only the continuing output, has to
+    // be the pool its datum claims to be. Without this the index is tied to a
+    // pool only by there being nowhere else for a second input to sit.
+    let prev_pool_identity = asset_quantity_of(prev_value, prev_pool_nft) == 1
+
     let royalty_withdraw_ok = withdraw_x >= 0 && withdraw_y >= 0 && withdraw_x <= prev_rx && withdraw_y <= prev_ry && new_rx == prev_rx - withdraw_x && new_ry == prev_ry - withdraw_y && prev_lq_val == new_lq_val && prev_x_val - withdraw_x == new_x_val && prev_y_val - withdraw_y == new_y_val
 
     let correct_lovelace_token2token = prev_lovelace_token2token == new_lovelace_token2token
@@ -284,7 +293,7 @@ validator royalty_withdraw_pool(withdraw_request_vh: ByteArray) {
       },
     )
 
-    creator_is_paid && correct_order_input_address && correct_final_pool_address && correct_tokens_qty_in_pool && pool_identity && royalty_withdraw_ok && signature_is_correct && strict_inputs && final_pool_config_is_correct && correct_pool && correct_lovelace_token2token
+    creator_is_paid && prev_pool_identity && correct_order_input_address && correct_final_pool_address && correct_tokens_qty_in_pool && pool_identity && royalty_withdraw_ok && signature_is_correct && strict_inputs && final_pool_config_is_correct && correct_pool && correct_lovelace_token2token
   }
 
   else(_) {
@@ -625,4 +634,44 @@ test claim_that_pays_nobody_fails() fail {
       outputs: [pool_out(3)],
     },
   )
+}
+
+
+/// Same claim as `creator_claim_at_the_parameterised_request_script_passes`,
+/// reached through a shaper that can restate the pool input's value, so the
+/// rejection below differs from a valid claim by that value alone.
+fn claim_tx_with_pool_value(v: assets.Value) -> Transaction {
+  Transaction {
+    ..transaction.placeholder,
+    inputs: [
+      request(Script(request_vh)),
+      Input { ..pool_in(3), output: Output { ..pool_in(3).output, value: v } },
+    ],
+    outputs: [pool_out(3), creator_reward()],
+  }
+}
+
+fn run_claim(t: Transaction) -> Bool {
+  royalty_withdraw_pool.withdraw(
+    request_vh,
+    RoyaltyWithdrawRedeemer { pool_in_ix: 1, order_in_ix: 0, hash: False },
+    Script(#"0b"),
+    t,
+  )
+}
+
+test claim_through_the_pool_value_shaper_passes() {
+  run_claim(claim_tx_with_pool_value(pool_value(100_000_000, 100_000_000)))
+}
+
+/// A look-alike under the NFT's own policy, so the value still holds four
+/// assets and the reserves are untouched: the claim is refused because the
+/// input is not the pool, not because anything else about it is wrong.
+test claim_naming_an_input_without_the_pool_nft_fails() fail {
+  let impostor =
+    assets.from_lovelace(100_000_000)
+      |> assets.add(token.policy, token.name, 100_000_000)
+      |> assets.add(#"cc", #"6c71", 1_000)
+      |> assets.add(nft.policy, #"6f74686572", 1)
+  run_claim(claim_tx_with_pool_value(impostor))
 }

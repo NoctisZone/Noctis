@@ -64,7 +64,11 @@ const ada: Asset = Asset { policy: ada_policy_id, name: ada_asset_name }
 /// and wallet. Both are script hashes rather than credentials: the pool's
 /// delegating arms are authorised by a withdrawal at these, and only a script
 /// runs when one is withdrawn from, so the factory can write no other kind.
-/// The three fee numerators are the platform schedule.
+/// They must also differ from each other: the pool reads its treasury
+/// authority from the first `dao_policy` entry and its governance authority
+/// from the second, so one script standing in both slots would let either
+/// action be authorised by the other's script. The three fee numerators are
+/// the platform schedule.
 /// `initial_lq`: the size of the escrowed position every pool opens with.
 validator pool_mint(
   thread_nft_policy: PolicyId,
@@ -165,6 +169,7 @@ validator pool_mint(
 
         and {
           own_minted == [Pair(nft_name, 1), Pair(lq_name, max_lq_cap)],
+          treasury_vh != redirect_vh,
           curve_graduates,
           pool_out.address == Address {
             payment_credential: Script(pool_vh),
@@ -420,11 +425,20 @@ fn create() -> MintAction {
 }
 
 fn run(redeemer: MintAction, t: Transaction) -> Bool {
+  run_with_authorities(redirect_vh(), treasury_vh(), redeemer, t)
+}
+
+fn run_with_authorities(
+  redirect: ScriptHash,
+  treasury: ScriptHash,
+  redeemer: MintAction,
+  t: Transaction,
+) -> Bool {
   pool_mint.mint(
     thread_policy,
     pool_hash,
-    redirect_vh(),
-    treasury_vh(),
+    redirect,
+    treasury,
     #"ee",
     99_700,
     100,
@@ -939,5 +953,30 @@ test burn_that_mints_fails() fail {
       ..transaction.placeholder,
       mint: assets.from_asset(lq_policy, name(), 5),
     },
+  )
+}
+
+
+/// The pool tells its treasury authority from its governance authority by
+/// position alone, so one script in both slots would let each action be
+/// authorised by the other's script. The datum in this fixture names that
+/// same script twice, so the transition is the one such a factory would
+/// really produce and the only thing left to refuse it is the rule above.
+test factory_naming_one_script_for_both_authorities_fails() fail {
+  let doubled =
+    SingleRoyaltyPoolConfig {
+      ..pool_cfg(),
+      dao_policy: [Inline(treasury()), Inline(treasury())],
+    }
+  run_with_authorities(
+    treasury_vh(),
+    treasury_vh(),
+    create(),
+    tx(
+      pool_out(doubled, pool_value(), Script(pool_hash)),
+      escrow_out(escrow_datum(1_000), escrow_value(initial)),
+      escrow_in(escrow_datum(0)),
+      mint_value(),
+    ),
   )
 }
