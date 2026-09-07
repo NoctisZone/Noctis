@@ -19,7 +19,7 @@ creator's key. See `NOTICE` for the exact provenance and licence terms.
 | File | Origin | Status |
 |---|---|---|
 | `lib/splash/*.ak`, `lib/splash/royalty_pool/single_royalty_pool.ak`, `lib/splash/orders/royalty_withdraw.ak` | splash-core `validators_v3` (Aiken) | vendored unchanged; compiles on stdlib v3.1.0 |
-| `validators/royalty_pool/single_royalty_withdraw_pool.ak` | splash-core `validators_v3` (Aiken) | vendored; the request script hash is now a validator parameter, and a claim's amounts are bounded below |
+| `validators/royalty_pool/single_royalty_withdraw_pool.ak` | splash-core `validators_v3` (Aiken) | vendored; the request script hash is a validator parameter, a claim's amounts are bounded below, and the claim must pay the creator's own key |
 | `validators/royalty_pool/pool.ak` | ported from `PRoyaltyPool.hs` (Plutarch) | Aiken port with tests; adds the `RedirectRoyalty` arm |
 | `validators/royalty_pool/withdraw_order.ak` | ported from `PRoyaltyWithdrawOrder.hs` (Plutarch) | the creator's claim request; payout address derived from the pool's royalty key |
 | `validators/royalty_pool/treasury.ak` | ours, informed by `PRoyaltyDAOV1.hs` | the platform slot: withdraw to the platform wallet, adjust the treasury fee within a band |
@@ -57,7 +57,9 @@ pool guarded by this script without modification.
   them in.
 - **The creator's payout address is derived, not declared.** A claim request
   carries no destination; the reward must go to the key hash of the pool's
-  `royalty_pub_key`, delegated by the creator or not at all. A CTO redirect of
+  `royalty_pub_key`, delegated by the creator or not at all. The pool-side
+  script holds that rule itself, so it binds every claim rather than one route
+  through one. A CTO redirect of
   that key moves the payout with it. A claim draws a non-negative amount from
   each side, so the counter it settles against can only fall.
 - **The platform slot has its own small script** that acts on one real pool:

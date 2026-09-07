@@ -240,7 +240,27 @@ validator royalty_withdraw_pool(withdraw_request_vh: ByteArray) {
 
     let strict_inputs = list.length(inputs) == 2
 
-    correct_order_input_address && correct_final_pool_address && correct_tokens_qty_in_pool && pool_identity && royalty_withdraw_ok && signature_is_correct && strict_inputs && final_pool_config_is_correct && correct_pool && correct_lovelace_token2token
+    // The payout is derived from the pool rather than declared by the request:
+    // the value a claim draws must reach the key `royalty_pub_key` hashes to.
+    //
+    // This rule lives here because this script runs on EVERY royalty claim —
+    // the pool's own action 4 defers to it, and the signature it checks covers
+    // the amounts and the nonce, so the signature itself can carry no
+    // destination. Holding the destination anywhere else would make the
+    // guarantee true of one way of completing a claim rather than of a claim.
+    let creator = VerificationKey(blake2b_224(prev_pk))
+    let creator_is_paid = list.any(
+      outputs,
+      fn(o) {
+        and {
+          o.address.payment_credential == creator,
+          asset_quantity_of(o.value, prev_pool_x) >= withdraw_x,
+          asset_quantity_of(o.value, prev_pool_y) >= withdraw_y,
+        }
+      },
+    )
+
+    creator_is_paid && correct_order_input_address && correct_final_pool_address && correct_tokens_qty_in_pool && pool_identity && royalty_withdraw_ok && signature_is_correct && strict_inputs && final_pool_config_is_correct && correct_pool && correct_lovelace_token2token
   }
 
   else(_) {
@@ -374,12 +394,31 @@ fn pool_out(nonce: Int) -> Output {
   }
 }
 
-fn claim_tx(at: Credential, nonce: Int) -> Transaction {
+/// Where a claim's value has to land: the key the pool's `royalty_pub_key`
+/// hashes to, holding at least what the claim draws from each side.
+fn creator_reward() -> Output {
+  Output {
+    address: Address {
+      payment_credential: VerificationKey(blake2b_224(creator_pub_key)),
+      stake_credential: None,
+    },
+    value: assets.from_lovelace(1_000_000)
+      |> assets.add(token.policy, token.name, 200),
+    datum: transaction.NoDatum,
+    reference_script: None,
+  }
+}
+
+fn claim_tx_paying(at: Credential, nonce: Int, reward: Output) -> Transaction {
   Transaction {
     ..transaction.placeholder,
     inputs: [request(at), pool_in(nonce)],
-    outputs: [pool_out(nonce)],
+    outputs: [pool_out(nonce), reward],
   }
+}
+
+fn claim_tx(at: Credential, nonce: Int) -> Transaction {
+  claim_tx_paying(at, nonce, creator_reward())
 }
 
 fn run(vh: ByteArray, at: Credential, nonce: Int) -> Bool {
@@ -457,6 +496,7 @@ fn backwards_claim_tx(
     ..transaction.placeholder,
     inputs: [request_signed(Script(request_vh), wd, sig), pool_in(3)],
     outputs: [
+      creator_reward(),
       Output {
         address: pool_address(),
         value: pool_value(lovelace, y),
@@ -506,5 +546,59 @@ test claim_for_a_negative_token_amount_fails() fail {
       100_000_000 - 1_000_000,
       100_000_001,
     ),
+  )
+}
+
+/// The claim redirected. Every delta, both counters, the nonce and the
+/// creator's signature are byte-for-byte the passing case; the only difference
+/// is who the value reaches. A signature that covers the amounts and the nonce
+/// cannot cover a destination, so nothing but this rule can refuse it.
+test claim_paid_to_someone_elses_address_fails() fail {
+  let elsewhere = Output {
+    address: Address {
+      payment_credential: VerificationKey(#"a7"),
+      stake_credential: None,
+    },
+    value: assets.from_lovelace(1_000_000)
+      |> assets.add(token.policy, token.name, 200),
+    datum: transaction.NoDatum,
+    reference_script: None,
+  }
+  royalty_withdraw_pool.withdraw(
+    request_vh,
+    RoyaltyWithdrawRedeemer { pool_in_ix: 1, order_in_ix: 0, hash: False },
+    Script(#"0b"),
+    claim_tx_paying(Script(request_vh), 3, elsewhere),
+  )
+}
+
+/// The creator's own key, but short on the token side. A payout that reaches
+/// the right address for less than the claim drew is not the claim being paid.
+test claim_paying_the_creator_short_fails() fail {
+  let short = Output {
+    ..creator_reward(),
+    value: assets.from_lovelace(1_000_000)
+      |> assets.add(token.policy, token.name, 199),
+  }
+  royalty_withdraw_pool.withdraw(
+    request_vh,
+    RoyaltyWithdrawRedeemer { pool_in_ix: 1, order_in_ix: 0, hash: False },
+    Script(#"0b"),
+    claim_tx_paying(Script(request_vh), 3, short),
+  )
+}
+
+/// And with no payout output at all — the shape every fixture in this file
+/// had before the rule existed.
+test claim_that_pays_nobody_fails() fail {
+  royalty_withdraw_pool.withdraw(
+    request_vh,
+    RoyaltyWithdrawRedeemer { pool_in_ix: 1, order_in_ix: 0, hash: False },
+    Script(#"0b"),
+    Transaction {
+      ..transaction.placeholder,
+      inputs: [request(Script(request_vh)), pool_in(3)],
+      outputs: [pool_out(3)],
+    },
   )
 }
