@@ -193,7 +193,10 @@ pub fn swap_config_ok(
   }
 }
 
-/// Deposit and redeem move LQ in proportion to both reserves.
+/// Deposit and redeem move LQ in proportion to both reserves. The pool must
+/// already have liquidity for that to mean anything: in a pool holding none,
+/// with no reserves to price it against, every product here is zero and any
+/// quantity of LQ satisfies the proportion equally.
 pub fn deposit_redeem_ok(
   rx0: Int,
   ry0: Int,
@@ -202,7 +205,7 @@ pub fn deposit_redeem_ok(
   dy: Int,
   dlq: Int,
 ) -> Bool {
-  dlq * rx0 <= dx * lq0 && dlq * ry0 <= dy * lq0
+  lq0 > 0 && dlq * rx0 <= dx * lq0 && dlq * ry0 <= dy * lq0
 }
 
 /// The Noctis arm: only the royalty key and the nonce change.
@@ -258,7 +261,16 @@ validator pool(royalty_withdraw_vh: ByteArray) {
     expect InlineDatum(succ_datum_raw) = successor.datum
     expect succ_cfg: SingleRoyaltyPoolConfig = succ_datum_raw
 
-    let no_more_tokens = v_len(self_out.value) == v_len(successor.value)
+    // A count on its own admits a foreign asset whenever a named one leaves
+    // entirely. Holding the successor to a real balance of each named asset is
+    // what makes the count mean what it appears to: with both still present
+    // and the total unchanged, there is no room for anything else. The NFT is
+    // already found by search, and `pool_x` is ADA on every Noctis pool.
+    let no_more_tokens = and {
+      v_len(self_out.value) == v_len(successor.value),
+      asset_quantity_of(successor.value, cfg.pool_y) > 0,
+      asset_quantity_of(successor.value, cfg.pool_lq) > 0,
+    }
     let script_preserved = successor.address == self_out.address
     let lovelace_t2t_preserved = s1.lovelace_t2t == s0.lovelace_t2t
 
@@ -309,9 +321,26 @@ validator pool(royalty_withdraw_vh: ByteArray) {
         redirect_config_ok(cfg, succ_cfg),
         successor.value == self_out.value,
       }
-    } else if redeemer.action == action_deposit || redeemer.action == action_redeem {
+    } else if redeemer.action == action_deposit {
       and {
         succ_cfg == cfg,
+        // A deposit adds liquidity and a redeem removes it. Each action states
+        // its own direction, so a spend that moves no liquidity at all is
+        // neither of them.
+        dlq > 0,
+        deposit_redeem_ok(
+          s0.reserves_x,
+          s0.reserves_y,
+          s0.liquidity,
+          dx,
+          dy,
+          dlq,
+        ),
+      }
+    } else if redeemer.action == action_redeem {
+      and {
+        succ_cfg == cfg,
+        dlq < 0,
         deposit_redeem_ok(
           s0.reserves_x,
           s0.reserves_y,
@@ -729,16 +758,17 @@ test tx_swap_that_rewrites_the_royalty_key_fails() fail {
 
 /// A UTxO parked at the pool's address carrying a copy of the live pool's
 /// datum, and a junk asset where the NFT would be so the asset counts still
-/// match. Its successor resolves to the LIVE pool's continuing output, which is
-/// unchanged, so the deposit arm's own arithmetic is satisfied with every delta
-/// at zero. The missing NFT is the single delta, and the only thing that says
-/// this is not a pool.
+/// match. Its successor resolves to the LIVE pool's continuing output, so the
+/// spend reads as a redeem of the difference between the two — which the redeem
+/// arm accepts in full, since burning liquidity while taking no reserves is
+/// only a gift to the pool. The missing NFT is the single delta, and the only
+/// thing that says this is not a pool.
 test tx_spending_a_look_alike_at_the_pool_address_fails() fail {
   let cfg = sample_cfg()
   let stray_ref = OutputReference { transaction_id: #"07", output_index: 0 }
   let stray_value = assets.from_lovelace(100_000_000)
     |> assets.add(cfg.pool_y.policy, cfg.pool_y.name, 100_000_000)
-    |> assets.add(cfg.pool_lq.policy, cfg.pool_lq.name, max_lq_cap - 50_000_000)
+    |> assets.add(cfg.pool_lq.policy, cfg.pool_lq.name, max_lq_cap - 51_000_000)
     |> assets.add(#"99", #"6a756e6b", 1)
   let stray = Input {
     output_reference: stray_ref,
@@ -758,7 +788,7 @@ test tx_spending_a_look_alike_at_the_pool_address_fails() fail {
   pool.spend(
     #"0b",
     Some(cfg),
-    PoolRedeemer { action: action_deposit, self_ix: 0 },
+    PoolRedeemer { action: action_redeem, self_ix: 0 },
     stray_ref,
     Transaction { ..transaction.placeholder, inputs: [stray], outputs: [live] },
   )
@@ -984,5 +1014,218 @@ test tx_redirect_on_a_pool_without_a_governance_entry_fails() fail {
     PoolRedeemer { action: action_redirect_royalty, self_ix: 0 },
     own_ref(),
     redirect_tx_from(prev, next, Script(#"0c")),
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Liquidity has a direction, and a pool keeps its own two assets.
+// ---------------------------------------------------------------------------
+
+/// An emptied pool: no reserves, and no liquidity to price against them. Every
+/// product in the proportion is zero, so on the proportion alone any quantity
+/// of LQ is as well-founded as any other.
+test minting_liquidity_from_an_empty_pool_fails() {
+  !deposit_redeem_ok(0, 0, 0, 0, 0, 1_000_000)
+}
+
+/// One pool spend, stated as gross holdings on each side. Reserves and
+/// liquidity are the only things that move.
+fn liquidity_tx(
+  x_in: Int,
+  y_in: Int,
+  lq_in: Int,
+  x_out: Int,
+  y_out: Int,
+  lq_out: Int,
+) -> Transaction {
+  let cfg = sample_cfg()
+  Transaction {
+    ..transaction.placeholder,
+    inputs: [
+      Input {
+        output_reference: own_ref(),
+        output: Output {
+          address: pool_address(),
+          value: pool_value(cfg, x_in, y_in, lq_in),
+          datum: InlineDatum(cfg),
+          reference_script: None,
+        },
+      },
+    ],
+    outputs: [
+      Output {
+        address: pool_address(),
+        value: pool_value(cfg, x_out, y_out, lq_out),
+        datum: InlineDatum(cfg),
+        reference_script: None,
+      },
+    ],
+  }
+}
+
+fn run_pool(action: Int, t: Transaction) -> Bool {
+  pool.spend(
+    #"0b",
+    Some(sample_cfg()),
+    PoolRedeemer { action, self_ix: 0 },
+    own_ref(),
+    t,
+  )
+}
+
+/// 2% more of each reserve for 2% more liquidity, exactly at the bound.
+test tx_deposit_at_the_bound_passes() {
+  run_pool(
+    action_deposit,
+    liquidity_tx(
+      100_000_000,
+      100_000_000,
+      50_000_000,
+      102_000_000,
+      102_000_000,
+      51_000_000,
+    ),
+  )
+}
+
+/// And the same in reverse.
+test tx_redeem_at_the_bound_passes() {
+  run_pool(
+    action_redeem,
+    liquidity_tx(
+      100_000_000,
+      100_000_000,
+      50_000_000,
+      98_000_000,
+      98_000_000,
+      49_000_000,
+    ),
+  )
+}
+
+/// A spend that moves no liquidity at all, offered as a deposit. The
+/// proportion is satisfied by every delta being zero, so the direction is the
+/// only thing it fails.
+test tx_deposit_that_moves_no_liquidity_fails() fail {
+  run_pool(
+    action_deposit,
+    liquidity_tx(
+      100_000_000,
+      100_000_000,
+      50_000_000,
+      100_000_000,
+      100_000_000,
+      50_000_000,
+    ),
+  )
+}
+
+/// The redeem above, presented under the deposit action. It is a valid redeem,
+/// which is the point: the proportion cannot tell the two apart.
+test tx_redeem_presented_as_a_deposit_fails() fail {
+  run_pool(
+    action_deposit,
+    liquidity_tx(
+      100_000_000,
+      100_000_000,
+      50_000_000,
+      98_000_000,
+      98_000_000,
+      49_000_000,
+    ),
+  )
+}
+
+/// And the deposit under the redeem action.
+test tx_deposit_presented_as_a_redeem_fails() fail {
+  run_pool(
+    action_redeem,
+    liquidity_tx(
+      100_000_000,
+      100_000_000,
+      50_000_000,
+      102_000_000,
+      102_000_000,
+      51_000_000,
+    ),
+  )
+}
+
+/// A successor holding a foreign token where the pool's own should be, so the
+/// asset count is unchanged. Dressed as a redeem of the whole token side: the
+/// proportion accepts it, since burning all the liquidity for all of one
+/// reserve is exactly at the bound, and every other rule is met. Whether the
+/// pool still holds its own token is the single thing left to decide it.
+test tx_successor_holding_a_foreign_token_in_place_of_the_pools_fails() fail {
+  let cfg = sample_cfg()
+  let successor = Output {
+    address: pool_address(),
+    value: assets.from_lovelace(100_000_000)
+      |> assets.add(#"99", #"666f726569676e", 100_000_000)
+      |> assets.add(cfg.pool_lq.policy, cfg.pool_lq.name, max_lq_cap)
+      |> assets.add(cfg.pool_nft.policy, cfg.pool_nft.name, 1),
+    datum: InlineDatum(cfg),
+    reference_script: None,
+  }
+  pool.spend(
+    #"0b",
+    Some(cfg),
+    PoolRedeemer { action: action_redeem, self_ix: 0 },
+    own_ref(),
+    Transaction {
+      ..transaction.placeholder,
+      inputs: [
+        Input {
+          output_reference: own_ref(),
+          output: Output {
+            address: pool_address(),
+            value: pool_value(cfg, 100_000_000, 100_000_000, 50_000_000),
+            datum: InlineDatum(cfg),
+            reference_script: None,
+          },
+        },
+      ],
+      outputs: [successor],
+    },
+  )
+}
+
+/// The same shape on the LQ token: a successor holding none of it reads as a
+/// pool that has minted every unit of liquidity there is, with a foreign token
+/// keeping the count. The reserves are grown far enough that the proportion
+/// itself is satisfied.
+test tx_successor_holding_no_lq_token_fails() fail {
+  let cfg = sample_cfg()
+  let minted = max_lq_cap - 50_000_000
+  let grown = 100_000_000 + 2 * minted
+  let successor = Output {
+    address: pool_address(),
+    value: assets.from_lovelace(grown)
+      |> assets.add(cfg.pool_y.policy, cfg.pool_y.name, grown)
+      |> assets.add(#"99", #"666f726569676e", 1)
+      |> assets.add(cfg.pool_nft.policy, cfg.pool_nft.name, 1),
+    datum: InlineDatum(cfg),
+    reference_script: None,
+  }
+  pool.spend(
+    #"0b",
+    Some(cfg),
+    PoolRedeemer { action: action_deposit, self_ix: 0 },
+    own_ref(),
+    Transaction {
+      ..transaction.placeholder,
+      inputs: [
+        Input {
+          output_reference: own_ref(),
+          output: Output {
+            address: pool_address(),
+            value: pool_value(cfg, 100_000_000, 100_000_000, 50_000_000),
+            datum: InlineDatum(cfg),
+            reference_script: None,
+          },
+        },
+      ],
+      outputs: [successor],
+    },
   )
 }

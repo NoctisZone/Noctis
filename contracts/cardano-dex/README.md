@@ -97,6 +97,12 @@ pool guarded by this script without modification.
   nothing else. Throughput comes from chaining transactions, as Splash's own
   executor does. Splash's newer batch design trades that guarantee for an
   executor spread; this package does not.
+- **A pool keeps its own two assets, and its liquidity has a direction.** The
+  successor of any pool spend still holds the pool's token and its LQ token, in
+  the same number of assets it started with, so nothing foreign can arrive in
+  the place of something the pool named. Deposit and redeem each state which
+  way liquidity moves, and the proportion they are held to is a proportion of
+  liquidity the pool actually has.
 - **An order carries only what it names.** Every value rule in the four order
   validators is an inequality over a named set: the assets the request trades,
   its LQ, the pool's own. Each order is therefore held to carrying exactly
