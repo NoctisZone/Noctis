@@ -58,7 +58,12 @@ pool guarded by this script without modification.
 - **The creator's payout address is derived, not declared.** A claim request
   carries no destination; the reward must go to the key hash of the pool's
   `royalty_pub_key`. A CTO redirect of that key moves the payout with it.
-- **The platform slot has its own small script** instead of Splash's multisig
+- **The platform slot has its own small script** that acts on one real pool:
+  the input it names must sit at the pool validator's address and hold the NFT
+  its datum names, and exactly one input sits there. The pool's own DAO arm
+  keeps its shape independently — liquidity untouched, only the treasury
+  counters, the treasury fee and the nonce free to move, neither counter below
+  zero, and whatever leaves matched to a counter — instead of Splash's multisig
   DAO action: withdraw to the platform wallet, or move `treasury_fee` within
   `[0, max_treasury_fee]`, each bumping the nonce and touching nothing else.
 - **The factory is one minting policy.** Splash mints LQ under policies served
@@ -96,18 +101,18 @@ take another one's hash, so they are applied in this order:
 
 1. `pool(royalty_withdraw_vh)` — the royalty-withdraw validator's hash.
 2. `redirect(thread_nft_policy, pool_vh, cto_governance_cred, lp_escrow_cred)`
-   — the pool validator's hash from step 1, with the platform's thread NFT
-   policy and the launch package's governance and escrow validators.
+   and `treasury(authority, max_treasury_fee, pool_vh)` — both take the pool
+   validator's hash from step 1, alongside the platform's thread NFT policy and
+   the launch package's governance and escrow validators.
 3. `pool_mint(thread_nft_policy, pool_vh, redirect_cred, treasury_cred, …)` —
    the pool from step 1 and the redirect script from step 2. The factory writes
    the redirect credential into every pool's datum as the second `dao_policy`
    entry, which is what keeps the pool's own hash independent of the redirect
    script's.
 
-`treasury(authority, max_treasury_fee)` and the order validators depend on
-none of these. A launch's genesis records the factory's policy id in its curve
-and escrow datums, so the venue's hashes are final before any launch is minted
-against them.
+The order validators take no parameters at all. A launch's genesis records the
+factory's policy id in its curve and escrow datums, so the venue's hashes are
+final before any launch is minted against them.
 
 ## Fee model
 

@@ -16,8 +16,13 @@
 ////     input; the treasury and royalty counters in the datum grow by exactly the
 ////     slice the swap owes (rounded down), and only for the input side; every
 ////     other datum field is unchanged.
-////   3 DAOAction — a withdrawal from the first `dao_policy` credential is present
-////     in the transaction; the DAO script decides the rest.
+////   3 DAOAction — a withdrawal from the first `dao_policy` credential is
+////     present in the transaction, and the DAO script decides how much moves.
+////     What it may never do is decided here: liquidity is untouched, only the
+////     treasury counters, the treasury fee and the nonce may change in the
+////     datum, neither counter ends below zero, and whatever leaves the pool
+////     comes out of a treasury counter rather than out of the reserves or the
+////     creator's slot.
 ////   4 WithdrawRoyalty — a withdrawal from the royalty-withdraw script is present;
 ////     that script decides the rest (it permits only `royalty_x/y` and `nonce`
 ////     to change).
@@ -28,10 +33,11 @@
 ////     Splash's DAO action deliberately cannot change the royalty key. A passed
 ////     community-takeover vote has to, so this arm exists.
 ////
-//// Every action also requires: the spent input is the one the redeemer names,
-//// the successor output carries the pool NFT, sits at the same address, holds
-//// the same number of distinct assets, and keeps the same lovelace when neither
-//// side of the pool is ADA.
+//// Every action also requires: the spent input is the one the redeemer names
+//// AND carries the pool NFT its own datum names, so a UTxO that merely sits at
+//// this address is not a pool; the successor output carries that NFT, sits at
+//// the same address, holds the same number of distinct assets, and keeps the
+//// same lovelace when neither side of the pool is ADA.
 
 use aiken/collection/list
 use aiken/collection/pairs
@@ -271,7 +277,29 @@ validator pool(royalty_withdraw_vh: ByteArray) {
       }
     } else if redeemer.action == action_dao {
       expect Some(Inline(dao_cred)) = list.head(cfg.dao_policy)
-      has_withdrawal(self, dao_cred)
+      // The DAO script decides how much the platform takes. These are the
+      // things no treasury action may do, held here so that a pool spent under
+      // this action keeps its own shape whatever runs at that credential.
+      let expected = SingleRoyaltyPoolConfig {
+        ..cfg,
+        treasury_x: succ_cfg.treasury_x,
+        treasury_y: succ_cfg.treasury_y,
+        treasury_fee: succ_cfg.treasury_fee,
+        nonce: succ_cfg.nonce,
+      }
+      and {
+        has_withdrawal(self, dao_cred),
+        expected == succ_cfg,
+        dlq == 0,
+        // Both states are read under the OLD datum, so a reserve delta is
+        // exactly the value that moved. Requiring it to equal the counter's
+        // own delta is what keeps a treasury action inside the treasury's
+        // slot: the reserves and the creator's counters are not its to spend.
+        dx == succ_cfg.treasury_x - cfg.treasury_x,
+        dy == succ_cfg.treasury_y - cfg.treasury_y,
+        succ_cfg.treasury_x >= 0,
+        succ_cfg.treasury_y >= 0,
+      }
     } else if redeemer.action == action_withdraw_royalty {
       has_withdrawal(self, Script(royalty_withdraw_vh))
     } else if redeemer.action == action_redirect_royalty {
@@ -299,6 +327,12 @@ validator pool(royalty_withdraw_vh: ByteArray) {
 
     and {
       self_identity,
+      // The input being spent is the pool, not merely something parked at the
+      // pool's address. Without this, a UTxO carrying a copy of a live pool's
+      // datum resolves its successor to that live pool's own continuing output
+      // — which is unchanged, so every rule below is satisfied by a transaction
+      // that never touches the pool at all.
+      asset_quantity_of(self_out.value, cfg.pool_nft) == 1,
       no_more_tokens,
       script_preserved,
       lovelace_t2t_preserved,
@@ -691,6 +725,162 @@ test tx_swap_that_rewrites_the_royalty_key_fails() fail {
     own_ref(),
     swap_tx(next, 976_372),
   )
+}
+
+/// A UTxO parked at the pool's address carrying a copy of the live pool's
+/// datum, and a junk asset where the NFT would be so the asset counts still
+/// match. Its successor resolves to the LIVE pool's continuing output, which is
+/// unchanged, so the deposit arm's own arithmetic is satisfied with every delta
+/// at zero. The missing NFT is the single delta, and the only thing that says
+/// this is not a pool.
+test tx_spending_a_look_alike_at_the_pool_address_fails() fail {
+  let cfg = sample_cfg()
+  let stray_ref = OutputReference { transaction_id: #"07", output_index: 0 }
+  let stray_value = assets.from_lovelace(100_000_000)
+    |> assets.add(cfg.pool_y.policy, cfg.pool_y.name, 100_000_000)
+    |> assets.add(cfg.pool_lq.policy, cfg.pool_lq.name, max_lq_cap - 50_000_000)
+    |> assets.add(#"99", #"6a756e6b", 1)
+  let stray = Input {
+    output_reference: stray_ref,
+    output: Output {
+      address: pool_address(),
+      value: stray_value,
+      datum: InlineDatum(cfg),
+      reference_script: None,
+    },
+  }
+  let live = Output {
+    address: pool_address(),
+    value: pool_value(cfg, 100_000_000, 100_000_000, 50_000_000),
+    datum: InlineDatum(cfg),
+    reference_script: None,
+  }
+  pool.spend(
+    #"0b",
+    Some(cfg),
+    PoolRedeemer { action: action_deposit, self_ix: 0 },
+    stray_ref,
+    Transaction { ..transaction.placeholder, inputs: [stray], outputs: [live] },
+  )
+}
+
+/// A pool with something in both treasury slots, so a withdrawal has
+/// something to take.
+fn dao_cfg() -> SingleRoyaltyPoolConfig {
+  SingleRoyaltyPoolConfig {
+    ..sample_cfg(),
+    treasury_x: 5_000_000,
+    treasury_y: 700,
+  }
+}
+
+fn dao_tx(next: SingleRoyaltyPoolConfig, x: Int, y: Int, lq: Int) -> Transaction {
+  let prev = dao_cfg()
+  let pool_in = Input {
+    output_reference: own_ref(),
+    output: Output {
+      address: pool_address(),
+      value: pool_value(prev, 100_000_000, 100_000_000, 50_000_000),
+      datum: InlineDatum(prev),
+      reference_script: None,
+    },
+  }
+  let pool_out = Output {
+    address: pool_address(),
+    value: pool_value(prev, x, y, lq),
+    datum: InlineDatum(next),
+    reference_script: None,
+  }
+  Transaction {
+    ..transaction.placeholder,
+    inputs: [pool_in],
+    outputs: [pool_out],
+    withdrawals: [Pair(Script(#"dd"), 0)],
+  }
+}
+
+fn run_dao(next: SingleRoyaltyPoolConfig, x: Int, y: Int, lq: Int) -> Bool {
+  pool.spend(
+    #"0b",
+    Some(dao_cfg()),
+    PoolRedeemer { action: action_dao, self_ix: 0 },
+    own_ref(),
+    dao_tx(next, x, y, lq),
+  )
+}
+
+/// Both slots emptied: the pool's holdings fall by exactly what the counters
+/// give up.
+fn dao_drained() -> SingleRoyaltyPoolConfig {
+  SingleRoyaltyPoolConfig {
+    ..dao_cfg(),
+    treasury_x: 0,
+    treasury_y: 0,
+    nonce: 1,
+  }
+}
+
+test tx_dao_withdrawal_of_the_treasury_passes() {
+  run_dao(dao_drained(), 95_000_000, 99_999_300, 50_000_000)
+}
+
+test tx_dao_without_the_withdrawal_fails() fail {
+  let t = dao_tx(dao_drained(), 95_000_000, 99_999_300, 50_000_000)
+  pool.spend(
+    #"0b",
+    Some(dao_cfg()),
+    PoolRedeemer { action: action_dao, self_ix: 0 },
+    own_ref(),
+    Transaction { ..t, withdrawals: [Pair(Script(#"0d"), 0)] },
+  )
+}
+
+/// Ten ADA leaves while the counter gives up five, so the difference comes out
+/// of the reserves the traders own.
+test tx_dao_that_drains_the_reserves_fails() fail {
+  run_dao(dao_drained(), 90_000_000, 99_999_300, 50_000_000)
+}
+
+test tx_dao_that_drains_the_token_reserve_fails() fail {
+  run_dao(dao_drained(), 95_000_000, 99_998_600, 50_000_000)
+}
+
+/// The counter and the holding fall together, so the arithmetic is consistent
+/// — but the counter ends below zero, which means the pool paid out more than
+/// the platform had ever accrued.
+test tx_dao_that_drives_a_counter_below_zero_fails() fail {
+  let over = SingleRoyaltyPoolConfig {
+    ..dao_cfg(),
+    treasury_x: -1_000_000,
+    treasury_y: 0,
+    nonce: 1,
+  }
+  run_dao(over, 94_000_000, 99_999_300, 50_000_000)
+}
+
+/// The same on the token side, which has its own counter and its own floor.
+test tx_dao_that_drives_the_token_counter_below_zero_fails() fail {
+  let over = SingleRoyaltyPoolConfig {
+    ..dao_cfg(),
+    treasury_x: 0,
+    treasury_y: -300,
+    nonce: 1,
+  }
+  run_dao(over, 95_000_000, 99_999_000, 50_000_000)
+}
+
+test tx_dao_that_moves_liquidity_fails() fail {
+  run_dao(dao_drained(), 95_000_000, 99_999_300, 50_000_001)
+}
+
+/// Splash's DAO action deliberately cannot reach the royalty key, and neither
+/// can this one.
+test tx_dao_that_rewrites_the_royalty_key_fails() fail {
+  let hijack = SingleRoyaltyPoolConfig {
+    ..dao_drained(),
+    royalty_pub_key: #"01",
+  }
+  run_dao(hijack, 95_000_000, 99_999_300, 50_000_000)
 }
 
 fn redirect_tx(next: SingleRoyaltyPoolConfig, cred: Credential) -> Transaction {
