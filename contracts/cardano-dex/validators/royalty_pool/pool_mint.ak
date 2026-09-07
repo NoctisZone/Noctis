@@ -120,9 +120,13 @@ validator pool_mint(
         // rule unrun while still putting the curve's record in the inputs, so
         // the record alone is not evidence of a graduation — the redeemer is.
         //
-        // This is also what binds `pool_y` to the launch's own token: the
-        // curve's rule demands its reserve in the pool output, and the
-        // four-asset cap below leaves no room for a second one.
+        // The curve's rule is also what puts the launch token in the pool at
+        // its exact reserve. It does not read this datum, so what makes
+        // `pool_y` NAME that token rather than one of the other three assets
+        // present is the datum rule below: `pool_y` is not ADA, and is neither
+        // the pool's own LQ nor its NFT. With ADA, the LQ and the NFT all
+        // excluded and the value capped at four assets, the launch token is
+        // the only asset left for it to name.
         //
         // Without this the escrow's seal would authorise itself, since the
         // position it seals is minted here.
@@ -181,6 +185,8 @@ validator pool_mint(
           escrow_out.address == escrow_in.output.address,
           cfg == expected,
           !is_ada(cfg.pool_y),
+          cfg.pool_y != cfg.pool_lq,
+          cfg.pool_y != cfg.pool_nft,
           // Read from the record that was spent, not from the datum written
           // in this transaction, so the creator's key comes from the launch's
           // own escrow rather than from whoever submits the graduation.
@@ -978,5 +984,39 @@ test factory_naming_one_script_for_both_authorities_fails() fail {
       escrow_in(escrow_datum(0)),
       mint_value(),
     ),
+  )
+}
+
+
+/// `pool_y` is the one datum field the factory copies from whoever submits
+/// the graduation rather than deriving. Graduation is permissionless, so it
+/// is named by a stranger, and the pool prices its reserves by what this
+/// names — it must therefore be the launch token and nothing else the pool
+/// already holds.
+test pool_naming_its_own_lq_as_the_second_asset_fails() fail {
+  let aliased = SingleRoyaltyPoolConfig { ..pool_cfg(), pool_y: lq() }
+  run(
+    create(),
+    Transaction {
+      ..good(),
+      outputs: [
+        pool_out(aliased, pool_value(), Script(pool_hash)),
+        escrow_out(escrow_datum(1_000), escrow_value(initial)),
+      ],
+    },
+  )
+}
+
+test pool_naming_its_own_nft_as_the_second_asset_fails() fail {
+  let aliased = SingleRoyaltyPoolConfig { ..pool_cfg(), pool_y: nft() }
+  run(
+    create(),
+    Transaction {
+      ..good(),
+      outputs: [
+        pool_out(aliased, pool_value(), Script(pool_hash)),
+        escrow_out(escrow_datum(1_000), escrow_value(initial)),
+      ],
+    },
   )
 }

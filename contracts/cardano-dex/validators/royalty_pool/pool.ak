@@ -38,10 +38,13 @@
 ////     community-takeover vote has to, so this arm exists.
 ////
 //// Every action also requires: the spent input is the one the redeemer names
-//// AND carries the pool NFT its own datum names, so a UTxO that merely sits at
-//// this address is not a pool; the successor output carries that NFT, sits at
-//// the same address, holds the same number of distinct assets, and keeps the
-//// same lovelace when neither side of the pool is ADA.
+//// AND carries the pool NFT its own datum names, and is the only input that
+//// does, so a UTxO that merely sits at this address is not a pool and one
+//// continuing output answers for one pool; the four assets the datum names
+//// are four different assets, so each balance answers for one of them; and
+//// the successor output carries that NFT, sits at the same address, holds the
+//// same number of distinct assets, and keeps the same lovelace when neither
+//// side of the pool is ADA.
 
 use aiken/collection/list
 use aiken/collection/pairs
@@ -272,6 +275,20 @@ validator pool(royalty_withdraw_vh: ByteArray) {
     // what makes the count mean what it appears to: with both still present
     // and the total unchanged, there is no room for anything else. The NFT is
     // already found by search, and `pool_x` is ADA on every Noctis pool.
+    // Each balance the pool reads answers for exactly one of the assets its
+    // datum names. `read_pool_state` looks each up by name, so two names
+    // pointing at one asset would make a single balance stand for both — and
+    // the count below, which is what bounds the pool's contents, would still
+    // see four. Reserves, liquidity and the NFT are only distinguishable from
+    // one another because these are.
+    let named_assets_distinct = and {
+      cfg.pool_x != cfg.pool_y,
+      cfg.pool_x != cfg.pool_lq,
+      cfg.pool_y != cfg.pool_lq,
+      cfg.pool_nft != cfg.pool_x,
+      cfg.pool_nft != cfg.pool_y,
+      cfg.pool_nft != cfg.pool_lq,
+    }
     let no_more_tokens = and {
       v_len(self_out.value) == v_len(successor.value),
       asset_quantity_of(successor.value, cfg.pool_y) > 0,
@@ -378,6 +395,7 @@ validator pool(royalty_withdraw_vh: ByteArray) {
         self.inputs,
         fn(i) { asset_quantity_of(i.output.value, cfg.pool_nft) == 1 },
       ) == 1,
+      named_assets_distinct,
       no_more_tokens,
       script_preserved,
       lovelace_t2t_preserved,
@@ -1361,4 +1379,77 @@ test a_second_input_holding_the_pool_nft_fails() fail {
     own_ref(),
     Transaction { ..base, inputs: list.concat(base.inputs, [twin]) },
   )
+}
+
+
+/// The four assets a graduation really leaves in the pool: ADA, the launch
+/// token, the pool's own LQ, and its NFT. Built without reference to the
+/// datum, so which of them `pool_y` names can be varied while the pool holds
+/// exactly this.
+fn four_asset_value(ada_qty: Int, tok: Int) -> Value {
+  assets.from_lovelace(ada_qty)
+    |> assets.add(#"bb", #"746f6b656e", tok)
+    |> assets.add(#"cc", #"6c71", max_lq_cap - 50_000_000)
+    |> assets.add(#"aa", #"6e6674", 1)
+}
+
+fn cfg_naming(y: Asset) -> SingleRoyaltyPoolConfig {
+  SingleRoyaltyPoolConfig { ..sample_cfg(), pool_y: y }
+}
+
+/// One lovelace in, `tok_out` of the launch token out.
+fn one_lovelace_in_tx(
+  cfg: SingleRoyaltyPoolConfig,
+  tok_out: Int,
+) -> Transaction {
+  let pool_in =
+    Input {
+      output_reference: own_ref(),
+      output: Output {
+        address: pool_address(),
+        value: four_asset_value(100_000_000, 200_000_000),
+        datum: InlineDatum(cfg),
+        reference_script: None,
+      },
+    }
+  let pool_out =
+    Output {
+      address: pool_address(),
+      value: four_asset_value(100_000_001, 200_000_000 - tok_out),
+      datum: InlineDatum(cfg),
+      reference_script: None,
+    }
+  Transaction {
+    ..transaction.placeholder,
+    inputs: [pool_in],
+    outputs: [pool_out],
+  }
+}
+
+fn run_one_lovelace_in(cfg: SingleRoyaltyPoolConfig, tok_out: Int) -> Bool {
+  pool.spend(
+    #"0b",
+    Some(cfg),
+    PoolRedeemer { action: action_swap, self_ix: 0 },
+    own_ref(),
+    one_lovelace_in_tx(cfg, tok_out),
+  )
+}
+
+/// The shaper builds a valid swap: a lovelace paid in, nothing taken out.
+/// The two rejections below differ from it only in which asset `pool_y`
+/// names, and in taking the reserve that naming leaves unmeasured.
+test a_lovelace_paid_into_an_honest_pool_passes() {
+  run_one_lovelace_in(cfg_naming(Asset { policy: #"bb", name: #"746f6b656e" }), 0)
+}
+
+/// The pool prices what leaves against what it names. A datum naming the
+/// pool's own LQ as its second asset would leave the launch token measured by
+/// nothing, so the reserve could go out against a lovelace.
+test swap_on_a_pool_naming_its_own_lq_as_pool_y_fails() fail {
+  run_one_lovelace_in(cfg_naming(Asset { policy: #"cc", name: #"6c71" }), 199_999_999)
+}
+
+test swap_on_a_pool_naming_its_own_nft_as_pool_y_fails() fail {
+  run_one_lovelace_in(cfg_naming(Asset { policy: #"aa", name: #"6e6674" }), 199_999_999)
 }
