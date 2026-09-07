@@ -72,9 +72,9 @@
 // simply gone), the 24h defense window has genuinely elapsed (real chain
 // time via validity_range, not a caller-supplied claim), and the payout
 // itself: Upheld returns the challenger's bond in full; Rejected forfeits
-// it, split 60/40 treasury/ops (same ratio as the forfeited-NIGHT-bond
-// split, for consistency, not because CLAUDE.md specifies it for this
-// mechanism — genuinely undecided beyond "some split," flagged here).
+// it, whole, to the one address the datum names. Nothing on this platform
+// divides money between two addresses; WHICH address a forfeited bond goes
+// to is a deployment choice, written into the datum, not a contract change.
 //
 // Submission has no validator logic at all — depositing ADA + a datum at
 // this script address needs no signature or check (Cardano doesn't gate

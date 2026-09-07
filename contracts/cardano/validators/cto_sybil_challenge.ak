@@ -46,7 +46,7 @@
 // nhop_challenge.ak — the reporter bond is ADA-denominated (reusing
 // NHOP_CHALLENGE_BOND, 25 ADA, for consistency — CLAUDE.md has no separate
 // named constant for this specific mechanism, flagged for confirmation
-// same as nhop_challenge.ak flagged its own undecided 60/40 split ratio),
+// same as nhop_challenge.ak flags its own bond amount),
 // and ADA isn't representable as a Midnight-native token.
 //
 // challenged_voter_key/challenged_proposal_id are raw Midnight values

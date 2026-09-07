@@ -82,9 +82,9 @@ import { extendedHexToBech32PrivateKey, loadValidator } from './tier-a-curve-sub
 import type { BondingCurveTierBDatumData } from './tier-a-schemas.js';
 import { BondingCurveTierBDatumSchema, capProofToPlutus, settlementDatum } from './tier-a-schemas.js';
 
-// Fix (2026-07-21): platform_claim_fee split — mirrors bonding_curve_tier_b.ak's
-// platform_fee_ops_bps/platform_fee_treasury_bps/min_platform_claim_fee_lovelace
-// exactly (ported from the linear curve's fix for parity).
+// The platform claim fee — mirrors bonding_curve_tier_b.ak's
+// `min_platform_claim_fee_lovelace`. It is a floor on what the claim pays the
+// platform, and it goes to one address: the fee is not divided.
 const MIN_PLATFORM_CLAIM_FEE_LOVELACE = 200_000n;
 
 // Pricing and the fee split are mirrors of bonding_curve_tier_b.ak's own

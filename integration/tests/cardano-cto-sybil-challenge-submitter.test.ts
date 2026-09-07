@@ -175,8 +175,7 @@ function baseSubmitParams(overrides: Partial<SubmitChallengeParams> = {}): Submi
     challengedProposalId: fakeBytes(4),
     bondAmountLovelace: 25_000_000n,
     evidenceHash: fakeBytes(5),
-    treasuryPubKeyHash: fakeBytes(6),
-    opsPubKeyHash: fakeBytes(7),
+    payoutPubKeyHash: fakeBytes(6),
     ...overrides,
   };
 }

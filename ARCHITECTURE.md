@@ -187,7 +187,7 @@ LP Escrow fans out from the Bonding Curve because graduation (100% sell-through)
 
 **Forfeited DarkVeil bonds go whole to the platform wallet.** An earlier version of this diagram split them 60/40 between a treasury and an ops wallet; that pair was retired for *revenue* on 2026-08-06. One address now receives the launch fee, the platform's 1.0% of trade volume, forfeited DarkVeil bonds and staking claim fees alike.
 
-**The treasury/ops pair is not gone from the platform, though — only from revenue.** Three validators still pay a *slashed challenge bond* to two separate addresses, 60/40: `nhop_challenge.ak`, `cto_sybil_challenge.ak` and `cto_governance.ak` each carry `treasury_bps = 60` / `ops_bps = 40` and a `treasury_pub_key_hash` / `ops_pub_key_hash` pair in their datum, with tests pinning the split. That is a different kind of money — a forfeited bond from someone who challenged and lost, not platform income — but it means both addresses must still be provisioned, and any claim that the platform has no split anywhere is wrong.
+**The treasury/ops pair is gone from the platform entirely.** A *slashed challenge bond* was the last thing dividing one — `nhop_challenge.ak`, `cto_sybil_challenge.ak` and `cto_governance.ak` each now carry a single `payout_pub_key_hash` and pay the whole bond to it. The ratio had borrowed its justification from a revenue split that no longer exists, so it was dividing a penalty by a rule nothing else follows, and it left two addresses to provision, hold keys for and disclose for money that arrives only when a challenge is rejected. **One address receives every kind of money on the platform.** Which address a forfeited bond goes to is still a deployment choice — a bond is arguably not platform revenue — but that is what the datum is written with, not a contract change.
 
 ---
 
@@ -548,8 +548,8 @@ Community takeover (CTO) governance, shared infrastructure across every launch t
 │ 24H CHALLENGE WINDOW:         │                   
 │ governor VoidPendingProposal  │                   
 │ voids fraud within the window │                   
-│ (bond slashed 60/40 treasury/ │                   
-│ ops); elapses clean →         │                   
+│ (bond slashed, whole, to the  │                   
+│ payout address); clean →      │                   
 │ ExecuteProposal (permission-  │                   
 │ less)                         │                   
 │                               │                   

@@ -344,9 +344,9 @@ pub type CtoGovernanceRedeemer {
   /// Fix: governor-only, within the challenge window — voids a
   /// pending anchor found to be fraudulent (same trust boundary already
   /// used throughout this codebase for off-chain-verified claims) and
-  /// slashes the relayer's bond, split 60/40 treasury/ops (same ratio as
-  /// every other forfeited bond in this codebase — nhop_challenge.ak,
-  /// cto_sybil_challenge.ak).
+  /// slashes the relayer's bond, paying it whole to the one address the
+  /// datum names — the same one-address rule every other forfeited bond in
+  /// this codebase follows (nhop_challenge.ak, cto_sybil_challenge.ak).
   VoidPendingProposal { current_timestamp: Int }
   /// Fix: the relayer reclaims their bond once their anchored
   /// proposal has been legitimately Executed or Expired (never voided) —

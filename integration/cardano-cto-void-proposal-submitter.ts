@@ -3,8 +3,8 @@
 // contracts/cardano/validators/cto_governance.ak's VoidPendingProposal
 // ============================================================================
 // Governor-only. Voids a pending anchor found to be fraudulent within the
-// 24h challenge window and slashes the relayer's bond, split 60/40
-// treasury/ops — same ratio as every other forfeited bond in this codebase
+// 24h challenge window and slashes the relayer's bond, whole, to the one
+// address the governance datum names in `payout_pub_key_hash`
 // (nhop_challenge.ak, cto_sybil_challenge.ak).
 //
 // Data encoding reuses cardano-cto-anchor-submitter.ts's exported schemas
@@ -12,10 +12,9 @@
 // for the on-chain datum shape across all four cto_governance submitters.
 //
 // What IS real here: Data encoding, UTXO lookup, transaction construction,
-// bps arithmetic (verified to match cto_governance.ak's own
-// treasury_bps=60/bps_denominator=100 floor-division exactly), and the
-// new-datum state-transition logic are all built against Lucid Evolution's
-// real, installed API.
+// the payout (the whole bond to the datum's `payout_pub_key_hash`, matching
+// cto_governance.ak's own rule), and the new-datum state-transition logic are
+// all built against Lucid Evolution's real, installed API.
 //
 // What is NOT tested: an actual end-to-end submission against a live
 // Cardano node. Same honest boundary as every other submitter here.
@@ -132,9 +131,8 @@ export class CardanoCtoVoidProposalSubmitter {
       throw new Error('pending_relayer_bond is not positive — nothing to slash.');
     }
 
-    // Exact same floor-division split as cto_governance.ak's own
-    // treasury_share/ops_share computation — must match precisely, since
-    // paid_to() requires each output's real lovelace to be >= its share.
+    // The whole bond, undivided — cto_governance.ak's `paid_to()` requires the
+    // payout output's real lovelace to be >= the bond.
     const bond = currentDatum.pending_relayer_bond;
 
     const voidedProposal: ProposalAnchorData = { ...proposal, execution_status: 'Expired' };

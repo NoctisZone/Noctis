@@ -338,10 +338,9 @@ export class NoctisMidnightClient {
       // — blocks the creator from registering, revealing a DarkVeil buy,
       // or (formerly) buying on the public curve.
       creatorPubKey: Uint8Array;
-      // Real unshielded addresses (not derived identities) the
-      // forfeited portion of a ratio-based bond refund is split 60/40 to.
-      /** One platform wallet: the treasury/ops split is gone here, so a
-       *  forfeited bond has a single destination. */
+      /** The real unshielded address (not a derived identity) the forfeited
+       *  portion of a ratio-based bond refund is paid to. ONE wallet: nothing
+       *  on this platform divides a payout between two addresses. */
       platformAddr: Uint8Array;
       /**
        * The three keys that may attest this contract's allowlist root, and how
@@ -479,9 +478,9 @@ export class NoctisMidnightClient {
       // deriveUserPublicKey) — blocks the creator from registering,
       // revealing a DarkVeil buy, or buying on the public curve.
       creatorPubKey: Uint8Array;
-      // Real unshielded addresses (not derived identities) forfeited
-      // DarkVeil bond NIGHT is split 60/40 to via claimRatioBondRefund.
-      /** One platform wallet. */
+      /** The real unshielded address (not a derived identity) forfeited
+       *  DarkVeil bond NIGHT is paid to via claimRatioBondRefund. ONE
+       *  wallet. */
       platformAddr: Uint8Array;
       // Design requirement: real unshielded payout addresses
       // withdrawFees/graduateLp pay out to — distinct from creatorPubKey

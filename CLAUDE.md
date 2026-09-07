@@ -133,11 +133,10 @@ STAKING_DURATION_MIN_DAYS = 1095 // Minimum staking pool runway (3 years) — cr
 STAKING_DURATION_MAX_DAYS = 1825 // Maximum staking pool runway (5 years)
 STAKING_BONDING_PERIOD_DAYS = 7 // A newly-staked position earns nothing until seasoned this long — anti-gaming, enforced off-chain via the governor's snapshot formula
 STAKING_CLAIM_FEE_USD = 1 // Flat USD fee to claim accrued rewards — ADA (Cardano) or NIGHT (Midnight) at oracle spot price
-// The whole claim fee goes to the single platform wallet. Every REVENUE
-// stream does: no launch fee, trade fee, forfeited DarkVeil bond or claim
-// fee is split (2026-08-06). Slashed CHALLENGE bonds are the exception and
-// are still split 60/40 to separate treasury/ops addresses — see the
-// Challenge Bond Slashing note under TEAM REVENUE SOURCES.
+// The whole claim fee goes to the single platform wallet. So does every
+// other stream, revenue or not: no launch fee, trade fee, forfeited DarkVeil
+// bond, claim fee or slashed challenge bond is split anywhere (2026-08-06,
+// challenge bonds followed 2026-09-07). ONE address, everywhere.
 LP_LOCK_DAYS = 365 // LP escrow lock duration
 LP_MIGRATION_COOLDOWN= 90 // Days between LP migrations
 CTO_MIN_DAYS_POSTGRD = 90 // Minimum days post-graduation before CTO vote (raised from 30, anti-whale-takeover fix, 2026-07-28 — see CTO GOVERNANCE section)
@@ -545,17 +544,16 @@ The creator's own token allocation CAN vote in a CTO ballot — it is not exclud
 | NIGHT Holdings | Market appreciation as ops buys NIGHT for DUST | Sellable under exceptional circumstances only |
 | Stablecoin Reserve | USDM accumulated out of the platform wallet's income | Protocol liquidity reserve, not a salary account. A holding policy now, not a separate wallet |
 
-> **Challenge bond slashing is the one real exception to "one wallet, no splits" (verified in code 2026-08-31).**
+> **There is no fee split anywhere on the platform (re-verified in code 2026-09-07).**
 > Revenue is unsplit — launch fee, the platform's 1.0%, forfeited DarkVeil bonds and staking claim
-> fees all land in the single platform wallet. But a *slashed challenge bond* is not revenue, and
-> three shipped validators still divide one 60/40 between two distinct addresses:
-> `nhop_challenge.ak`, `cto_sybil_challenge.ak` and `cto_governance.ak` each declare
-> `treasury_bps = 60` / `ops_bps = 40` and carry a `treasury_pub_key_hash` / `ops_pub_key_hash` pair
-> in their datum, with tests asserting the payout. **Both addresses must therefore still be
-> provisioned and disclosed** — retiring the pair for revenue did not retire it here, and the
-> deployment checklist needs both. Whether these should also collapse to one address is a real open
-> question, not a documentation slip; it needs a contract change and a re-audit, so it is not assumed
-> either way here.
+> fees all land in the single platform wallet. A *slashed challenge bond* was the last thing that
+> divided one, and it no longer does: `nhop_challenge.ak`, `cto_sybil_challenge.ak` and
+> `cto_governance.ak` each carry a single `payout_pub_key_hash` and pay the whole bond to it. The
+> 60/40 ratio had borrowed its justification from a revenue split that no longer exists, so it was
+> dividing a penalty by a rule nothing else on the platform follows. **The deployment checklist needs
+> ONE address, not two.** Which address a forfeited bond goes to is still a deployment choice — a
+> bond is arguably not platform revenue — but that is what the datum is written with, not a contract
+> change.
 
 ### NIGHT Sell Policy (Team-held NIGHT only)
 - Protocol treasury NIGHT: **never sold, ever**
@@ -638,8 +636,9 @@ Twitter/X, Discord, LinkedIn, Telegram, Instagram, TikTok — displayed on launc
 > code. For the launch fee specifically the platform only *quotes* an amount; the creator signs the
 > transaction, so a wrong price is visible and refusable rather than silently extracted.
 >
-> **Verified end to end on Preprod:** a real mint paid **51.388782 ADA**, split 60/40 treasury/ops,
-> which was exactly $10 at the prevailing rate.
+> **Verified end to end on Preprod:** a real mint paid **51.388782 ADA**, which was exactly $10 at
+> the prevailing rate. (That run predates the retirement of the treasury/ops pair and paid two
+> addresses; the price check is what it evidences, not the destination.)
 >
 > A real bug was fixed on the way: `BlockfrostClient.getAddressUtxos` requested page 1 in ascending
 > order, so on any long-lived address it returned the oldest hundred UTXOs and never current state.

@@ -29,7 +29,8 @@
 //   - resolveChallenge — GOVERNOR-signed (matches the validator's own
 //     list.has(self.extra_signatories, datum.governor_pub_key_hash) check),
 //     spends the challenge UTXO with ResolveChallenge, paying either the
-//     challenger in full (Upheld) or treasury+ops split 60/40 (Rejected).
+//     challenger in full (Upheld) or the datum's single payout address
+//     (Rejected).
 //     Modeled on cardano-cto-anchor-submitter.ts's relayer-private-key
 //     pattern.
 //
@@ -113,8 +114,13 @@ export interface SubmitChallengeParams {
   challengedProposalId: Uint8Array;
   bondAmountLovelace: bigint;
   evidenceHash: Uint8Array;
-  treasuryPubKeyHash: Uint8Array;
-  opsPubKeyHash: Uint8Array;
+  /**
+   * Where a forfeited bond goes — `payout_pub_key_hash` in
+   * cto_sybil_challenge.ak. ONE address: the 60/40 treasury/ops pair this
+   * once took was retired along with the revenue split it borrowed its ratio
+   * from.
+   */
+  payoutPubKeyHash: Uint8Array;
 }
 
 export interface ResolveChallengeParams {
@@ -296,7 +302,7 @@ export class CardanoCtoSybilChallengeSubmitter {
       bond_amount: params.bondAmountLovelace,
       submitted_at: submittedAt,
       evidence_hash: toHex(params.evidenceHash),
-      payout_pub_key_hash: toHex(params.treasuryPubKeyHash),
+      payout_pub_key_hash: toHex(params.payoutPubKeyHash),
     };
 
     const tx = await lucid
