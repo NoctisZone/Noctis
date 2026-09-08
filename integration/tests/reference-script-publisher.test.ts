@@ -35,6 +35,15 @@ function validator(title: string) {
 const TIER_B = validator('bonding_curve_tier_b.bonding_curve_tier_b.spend');
 const TIER_A = validator('bonding_curve.bonding_curve.spend');
 
+// The venue's parameterised validators, as they actually deploy. Their bytes
+// come from `aiken blueprint apply` and appear in no blueprint, which is the
+// whole reason the publisher takes bytes plus a hash rather than a title.
+const applied = JSON.parse(
+  readFileSync(join(import.meta.dirname, '..', '..', 'contracts', 'cardano-dex', 'deployment', 'applied.json'), 'utf8'),
+) as { validators: Array<{ title: string; compiledCode: string; hash: string }> };
+const APPLIED_POOL = applied.validators.find((v) => v.title === 'royalty_pool/pool.pool.spend');
+if (!APPLIED_POOL) throw new Error('the applied venue pool is missing');
+
 const ADDRESS = credentialToAddress('Preprod', { type: 'Key', hash: '33'.repeat(28) });
 
 function utxo(txHash: string, index: number, lovelace: string): MeshUTxO {
@@ -235,5 +244,84 @@ describe('the deposit, which is a deposit and not a cost', () => {
       BigInt(rawScriptSize(TIER_B.compiledCode) - rawScriptSize(TIER_A.compiledCode));
     expect(perByte).toBeGreaterThan(4_000n);
     expect(perByte).toBeLessThan(5_000n);
+  });
+});
+
+describe('publishing a script the caller brought its own hash for', () => {
+  it('publishes when the bytes hash to the hash supplied with them', async () => {
+    const result = await publishReferenceScript({
+      network: 'preprod',
+      compiledScriptCbor: APPLIED_POOL.compiledCode,
+      expectedScriptHash: APPLIED_POOL.hash,
+      label: APPLIED_POOL.title,
+      provider,
+      wallet: wallet(),
+      dryRun: true,
+    });
+    expect(result.pointer.scriptHash).toBe(APPLIED_POOL.hash);
+  });
+
+  // The failure this exists for is silent: a wrong script publishes perfectly
+  // well and simply locks the deposit at an address nothing will ever spend
+  // from. So the refusal has to happen before the transaction is built, not be
+  // discovered when the pointer is used.
+  it('refuses, and spends nothing, when they do not', async () => {
+    const w = wallet();
+    await expect(
+      publishReferenceScript({
+        network: 'preprod',
+        compiledScriptCbor: APPLIED_POOL.compiledCode,
+        // One nibble out — the shape of a hash transcribed rather than derived.
+        expectedScriptHash: `${APPLIED_POOL.hash.slice(0, -1)}0`,
+        label: APPLIED_POOL.title,
+        provider,
+        wallet: w,
+        dryRun: true,
+      }),
+    ).rejects.toThrow(/does not hash to the hash supplied with it/);
+    expect(w.signTx).not.toHaveBeenCalled();
+  });
+
+  // The unapplied form is the one sitting in the blueprint, so it is the wrong
+  // script most easily reached for — and it is a real, valid script, so nothing
+  // downstream would object to it.
+  it('refuses the unapplied form of the same validator', async () => {
+    const unapplied = validator('bonding_curve.bonding_curve.spend');
+    await expect(
+      publishReferenceScript({
+        network: 'preprod',
+        compiledScriptCbor: unapplied.compiledCode,
+        expectedScriptHash: APPLIED_POOL.hash,
+        label: APPLIED_POOL.title,
+        provider,
+        wallet: wallet(),
+        dryRun: true,
+      }),
+    ).rejects.toThrow(/does not hash to the hash supplied with it/);
+  });
+
+  it('is case-insensitive about the hash, the way every other hash here is', async () => {
+    const result = await publishReferenceScript({
+      network: 'preprod',
+      compiledScriptCbor: APPLIED_POOL.compiledCode,
+      expectedScriptHash: APPLIED_POOL.hash.toUpperCase(),
+      label: APPLIED_POOL.title,
+      provider,
+      wallet: wallet(),
+      dryRun: true,
+    });
+    expect(result.pointer.scriptHash).toBe(APPLIED_POOL.hash);
+  });
+
+  it('still publishes without one, which is how a blueprint script arrives', async () => {
+    const result = await publishReferenceScript({
+      network: 'preprod',
+      compiledScriptCbor: TIER_A.compiledCode,
+      label: TIER_A.title,
+      provider,
+      wallet: wallet(),
+      dryRun: true,
+    });
+    expect(result.pointer.scriptHash).toBe(scriptHashOf(TIER_A.compiledCode));
   });
 });

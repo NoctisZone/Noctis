@@ -100,6 +100,13 @@ export interface PublishReferenceScriptParams {
   compiledScriptCbor: string;
   /** Named in errors, so a failure says which validator it was about. */
   label: string;
+  /**
+   * The hash `compiledScriptCbor` must have, when the caller knows it
+   * independently — as it does for a parameterised validator, whose deployable
+   * bytes come from `aiken blueprint apply` rather than from a blueprint the
+   * publisher could look them up in. Checked before anything is spent.
+   */
+  expectedScriptHash?: string;
   provider: CurveSpendProvider;
   wallet: CurveSpendWallet;
   /** Build and measure without submitting. */
@@ -138,6 +145,23 @@ export async function publishReferenceScript(
 
   const wrapped = applyCborEncoding(compiledScriptCbor);
   const scriptHash = scriptHashOf(compiledScriptCbor);
+
+  // The bytes are the script; the hash is the address every future pointer,
+  // datum and spend is written against. When the caller arrived holding both —
+  // which is the case for a parameterised validator, where the deployable bytes
+  // are produced by applying a parameter and cannot be looked up in any
+  // blueprint — checking them against each other costs nothing and is the last
+  // moment either can be corrected. Publishing the wrong bytes succeeds: the
+  // deposit simply lands at whichever address they really produce, and no
+  // republish reaches it.
+  if (params.expectedScriptHash && params.expectedScriptHash.toLowerCase() !== scriptHash.toLowerCase()) {
+    throw new Error(
+      `Refusing to publish ${label}: the script does not hash to the hash supplied with it.\n` +
+        `  expected: ${params.expectedScriptHash.toLowerCase()}\n` +
+        `  actual:   ${scriptHash.toLowerCase()}\n` +
+        'Re-derive both from the same `aiken blueprint apply` output rather than reconciling them by hand.',
+    );
+  }
 
   const [changeAddress, utxos] = await Promise.all([params.wallet.getChangeAddress(), params.wallet.getUtxos()]);
 

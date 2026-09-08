@@ -31,7 +31,7 @@
 // identical everywhere.
 // ============================================================================
 
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Network as LucidNetwork } from '@lucid-evolution/lucid';
 import { assertBlueprintMatchesBuild } from '../blueprint-fingerprint.js';
@@ -200,6 +200,43 @@ export function loadPlutusBlueprint(callerDirname: string): PlutusBlueprint {
   const blueprint: PlutusBlueprint = JSON.parse(readFileSync(blueprintPath, 'utf8'));
   assertBlueprintMatchesBuild(blueprint, blueprintPath);
   return blueprint;
+}
+
+/**
+ * Every compiled validator the platform builds, across every package, plus the
+ * parameterised ones as they are actually deployed.
+ *
+ * The launch package and the venue are separate Aiken projects with separate
+ * blueprints, and a wallet that has published reference scripts for both holds
+ * scripts from both. Anything that asks "is this script one of ours" has to ask
+ * it of the whole set, not of one package — see reference-script-reclaimer.ts
+ * for what a partial answer costs there.
+ *
+ * `deployment/applied.json` carries the third case: a validator that takes a
+ * parameter has no deployable bytes until the parameter is applied, so its real
+ * script appears in no blueprint. That file records the applied bytes, and the
+ * hash is derived here from those bytes like every other.
+ *
+ * Only the launch blueprint is fingerprint-checked. It is the one the bundles
+ * are built against and the one whose staleness silently misbuilds a
+ * transaction; the others are read to widen a "leave this alone" set, where a
+ * stale copy makes the tool more cautious rather than less. A missing file is
+ * not an error for the same reason — a deployment that has not been derived yet
+ * is a smaller known set, not a wrong one.
+ */
+export function loadDeployedValidators(callerDirname: string): PlutusBlueprint['validators'] {
+  const root = join(callerDirname, '..', '..', '..', 'contracts');
+  const validators = [...loadPlutusBlueprint(callerDirname).validators];
+  for (const relative of [
+    ['cardano-dex', 'plutus.json'],
+    ['cardano-dex', 'deployment', 'applied.json'],
+  ]) {
+    const path = join(root, ...relative);
+    if (!existsSync(path)) continue;
+    const extra: PlutusBlueprint = JSON.parse(readFileSync(path, 'utf8'));
+    validators.push(...extra.validators);
+  }
+  return validators;
 }
 
 /** Finds one compiled validator's CBOR by its real plutus.json title, matching every CLI's existing error-message text exactly. */

@@ -5,24 +5,36 @@
 // the deposit behind it — 56 ada for the linear curve curve, 73 for Cardano Launch. This
 // spends the stranded ones back.
 //
-//   list      what the wallet holds, marked current or superseded
-//   reclaim   spend the superseded ones back to the wallet
+//   list      what the wallet holds, marked current or unrecognised
+//   reclaim   spend the named ones back to the wallet
 //
-// **A script matching any validator the current blueprint compiles to is
-// refused, whatever is asked for.** Spending a reference script destroys it,
-// and destroying a live one breaks every launch pointing at it, silently,
-// with the transaction succeeding. The live set is derived from the blueprint
-// rather than taken from the caller.
+// **A script matching any validator a current build compiles to is refused,
+// whatever is asked for.** Spending a reference script destroys it, and
+// destroying a live one breaks every launch pointing at it, silently, with the
+// transaction succeeding. The live set is derived from the compiled bytes of
+// every package the platform builds, never taken from the caller.
+//
+// **And a script nobody named is left alone.** The wallet holds whatever has
+// been published from it — now more than one package, and for a parameterised
+// validator a script that appears in no blueprint at all, because its bytes
+// come from applying a parameter rather than from compiling. Read the listing,
+// then name the hashes to reclaim in `approveScriptHashes`. Anything refused
+// is reported with the reason rather than dropped.
 //
 // Input: single JSON object on stdin. Output: single JSON object on stdout.
 // ============================================================================
 
 import { Blockfrost, Lucid } from '@lucid-evolution/lucid';
-import { findReferenceScripts, reclaimable, reclaimableLovelace } from '../reference-script-reclaimer.js';
+import {
+  findReferenceScripts,
+  reclaimable,
+  reclaimableLovelace,
+  refusedApprovals,
+} from '../reference-script-reclaimer.js';
 import {
   CARDANO_NETWORK_MAP,
   jsonSafe,
-  loadPlutusBlueprint,
+  loadDeployedValidators,
   parseJsonStdin,
   readStdin,
   requireField,
@@ -37,6 +49,11 @@ interface Input {
   blockfrostUrl: string;
   /** The wallet that published them, and the only one that can spend them. */
   publisherMnemonic: string;
+  /**
+   * The script hashes to destroy, read off a `list` run. Nothing is spent
+   * without this; a live hash named here is still refused.
+   */
+  approveScriptHashes?: string[];
 }
 
 async function main() {
@@ -62,9 +79,10 @@ async function main() {
     },
   }));
 
-  const blueprint = loadPlutusBlueprint(__dirname);
-  const found = findReferenceScripts(asMesh, blueprint.validators);
-  const stale = reclaimable(found);
+  const approved = input.approveScriptHashes ?? [];
+  const found = findReferenceScripts(asMesh, loadDeployedValidators(__dirname));
+  const stale = reclaimable(found, approved);
+  const refused = refusedApprovals(found, approved);
 
   const summary = {
     address,
@@ -72,10 +90,11 @@ async function main() {
       utxo: `${f.txHash}#${f.outputIndex}`,
       lovelace: f.lovelace,
       scriptHash: f.scriptHash,
-      status: f.isCurrent ? `CURRENT (${f.module})` : 'superseded',
+      status: f.isCurrent ? `CURRENT (${f.module})` : 'unrecognised — spent only if named',
     })),
-    reclaimableLovelace: reclaimableLovelace(found),
+    reclaimableLovelace: reclaimableLovelace(found, approved),
     reclaimableCount: stale.length,
+    ...(refused.length ? { refused } : {}),
   };
 
   if (action === 'list') {
@@ -84,7 +103,10 @@ async function main() {
   }
 
   if (stale.length === 0) {
-    process.stdout.write(JSON.stringify(jsonSafe({ ...summary, message: 'Nothing to reclaim.' })));
+    const message = approved.length
+      ? 'Nothing to reclaim — see `refused` for why each named hash was not spent.'
+      : 'Nothing to reclaim. Name the hashes to destroy in approveScriptHashes; a script is never spent for merely being unrecognised.';
+    process.stdout.write(JSON.stringify(jsonSafe({ ...summary, message })));
     return;
   }
 

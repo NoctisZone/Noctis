@@ -179,10 +179,12 @@ values set at creation, not constants of the validator.
 
 ## Not here yet
 
-The batcher (Splash's executor is unlicensed and is not used), and the launch
-package's side of the graduation transaction (the curve seeding the pool output
-instead of raw reserves), which rides the launch package's next validator
-pass. The build plan tracks these.
+The batcher. Splash's executor is unlicensed and is not used, so this is
+written rather than adopted; the build plan tracks it.
+
+The launch package's side of graduation is built: its curve pays a pool output
+carrying the pool thread NFT, the whole net-of-fee raise and the full LP token
+reserve, and nothing else, which is the shape the factory mints against.
 
 ## Build and test
 
