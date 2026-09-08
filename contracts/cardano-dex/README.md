@@ -115,6 +115,33 @@ pool guarded by this script without modification.
   fill. A request assembled with anything else is refundable rather than
   fillable, which puts the discipline where the order is built: our own front
   end and batcher.
+- **A pool names four assets, and they are four different assets.** Reserves,
+  liquidity and the pool's own NFT are each read out of the pool's value by
+  name, so each balance answers for exactly one of them. The factory writes
+  those names from the launch rather than taking them on trust: the second
+  asset is the launch's token, being neither ADA nor the pool's own LQ or NFT,
+  which with the value capped at four assets leaves it nothing else to be.
+- **One continuing output answers for one pool.** A pool's NFT exists in a
+  single unit, exactly one input of any transaction may carry it, and the
+  successor is found by it — so a pool's own arm accounts for the pool it is
+  spending and no other, and the two validators it delegates to each keep the
+  same count.
+- **What the pool delegates, it delegates to a script.** Three of the five
+  actions are authorised by a withdrawal at a credential the datum names, which
+  is evidence only because a withdrawal at a script credential runs that
+  script. Both credentials the datum carries are script credentials, and they
+  are different scripts, so each action is authorised by the one the pool names
+  for it. The factory takes them as script hashes, so it can write no other
+  kind. A royalty claim likewise requires the pool input it names to carry the
+  NFT that input's own datum names, which is what ties the claim to a pool
+  without the two scripts having to name each other.
+- **The fee schedule is a schedule.** The three fees are numerators over a
+  fixed denominator, and each is held to being one in both directions: enough
+  left after both slices for the pool to price against, and no numerator above
+  the denominator. That is what keeps a fee slice smaller than the trade it is
+  taken from, and so keeps the reserves the pool reports equal to the reserves
+  it holds. The factory fixes the schedule at creation and is where it is
+  checked, since no later action can raise or lower it.
 - **Deposit and redeem requests name the pool's own assets.** A request whose
   assets are not the pool's is refused outright, and a deposit's collateral is
   checked back to the placer on every fill, not only when ADA is the surplus
