@@ -188,6 +188,11 @@ export async function readVenuePools(
  * same one, so a batch of orders placed together costs one lookup rather than
  * several. Pass `positions` to supply what is already known and skip the
  * lookup entirely.
+ *
+ * `includeUnknownPools` returns those set-aside requests as orders instead. A
+ * batcher never wants that — it cannot act on one — but a tracker showing a
+ * placer their own orders always does, because an order naming a pool that
+ * does not exist is precisely the thing its placer most needs to be told.
  */
 export async function readVenueSwapOrders(
   provider: VenueChainProvider,
@@ -197,6 +202,8 @@ export async function readVenueSwapOrders(
     knownPools: readonly string[];
     /** Placements already known, keyed by transaction hash. */
     positions?: Map<string, VenueOrderPosition>;
+    /** Return orders naming an unfound pool rather than setting them aside. */
+    includeUnknownPools?: boolean;
   },
 ): Promise<VenueOrdersRead> {
   const utxos = await provider.getAddressUtxosAll(args.orderAddress);
@@ -219,7 +226,7 @@ export async function readVenueSwapOrders(
       continue;
     }
     const nft = venueUnitOf(datum.pool_nft);
-    if (!known.has(nft)) {
+    if (!known.has(nft) && !args.includeUnknownPools) {
       skipped.push({ ...at, reason: `names pool ${nft}, which is not one of the pools this reader found` });
       continue;
     }

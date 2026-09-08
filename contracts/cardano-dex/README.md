@@ -411,6 +411,53 @@ Everything is exact integer arithmetic and rates are rationals, in the shape
 the order datum states its floor in — a rate that has been through a float is a
 rate that no longer agrees with the validator.
 
+## Getting out of an order
+
+`swap_order.ak`'s cancel arm is one line — the placer's own signature, and
+nothing else. No deadline, no batcher, no counterparty, no conditions. An order
+is never something its placer has to wait to get out of.
+
+**A venue order has no expiry, and that is the design rather than a gap.** The
+launch curve's order is the other way round: it carries a deadline and a
+permissionless expiry sweep beside the owner's own cancel. The difference is
+the instrument. A curve order is a queued instruction against a curve that will
+eventually graduate and close, so an unfilled one needs returning and a
+deadline anyone may act on is right. A venue order is a resting limit order,
+and resting indefinitely is what a limit order is for — giving it an expiry
+would make it a worse instrument, and letting a stranger return it would hand
+them the choice of when somebody else's order stops existing.
+
+So expiry here is off-chain and advisory: a tracker can say an order has been
+sitting a long while and offer the placer the button. Nobody else can act on
+it, ever.
+
+**What a placer actually needs is not a countdown but an answer**, because an
+order that will never fill looks exactly like one patiently waiting. Four
+states, and two of them are permanent:
+
+- **fillable** — an executor can fill it now, and this says how much.
+- **waiting** — the pool cannot reach its floor yet, and this says how far
+  short it is in basis points, so the placer can tell a normal day's move from
+  a different market.
+- **unfundable** — its execution fee is below what one fill costs. The fee is
+  fixed when the order is written, so no part of it can be filled at any price,
+  now or later.
+- **orphaned** — it names a pool that does not exist. One unit of a pool NFT is
+  ever minted, so nothing can arrive later to change that.
+
+Nothing is ever stranded beyond recovery: every one of those is cancellable by
+the placer, immediately, for as long as it exists.
+
+Two details about the cancel transaction itself. **Cancels batch and fills
+cannot** — the two-input rule lives inside the fill arm, so one transaction can
+take back as many of a placer's orders as fit, for one fee and one signature.
+And **a cancel offers the wallet's own UTXOs to coin selection where a fill must
+refuse them**, which matters more than it sounds: the orders most in need of
+cancelling are underfunded ones, which carry barely more than the minimum an
+output must hold, so taking a network fee out of one leaves too little to stand
+as an output. Without the wallet chipping in, exactly the orders that most need
+cancelling would be the ones that could not be.
+
 ## Not here yet
 
 Running the batcher in production: where it is hosted, how its key is held, and
