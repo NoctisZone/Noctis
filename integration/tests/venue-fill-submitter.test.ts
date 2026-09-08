@@ -32,7 +32,14 @@ import {
   type VenueFillPlan,
   venueInputPositions,
 } from '../venue-fill-submitter.js';
-import { VENUE_POOL_ACTION } from '../venue-swap.js';
+import { type VenuePoolConfigData, VenuePoolConfigSchema } from '../venue-pool.js';
+import {
+  planVenueSwapFill,
+  VENUE_FILL_FLOOR_LOVELACE,
+  VENUE_ORDER_EXECUTION_FEE_LOVELACE,
+  VENUE_POOL_ACTION,
+  type VenueSwapConfigData,
+} from '../venue-swap.js';
 
 interface Blueprint {
   validators: Array<{ title: string; compiledCode: string; hash?: string }>;
@@ -375,5 +382,114 @@ describe('what a fill costs, and who pays it', () => {
     );
     expect(redeemersOf(txHex).get(0)).toEqual([1n, 0n, 1n]);
     expect(inputsOf(txHex)[1]).toBe(`${POOL_SORTS_SECOND}#0`);
+  });
+});
+
+describe('an order funded at the recommended fee', () => {
+  // The dearest fill that can be constructed: a token-to-token pool (no ADA
+  // side, so the placer's lovelace is its own balance), a placer with a stake
+  // key (a bigger reward output), an executor the order names (an extra
+  // signature and a required-signer entry) and an executor paying itself at a
+  // base address (a bigger change output). Every dimension at once.
+  const USDM_UNIT = `${'be'.repeat(28)}5553444d`;
+  const EXEC_BASE = credentialToAddress(
+    'Preprod',
+    { type: 'Key', hash: EXECUTOR_KEY },
+    { type: 'Key', hash: '99'.repeat(28) },
+  );
+  const PLACER_STAKE = '0e'.repeat(28);
+
+  const dearPoolDatum: VenuePoolConfigData = {
+    pool_nft: { policy: 'aa'.repeat(28), name: '6e6674' },
+    pool_x: { policy: 'be'.repeat(28), name: '5553444d' },
+    pool_y: { policy: 'bb'.repeat(28), name: '746f6b656e' },
+    pool_lq: { policy: 'cc'.repeat(28), name: '6c71' },
+    fee_num: 99_900n,
+    treasury_fee: 100n,
+    royalty_fee: 1_000n,
+    treasury_x: 0n,
+    treasury_y: 0n,
+    royalty_x: 0n,
+    royalty_y: 0n,
+    dao_policy: [
+      { StakingHash: [{ ScriptCredential: ['d1'.repeat(28)] }] },
+      { StakingHash: [{ ScriptCredential: ['d2'.repeat(28)] }] },
+    ],
+    treasury_address: 'ee'.repeat(57),
+    royalty_pub_key: 'ff'.repeat(32),
+    nonce: 0n,
+  };
+  const dearPoolAssets = {
+    lovelace: 3_000_000n,
+    [USDM_UNIT]: 20_000_000_000n,
+    [TOKEN]: 200_000_000n,
+    [LQ]: MAX_LQ - 1_000_000_000n,
+    [NFT]: 1n,
+  };
+  const dearSwap: VenueSwapConfigData = {
+    pool_nft: { policy: 'aa'.repeat(28), name: '6e6674' },
+    input: { policy: 'be'.repeat(28), name: '5553444d' },
+    output: { policy: 'bb'.repeat(28), name: '746f6b656e' },
+    tradable_input: 100_000_000n,
+    base_price: { num: 0n, denom: 1n },
+    min_marginal_output: 0n,
+    ex_fee: VENUE_ORDER_EXECUTION_FEE_LOVELACE,
+    reward_pkh: '0d'.repeat(28),
+    stake_pkh: PLACER_STAKE,
+    permitted_executors: [EXECUTOR_KEY],
+  };
+
+  function dearest(exFee: bigint) {
+    const orderAssets = { lovelace: 1_500_000n + exFee, [USDM_UNIT]: 100_000_000n };
+    const swap = { ...dearSwap, ex_fee: exFee };
+    const fill = planVenueSwapFill({
+      pool: {
+        txHash: POOL_SORTS_FIRST,
+        outputIndex: 0,
+        address: POOL_ADDRESS,
+        assets: dearPoolAssets,
+        datum: dearPoolDatum,
+      },
+      order: { txHash: '02'.repeat(32), outputIndex: 0, address: ORDER_ADDRESS, assets: orderAssets, datum: swap },
+      network: 'Preprod',
+      minOutputLovelace: 1_000_000n,
+    });
+    const wallet = fakeWallet();
+    wallet.getChangeAddress = vi.fn().mockResolvedValue(EXEC_BASE);
+    return filler().build(
+      {
+        pool: { txHash: POOL_SORTS_FIRST, outputIndex: 0, address: POOL_ADDRESS, assets: dearPoolAssets },
+        order: { txHash: '02'.repeat(32), outputIndex: 0, address: ORDER_ADDRESS, assets: orderAssets },
+        poolOutput: {
+          address: POOL_ADDRESS,
+          assets: fill.poolAssets,
+          datumCbor: Data.to(fill.poolDatum, VenuePoolConfigSchema),
+        },
+        successorOutput: { address: fill.successor.address, assets: fill.successor.assets },
+        requiredSignerHashes: [EXECUTOR_KEY],
+      },
+      wallet,
+    );
+  }
+
+  it('fills the dearest shape there is, with room to spare', async () => {
+    const built = await dearest(VENUE_ORDER_EXECUTION_FEE_LOVELACE);
+    expect(built.length / 2).toBeLessThan(1_300);
+    expect(deserializeTx(built).body().outputs()).toHaveLength(3);
+  });
+
+  it('is the floor the constant records, to the lovelace', async () => {
+    // 1,409,140 is where this builder stops refusing the shape. One lovelace
+    // under it there is nowhere for the executor's payment to go: a fill has
+    // two inputs, neither is the executor's, and an output has a minimum.
+    //
+    // An operator pinning the budgets instead of asking an evaluator for them
+    // measured 1,409,932 — 792 more, because a declared budget prices slightly
+    // differently from a measured one. `VENUE_FILL_FLOOR_LOVELACE` rounds up
+    // past both, so a validator that grows fails here rather than in
+    // production.
+    await expect(dearest(1_409_140n)).resolves.toBeTypeOf('string');
+    await expect(dearest(1_409_139n)).rejects.toThrow();
+    expect(VENUE_FILL_FLOOR_LOVELACE).toBeGreaterThan(1_409_932n);
   });
 });

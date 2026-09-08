@@ -269,11 +269,26 @@ cpu steps — under a tenth of what one mainnet transaction is allowed. Both
 validators are referenced rather than carried: the two together are 7.3 KB and
 would fit, but carrying them costs a further 0.21 ADA on every fill forever.
 
-An order therefore has to set aside about **1.4 ADA**: the fill's own fee, plus
-the smallest output the protocol's per-byte minimum admits, because an
-executor's payment has nowhere else to go. For scale, mainnet's block budget
-runs out at roughly **40 to 45 fills** — the cpu-step limit binds first — which
-is a ceiling the chain sets rather than one the venue does.
+**An order sets aside 1.5 ADA** for its own execution: the fill's fee, plus the
+smallest output the protocol's per-byte minimum admits, because an executor's
+payment has nowhere else to go. The floor under that was bisected against the
+real builder across every dimension that makes a fill bigger — a
+token-to-token pool, a placer with a stake key, an executor the order names,
+and an executor paying itself at a base address, all at once — and came to
+1,409,932 lovelace. 1.5 ADA clears it by about 6%, which is the margin that
+absorbs a validator growing or a protocol parameter moving without every order
+in flight becoming unfillable.
+
+**1.5 ADA funds one fill.** The fee is shared out in proportion to what is
+filled, so a fill of part of an order draws only that part of the fee while
+still paying for a whole transaction. At 1.5 ADA the least of an order anyone
+can fill is about **94%** of it: an order fills whole or waits. A front end
+should set the placer's own `min_marginal_output` to match, so an order that
+cannot be filled says so rather than sitting there.
+
+For scale, mainnet's block budget runs out at roughly **40 to 45 fills** — the
+cpu-step limit binds first — which is a ceiling the chain sets rather than one
+the venue does.
 
 ## Not here yet
 

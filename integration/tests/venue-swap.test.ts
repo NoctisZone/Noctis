@@ -31,11 +31,14 @@ import { VENUE_FEE_DEN, type VenuePoolConfigData } from '../venue-pool.js';
 import {
   planVenueSwapFill,
   readVenuePoolState,
+  VENUE_FILL_FLOOR_LOVELACE,
+  VENUE_ORDER_EXECUTION_FEE_LOVELACE,
   VENUE_POOL_ACTION,
   type VenueSwapConfigData,
   type VenueSwapOrderUtxo,
   venueFeeSlice,
   venueFillSequence,
+  venueMinFundableTrade,
   venueRewardAddress,
   venueSwapQuote,
   venueUnitOf,
@@ -526,5 +529,74 @@ describe('naming an asset the way a value keys it', () => {
   it('spells ADA as lovelace and a token as policy then name', () => {
     expect(venueUnitOf({ policy: '', name: '' })).toBe('lovelace');
     expect(venueUnitOf({ policy: TOKEN_POLICY, name: TOKEN_NAME })).toBe(TOKEN);
+  });
+});
+
+describe('what one fill costs, and what that leaves fillable', () => {
+  // 1.5 ADA is what an order sets aside. It clears the dearest fill measured
+  // against the real builder — a token-to-token pool, a gated executor and a
+  // placer with a stake key, all at once — by about 6%.
+  it('leaves headroom over the dearest fill measured', () => {
+    expect(VENUE_ORDER_EXECUTION_FEE_LOVELACE).toBeGreaterThan(VENUE_FILL_FLOOR_LOVELACE);
+    expect(VENUE_ORDER_EXECUTION_FEE_LOVELACE - VENUE_FILL_FLOOR_LOVELACE).toBe(90_000n);
+    expect(VENUE_FILL_FLOOR_LOVELACE).toBeGreaterThanOrEqual(1_409_932n);
+  });
+
+  it('funds one whole fill and about 94% of an order, not less', () => {
+    const smallest = venueMinFundableTrade({
+      tradableInput: 100_000_000n,
+      exFee: VENUE_ORDER_EXECUTION_FEE_LOVELACE,
+    });
+    expect(smallest).toBe(94_000_000n);
+    // And that really is the boundary the order enforces: at `smallest` the
+    // pro-rata share covers a fill, one unit under it does not.
+    const share = (n: bigint) => (n * VENUE_ORDER_EXECUTION_FEE_LOVELACE) / 100_000_000n;
+    expect(share(smallest)).toBeGreaterThanOrEqual(VENUE_FILL_FLOOR_LOVELACE);
+    expect(share(smallest - 1n)).toBeLessThan(VENUE_FILL_FLOOR_LOVELACE);
+  });
+
+  it('says the whole order when its fee cannot fund even one fill', () => {
+    expect(venueMinFundableTrade({ tradableInput: 100n, exFee: 500_000n })).toBe(100n);
+    expect(venueMinFundableTrade({ tradableInput: 100n, exFee: 0n })).toBe(100n);
+  });
+
+  it('refuses a fill the fee cannot pay for, and names what would work', () => {
+    expect(() =>
+      fill({
+        pool: pool(),
+        order: buyOrder(
+          { ex_fee: VENUE_ORDER_EXECUTION_FEE_LOVELACE, base_price: { num: 0n, denom: 1n } },
+          110_000_000n,
+        ),
+        tradeAmount: 400_000n,
+        network: 'Preprod',
+        minOutputLovelace: MIN_OUTPUT,
+        fillCostLovelace: VENUE_FILL_FLOOR_LOVELACE,
+      }),
+    ).toThrow(/The least of this order anyone can fill is 940000/);
+  });
+
+  it('refuses outright when no part of the order can be filled', () => {
+    expect(() =>
+      fill({
+        pool: pool(),
+        order: buyOrder({ ex_fee: 500_000n, base_price: { num: 0n, denom: 1n } }, 110_000_000n),
+        network: 'Preprod',
+        minOutputLovelace: MIN_OUTPUT,
+        fillCostLovelace: VENUE_FILL_FLOOR_LOVELACE,
+      }),
+    ).toThrow(/no part of it can be filled at all/);
+  });
+
+  it('builds the same fill once it is funded', () => {
+    const plan = fill({
+      pool: pool(),
+      order: buyOrder({ ex_fee: VENUE_ORDER_EXECUTION_FEE_LOVELACE, base_price: { num: 0n, denom: 1n } }, 110_000_000n),
+      network: 'Preprod',
+      minOutputLovelace: MIN_OUTPUT,
+      fillCostLovelace: VENUE_FILL_FLOOR_LOVELACE,
+    });
+    expect(plan.terminated).toBe(true);
+    expect(plan.permittedFee).toBe(VENUE_ORDER_EXECUTION_FEE_LOVELACE);
   });
 });

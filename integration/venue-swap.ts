@@ -73,6 +73,82 @@ export const VENUE_POOL_ACTION = {
   RedirectRoyalty: 5,
 } as const;
 
+/**
+ * The dearest a single fill has been measured to need, in lovelace.
+ *
+ * Not the network fee alone — it is the whole floor under an order: the fee,
+ * plus the smallest change output the protocol's per-byte minimum admits,
+ * because a fill has two inputs and neither is the executor's, so its payment
+ * has nowhere else to go.
+ *
+ * Bisected against the real builder, across every dimension that makes a fill
+ * bigger, in lovelace:
+ *
+ *     sell, token in                              1,401,528
+ *     buy, ADA in                                 1,403,904
+ *     buy, placer named a stake key               1,405,136
+ *     full fill, gated executor + stake key       1,406,676
+ *     token-to-token, gated + stake key           1,409,932   ← dearest
+ *
+ * Rounded up from the dearest. Re-measure when either validator changes, or
+ * when the protocol's fee or per-byte parameters move.
+ */
+export const VENUE_FILL_FLOOR_LOVELACE = 1_410_000n;
+
+/**
+ * What an order should set aside for its own execution: **1.5 ADA**.
+ *
+ * A ceiling, not a price — a settled build charges what the transaction
+ * actually costs and returns the rest to the placer, so this is the most a
+ * fill may take rather than what it will.
+ *
+ * It clears the dearest measured fill by about 90,000 lovelace, roughly 6%.
+ * That margin is what absorbs a validator growing slightly, or a protocol
+ * parameter moving, without every order in flight becoming unfillable.
+ *
+ * **It funds ONE fill.** The order's fee is drawn pro rata, so a fill of part
+ * of an order may take only that part of the fee while costing a whole
+ * transaction — see `venueMinFundableTrade`, which is what a front end should
+ * use to set the placer's own `min_marginal_output` rather than leaving an
+ * order quietly unfillable.
+ *
+ * For scale: batched Cardano venues charge around 2 ADA an order.
+ */
+export const VENUE_ORDER_EXECUTION_FEE_LOVELACE = 1_500_000n;
+
+/**
+ * The smallest part of an order an executor can afford to fill.
+ *
+ * The order permits `fee_removed * tradable_input <= traded * ex_fee`, so a
+ * fill of a fraction of the order may draw at most that fraction of the fee —
+ * while paying for a whole transaction either way. Below this, no executor can
+ * build the fill at all, whatever it would like to do.
+ *
+ * At the recommended 1.5 ADA against the dearest measured fill, that is about
+ * 94% of the order: at 1.5 ADA an order fills whole or waits, which is a
+ * choice worth making visible in the order itself.
+ *
+ * Returns `tradable_input` when even a full fill cannot be funded — there is
+ * no part of such an order that can be filled, and the caller should say so
+ * rather than offer a number that will not work either.
+ */
+export function venueMinFundableTrade(args: {
+  tradableInput: bigint;
+  exFee: bigint;
+  /** What one fill costs; `VENUE_FILL_FLOOR_LOVELACE` unless measured again. */
+  fillCostLovelace?: bigint;
+}): bigint {
+  const cost = args.fillCostLovelace ?? VENUE_FILL_FLOOR_LOVELACE;
+  if (args.exFee <= 0n || args.tradableInput <= 0n) return args.tradableInput;
+  if (args.exFee < cost) return args.tradableInput;
+  // The pro-rata share is a floor, and the cost is a whole number, so
+  // `floor(traded * exFee / tradable) >= cost` is exactly
+  // `traded >= ceil(cost * tradable / exFee)`.
+  const numerator = cost * args.tradableInput;
+  const smallest = numerator / args.exFee + (numerator % args.exFee === 0n ? 0n : 1n);
+  return smallest > args.tradableInput ? args.tradableInput : smallest;
+}
+
 /** `splash/rational/Rational`: a numerator and a denominator, one constructor. */
 export const VenueRationalShape = Data.Object({
   num: Data.Integer(),
@@ -356,6 +432,16 @@ export function planVenueSwapFill(args: {
   executorFee?: bigint;
   /** Least lovelace an output may hold, from the protocol parameters. */
   minOutputLovelace: bigint;
+  /**
+   * What one fill costs, when the caller wants this refused rather than built.
+   *
+   * A fill whose pro-rata share of the fee falls short cannot be built by
+   * anybody: the executor has no input of its own, so the transaction simply
+   * will not balance, and the builder's complaint names nothing. Passing the
+   * cost here turns that into a refusal that says which fill, how short, and
+   * how much of the order would have to be filled instead.
+   */
+  fillCostLovelace?: bigint;
 }): VenueFill {
   const { pool, order, network, minOutputLovelace } = args;
   const cfg = pool.datum;
@@ -421,6 +507,25 @@ export function planVenueSwapFill(args: {
       `This fill takes ${exFeeTaken} lovelace of execution fee where the order permits at most ` +
         `${permittedFee}. The order refuses a fee above what it authorised, and a negative one is the ` +
         'executor paying the placer.',
+    );
+  }
+
+  if (args.fillCostLovelace !== undefined && permittedFee < args.fillCostLovelace) {
+    const smallest = venueMinFundableTrade({
+      tradableInput: swap.tradable_input,
+      exFee: swap.ex_fee,
+      fillCostLovelace: args.fillCostLovelace,
+    });
+    const enough = smallest < swap.tradable_input || swap.ex_fee >= args.fillCostLovelace;
+    throw new Error(
+      `Filling ${traded} of this order draws ${permittedFee} lovelace of execution fee and a fill costs ` +
+        `${args.fillCostLovelace}. The order's fee is shared out in proportion to what is filled, so a ` +
+        `smaller fill funds less of it while still paying for a whole transaction. ${
+          enough
+            ? `The least of this order anyone can fill is ${smallest}.`
+            : `Its whole fee of ${swap.ex_fee} is below what one fill costs, so no part of it can be filled ` +
+              'at all — it can only be cancelled.'
+        }`,
     );
   }
 

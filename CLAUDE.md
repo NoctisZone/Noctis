@@ -183,7 +183,15 @@ The fee split percentage is the same across all tiers. The **denomination differ
 
 **Post-graduation (decided 2026-08-05, venue not built yet):** creator **1.0%**,
 platform **0.1%**, and **0.1%** compounded straight back into the pool, plus the batcher
-fee. Total **1.2% + batcher**. The creator's share DOUBLES at graduation while the
+fee. Total **1.2% + batcher**. **The venue's batcher fee is 1.5 ADA an order**
+(decided 2026-09-08, sized against a measured fill — see `contracts/cardano-dex/README.md`).
+It is a ceiling the order names, not a price: a fill charges what the transaction
+actually costs and returns the rest to the placer. The floor under it is structural
+rather than chosen — a fill has exactly two inputs and the executor supplies neither,
+so its payment has to be an output, and an output has a protocol minimum. The same
+1.5 ADA funds ONE fill; because the fee is drawn in proportion to what is filled, the
+least of an order anyone can fill is about 94% of it.
+The creator's share DOUBLES at graduation while the
 platform's drops tenfold. Trading continues on Noctis rather than being handed to a DEX,
 which is what makes the 0.1% pool share possible — snek.fun burns its LP, so their
 equivalent slice deepens a pool nobody can claim.
@@ -1077,10 +1085,17 @@ the 42,069 ADA graduation figure. First-party values:
   Their 200 ADA graduation bonus is a one-off; ours is a permanent 0.1% compounding into an LP the
   creator ultimately controls, where theirs is burned. The old "double competitors" line is retired:
   it was true at 1.0% during the curve and is not true at 0.5%.
-- **Their flat 0.5 ADA per curve trade is regressive** and bites small buyers hard. Noctis's batcher
-  fee has a **ceiling, not a floor** — the order names a maximum and the batcher takes actual cost or
-  less, typically ~0.25 ADA. On a 20 ADA trade their real cost is ~3.8% against our ~2.75%, and
-  post-graduation we are cheaper than them at every size.
+- **Their flat 0.5 ADA per curve trade is regressive** and bites small buyers hard. Noctis's CURVE
+  batcher fee has a **ceiling, not a floor** — the order names a maximum and the batcher takes actual
+  cost or less, typically ~0.25 ADA, because one transaction fills many orders. On a 20 ADA trade
+  their real cost is ~3.8% against our ~2.75%.
+- **Post-graduation the comparison reverses on small trades, and the old "cheaper at every size" line
+  was wrong** (corrected 2026-09-08, once a venue fill was measured). The venue fills ONE order per
+  transaction, so its execution fee is 1.5 ADA an order rather than a shared quarter-ADA. Against
+  their 1.3%, our 1.2% + 1.5 ADA is dearer below roughly 1,500 ADA a trade and cheaper above it. The
+  floor is structural and every batched Cardano venue carries one of the same shape, so the defensible
+  claim is about being the cheapest BATCHED venue — **confirm competitors' current per-order fees
+  first-hand before that goes in public copy**, the way snek.fun's own figures were.
 - **Graduation thresholds are now close** — 75,000 ADA against their 69,000, so a Noctis launch
   asks for slightly more buy-side than a snek.fun one rather than materially less.
 - **Zero team allocation is their strongest fairness claim.** Noctis answers it with vesting and the
