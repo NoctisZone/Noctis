@@ -1128,13 +1128,37 @@ async function run() {
 			},
 		}));
 
+	// `--only=<substring>` builds just the bundles whose output filename
+	// contains it, and is a safety tool as much as a speed one.
+	//
+	// Every bundle is stamped with the fingerprint of the blueprint it was
+	// built against, and refuses at runtime to read a different one. So on a
+	// branch that moves any validator, a bundle NOT rebuilt is a bundle that
+	// declines to run there — which is the correct outcome for every CLI whose
+	// validators are not the ones deployed. Rebuilding all of them removes that
+	// protection wholesale, to make one or two of them usable. Rebuild the ones
+	// the work needs and leave the rest refusing.
+	const only = process.argv.find((a) => a.startsWith("--only="))?.slice("--only=".length);
+	const selected = only ? configs.filter((c) => c.outfile.includes(only)) : configs;
+	if (only) {
+		if (selected.length === 0) {
+			throw new Error(`--only=${only} matched none of the ${configs.length} bundles.`);
+		}
+		console.log(
+			`--only=${only}: building ${selected.length} of ${configs.length} bundles. ` +
+				"The rest keep the fingerprint they were last built with, and will refuse to run " +
+				"against a blueprint that does not match it.",
+		);
+		for (const c of selected) console.log(`  ${c.outfile.split(/[\\/]/).pop()}`);
+	}
+
 	if (watch) {
-		const contexts = await Promise.all(configs.map((c) => esbuild.context(c)));
+		const contexts = await Promise.all(selected.map((c) => esbuild.context(c)));
 		await Promise.all(contexts.map((ctx) => ctx.watch()));
 		await copyWasmFiles();
 		console.log("Watching for changes...");
 	} else {
-		await buildAll(configs);
+		await buildAll(selected);
 		await copyWasmFiles();
 	}
 }
