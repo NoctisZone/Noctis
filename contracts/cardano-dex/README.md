@@ -458,6 +458,55 @@ output must hold, so taking a network fee out of one leaves too little to stand
 as an output. Without the wallet chipping in, exactly the orders that most need
 cancelling would be the ones that could not be.
 
+## A pool's history is a chain, not a feed
+
+**A pool is a single-threaded state machine, so it needs no follower.** Every
+action against a pool spends the one UTXO carrying its NFT and creates exactly
+one successor carrying it again — `pool.ak` finds its own continuation that
+way, and `swap_order.ak` finds it the same way. Each transaction therefore
+names its predecessor in its own inputs, and the chain of them *is* the
+history. This is the shape the launch curve's trade-history reader already
+uses, for the same reason.
+
+That buys three things over a block-range follower with a stored cursor:
+
+- **Rollbacks need no machinery.** Walking backward from the pool as it stands
+  now cannot produce a history the chain does not currently have. A rolled-back
+  event is simply not on the path.
+- **Requests scale with events, not blocks.** A quiet pool costs nothing to be
+  up to date on.
+- **Nothing has to be stored to be correct.** A caller that keeps events is
+  caching, not bookkeeping, and a wrong cache is repaired by walking again.
+
+The cost is that a busy pool's whole history is proportional to that history,
+so the walk stops on a transaction the caller already knows — the incremental
+read — or after a set number of events. A result says which stopped it, because
+a truncated history and a complete one look identical in the events themselves.
+
+**Every event carries the reserves after it**, which is what a price feed
+cannot reconstruct later if it was not recorded at the time — except that here
+it never has to be, because the chain still holds it.
+
+Events are classified from what moved rather than from the redeemer, so no
+second request is needed per event and the answer rests on what happened rather
+than on what was asked for. A movement matching no known shape is reported as
+unclassified with what was seen, never guessed at. Two rules do the work:
+
+- **Reserves are netted; deltas are not.** A swap's fee slices stay in the pool
+  and move to the counters, so the tradable reserve grows by less than the
+  trader put in. What a trade executed at is the *balance* movement — the same
+  reading the pool validator takes, since it compares both states under the old
+  datum. Reporting the netted delta would understate every trade by its own
+  fee.
+- **A fee withdrawal moves the balance and not the price.** It is the only
+  event whose tradable reserves do not move at all, which is exactly how it is
+  told apart from everything else.
+
+One trap worth naming, since it is the eUTXO classic: **a reference input is
+never spent.** Blockfrost returns reference and collateral entries in the same
+`inputs` array as real ones, flagged, so a walk that does not filter them can
+follow a pool somebody merely *looked at* into a history that never happened.
+
 ## Not here yet
 
 Running the batcher in production: where it is hosted, how its key is held, and
@@ -465,13 +514,12 @@ what watches it. The loop, the fill and the reading are here and tested; the
 operational half is a deployment decision the build plan tracks. Splash's
 executor is unlicensed and is not used, so this is written rather than adopted.
 
-The aggregator-facing price feed. A pool's own market state — reserves net of
-accrued fees, mid and spot, the fee, and the pool's value — is derived from a
-pool UTXO and is here. What an aggregator asks for on top of that is a stream
-of trades with the reserves after each one, which is a product of following the
-chain continuously rather than reading it on demand. The wire format should be
-settled against the aggregator's own specification rather than inferred from
-third-party adapters, and that pairs naturally with applying to be listed.
+The aggregator-facing price feed's wire format. Everything it is built from is
+here — a pool's market state from its current UTXO, and a stream of trades with
+the reserves after each one from the walk above. What remains is the shape an
+aggregator wants those served in, and that should be settled against the
+aggregator's own specification rather than inferred from third-party adapters,
+which pairs naturally with applying to be listed.
 
 ## Build and test
 

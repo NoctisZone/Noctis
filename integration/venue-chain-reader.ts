@@ -116,7 +116,7 @@ function assetsOf(utxo: ProviderUtxo): Record<string, bigint> {
  * shares the policy and is deliberately not a candidate: it is fungible, so a
  * balance of it says nothing about identity.
  */
-function poolNftOf(assets: Record<string, bigint>, factoryPolicyId: string): string | null {
+export function venuePoolNftOf(assets: Record<string, bigint>, factoryPolicyId: string): string | null {
   const candidates = Object.entries(assets).filter(
     ([unit, quantity]) =>
       unit.startsWith(factoryPolicyId) &&
@@ -148,7 +148,7 @@ export async function readVenuePools(
       continue;
     }
     const assets = assetsOf(utxo);
-    const nft = poolNftOf(assets, args.factoryPolicyId);
+    const nft = venuePoolNftOf(assets, args.factoryPolicyId);
     if (!nft) {
       skipped.push({
         ...at,

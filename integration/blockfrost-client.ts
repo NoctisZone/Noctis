@@ -104,10 +104,26 @@ export interface TxUtxos {
   inputs: Array<{
     address: string;
     amount: Array<{ unit: string; quantity: string }>;
+    /** The output this input spends — how a UTXO chain is walked backward. */
+    tx_hash?: string;
+    output_index?: number;
+    /** The datum of the UTXO being SPENT: the state as it stood before. */
+    inline_datum?: string | null;
+    /**
+     * Blockfrost returns reference and collateral entries in this same array,
+     * flagged. A reference input is never spent, so anything walking inputs as
+     * evidence of what a transaction consumed has to drop both.
+     */
+    reference?: boolean;
+    collateral?: boolean;
   }>;
   outputs: Array<{
     address: string;
     amount: Array<{ unit: string; quantity: string }>;
+    output_index?: number;
+    inline_datum?: string | null;
+    /** True for a collateral return output, which a successful spend has none of. */
+    collateral?: boolean;
   }>;
 }
 
