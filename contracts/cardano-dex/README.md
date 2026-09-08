@@ -282,9 +282,25 @@ in flight becoming unfillable.
 **1.5 ADA funds one fill.** The fee is shared out in proportion to what is
 filled, so a fill of part of an order draws only that part of the fee while
 still paying for a whole transaction. At 1.5 ADA the least of an order anyone
-can fill is about **94%** of it: an order fills whole or waits. A front end
-should set the placer's own `min_marginal_output` to match, so an order that
-cannot be filled says so rather than sitting there.
+can fill is about **94%** of it: an order fills whole or waits.
+
+That is a choice about where the cost sits, and the price floor is the cheaper
+lever. A trade moves the price against itself, so **an order worth about p% of
+the pool needs a floor about p% below spot** — set the floor from the quote
+rather than from spot and an order fills whole. Set it from spot and an order
+of any real size can never clear it, at any fee. Against a 20,000 ADA pool a
+floor 0.5% under spot admits about 100 ADA in one trade, 1% admits 205, and 2%
+admits 413.
+
+Raising the fee buys the same fill certainty far more expensively: a pool that
+can serve only 15% of an order needs about seven fills' worth of fee to serve
+that 15%. A placer who genuinely wants to be filled in pieces gets a better
+deal placing several orders, each of which fills whole for 1.5 ADA.
+
+So the placement screen owes the placer two checks, both answerable before
+signing and neither visible afterwards — an order that cannot fill just sits
+there: that the floor leaves room for the order's own impact, and that the fee
+covers the part that would actually fill.
 
 For scale, mainnet's block budget runs out at roughly **40 to 45 fills** — the
 cpu-step limit binds first — which is a ceiling the chain sets rather than one

@@ -398,6 +398,91 @@ export function venueRewardAddress(cfg: VenueSwapConfigData, network: LucidNetwo
   return credentialToAddress(network, payment, { type: 'Key', hash: cfg.stake_pkh });
 }
 
+/** What a pool can do for an order right now, and whether anyone can do it. */
+export interface VenueFillableAmount {
+  /** The most of the order that clears its price floor at this pool state. */
+  largest: bigint;
+  /** The least anyone can afford to fill — the pro-rata share must cover a fill. */
+  smallestFundable: bigint;
+  /**
+   * True when the two overlap. False means the order cannot be filled at all
+   * as things stand: either the pool has moved too far for its floor, or its
+   * own size cannot clear the floor it set, or its fee is too small.
+   */
+  fillable: boolean;
+}
+
+/**
+ * How much of an order a pool can serve, and whether an executor can afford to.
+ *
+ * **This is the check a front end owes the placer at placement time**, and the
+ * reason the recommended fee can stay at one fill's worth. Two ways an order
+ * ends up unfillable, and neither announces itself:
+ *
+ *   - **A floor its own size cannot clear.** `base_price` is the average over
+ *     what is traded, and a trade moves the price against itself, so an order
+ *     worth roughly p% of the pool needs a floor about p% below spot. Set from
+ *     spot instead of from the quote, on an order any larger than a rounding
+ *     error, and no amount of it ever clears — the order is dead on arrival.
+ *   - **A fee too small for the part that would fill.** The fee is drawn pro
+ *     rata, so an order the pool can only half serve needs twice a fill's cost.
+ *
+ * Both are answerable before the order is signed, which is where they should
+ * be answered. Afterwards they look identical from outside: an order sitting
+ * there, doing nothing, for no visible reason.
+ *
+ * The search is a bisection, which is sound because the average price a
+ * constant-product pool gives falls monotonically as the trade grows.
+ */
+export function venueFillableAmount(args: {
+  pool: VenuePoolUtxo;
+  order: VenueSwapOrderUtxo;
+  /** What one fill costs; `VENUE_FILL_FLOOR_LOVELACE` unless measured again. */
+  fillCostLovelace?: bigint;
+}): VenueFillableAmount {
+  const cfg = args.pool.datum;
+  const swap = args.order.datum;
+  const smallestFundable = venueMinFundableTrade({
+    tradableInput: swap.tradable_input,
+    exFee: swap.ex_fee,
+    fillCostLovelace: args.fillCostLovelace,
+  });
+  const state = readVenuePoolState(cfg, args.pool.assets);
+  const inputIsX = venueUnitOf(swap.input) === venueUnitOf(cfg.pool_x);
+  const reserveIn = inputIsX ? state.reservesX : state.reservesY;
+  const reserveOut = inputIsX ? state.reservesY : state.reservesX;
+
+  const clears = (traded: bigint): boolean => {
+    if (traded <= 0n || reserveIn <= 0n || reserveOut <= 0n) return false;
+    const { output } = venueSwapQuote({
+      reserveIn,
+      reserveOut,
+      tradedIn: traded,
+      feeNum: cfg.fee_num,
+      treasuryFee: cfg.treasury_fee,
+      royaltyFee: cfg.royalty_fee,
+    });
+    return output * swap.base_price.denom >= traded * swap.base_price.num;
+  };
+
+  let largest = 0n;
+  if (clears(swap.tradable_input)) {
+    largest = swap.tradable_input;
+  } else {
+    let lo = 0n;
+    let hi = swap.tradable_input;
+    while (hi - lo > 1n) {
+      const mid = (lo + hi) / 2n;
+      if (clears(mid)) lo = mid;
+      else hi = mid;
+    }
+    largest = lo;
+  }
+
+  const fundedFully = swap.ex_fee >= (args.fillCostLovelace ?? VENUE_FILL_FLOOR_LOVELACE);
+  return { largest, smallestFundable, fillable: fundedFully && largest >= smallestFundable };
+}
+
 /**
  * Prices one fill and lays out both sides of it.
  *

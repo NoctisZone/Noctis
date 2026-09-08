@@ -37,6 +37,7 @@ import {
   type VenueSwapConfigData,
   type VenueSwapOrderUtxo,
   venueFeeSlice,
+  venueFillableAmount,
   venueFillSequence,
   venueMinFundableTrade,
   venueRewardAddress,
@@ -598,5 +599,82 @@ describe('what one fill costs, and what that leaves fillable', () => {
     });
     expect(plan.terminated).toBe(true);
     expect(plan.permittedFee).toBe(VENUE_ORDER_EXECUTION_FEE_LOVELACE);
+  });
+});
+
+describe('whether an order can be filled at all', () => {
+  // The pool the fixtures use is 100 ADA / 100M tokens, so an order of
+  // 1,000,000 lovelace is 1% of it and moves the price about 1% against
+  // itself. That ratio is what every case below turns on.
+  const cost = VENUE_FILL_FLOOR_LOVELACE;
+
+  it('serves the whole order when its floor leaves room for its own impact', () => {
+    const answer = venueFillableAmount({
+      pool: pool(),
+      order: buyOrder({ ex_fee: VENUE_ORDER_EXECUTION_FEE_LOVELACE, base_price: { num: 97n, denom: 100n } }),
+      fillCostLovelace: cost,
+    });
+    expect(answer.largest).toBe(1_000_000n);
+    expect(answer.fillable).toBe(true);
+  });
+
+  it('serves only part of it when the floor is tighter than its own impact', () => {
+    // 0.9885 of spot. The order's own 1% of the pool cannot clear that, so the
+    // pool can serve some of it and not all.
+    const answer = venueFillableAmount({
+      pool: pool(),
+      order: buyOrder({ ex_fee: VENUE_ORDER_EXECUTION_FEE_LOVELACE, base_price: { num: 9_845n, denom: 10_000n } }),
+      fillCostLovelace: cost,
+    });
+    expect(answer.largest).toBeGreaterThan(0n);
+    expect(answer.largest).toBeLessThan(1_000_000n);
+    // …and at one fill's worth of fee, that part is too small to pay for.
+    expect(answer.largest).toBeLessThan(answer.smallestFundable);
+    expect(answer.fillable).toBe(false);
+  });
+
+  it('is fillable again once the order funds the part that would fill', () => {
+    // The same order with a fee sized for the fraction it can actually serve.
+    // That pool can only take about 15% of this order at this floor, so the
+    // fee has to be about seven fills' worth — which is what makes a partial
+    // expensive, and why the front end should size the FLOOR instead.
+    const order = buyOrder({ ex_fee: 10_000_000n, base_price: { num: 9_845n, denom: 10_000n } });
+    const answer = venueFillableAmount({ pool: pool(), order, fillCostLovelace: cost });
+    expect(answer.smallestFundable).toBeLessThanOrEqual(answer.largest);
+    expect(answer.fillable).toBe(true);
+  });
+
+  it('says nothing clears a floor above spot, whatever the fee', () => {
+    // 1.02 of spot is above the price before any slippage at all.
+    const answer = venueFillableAmount({
+      pool: pool(),
+      order: buyOrder({ ex_fee: 50_000_000n, base_price: { num: 102n, denom: 100n } }),
+      fillCostLovelace: cost,
+    });
+    expect(answer.largest).toBe(0n);
+    expect(answer.fillable).toBe(false);
+  });
+
+  it('refuses an order whose fee cannot fund even a whole fill', () => {
+    const answer = venueFillableAmount({
+      pool: pool(),
+      order: buyOrder({ ex_fee: 500_000n, base_price: { num: 0n, denom: 1n } }),
+      fillCostLovelace: cost,
+    });
+    expect(answer.largest).toBe(1_000_000n);
+    expect(answer.fillable).toBe(false);
+  });
+
+  it('agrees with the planner about the largest fill that works', () => {
+    // The strongest form: what this says is fillable, the planner builds; one
+    // unit more, and the order's own floor rejects it.
+    const order = buyOrder({ ex_fee: 4_000_000n, base_price: { num: 9_845n, denom: 10_000n } });
+    const { largest } = venueFillableAmount({ pool: pool(), order, fillCostLovelace: cost });
+    expect(() =>
+      fill({ pool: pool(), order, tradeAmount: largest, network: 'Preprod', minOutputLovelace: MIN_OUTPUT }),
+    ).not.toThrow();
+    expect(() =>
+      fill({ pool: pool(), order, tradeAmount: largest + 1n, network: 'Preprod', minOutputLovelace: MIN_OUTPUT }),
+    ).toThrow(/floor the order set/);
   });
 });
