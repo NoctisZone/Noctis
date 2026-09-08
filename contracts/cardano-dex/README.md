@@ -507,6 +507,66 @@ never spent.** Blockfrost returns reference and collateral entries in the same
 `inputs` array as real ones, flagged, so a walk that does not filter them can
 follow a pool somebody merely *looked at* into a history that never happened.
 
+## Collecting the platform's slice
+
+The platform's 0.1% is never paid to the platform. It is **credited**, in the
+pool's own datum, to a counter `read_pool_state` subtracts back out of the
+reserves — so it sits in the pool's UTXO while belonging to nobody who trades
+there. The creator's 1.0% sits beside it under its own pair of counters,
+claimed under a different redeemer with the creator's signature over the pool's
+nonce.
+
+Collecting the platform's side is one transaction that runs **two scripts over
+the same pool and lets neither decide alone**. `pool.ak` action 3 spends the
+pool and requires a withdrawal at the credential its own datum names; it fixes
+what may change — the two treasury counters and nothing else — and pins the
+value movement to the counter movement exactly. `treasury.ak` runs at that
+credential and decides how much: it re-finds the pool independently, re-checks
+its shape, and requires the payout to reach the address the pool's datum names.
+Neither script trusts the other's reading. So a collection cannot pay somewhere
+else, cannot take more than has accrued, and cannot touch the reserves or the
+creator's counters on the way past.
+
+Four things follow, and together they are the whole of the operating decision.
+
+- **A collection costs exactly one network fee.** A payout carrying tokens
+  needs the protocol's minimum lovelace to exist, which a small ADA counter
+  cannot always cover — so the platform tops it up from its own wallet and
+  receives it back in the same output. Track the whole transaction and every
+  term cancels but one: the platform's lovelace changes by the ADA counter less
+  the fee, exactly. The ADA side of the payout is a floor rather than an exact
+  figure for precisely this reason, and the token side stays exact, because
+  nothing makes a surplus there necessary.
+- **The two counters are not the same kind of thing.** The ADA counter pays for
+  its own collection; the token counter never does. Tokens come out in the same
+  transaction for nothing, which makes them no reason to go and no reason to
+  wait — a token has to be sold before it pays for anything, and selling it
+  costs another transaction.
+- **One transaction per pool, always.** `treasury.ak` counts the inputs at the
+  pool validator and refuses a second, so a collection speaks for one pool and
+  no other. The fee is therefore charged per pool per collection, and the only
+  lever an operator has is *when*: waiting earns nothing extra but puts more
+  behind the same single fee. Nothing decays and nothing expires.
+- **Collecting does not move the price.** The counters were already outside the
+  reserves, so taking them out changes the pool's balance and not its price. It
+  is the one event in a pool's history with that signature — which is how the
+  walk above tells a collection from a redeem — and it means no trader is
+  affected by the timing and there is no good or bad moment to go.
+
+Because a collection is a pool spend, it competes with a fill against the same
+pool rather than sharing it: whichever lands first invalidates the other's
+reading of that pool. Nothing is lost but the effort, and the same is true of
+two batchers against one pool.
+
+The ledger side reconciles rather than merely reports. Over a **complete**
+history, what was earned less what was withdrawn must equal what the datum says
+is owed — a real assertion rather than arithmetic, because a pool opens with
+all four counters at zero and the factory refuses one that does not, so a gap
+means the pool is carrying a claim nothing paid for. Over a partial history the
+same figure means something else entirely: what was owed when the walk began.
+The two are told apart by whether the walk reached the pool's opening, and by
+nothing else.
+
 ## Not here yet
 
 Running the batcher in production: where it is hosted, how its key is held, and
@@ -520,6 +580,12 @@ the reserves after each one from the walk above. What remains is the shape an
 aggregator wants those served in, and that should be settled against the
 aggregator's own specification rather than inferred from third-party adapters,
 which pairs naturally with applying to be listed.
+
+Measured execution budgets for a collection's two scripts. The fill's are
+simulated against a real script context; the collection's are reasoned from
+them, and what a collection costs is pinned against a real built transaction
+carrying those figures. Simulating them is what makes the cost figure final,
+and it belongs with the same pass that re-measures the fill's.
 
 ## Build and test
 
