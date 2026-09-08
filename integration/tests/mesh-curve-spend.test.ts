@@ -43,6 +43,17 @@ function validator(title: string) {
   return found;
 }
 
+// The venue is a separate Aiken package with its own blueprint. A graduation
+// is the one transaction that runs scripts from both.
+const venueBlueprint: Blueprint = JSON.parse(
+  readFileSync(join(import.meta.dirname, '..', '..', 'contracts', 'cardano-dex', 'plutus.json'), 'utf8'),
+);
+function venueValidator(title: string) {
+  const found = venueBlueprint.validators.find((v) => v.title === title);
+  if (!found) throw new Error(`${title} missing from the venue plutus.json`);
+  return found;
+}
+
 const TIER_B = validator('bonding_curve_tier_b.bonding_curve_tier_b.spend');
 const TIER_A = validator('bonding_curve.bonding_curve.spend');
 
@@ -439,5 +450,263 @@ describe('MeshCurveSpender — graduation', () => {
     expect(hash).toBe('submitted-hash');
     expect(order).toEqual(['wallet', 'co:signed-1']);
     expect(wallet.submitTx).toHaveBeenCalledWith('signed-2');
+  });
+});
+
+// ============================================================================
+// The venue graduation — FOUR scripts, one transaction, and two outputs the
+// factory names by NUMBER.
+// ============================================================================
+// A Cardano Launch graduation spends the curve, the LP escrow and (opt-in) the
+// staking pool, and mints under NoctisSwap's factory, all at once. The factory
+// checks the pool and the escrow outputs at indices its redeemer carries, so
+// these tests build the real transaction from the real compiled scripts and
+// decode the result: the mint has to be there, under one policy, with ONE
+// redeemer for two asset names, and the outputs have to be where the plan
+// said they would be.
+//
+// The size claim here is the one that decides deployment: with all four
+// scripts carried this transaction cannot exist, and the whole four together
+// are what the reference-script publishing exists to keep out of it.
+describe('MeshCurveSpender — a graduation that opens a venue pool', () => {
+  const LP = validator('lp_escrow.lp_escrow.spend');
+  const POOL = validator('staking_pool.staking_pool.spend');
+  const LP_REF_TX = 'ef'.repeat(32);
+  const FACTORY_REF_TX = 'fa'.repeat(32);
+  const POOL_REF_TX = 'fb'.repeat(32);
+  const LP_ADDRESS = scriptAddressOf(LP.compiledCode, 0);
+  const STAKING_ADDRESS = scriptAddressOf(POOL.compiledCode, 0);
+  const THREAD_UNIT = `${'bb'.repeat(28)}00`;
+  const LAUNCH_ID = '0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20';
+
+  // The factory, UNAPPLIED. Applying its nine parameters changes the bytes
+  // and therefore the policy id, but not by much and not in a way any of
+  // these claims turn on — what is under test is the SHAPE of the
+  // transaction. The size assertion notes the difference where it matters.
+  const FACTORY = venueValidator('royalty_pool/pool_mint.pool_mint.mint');
+  const FACTORY_POLICY = scriptHashOf(FACTORY.compiledCode);
+  const VENUE_POOL_ADDRESS = credentialToAddress('Preprod', { type: 'Script', hash: 'a0'.repeat(28) });
+  const POOL_NFT = `${FACTORY_POLICY}10${LAUNCH_ID.slice(0, 62)}`;
+  const LQ = `${FACTORY_POLICY}11${LAUNCH_ID.slice(0, 62)}`;
+  const MAX_LQ = 0x7fffffffffffffffn;
+  const INITIAL_LQ = 1_000_000_000n;
+
+  function paddedDatum(bytes: number): string {
+    return Data.to(new Constr(0, ['aa'.repeat(bytes)]));
+  }
+
+  function venueProvider() {
+    return {
+      fetchProtocolParameters: vi.fn().mockResolvedValue(DEFAULT_PROTOCOL_PARAMETERS),
+      evaluateTx: vi.fn().mockResolvedValue([
+        { tag: 'SPEND', index: 0, budget: { mem: 3_000_000, steps: 1_200_000_000 } },
+        { tag: 'SPEND', index: 1, budget: { mem: 2_000_000, steps: 800_000_000 } },
+        { tag: 'SPEND', index: 2, budget: { mem: 1_000_000, steps: 400_000_000 } },
+        { tag: 'MINT', index: 0, budget: { mem: 1_500_000, steps: 600_000_000 } },
+      ]),
+    };
+  }
+
+  /** The real five-output shape, with every script referenced. */
+  function venuePlan(
+    s: MeshCurveSpender,
+    opts: { staking?: boolean; referenceFactory?: boolean } = {},
+  ): GraduationSpendPlan {
+    const staking = opts.staking ?? true;
+    const companionInputs: GraduationSpendPlan['companionInputs'] = [
+      {
+        utxo: {
+          txHash: 'ee'.repeat(32),
+          outputIndex: 0,
+          address: LP_ADDRESS,
+          assets: { lovelace: 3_000_000n, [THREAD_UNIT]: 1n },
+        },
+        redeemerCbor: Data.to(new Constr(0, [1_756_000_240_000n, 0n])),
+        script: {
+          compiledScriptCbor: LP.compiledCode,
+          referenceScript: { txHash: LP_REF_TX, outputIndex: 0, scriptHash: LP.hash },
+        },
+      },
+    ];
+    const payouts: GraduationSpendPlan['payouts'] = [
+      // 1 — the escrow, sealed: lovelace unchanged, the LQ position added.
+      {
+        address: LP_ADDRESS,
+        assets: { lovelace: 3_000_000n, [THREAD_UNIT]: 1n, [LQ]: INITIAL_LQ },
+        datumCbor: paddedDatum(400),
+      },
+      // 2 — the pool, opened: the whole raise, the reserve, the NFT, the rest
+      // of the LQ. Four assets, which is what the factory allows.
+      {
+        address: VENUE_POOL_ADDRESS,
+        assets: {
+          lovelace: 20_000_000_000n,
+          [TOKEN_UNIT]: 200_000_000n,
+          [POOL_NFT]: 1n,
+          [LQ]: MAX_LQ - INITIAL_LQ,
+        },
+        datumCbor: paddedDatum(200),
+      },
+    ];
+    if (staking) {
+      companionInputs.push({
+        utxo: {
+          txHash: 'ec'.repeat(32),
+          outputIndex: 0,
+          address: STAKING_ADDRESS,
+          assets: { lovelace: 1_400_000n, [THREAD_UNIT]: 1n },
+        },
+        redeemerCbor: Data.to(new Constr(3, [250_000_000n])),
+        script: {
+          compiledScriptCbor: POOL.compiledCode,
+          referenceScript: { txHash: POOL_REF_TX, outputIndex: 0, scriptHash: POOL.hash },
+        },
+      });
+      payouts.push({
+        address: STAKING_ADDRESS,
+        assets: { lovelace: 1_700_000n, [TOKEN_UNIT]: 250_000_000n, [THREAD_UNIT]: 1n },
+        datumCbor: paddedDatum(300),
+      });
+    }
+    return {
+      scriptUtxo: {
+        txHash: CURVE_TX,
+        outputIndex: 0,
+        address: s.scriptAddress,
+        assets: { lovelace: 20_010_000_000n, [TOKEN_UNIT]: 450_000_000n, [THREAD_UNIT]: 1n },
+      },
+      redeemerCbor: Data.to(new Constr(8, [])),
+      continuing: { datumCbor: paddedDatum(600), assets: { lovelace: 10_000_000n, [THREAD_UNIT]: 1n } },
+      companionInputs,
+      payouts,
+      mint: {
+        policyScriptCbor: FACTORY.compiledCode,
+        referenceScript:
+          opts.referenceFactory === false
+            ? undefined
+            : { txHash: FACTORY_REF_TX, outputIndex: 0, scriptHash: FACTORY_POLICY },
+        redeemerCbor: Data.to(new Constr(0, [LAUNCH_ID, 2n, 1n])),
+        assets: [
+          { assetNameHex: `10${LAUNCH_ID.slice(0, 62)}`, quantity: 1n },
+          { assetNameHex: `11${LAUNCH_ID.slice(0, 62)}`, quantity: MAX_LQ },
+        ],
+      },
+      expectedOutputs: [
+        { index: 1, unit: LQ, quantity: INITIAL_LQ },
+        { index: 2, unit: POOL_NFT, quantity: 1n },
+      ],
+      requiredSignerHashes: [],
+      validity: { fromMs: 1_756_000_000_000, toMs: 1_756_000_480_000 },
+    };
+  }
+
+  function venueSpender() {
+    return spender(TIER_B, venueProvider());
+  }
+
+  /** A wallet with enough ada to fund a 20,000-ADA pool output's own fee. */
+  function fundedWallet() {
+    const wallet = fakeWallet();
+    wallet.getUtxos = vi.fn().mockResolvedValue([walletUtxo('11'.repeat(32), 0, '30000000000')]);
+    return wallet;
+  }
+
+  it('mints the pool NFT and the LQ supply under ONE policy with ONE redeemer', async () => {
+    const s = venueSpender();
+    const hex = await s.buildGraduation(venuePlan(s), fundedWallet());
+    const decoded = deserializeTx(hex);
+    const mint = decoded.body().mint();
+    expect(mint).toBeDefined();
+    // Two asset names under the factory's policy, and nothing else minted.
+    const entries = [...(mint?.entries() ?? [])];
+    expect(entries).toHaveLength(2);
+    expect(entries.every(([assetId]) => String(assetId).startsWith(FACTORY_POLICY))).toBe(true);
+    expect(entries.map(([, qty]) => qty).sort((a, b) => (a < b ? -1 : 1))).toEqual([1n, MAX_LQ]);
+
+    // Three spends and ONE mint. The ledger indexes a mint redeemer by the
+    // policy's position in the mint map, so two names share one — asserted
+    // rather than assumed, because the builder is called once per name.
+    expect(decoded.witnessSet().redeemers()?.size() ?? 0).toBe(4);
+  });
+
+  it('names the factory as a reference input rather than carrying it', async () => {
+    const s = venueSpender();
+    const hex = await s.buildGraduation(venuePlan(s), fundedWallet());
+    const decoded = deserializeTx(hex);
+    const refs = (decoded.body().referenceInputs()?.toCore() ?? []).map((r) => `${r.txId}#${r.index}`);
+    expect(refs).toContain(`${FACTORY_REF_TX}#0`);
+    // Every one of the four is referenced, so nothing rides in the witness set.
+    expect(decoded.witnessSet().plutusV3Scripts()?.size() ?? 0).toBe(0);
+  });
+
+  it('carries the factory when no pointer was published for it', async () => {
+    const s = venueSpender();
+    const hex = await s.buildGraduation(venuePlan(s, { referenceFactory: false }), fundedWallet());
+    const decoded = deserializeTx(hex);
+    expect(decoded.witnessSet().plutusV3Scripts()?.size() ?? 0).toBe(1);
+  });
+
+  it('refuses a factory pointer published for some other script', async () => {
+    const s = venueSpender();
+    const plan = venuePlan(s);
+    if (!plan.mint) throw new Error('fixture drift');
+    plan.mint.referenceScript = { txHash: FACTORY_REF_TX, outputIndex: 0, scriptHash: LP.hash };
+    await expect(s.buildGraduation(plan, fundedWallet())).rejects.toThrow(/stale/i);
+  });
+
+  // The claim the factory's redeemer rests on, checked against the bytes.
+  it('puts the escrow at output 1 and the pool at output 2, as the redeemer says', async () => {
+    const s = venueSpender();
+    const hex = await s.buildGraduation(venuePlan(s), fundedWallet());
+    const outputs = deserializeTx(hex)
+      .body()
+      .outputs()
+      .map((o) => o.toCore());
+    expect(outputs[1]?.value.assets?.get(LQ as never)).toBe(INITIAL_LQ);
+    expect(outputs[2]?.value.assets?.get(POOL_NFT as never)).toBe(1n);
+    // The curve's own continuing output is 0 and change follows the payouts,
+    // so nothing the builder adds of its own accord lands before them.
+    expect(outputs[0]?.value.assets?.get(THREAD_UNIT as never)).toBe(1n);
+  });
+
+  it('refuses to hand back a transaction whose outputs moved', async () => {
+    const s = venueSpender();
+    const plan = venuePlan(s);
+    // The plan claims the pool NFT is at output 1. It is at 2. Nothing else
+    // changes — this is exactly what a builder that reordered outputs would
+    // produce, and it is what the redeemer would then point at.
+    plan.expectedOutputs = [{ index: 1, unit: POOL_NFT, quantity: 1n }];
+    await expect(s.buildGraduation(plan, fundedWallet())).rejects.toThrow(/outputs moved/i);
+  });
+
+  // ==========================================================================
+  // The size measurement. This is the deployment decision, not a style note.
+  // ==========================================================================
+  it('fits only because all four scripts are named — carried, it cannot exist', async () => {
+    const s = venueSpender();
+    const hex = await s.buildGraduation(venuePlan(s), fundedWallet());
+    const referenced = hex.length / 2;
+    // Signatures land on top; leave room for several.
+    expect(referenced + 500).toBeLessThan(MAX_TX_BYTES);
+
+    const carried =
+      referenced +
+      rawScriptSize(TIER_B.compiledCode) +
+      rawScriptSize(LP.compiledCode) +
+      rawScriptSize(POOL.compiledCode) +
+      rawScriptSize(FACTORY.compiledCode);
+    expect(carried).toBeGreaterThan(MAX_TX_BYTES);
+    // And not marginally: the four together are nearly twice the whole cap,
+    // which is why every one of them has to be published before a Cardano
+    // Launch can graduate at all.
+    expect(carried).toBeGreaterThan(MAX_TX_BYTES * 2);
+  });
+
+  it('fits a staking-declined launch too, with one fewer script and output', async () => {
+    const s = venueSpender();
+    const hex = await s.buildGraduation(venuePlan(s, { staking: false }), fundedWallet());
+    const decoded = deserializeTx(hex);
+    expect(decoded.witnessSet().redeemers()?.size() ?? 0).toBe(3);
+    expect(hex.length / 2 + 500).toBeLessThan(MAX_TX_BYTES);
   });
 });

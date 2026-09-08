@@ -239,6 +239,48 @@ export function loadDeployedValidators(callerDirname: string): PlutusBlueprint['
   return validators;
 }
 
+/**
+ * One entry of the venue's deployment record, by title.
+ *
+ * The record — not the blueprint — is the only place a parameterised venue
+ * validator's real bytes and its real parameter values sit together, and the
+ * two have to travel together: a graduation builds the pool's datum from the
+ * parameters and hands the transaction the bytes, and a mismatch between them
+ * is a datum the factory refuses for a reason nothing on chain explains.
+ *
+ * Unlike `loadDeployedValidators`, a missing record IS an error here. That
+ * function widens a leave-this-alone set and gets safer when a file is
+ * absent; this one is asked for a specific script to spend, and answering
+ * "not deployed yet" is the useful reply.
+ */
+export function loadAppliedVenueValidator(
+  callerDirname: string,
+  title: string,
+): { title: string; parameters: Array<{ title: string; value: string }>; compiledCode: string; hash: string } {
+  const path = join(callerDirname, '..', '..', '..', 'contracts', 'cardano-dex', 'deployment', 'applied.json');
+  if (!existsSync(path)) {
+    throw new Error(
+      `${title} has no applied bytes: ${path} does not exist. A parameterised validator is not deployable ` +
+        'until its parameters are applied and recorded there.',
+    );
+  }
+  const record = JSON.parse(readFileSync(path, 'utf8')) as {
+    validators: Array<{
+      title: string;
+      parameters?: Array<{ title: string; value: string }>;
+      compiledCode: string;
+      hash: string;
+    }>;
+  };
+  const entry = record.validators.find((v) => v.title === title);
+  if (!entry) {
+    throw new Error(
+      `${title} is not in ${path}. Derived so far: ${record.validators.map((v) => v.title).join(', ') || '(none)'}.`,
+    );
+  }
+  return { title: entry.title, parameters: entry.parameters ?? [], compiledCode: entry.compiledCode, hash: entry.hash };
+}
+
 /** Finds one compiled validator's CBOR by its real plutus.json title, matching every CLI's existing error-message text exactly. */
 export function loadValidatorCbor(blueprint: PlutusBlueprint, title: string): string {
   const entry = blueprint.validators.find((v) => v.title === title);

@@ -1,70 +1,72 @@
 // ============================================================================
-// Noctis Zone — Cardano Launch Preprod, graduation submitter
-// Real Cardano transaction submitter for a TIER B launch's graduation:
-// bonding_curve_tier_b.ak's Graduate + lp_escrow.ak's SealLock +
-// vesting.ak's StartVesting.
+// Noctis Zone — Cardano Launch, graduation submitter
+// bonding_curve_tier_b.ak's Graduate + lp_escrow.ak's SealLock + the staking
+// pool's TopUpPool + NoctisSwap's factory Create, as ONE transaction, then
+// vesting.ak's StartVesting as a second.
 // ============================================================================
-// This is a direct MIRROR of tier-a-graduation-submitter.ts (the proven Tier
-// A flow — real Preprod txs a7531f4b… graduate+seal and 09d917d2… Minswap
-// pool, TIER_A_PREPROD_MILESTONE.md Phase 5/5b). Everything that made the
-// The linear curve version correct applies here unchanged, because:
-//   - lp_escrow.ak and vesting.ak are SHARED across both Cardano curves (one
-//     validator each, not tier-specific). SealLock and StartVesting are
-//     byte-for-byte the same redeemers with the same variant indices.
-//   - Cardano Launch's Graduate arm (bonding_curve_tier_b.ak) is structurally
-//     identical to the linear curve's — verified directly: same
-//     `curve_state == Graduated`, `!lp_seeded`, `!staking_seeded`,
-//     `new_datum == expected_datum` (only total_raised→0, lp_seeded→True,
-//     staking_seeded→True change), and the same four value-movement helpers
-//     (graduation_funds_left_curve / lp_seeding_output_ok /
-//     staking_seeding_output_ok / curve_own_output_clean). NO DarkVeil-
-//     specific precondition (dv_settled/dv_claimed are untouched, carried
-//     through by the contract's own `..datum` spread — mirrored here by our
-//     `...curveDatum` spread, which now preserves them because
-//     BondingCurveTierBDatumSchema was synced to the real 31-field datum,
-//     2026-07-23).
+// WHAT A GRADUATION IS NOW. A Cardano Launch does not park its reserves in
+// escrow any more: it opens a NoctisSwap pool, and the escrow holds that
+// pool's LQ position for the lock. Five things therefore have to be true of
+// one transaction, and each is checked by a different validator:
 //
-// The ONLY differences from the linear curve submitter:
-//   - decodes/re-encodes the curve UTXO with BondingCurveTierBDatumSchema
-//     (Cardano Launch's genuinely different datum shape — adds dv_allocation_root /
-//     dv_claimed / dv_settled).
-//   - targets bonding_curve_tier_b.ak's compiled script instead of
-//     bonding_curve.ak's.
+//   0  the curve's own continuing output   Graduate: state Graduated, not yet
+//                                          seeded, the raise and both reserves
+//                                          really leaving, nothing padded
+//   1  the LP escrow, sealed               SealLock: the LQ named in the datum
+//                                          really arrives, lovelace UNCHANGED,
+//                                          the lock stamped inside the range
+//   2  the venue pool, opened              the factory: its own `expected`
+//                                          datum field for field, four assets,
+//                                          the NFT, the LQ remainder
+//   3  the staking pool, seeded            TopUpPool, opt-in launches only
+//      (the factory's mint)                exactly one pool NFT and the whole
+//                                          LQ supply, nothing else
 //
-// Graduate's redeemer variant index is 9 on BOTH curves — verified against
-// bonding_curve_tier_b.ak's own `pub type BondingCurveTierBRedeemer`
-// declaration order (ActivateCurve=0, BuyTokens=1, ClaimDarkVeilTokens=2,
-// ClaimCreatorFees=3, ClaimTreasuryFees=4, ClaimOpsFees=5, CancelCurve=6,
-// ExpireCurve=7, ClaimBuyback=8, Graduate=9, TriggerCTO=10, DissolveCTO=11,
-// AnchorDvAllocationRoot=12), not assumed to match the linear curve.
+// The numbers on the left are literal: the factory's `Create` redeemer names
+// the pool and the escrow BY OUTPUT INDEX, so the order above is part of the
+// transaction's meaning rather than a matter of style. `expectedOutputs` on
+// the plan is what holds the built transaction to it — see mesh-curve-spend.ts.
 //
-// Timestamp units — MILLISECONDS throughout, matching the linear curve submitter
-// and Cardano's own validity range. This file is a mirror, and it inherits
-// the units along with everything else:
-//   - Graduate takes no timestamp parameter at all (bare variant).
-//   - SealLock's `timestamp` and vesting's `start_timestamp` are each bound
-//     through interval.contains(self.validity_range, ...) in the SHARED
-//     lp_escrow.ak / vesting.ak named above, so both builders below set a
-//     range and the value must fall inside it.
-//   - Both are also stored: `lock_timestamp` is what is_lock_expired adds
-//     lock_duration to, and `vest_start_timestamp` is what ClaimVested
-//     subtracts from current_timestamp. Those comparisons are ms against
-//     ms-scale constants (min_lock_duration, vest_days*86_400_000).
+// WHAT MAKES IT PERMISSIONLESS. Graduate, SealLock, TopUpPool and Create are
+// all unsigned. The factory's authority is that the curve is spent under
+// `Graduate` in the same transaction, and the curve's authority is that it
+// really reached 100% sell-through. Nothing here can withhold a pool from a
+// launch that earned one, which is the point: a platform signature on
+// graduation would be a platform veto on graduation.
 //
-// Graduate and SealLock are PERMISSIONLESS; StartVesting requires the
-// governor signature. Two-transaction split (TX1 = Graduate + SealLock,
-// TX2 = StartVesting alone, built only after TX1 confirms) — same 16384-byte
-// tx-size-cap reasoning and same independence proof as the linear curve. TX1 builds
-// through mesh-curve-spend.ts's reference-script path exactly as the linear curve's
-// does (2026-08-31): the curve and LP escrow validators are NAMED via their
-// published CIP-33 reference scripts, staking_pool.ak is carried when a
-// staking-enabled launch's pool seeding (TopUpPool, creator-signed) joins
-// the transaction — see tier-a-graduation-submitter.ts's header, which this
-// file mirrors.
+// WHAT THE SUBMITTER HAS TO BE TOLD, AND WHY IT CANNOT WORK IT OUT. The pool's
+// opening datum carries `royalty_pub_key`, the creator's Ed25519 PUBLIC KEY —
+// the factory checks `blake2b_224` of it against the key hash the LP escrow
+// recorded at genesis, and the withdraw path later verifies real signatures
+// against it. A Cardano address carries a key HASH, so the key itself cannot
+// be recovered from anything on chain that this submitter reads. It has to be
+// captured when the launch is created and handed in here.
+// ============================================================================
+// SCRIPTS ARE NAMED, NOT CARRIED. The curve alone is most of the 16,384-byte
+// transaction cap; the escrow, the staking pool and the factory together are
+// most of the rest. Every one of the four is referenced through its published
+// CIP-33 pointer, and `mesh-curve-spend.ts` re-derives each script's hash from
+// the bytes it was handed before it will use a pointer, so a pointer left over
+// from an older build fails at build time with both hashes named.
+//
+// TWO TRANSACTIONS, NOT ONE. StartVesting is independent of all of the above —
+// it touches only `vesting.ak`, reads nothing the graduation writes, and can
+// run any time after the mint. It stays a second transaction so the first one
+// keeps its headroom, and so a failure in either is retriable on its own.
+//
+// TIMESTAMPS ARE MILLISECONDS throughout, matching Cardano's own validity
+// range. Graduate takes no timestamp at all. SealLock's `timestamp` and
+// vesting's `start_timestamp` are each bound by
+// `interval.contains(self.validity_range, …)` AND a width bound, so declaring
+// one means also declaring a narrow range around it. The staking pool is the
+// awkward one: it reads its own `now` off the range's LOWER BOUND and pins its
+// `last_update_ms` to exactly that, so the seeding datum is stamped with the
+// floor of the range rather than with the seal timestamp. A unit test cannot
+// catch that — it builds the range and the datum from the same variable.
 // ============================================================================
 
 import type { Assets, LucidEvolution, Network as LucidNetwork, SpendingValidator, UTxO } from '@lucid-evolution/lucid';
-import { Blockfrost, CML, Constr, Data, Lucid, validatorToAddress } from '@lucid-evolution/lucid';
+import { Blockfrost, CML, Constr, credentialToAddress, Data, Lucid, validatorToAddress } from '@lucid-evolution/lucid';
 import { BlockfrostProvider } from '@meshsdk/core';
 import { KeyCurveSpendWallet } from './key-curve-spend-wallet.js';
 import { selectLaunchUtxo, selectStakingPoolUtxo } from './launch-utxo-lookup.js';
@@ -82,6 +84,7 @@ import {
   VESTING_REDEEMER,
 } from './redeemer-indices.js';
 import type { ReferenceScriptPointer } from './reference-script.js';
+import { scriptHashOf } from './reference-script.js';
 import { advance } from './staking-math.js';
 import type { CreatorSigner } from './tier-a-graduation-submitter.js';
 import {
@@ -96,6 +99,16 @@ import {
   type VestingDatumData,
   VestingDatumSchema,
 } from './tier-a-schemas.js';
+import {
+  blake2b224Hex,
+  openingPoolDatum,
+  VENUE_MAX_LQ_CAP,
+  type VenueFactoryParameters,
+  VenuePoolConfigSchema,
+  venueAssetName,
+  venueCreateRedeemer,
+  venueMintedAssets,
+} from './venue-pool.js';
 
 /** Lucid's network names, as Mesh's builder and slot maths take them. */
 const CURVE_NETWORK: Partial<Record<LucidNetwork, CurveNetwork>> = {
@@ -129,6 +142,25 @@ function pruneZero(assets: Assets): Assets {
   return out;
 }
 
+/**
+ * NoctisSwap, as a graduation has to know it: the factory that mints the
+ * pool, and the nine parameters it was applied with.
+ *
+ * `parameters` is not a convenience copy — the factory rebuilds the pool's
+ * opening datum from exactly these values and requires the submitted datum to
+ * equal it, so a graduation built from a different set produces a datum the
+ * factory refuses. Read them from `contracts/cardano-dex/deployment/
+ * applied.json` with `readVenueFactoryParameters`, which is the same record
+ * `factoryScriptCbor` comes from, rather than assembling them by hand.
+ */
+export interface VenueDeployment {
+  /** The APPLIED factory's compiled script, raw CBOR from the record. */
+  factoryScriptCbor: string;
+  /** Where that factory is published. Referenced, not carried — see header. */
+  factoryRef?: ReferenceScriptPointer;
+  parameters: VenueFactoryParameters;
+}
+
 export interface TierBGraduationConfig {
   blockfrostProjectId: string;
   blockfrostUrl: string;
@@ -137,6 +169,20 @@ export interface TierBGraduationConfig {
   lpEscrowScriptCbor: string;
   vestingScriptCbor: string;
   stakingPoolScriptCbor: string;
+  /** The venue this launch graduates onto. */
+  venue: VenueDeployment;
+  /**
+   * The creator's fee-recipient Ed25519 PUBLIC KEY, hex — not its hash.
+   *
+   * The pool's datum carries it, the factory checks `blake2b_224` of it
+   * against the hash the LP escrow recorded at genesis, and the venue's
+   * withdraw path verifies real signatures against it later. It cannot be
+   * derived from anything this submitter reads: a Cardano address carries the
+   * hash, and hashing is one-way. Captured at launch creation.
+   */
+  creatorRoyaltyPubKeyHex: string;
+  /** Where the staking pool validator is published, for staking launches. */
+  stakingPoolRef?: ReferenceScriptPointer;
   /**
    * Where the curve and LP escrow validators are published as CIP-33
    * reference scripts — TX1 names both rather than carrying them, the same
@@ -218,11 +264,14 @@ export class TierBGraduationSubmitter {
   }
 
   /**
-   * TX1 of the graduation flow — Graduate (bonding_curve_tier_b) + SealLock
-   * (lp_escrow). See file header for why this is separate from
-   * StartVesting. Independently retriable: if a prior call already landed
-   * on-chain, this throws (on the state guards below) instead of
-   * double-spending.
+   * TX1 — the graduation itself: Graduate, SealLock, the factory's Create and
+   * (for an opt-in launch) TopUpPool, in one transaction. See the file header
+   * for the output layout the factory's redeemer depends on, and for why
+   * StartVesting is a separate transaction.
+   *
+   * Independently retriable. If a prior call already landed on chain this
+   * throws on one of the state guards below rather than building a second
+   * transaction to spend UTXOs that are gone.
    *
    * @param lockSealTimestampMs  MILLISECONDS — becomes lp_escrow's
    *   lock_timestamp, which is_lock_expired adds lock_duration to. See file
@@ -239,6 +288,11 @@ export class TierBGraduationSubmitter {
     lpReserveTokens: bigint;
     stakingReserveTokens: bigint;
     stakingSeeded: boolean;
+    poolAddress: string;
+    poolUtxoRef: string;
+    poolNftUnit: string;
+    lqUnit: string;
+    escrowedLq: bigint;
   }> {
     const lucid = await this.lucidPromise;
 
@@ -305,14 +359,95 @@ export class TierBGraduationSubmitter {
       staking_seeded: true,
     };
 
-    // ---- lp_escrow's own continuing output (SealLock) ----
-    // Same full-value discipline: the escrow's thread NFT continues, and
-    // `lp_seeding_output_ok` requires it to (== 1 in the seeded output).
-    const newLpAssets = pruneZero({
-      ...lpUtxo.assets,
-      lovelace: (lpUtxo.assets.lovelace ?? 0n) + lpAda,
-      [tokenUnit]: lpDatum.lp_token_amount,
+    // ---- NoctisSwap: the pool this graduation opens ----
+    // The factory's policy id is the hash of the APPLIED factory. Everything
+    // below is checked against it before a transaction is built, because each
+    // of these is a rule some validator enforces with a message that names
+    // neither the field nor the reason.
+    const { parameters: venue } = this.config.venue;
+    const factoryPolicyId = scriptHashOf(this.config.venue.factoryScriptCbor);
+    const poolNftUnit = factoryPolicyId + venueAssetName('pool', this.config.launchIdHex);
+    const lqUnit = factoryPolicyId + venueAssetName('lq', this.config.launchIdHex);
+
+    if (curveDatum.pool_nft_policy !== factoryPolicyId) {
+      throw new Error(
+        `This launch was minted against factory ${curveDatum.pool_nft_policy}, and the graduation is ` +
+          `being built against ${factoryPolicyId}. The curve looks for a pool output carrying an NFT ` +
+          'under the policy in its own datum, so a pool minted by any other factory is invisible to it.',
+      );
+    }
+    if (curveDatum.lp_reserve_tokens <= 0n) {
+      throw new Error(
+        `lp_reserve_tokens is ${curveDatum.lp_reserve_tokens} — a pool opens with a real reserve of the ` +
+          'launch token on one side, and the factory requires a positive quantity of it.',
+      );
+    }
+    // The escrow's position was written at GENESIS and SealLock's equality
+    // check never updates it, so these three fields have to have been right
+    // before the launch ever traded. Wrong here means a launch that can reach
+    // 100% sell-through and then cannot graduate at all.
+    if (
+      lpDatum.lp_token_policy_id !== factoryPolicyId ||
+      lpDatum.lp_token_name !== venueAssetName('lq', this.config.launchIdHex) ||
+      lpDatum.lp_token_amount !== venue.initialLq
+    ) {
+      throw new Error(
+        `The LP escrow's genesis names its position as ${lpDatum.lp_token_amount} of ` +
+          `${lpDatum.lp_token_policy_id}.${lpDatum.lp_token_name}, but this factory mints ` +
+          `${venue.initialLq} of ${factoryPolicyId}.${venueAssetName('lq', this.config.launchIdHex)}. ` +
+          'SealLock compares the position it receives with the one its datum names, and that datum was ' +
+          'fixed at genesis — this launch cannot graduate onto this factory.',
+      );
+    }
+    if (blake2b224Hex(this.config.creatorRoyaltyPubKeyHex) !== lpDatum.fee_recipient_pub_key_hash) {
+      throw new Error(
+        'The creator public key supplied does not hash to the fee recipient the LP escrow recorded at ' +
+          'genesis. The factory takes blake2b_224 of the key it is given and compares it with that ' +
+          'record, so the wrong key is refused on chain with nothing said about which key was wrong.',
+      );
+    }
+    // `lp_own_output_clean` allows the sealed escrow three assets: lovelace,
+    // its thread NFT and the LQ position. Anything else already sitting on
+    // the escrow makes that four and the seal fails.
+    const escrowUnits = Object.keys(pruneZero(lpUtxo.assets));
+    if (escrowUnits.length > 2) {
+      throw new Error(
+        `The LP escrow UTXO holds ${escrowUnits.length} assets (${escrowUnits.join(', ')}). Sealing adds ` +
+          'the pool LQ token, and the escrow refuses a sealed output holding more than lovelace, its ' +
+          'thread NFT and the position.',
+      );
+    }
+
+    const poolAddress = credentialToAddress(this.config.network, {
+      type: 'Script',
+      hash: venue.poolValidatorHash,
     });
+    const poolAssets = pruneZero({
+      lovelace: lpAda,
+      [tokenUnit]: curveDatum.lp_reserve_tokens,
+      [poolNftUnit]: 1n,
+      // The pool keeps everything the escrow does not: circulating liquidity
+      // is `max_lq_cap` minus what the pool still holds, so the escrow's
+      // position IS the liquidity and this remainder is the unissued rest.
+      [lqUnit]: VENUE_MAX_LQ_CAP - venue.initialLq,
+    });
+    const poolDatum = openingPoolDatum(venue, {
+      launchIdHex: this.config.launchIdHex,
+      factoryPolicyId,
+      tokenPolicyIdHex: curveDatum.token_policy_id,
+      tokenAssetNameHex: curveDatum.token_asset_name,
+      royaltyPubKeyHex: this.config.creatorRoyaltyPubKeyHex,
+    });
+
+    // ---- lp_escrow's own continuing output (SealLock) ----
+    // The escrow's LOVELACE DOES NOT MOVE. `lp_value_received` compares the
+    // sealed output's lovelace with the input's plus `seeded_ada`, and the
+    // raise went into the pool, so `seeded_ada` is zero and the comparison is
+    // an exact equality on a figure genesis already set. Nothing can top this
+    // output up: an escrow whose genesis lovelace does not cover a three-asset
+    // output is one that cannot be sealed, which is why the check below is
+    // here rather than left to the node.
+    const newLpAssets = pruneZero({ ...lpUtxo.assets, [lqUnit]: venue.initialLq });
     const newLpDatum: LpEscrowDatumData = {
       ...lpDatum,
       lock_timestamp: BigInt(lockSealTimestampMs),
@@ -323,7 +458,10 @@ export class TierBGraduationSubmitter {
     // Graduate as variant 9 while the code sent 8. `redeemer-indices.ts` is
     // held against the compiled blueprint by a test, so it cannot say that.
     const graduateRedeemer = new Constr(BONDING_CURVE_TIER_B_REDEEMER.Graduate, []);
-    const sealLockRedeemer = new Constr(LP_ESCROW_REDEEMER.SealLock, [BigInt(lockSealTimestampMs), lpAda]);
+    // `seeded_ada` is ZERO, and that is not an omission. It is what the seal
+    // claims arrived in lovelace, and on this path nothing does — the whole
+    // raise went into the pool, and the escrow's position is the LQ token.
+    const sealLockRedeemer = new Constr(LP_ESCROW_REDEEMER.SealLock, [BigInt(lockSealTimestampMs), 0n]);
 
     const companionInputs: CompanionScriptInput[] = [
       {
@@ -340,11 +478,23 @@ export class TierBGraduationSubmitter {
         },
       },
     ];
+    // ORDER IS MEANING HERE. The curve's continuing output is 0; these follow
+    // it. The factory's `Create` redeemer names the escrow and the pool by
+    // these numbers, so appending to this list ahead of them silently
+    // repoints the factory at the wrong outputs. `expectedOutputs` below is
+    // what turns that from a silent repointing into a build failure.
+    const ESCROW_OUT_IX = 1;
+    const POOL_OUT_IX = 2;
     const payouts: GraduationSpendPlan['payouts'] = [
       {
         address: this.lpEscrowAddress,
         assets: newLpAssets,
         datumCbor: Data.to<LpEscrowDatumData>(newLpDatum, LpEscrowDatumSchema),
+      },
+      {
+        address: poolAddress,
+        assets: poolAssets,
+        datumCbor: Data.to(poolDatum, VenuePoolConfigSchema),
       },
     ];
     const requiredSignerHashes: string[] = [];
@@ -400,7 +550,16 @@ export class TierBGraduationSubmitter {
           assets: poolUtxo.assets,
         },
         redeemerCbor: Data.to(new Constr(STAKING_POOL_REDEEMER.TopUpPool, [curveDatum.staking_reserve_tokens])),
-        script: { embeddedScriptCbor: this.config.stakingPoolScriptCbor },
+        // Referenced when a pointer was published, carried otherwise. This
+        // one is the swing vote on whether a staking graduation fits: the
+        // curve, the escrow and the factory are all named, and the staking
+        // validator carried is the only script left in the witness set.
+        script: this.config.stakingPoolRef
+          ? {
+              compiledScriptCbor: this.config.stakingPoolScriptCbor,
+              referenceScript: this.config.stakingPoolRef,
+            }
+          : { embeddedScriptCbor: this.config.stakingPoolScriptCbor },
       });
       payouts.push({
         address: this.stakingPoolAddress,
@@ -430,6 +589,19 @@ export class TierBGraduationSubmitter {
       payouts,
       companionInputs,
       requiredSignerHashes,
+      mint: {
+        policyScriptCbor: this.config.venue.factoryScriptCbor,
+        referenceScript: this.config.venue.factoryRef,
+        redeemerCbor: Data.to(venueCreateRedeemer(this.config.launchIdHex, POOL_OUT_IX, ESCROW_OUT_IX)),
+        assets: venueMintedAssets(this.config.launchIdHex),
+      },
+      // The two the factory names by number, identified by the asset that can
+      // only be at one of them. Both are minted in this same transaction, so
+      // neither could have come from anywhere else.
+      expectedOutputs: [
+        { index: ESCROW_OUT_IX, unit: lqUnit, quantity: venue.initialLq },
+        { index: POOL_OUT_IX, unit: poolNftUnit, quantity: 1n },
+      ],
       // SealLock binds its timestamp to the range, so the range has to exist.
       validity: { fromMs: validityFromMs, toMs: lockSealTimestampMs + graduationHalfWindowMs },
     };
@@ -454,6 +626,14 @@ export class TierBGraduationSubmitter {
       lpReserveTokens: curveDatum.lp_reserve_tokens,
       stakingReserveTokens: curveDatum.staking_reserve_tokens,
       stakingSeeded: curveDatum.staking_enabled,
+      // The pool this graduation opened. Its own UTXO is `txHash#POOL_OUT_IX`
+      // — reported rather than left to be searched for, because the pool NFT
+      // is what every later venue transaction identifies it by.
+      poolAddress,
+      poolUtxoRef: `${txHash}#${POOL_OUT_IX}`,
+      poolNftUnit,
+      lqUnit,
+      escrowedLq: venue.initialLq,
     };
   }
 
@@ -599,6 +779,11 @@ export class TierBGraduationSubmitter {
     lpReserveTokens: bigint;
     stakingReserveTokens: bigint;
     stakingSeeded: boolean;
+    poolAddress: string;
+    poolUtxoRef: string;
+    poolNftUnit: string;
+    lqUnit: string;
+    escrowedLq: bigint;
   }> {
     const lucid = await this.lucidPromise;
 
@@ -630,6 +815,11 @@ export class TierBGraduationSubmitter {
       lpReserveTokens: step1.lpReserveTokens,
       stakingReserveTokens: step1.stakingReserveTokens,
       stakingSeeded: step1.stakingSeeded,
+      poolAddress: step1.poolAddress,
+      poolUtxoRef: step1.poolUtxoRef,
+      poolNftUnit: step1.poolNftUnit,
+      lqUnit: step1.lqUnit,
+      escrowedLq: step1.escrowedLq,
     };
   }
 }

@@ -1,12 +1,23 @@
-// Tests for tier-b-graduation-submitter.ts's TierBGraduationSubmitter — a
-// direct mirror of tier-a-graduation-submitter.ts's proven two-transaction
-// graduation flow, targeting bonding_curve_tier_b.ak instead of
-// bonding_curve.ak. This file's own header flags the one thing genuinely
-// worth testing distinctly from the linear curve version: Cardano Launch's DarkVeil-
-// specific datum fields (dv_allocation_root, dv_claimed,
-// dv_settled) must survive Graduate's `...curveDatum` spread untouched — a
-// real schema-sync bug once dropped them. Same importOriginal
-// partial-mock Lucid strategy as the other submitter tests.
+// Tests for tier-b-graduation-submitter.ts's TierBGraduationSubmitter.
+//
+// A Cardano Launch graduation opens a NoctisSwap pool, so one transaction has
+// to satisfy four validators at once and the factory names two of its outputs
+// BY INDEX. These tests assert the PLAN the submitter authors — the value on
+// each of the four outputs, the datum the factory will rebuild and compare
+// against, the mint, and the output indices the redeemer carries. What they
+// deliberately do not assert is that the built transaction really puts those
+// outputs where the plan says: that is a fact about the transaction builder,
+// and mesh-curve-spend.test.ts checks it against real transaction bytes.
+//
+// Two things here have bitten for real and are pinned by name: Cardano
+// Launch's DarkVeil fields (dv_allocation_root / dv_claimed / dv_settled)
+// must survive Graduate's spread untouched, and the staking pool's opening
+// datum must be stamped with the validity range's LOWER BOUND rather than the
+// seal timestamp, because that is the clock the pool itself reads.
+//
+// Same importOriginal partial-mock Lucid strategy as the other submitter
+// tests: `Data.to` is the identity, so a datum or redeemer reaches the plan as
+// the object that was built rather than as CBOR.
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -23,11 +34,15 @@ vi.mock('@lucid-evolution/lucid', async (importOriginal) => {
   };
 });
 
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { CML, credentialToAddress, Lucid } from '@lucid-evolution/lucid';
 import { bytesToHex } from '../cap-accumulator-tree.js';
+import { scriptHashOf } from '../reference-script.js';
 import { STAKE_EMPTY_ROOT } from '../stake-accumulator-tree.js';
 import { type ThreadNftRole, threadNftAssetName } from '../tier-a-schemas.js';
 import { TierBGraduationSubmitter } from '../tier-b-graduation-submitter.js';
+import { blake2b224Hex, VENUE_MAX_LQ_CAP, type VenueFactoryParameters, venueAssetName } from '../venue-pool.js';
 
 function fakeKeyHash(fill: number): string {
   return fill.toString(16).padStart(2, '0').repeat(28);
@@ -50,6 +65,36 @@ const THREAD_POLICY = 'cc'.repeat(28);
 /** The unit a real launch's state UTXO carries for one role. */
 const threadNft = (role: ThreadNftRole) => THREAD_POLICY + threadNftAssetName(role, LAUNCH_ID_HEX);
 
+// ---------------------------------------------------------------------------
+// The venue, as a graduation has to be told about it.
+//
+// The factory's bytes are the real compiled `pool_mint`, UNAPPLIED — the
+// applied form does not exist until its nine parameters are chosen, and what
+// these tests need from it is a script that really hashes to a policy id.
+// Everything the datum is built from comes from `VENUE` below, which is what
+// the deployment record will hold.
+// ---------------------------------------------------------------------------
+const venueBlueprint: { validators: Array<{ title: string; compiledCode: string }> } = JSON.parse(
+  readFileSync(join(import.meta.dirname, '..', '..', 'contracts', 'cardano-dex', 'plutus.json'), 'utf8'),
+);
+const FACTORY_CBOR = venueBlueprint.validators.find((v) => v.title === 'royalty_pool/pool_mint.pool_mint.mint')
+  ?.compiledCode as string;
+const FACTORY_POLICY = scriptHashOf(FACTORY_CBOR);
+const CREATOR_PUB_KEY = 'c1'.repeat(32);
+const VENUE: VenueFactoryParameters = {
+  threadNftPolicy: THREAD_POLICY,
+  poolValidatorHash: '0a'.repeat(28),
+  redirectValidatorHash: '0e'.repeat(28),
+  treasuryValidatorHash: '0c'.repeat(28),
+  treasuryAddressHex: '0f'.repeat(29),
+  feeNum: 99_900n,
+  treasuryFee: 100n,
+  royaltyFee: 1_000n,
+  initialLq: 1_000_000_000n,
+};
+const POOL_NFT_UNIT = FACTORY_POLICY + venueAssetName('pool', LAUNCH_ID_HEX);
+const LQ_UNIT = FACTORY_POLICY + venueAssetName('lq', LAUNCH_ID_HEX);
+
 function curveDatum(overrides: Record<string, unknown> = {}) {
   return {
     launch_id: LAUNCH_ID_HEX,
@@ -68,6 +113,9 @@ function curveDatum(overrides: Record<string, unknown> = {}) {
     dv_claimed: [fakeKeyHash(0x88)],
     dv_settled: true,
     thread_nft_policy: THREAD_POLICY,
+    // The factory this launch was minted against. Graduate looks for a pool
+    // output carrying an NFT under exactly this policy.
+    pool_nft_policy: FACTORY_POLICY,
     ...overrides,
   };
 }
@@ -97,7 +145,12 @@ function lpDatum(overrides: Record<string, unknown> = {}) {
     launch_id: LAUNCH_ID_HEX,
     lock_timestamp: 0n,
     lp_state: 'Unlocked',
-    lp_token_amount: 150_000_000n,
+    // The position is the venue pool's LQ token, and all three fields were
+    // fixed at genesis: SealLock's equality check never rewrites them.
+    lp_token_policy_id: FACTORY_POLICY,
+    lp_token_name: venueAssetName('lq', LAUNCH_ID_HEX),
+    lp_token_amount: VENUE.initialLq,
+    fee_recipient_pub_key_hash: blake2b224Hex(CREATOR_PUB_KEY),
     thread_nft_policy: THREAD_POLICY,
     ...overrides,
   };
@@ -223,6 +276,8 @@ function makeSubmitter(
     stakingPoolScriptCbor: '590004',
     bondingCurveRef: { txHash: 'ab'.repeat(32), outputIndex: 0, scriptHash: 'a1'.repeat(28) },
     lpEscrowRef: { txHash: 'cd'.repeat(32), outputIndex: 0, scriptHash: 'b2'.repeat(28) },
+    venue: { factoryScriptCbor: FACTORY_CBOR, parameters: VENUE },
+    creatorRoyaltyPubKeyHex: CREATOR_PUB_KEY,
     launchIdHex: LAUNCH_ID_HEX,
     threadNftPolicyId: THREAD_POLICY,
   });
@@ -444,7 +499,7 @@ describe('TierBGraduationSubmitter — SealLock/StartVesting are bound to a real
 });
 
 describe('TierBGraduationSubmitter.graduateAndSealLp — value movement + redeemers', () => {
-  it('moves lpAda + reserve tokens OUT of the curve and INTO lp_escrow exactly, redeemer indices 8/0', async () => {
+  it('empties the raise and both reserves out of the curve, redeemer indices 8/0', async () => {
     const { builder } = makeFakeTxBuilder();
     const { submitter, submitGraduation } = makeSubmitter(builder, {
       curveUtxos: [
@@ -457,12 +512,7 @@ describe('TierBGraduationSubmitter.graduateAndSealLp — value movement + redeem
           assets: { lovelace: 20_000_000n, [TOKEN_UNIT]: 1_000_000n },
         },
       ],
-      lpUtxos: [
-        {
-          datum: lpDatum({ lp_token_amount: 100n }),
-          assets: { lovelace: 2_000_000n },
-        },
-      ],
+      lpUtxos: [{ datum: lpDatum(), assets: { lovelace: 2_000_000n } }],
     });
 
     const result = await submitter.graduateAndSealLp(REAL_EXTENDED_KEY_HEX, GOVERNOR_ADDR, 1_700_000_000);
@@ -474,13 +524,182 @@ describe('TierBGraduationSubmitter.graduateAndSealLp — value movement + redeem
     // The curve's thread NFT continues — the seeding checks authenticate
     // every state output by its role's NFT.
     expect(plan.continuing.assets[threadNft('bondingCurveTierB')]).toBe(1n);
-    const lpPayout = plan.payouts[0];
-    expect(lpPayout?.assets.lovelace).toBe(7_000_000n);
-    expect(lpPayout?.assets[TOKEN_UNIT]).toBe(100n);
-    expect(lpPayout?.assets[threadNft('lpEscrow')]).toBe(1n);
 
     expect((plan.redeemerCbor as unknown as { index: number }).index).toBe(8);
     expect((plan.companionInputs[0]?.redeemerCbor as unknown as { index: number } | undefined)?.index).toBe(0);
+  });
+
+  // The escrow's lovelace is the one figure on this path that CANNOT move:
+  // `lp_value_received` compares the sealed output's lovelace with the input's
+  // plus `seeded_ada`, and `seeded_ada` is zero because the raise went to the
+  // pool. Both halves are asserted, because a submitter that sent the raise to
+  // the pool AND declared it in the redeemer would build a transaction that
+  // looks right and fails on an equality nothing names.
+  it('seals the escrow with the LQ position alone, its lovelace untouched', async () => {
+    const { builder } = makeFakeTxBuilder();
+    const { submitter, submitGraduation } = makeSubmitter(builder, {
+      curveUtxos: [
+        {
+          datum: curveDatum({ total_raised: 5_000_000n, lp_reserve_tokens: 100n, staking_reserve_tokens: 0n }),
+          assets: { lovelace: 20_000_000n, [TOKEN_UNIT]: 1_000_000n },
+        },
+      ],
+      lpUtxos: [{ datum: lpDatum(), assets: { lovelace: 2_000_000n } }],
+    });
+
+    await submitter.graduateAndSealLp(REAL_EXTENDED_KEY_HEX, GOVERNOR_ADDR, 1_700_000_000);
+
+    const plan = planOf(submitGraduation);
+    const escrow = plan.payouts[0];
+    expect(escrow?.assets.lovelace).toBe(2_000_000n);
+    expect(escrow?.assets[LQ_UNIT]).toBe(VENUE.initialLq);
+    expect(escrow?.assets[threadNft('lpEscrow')]).toBe(1n);
+    // Three assets exactly — `lp_own_output_clean` allows no more.
+    expect(Object.keys(escrow?.assets ?? {})).toHaveLength(3);
+    // The launch token does NOT go to the escrow any more.
+    expect(escrow?.assets[TOKEN_UNIT]).toBeUndefined();
+
+    const sealLock = plan.companionInputs[0]?.redeemerCbor as unknown as { fields: unknown[] };
+    expect(sealLock.fields[1]).toBe(0n);
+  });
+
+  it('opens the pool with the whole raise, the exact reserve, and four assets', async () => {
+    const { builder } = makeFakeTxBuilder();
+    const { submitter, submitGraduation } = makeSubmitter(builder, {
+      curveUtxos: [
+        {
+          datum: curveDatum({ total_raised: 5_000_000n, lp_reserve_tokens: 100n, staking_reserve_tokens: 0n }),
+          assets: { lovelace: 20_000_000n, [TOKEN_UNIT]: 1_000_000n },
+        },
+      ],
+      lpUtxos: [{ datum: lpDatum(), assets: { lovelace: 2_000_000n } }],
+    });
+
+    await submitter.graduateAndSealLp(REAL_EXTENDED_KEY_HEX, GOVERNOR_ADDR, 1_700_000_000);
+
+    const pool = planOf(submitGraduation).payouts[1];
+    expect(pool?.assets.lovelace).toBe(5_000_000n);
+    expect(pool?.assets[TOKEN_UNIT]).toBe(100n);
+    expect(pool?.assets[POOL_NFT_UNIT]).toBe(1n);
+    // The pool keeps every LQ the escrow does not, so circulating liquidity
+    // reads back as exactly the escrowed position.
+    expect(pool?.assets[LQ_UNIT]).toBe(VENUE_MAX_LQ_CAP - VENUE.initialLq);
+    expect(Object.keys(pool?.assets ?? {})).toHaveLength(4);
+    // A bare script address: the factory refuses a stake part, so nobody can
+    // delegate the pool's ADA for the pool's whole life.
+    expect(pool?.address).toBe(credentialToAddress('Preprod', { type: 'Script', hash: VENUE.poolValidatorHash }));
+  });
+
+  it("writes the factory's own expected datum, counters and nonce at zero", async () => {
+    const { builder } = makeFakeTxBuilder();
+    const { submitter, submitGraduation } = makeSubmitter(builder, {
+      curveUtxos: [{ datum: curveDatum(), assets: { lovelace: 20_000_000n, [TOKEN_UNIT]: 1_000_000n } }],
+      lpUtxos: [{ datum: lpDatum(), assets: { lovelace: 2_000_000n } }],
+    });
+
+    await submitter.graduateAndSealLp(REAL_EXTENDED_KEY_HEX, GOVERNOR_ADDR, 1_700_000_000);
+
+    const datum = planOf(submitGraduation).payouts[1]?.datumCbor as unknown as Record<string, unknown>;
+    expect(datum.pool_nft).toEqual({ policy: FACTORY_POLICY, name: venueAssetName('pool', LAUNCH_ID_HEX) });
+    expect(datum.pool_x).toEqual({ policy: '', name: '' });
+    expect(datum.pool_y).toEqual({ policy: TOKEN_POLICY, name: TOKEN_ASSET_NAME });
+    expect(datum.pool_lq).toEqual({ policy: FACTORY_POLICY, name: venueAssetName('lq', LAUNCH_ID_HEX) });
+    expect(datum.fee_num).toBe(99_900n);
+    expect(datum.treasury_fee).toBe(100n);
+    expect(datum.royalty_fee).toBe(1_000n);
+    expect([datum.treasury_x, datum.treasury_y, datum.royalty_x, datum.royalty_y, datum.nonce]).toEqual([
+      0n,
+      0n,
+      0n,
+      0n,
+      0n,
+    ]);
+    // Treasury first, redirect second. The pool reads its treasury authority
+    // from entry 0 and its governance authority from entry 1, so swapping
+    // them lets either action be authorised by the other's script.
+    expect(datum.dao_policy).toEqual([
+      { StakingHash: [{ ScriptCredential: [VENUE.treasuryValidatorHash] }] },
+      { StakingHash: [{ ScriptCredential: [VENUE.redirectValidatorHash] }] },
+    ]);
+    expect(datum.royalty_pub_key).toBe(CREATOR_PUB_KEY);
+  });
+
+  it('mints one pool NFT and the whole LQ supply, naming both outputs by index', async () => {
+    const { builder } = makeFakeTxBuilder();
+    const { submitter, submitGraduation } = makeSubmitter(builder, {
+      curveUtxos: [{ datum: curveDatum(), assets: { lovelace: 20_000_000n, [TOKEN_UNIT]: 1_000_000n } }],
+      lpUtxos: [{ datum: lpDatum(), assets: { lovelace: 2_000_000n } }],
+    });
+
+    await submitter.graduateAndSealLp(REAL_EXTENDED_KEY_HEX, GOVERNOR_ADDR, 1_700_000_000);
+
+    const plan = planOf(submitGraduation);
+    expect(plan.mint?.assets).toEqual([
+      { assetNameHex: venueAssetName('pool', LAUNCH_ID_HEX), quantity: 1n },
+      { assetNameHex: venueAssetName('lq', LAUNCH_ID_HEX), quantity: VENUE_MAX_LQ_CAP },
+    ]);
+    const create = plan.mint?.redeemerCbor as unknown as { index: number; fields: unknown[] };
+    expect(create.index).toBe(0);
+    // launch id, pool_out_ix, escrow_out_ix — and the indices must match where
+    // the payouts above actually sit.
+    expect(create.fields).toEqual([LAUNCH_ID_HEX, 2n, 1n]);
+    expect(plan.expectedOutputs).toEqual([
+      { index: 1, unit: LQ_UNIT, quantity: VENUE.initialLq },
+      { index: 2, unit: POOL_NFT_UNIT, quantity: 1n },
+    ]);
+  });
+
+  // Each of these is a rule some validator enforces with a message that names
+  // neither the field nor the reason. Catching them at build time is the
+  // difference between "this launch cannot graduate onto this factory" and an
+  // opaque evaluation failure on a transaction that cost real fees to build.
+  describe('the pre-flight checks', () => {
+    const cases: [string, { curve?: Record<string, unknown>; lp?: Record<string, unknown> }, RegExp][] = [
+      [
+        'the launch was minted against a different factory',
+        { curve: { pool_nft_policy: 'ab'.repeat(28) } },
+        /minted against factory/,
+      ],
+      ['there is no launch-token reserve to open with', { curve: { lp_reserve_tokens: 0n } }, /lp_reserve_tokens is 0/],
+      [
+        'the escrow names a position this factory does not mint',
+        { lp: { lp_token_amount: 7n } },
+        /cannot graduate onto this factory/,
+      ],
+      [
+        'the escrow names some other policy entirely',
+        { lp: { lp_token_policy_id: 'ab'.repeat(28) } },
+        /cannot graduate onto this factory/,
+      ],
+      [
+        'the creator key does not hash to the recorded recipient',
+        { lp: { fee_recipient_pub_key_hash: 'ee'.repeat(28) } },
+        /does not hash to the fee recipient/,
+      ],
+    ];
+    for (const [name, overrides, message] of cases) {
+      it(`refuses when ${name}`, async () => {
+        const { builder } = makeFakeTxBuilder();
+        const { submitter } = makeSubmitter(builder, {
+          curveUtxos: [{ datum: curveDatum(overrides.curve ?? {}), assets: { lovelace: 20_000_000n } }],
+          lpUtxos: [{ datum: lpDatum(overrides.lp ?? {}), assets: { lovelace: 2_000_000n } }],
+        });
+        await expect(submitter.graduateAndSealLp(REAL_EXTENDED_KEY_HEX, GOVERNOR_ADDR, 1_700_000_000)).rejects.toThrow(
+          message,
+        );
+      });
+    }
+
+    it('refuses when the escrow already holds something a sealed output has no room for', async () => {
+      const { builder } = makeFakeTxBuilder();
+      const { submitter } = makeSubmitter(builder, {
+        curveUtxos: [{ datum: curveDatum(), assets: { lovelace: 20_000_000n } }],
+        lpUtxos: [{ datum: lpDatum(), assets: { lovelace: 2_000_000n, [TOKEN_UNIT]: 5n } }],
+      });
+      await expect(submitter.graduateAndSealLp(REAL_EXTENDED_KEY_HEX, GOVERNOR_ADDR, 1_700_000_000)).rejects.toThrow(
+        /holds 3 assets/,
+      );
+    });
   });
 
   it('references the LP escrow validator and requires no signer on a staking-declined launch', async () => {
@@ -576,7 +795,7 @@ describe('TierBGraduationSubmitter — staking-enabled launches', () => {
     const { builder } = makeFakeTxBuilder();
     const { submitter, submitGraduation } = makeSubmitter(builder, {
       curveUtxos: [{ datum: stakingCurve(), assets: { lovelace: 20_000_000n, [TOKEN_UNIT]: 1_000n } }],
-      lpUtxos: [{ datum: lpDatum({ lp_token_amount: 100n }), assets: { lovelace: 2_000_000n } }],
+      lpUtxos: [{ datum: lpDatum(), assets: { lovelace: 2_000_000n } }],
       stakingPoolUtxos: [{ datum: poolDatum(), assets: { lovelace: 1_200_000n } }],
     });
 
@@ -594,7 +813,10 @@ describe('TierBGraduationSubmitter — staking-enabled launches', () => {
     // TopUpPool is permissionless — funding a pool needs nobody's approval.
     expect(plan.requiredSignerHashes).toEqual([]);
 
-    const poolPayout = plan.payouts[1]!;
+    // Index 2, after the escrow (0) and the venue pool (1) — the staking
+    // pool joins the payouts last, which is what keeps the two the factory
+    // names by number where the factory expects them.
+    const poolPayout = plan.payouts[2]!;
     expect(poolPayout.assets[TOKEN_UNIT]).toBe(250n);
     expect(poolPayout.assets[threadNft('stakingPool')]).toBe(1n);
 

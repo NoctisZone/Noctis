@@ -185,14 +185,44 @@ factory writes them from its own parameters onto every pool it mints and no arm
 can raise or lower them afterwards, so a deployment's schedule is fixed at the
 moment its factory hash is.
 
+## How a pool opens
+
+A pool comes into being in its launch's graduation and nowhere else, as one
+transaction that satisfies four validators at once:
+
+| output | what it is | what holds it to that |
+|---|---|---|
+| 0 | the curve's own continuing record | `Graduate`: the state, the raise and both reserves really leaving, nothing padded |
+| 1 | the LP escrow, sealed | `SealLock`: the position its datum names really arrives, and its lovelace does not move |
+| 2 | the pool, opened | the factory: its own expected datum field for field, four assets, the NFT, the LQ remainder |
+| 3 | the staking pool, seeded | `TopUpPool`, on a launch that opted into staking |
+
+The factory names outputs 1 and 2 **by index**, so the order above is part of
+the transaction's meaning. Every step is permissionless: the factory's
+authority is that the curve is spent under `Graduate` in the same transaction,
+and the curve's authority is that it really sold through. Nothing can withhold
+a pool from a launch that earned one.
+
+The escrow's position is the pool's own LQ token, `initial_lq` of it, minted
+here and held for the lock. The pool keeps the rest of the LQ supply, so
+circulating liquidity is read from the pool's balance rather than stored.
+
+**Every script is referenced, not carried.** The curve, the escrow, the staking
+pool and the factory together are roughly twice the 16,384-byte transaction
+cap, so all four are named through published CIP-33 pointers. Referenced, a
+staking graduation is under 2.8 KB.
+
+**Measured budgets.** Evaluated against a real script context with
+`aiken tx simulate`, a staking graduation spends **2,861,455** memory units and
+**1,068,537,256** cpu steps — about 17% and 11% of a mainnet transaction's
+limits. A launch that declined staking spends roughly two thirds of that. The
+figures are for the current build and are worth re-measuring when a validator
+in either package changes.
+
 ## Not here yet
 
 The batcher. Splash's executor is unlicensed and is not used, so this is
 written rather than adopted; the build plan tracks it.
-
-The launch package's side of graduation is built: its curve pays a pool output
-carrying the pool thread NFT, the whole net-of-fee raise and the full LP token
-reserve, and nothing else, which is the shape the factory mints against.
 
 ## Build and test
 

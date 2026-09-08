@@ -24,12 +24,18 @@ import { BONDING_CURVE_TIER_B_REDEEMER, REDEEMER_TABLES } from '../redeemer-indi
 interface Blueprint {
   definitions: Record<string, { anyOf?: Array<{ title: string; index: number }> }>;
 }
-const blueprint: Blueprint = JSON.parse(
-  readFileSync(join(import.meta.dirname, '..', '..', 'contracts', 'cardano', 'plutus.json'), 'utf8'),
-);
+function load(pkg: 'cardano' | 'cardano-dex'): Blueprint {
+  return JSON.parse(readFileSync(join(import.meta.dirname, '..', '..', 'contracts', pkg, 'plutus.json'), 'utf8'));
+}
+const blueprint = load('cardano');
+// The venue is a separate Aiken package with its own blueprint. A redeemer
+// that crosses the boundary — the factory's, which a graduation sends — is
+// pinned against the file that actually compiled it, not against the launch
+// package's, which does not declare it at all.
+const venueBlueprint = load('cardano-dex');
 
-describe.each(REDEEMER_TABLES)('$definition', ({ definition, indices }) => {
-  const declared = blueprint.definitions[definition]?.anyOf;
+describe.each(REDEEMER_TABLES)('$definition', ({ definition, indices, package: pkg }) => {
+  const declared = (pkg === 'venue' ? venueBlueprint : blueprint).definitions[definition]?.anyOf;
 
   it('exists in the compiled blueprint', () => {
     expect(declared, `${definition} is not in plutus.json — was the validator renamed?`).toBeDefined();
@@ -54,8 +60,17 @@ describe.each(REDEEMER_TABLES)('$definition', ({ definition, indices }) => {
 describe('the table itself', () => {
   it('names every redeemer type the blueprint declares', () => {
     const inBlueprint = Object.keys(blueprint.definitions).filter((k) => k.endsWith('Redeemer'));
-    const inTable = REDEEMER_TABLES.map((t) => t.definition);
+    const inTable = REDEEMER_TABLES.filter((t) => t.package !== 'venue').map((t) => t.definition);
     expect(new Set(inTable)).toEqual(new Set(inBlueprint));
+  });
+
+  // The venue names its redeemer types after the ACTION rather than after the
+  // validator, so the suffix sweep above would not find them however the file
+  // was loaded. Named individually instead, which is honest about the fact
+  // that this side is a list rather than a sweep.
+  it('records the venue redeemers a graduation sends', () => {
+    const inTable = REDEEMER_TABLES.filter((t) => t.package === 'venue').map((t) => t.definition);
+    expect(inTable).toContain('royalty_pool/pool_mint/MintAction');
   });
 });
 

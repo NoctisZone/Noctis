@@ -38,11 +38,13 @@
 //     the node rejects for a reason that names neither the output nor ada.
 
 import { type Asset, applyCborEncoding, MeshTxBuilder, type UTxO as MeshUTxO, resolveSlotNo } from '@meshsdk/core';
+import { deserializeTx } from '@meshsdk/core-cst';
 import {
   MESH_NETWORK_ID,
   type ReferenceScriptPointer,
   type ResolvedReferenceScript,
   resolveReferenceScript,
+  scriptHashOf,
 } from './reference-script.js';
 
 /** Networks this codebase names, as Mesh's builder and slot maths take them. */
@@ -120,6 +122,28 @@ export interface CompanionScriptInput {
 }
 
 /**
+ * A minting policy running in the same transaction — how the venue's pool
+ * factory creates a launch's pool NFT and LQ token during graduation.
+ *
+ * One policy, one redeemer, however many asset names: the ledger indexes a
+ * mint redeemer by the policy's position in the mint map, not by asset, so
+ * two names under one policy share a single redeemer. The builder below calls
+ * Mesh once per name because that is the shape of its API, and
+ * `mesh-curve-spend.test.ts` decodes the result to confirm one redeemer came
+ * out — an assumption about somebody else's serialiser is not a fact.
+ */
+export interface PlanMint {
+  /** The policy's compiled script, raw CBOR straight from the blueprint. */
+  policyScriptCbor: string;
+  /** Where that exact policy is published, when it is named rather than carried. */
+  referenceScript?: ReferenceScriptPointer;
+  /** The redeemer, CBOR hex. */
+  redeemerCbor: string;
+  /** Asset name (hex) and quantity, one entry per name minted. */
+  assets: Array<{ assetNameHex: string; quantity: bigint }>;
+}
+
+/**
  * A graduation: the curve spent against its published reference script,
  * alongside the launch's other contracts settling in the same transaction.
  *
@@ -129,6 +153,21 @@ export interface CompanionScriptInput {
  */
 export interface GraduationSpendPlan extends CurveSpendPlan {
   companionInputs: CompanionScriptInput[];
+  /** The venue factory, when this graduation opens a pool. */
+  mint?: PlanMint;
+  /**
+   * Output positions a redeemer in this plan names by NUMBER, and the asset
+   * that identifies each one.
+   *
+   * The venue factory's `Create` carries `pool_out_ix` and `escrow_out_ix` —
+   * indices into the transaction's own output list. Nothing in the redeemer
+   * describes what should be there, so an output list that came out in a
+   * different order still decodes, still evaluates, and checks the wrong
+   * output against the wrong rule. The builder does not sort outputs today;
+   * this is what makes that a fact about the transaction rather than a fact
+   * about the version of the library installed.
+   */
+  expectedOutputs?: Array<{ index: number; unit: string; quantity: bigint }>;
 }
 
 /**
@@ -236,6 +275,40 @@ function toMesh(assets: PlanAssets): Asset[] {
  */
 export function spendableForFees(utxos: readonly MeshUTxO[]): MeshUTxO[] {
   return utxos.filter((u) => !u.output.scriptRef && !u.output.scriptHash);
+}
+
+/**
+ * Holds the finished transaction to the output positions the plan's redeemers
+ * name, by looking at what came out rather than at what was asked for.
+ *
+ * A redeemer that carries an output index is trusting the builder to leave
+ * the outputs where they were put. That is true of this builder today — it
+ * sorts inputs, mints and withdrawals during `complete()` and leaves outputs
+ * alone, and appends change last — but it is a property of somebody else's
+ * library, not of this code, and it fails silently: the transaction is
+ * well-formed, the script runs, and it checks the wrong output.
+ */
+function assertOutputsWhereClaimed(unsignedTxHex: string, expected: GraduationSpendPlan['expectedOutputs']): void {
+  if (!expected || expected.length === 0) return;
+  const outputs = deserializeTx(unsignedTxHex).body().outputs();
+  for (const claim of expected) {
+    const output = outputs[claim.index];
+    if (!output) {
+      throw new Error(
+        `The plan names output ${claim.index}, but the built transaction has only ${outputs.length}. ` +
+          'A redeemer carrying that index would be pointing past the end of the output list.',
+      );
+    }
+    const value = output.toCore().value;
+    const held = claim.unit === 'lovelace' ? value.coins : (value.assets?.get(claim.unit as never) ?? 0n);
+    if (held !== claim.quantity) {
+      throw new Error(
+        `Output ${claim.index} should hold ${claim.quantity} of ${claim.unit} and holds ${held}. ` +
+          'The outputs moved after they were placed, so every redeemer naming one by index is now ' +
+          'pointing at the wrong output.',
+      );
+    }
+  }
 }
 
 /**
@@ -546,6 +619,34 @@ export class MeshCurveSpender {
       tx.txInInlineDatumPresent().txInRedeemerValue(companion.redeemerCbor, 'CBOR');
     }
 
+    if (plan.mint) {
+      if (plan.mint.assets.length === 0) {
+        throw new Error('A mint with no assets mints nothing — leave `mint` off the plan instead.');
+      }
+      const policyId = scriptHashOf(plan.mint.policyScriptCbor);
+      const reference = plan.mint.referenceScript
+        ? resolveReferenceScript(
+            plan.mint.policyScriptCbor,
+            plan.mint.referenceScript,
+            MESH_NETWORK_ID[this.config.network],
+          )
+        : undefined;
+      for (const asset of plan.mint.assets) {
+        tx.mintPlutusScriptV3().mint(String(asset.quantity), policyId, asset.assetNameHex);
+        if (reference) {
+          tx.mintTxInReference(
+            reference.txHash,
+            reference.outputIndex,
+            String(reference.rawSizeBytes),
+            reference.scriptHash,
+          );
+        } else {
+          tx.mintingScript(applyCborEncoding(plan.mint.policyScriptCbor));
+        }
+        tx.mintRedeemerValue(plan.mint.redeemerCbor, 'CBOR');
+      }
+    }
+
     tx.txOut(this.ref.scriptAddress, toMesh(plan.continuing.assets)).txOutInlineDatumValue(
       plan.continuing.datumCbor,
       'CBOR',
@@ -573,7 +674,9 @@ export class MeshCurveSpender {
       .changeAddress(changeAddress)
       .setNetwork(this.config.network);
 
-    return tx.complete();
+    const unsigned = await tx.complete();
+    assertOutputsWhereClaimed(unsigned, plan.expectedOutputs);
+    return unsigned;
   }
 
   /**

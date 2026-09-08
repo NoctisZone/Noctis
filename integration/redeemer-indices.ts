@@ -154,17 +154,36 @@ export const NHOP_CHALLENGE_REDEEMER = { ResolveChallenge: 0 } as const;
 export const NHOP_MINT_REDEEMER = { OpenChallenge: 0, CloseChallenge: 1 } as const;
 
 /**
+ * `contracts/cardano-dex/validators/royalty_pool/pool_mint.ak` — NoctisSwap's
+ * pool factory, as a MINTING policy.
+ *
+ * `Create` is the only redeemer a graduation ever sends, and its two integer
+ * fields are indices into the transaction's own output list. That makes this
+ * table load-bearing twice over: the constructor index says which arm runs,
+ * and getting it wrong sends `Burn` — which passes only for a transaction
+ * that mints nothing positive, so a graduation carrying it fails with no
+ * mention of either.
+ */
+export const POOL_MINT_REDEEMER = { Create: 0, Burn: 1 } as const;
+
+/**
  * Every table above, against the blueprint definition it must agree with.
  *
  * The test walks this in BOTH directions — every entry against the blueprint,
  * and every `*Redeemer` definition in the blueprint against this list — so a
  * validator whose redeemers are recorded nowhere fails a test rather than
  * sitting unchecked. `zk_anchor` did exactly that until it was noticed.
+ *
+ * `package` names which blueprint the definition lives in: the launch package
+ * (`contracts/cardano`) or the venue (`contracts/cardano-dex`). They are
+ * separately compiled, so one file cannot answer for both.
  */
 export const REDEEMER_TABLES: ReadonlyArray<{
   definition: string;
   indices: Readonly<Record<string, number>>;
+  package?: 'launch' | 'venue';
 }> = [
+  { definition: 'royalty_pool/pool_mint/MintAction', indices: POOL_MINT_REDEEMER, package: 'venue' },
   { definition: 'bonding_curve/BondingCurveRedeemer', indices: BONDING_CURVE_REDEEMER },
   { definition: 'bonding_curve_tier_b/BondingCurveTierBRedeemer', indices: BONDING_CURVE_TIER_B_REDEEMER },
   { definition: 'curve_order/OrderRedeemer', indices: CURVE_ORDER_REDEEMER },
