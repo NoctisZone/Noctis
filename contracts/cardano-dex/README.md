@@ -377,12 +377,54 @@ smaller than it is for a venue whose executor fronts trades, and it is worth
 settling the hosting and key-custody decisions against the real figure rather
 than the assumed one.
 
+## What a quote promises, and what it only estimates
+
+An order is not filled when it is signed. It rests until an executor meets it,
+and the pool it meets is not the pool it was quoted against — so **a quote is a
+bound, not a price**, and the two ways a fill departs from its quote point in
+opposite directions.
+
+The pool may move first, because other fills land in between, and the placer
+then gets less than the quote said. What stops that going arbitrarily far is
+the order's own price floor, and **the floor is the only figure anyone is bound
+to**: a fill pays at or above it, or the validator refuses the fill. The other
+direction is the execution fee, which is a ceiling rather than a price — a
+settled fill charges what the transaction cost and returns the rest — so the
+lovelace side usually comes back slightly better than quoted.
+
+**The floor is set from the quote, never from spot.** This is the one mistake
+worth designing against, because it is silent. A trade moves the price against
+itself, so an order worth roughly p% of the pool realises about p% below spot;
+a floor placed at spot less a small tolerance is therefore unreachable at any
+size and at any fee, forever. From outside, that order is indistinguishable
+from one patiently waiting for a better price. A draft is checked against the
+pool before it is returned, so an order that could not be filled at the state
+it was quoted at is refused rather than handed back.
+
+**Price impact is measured against the fee-inclusive spot**, so it is the
+effect of the trade's size alone. Measuring from the fee-free mid price would
+report the pool's own fee a second time, as though the trade had caused it: a
+1 ADA trade into a 20,000 ADA pool would read about 121 basis points where the
+honest figure is 2.
+
+Everything is exact integer arithmetic and rates are rationals, in the shape
+the order datum states its floor in — a rate that has been through a float is a
+rate that no longer agrees with the validator.
+
 ## Not here yet
 
 Running the batcher in production: where it is hosted, how its key is held, and
 what watches it. The loop, the fill and the reading are here and tested; the
 operational half is a deployment decision the build plan tracks. Splash's
 executor is unlicensed and is not used, so this is written rather than adopted.
+
+The aggregator-facing price feed. A pool's own market state — reserves net of
+accrued fees, mid and spot, the fee, and the pool's value — is derived from a
+pool UTXO and is here. What an aggregator asks for on top of that is a stream
+of trades with the reserves after each one, which is a product of following the
+chain continuously rather than reading it on demand. The wire format should be
+settled against the aggregator's own specification rather than inferred from
+third-party adapters, and that pairs naturally with applying to be listed.
 
 ## Build and test
 
