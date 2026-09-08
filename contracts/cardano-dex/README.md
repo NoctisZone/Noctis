@@ -328,12 +328,61 @@ quietly dropped — a reader that reports three pools where the chain holds four
 is indistinguishable from a chain that holds three, and the difference is a
 launch whose market has silently stopped trading.
 
+## How a round of fills runs
+
+A pool fills one order per transaction, so a round of work against one pool is
+a **chain, not a set** — and every rule the runner follows comes out of that.
+
+**The state a round was read at is correct only for its first fill.** Each fill
+spends the pool output the last one made, so the second order in a pool's queue
+meets a pool that has already moved: a worse price, and possibly a floor it no
+longer clears. The runner carries each successor forward and re-asks whether
+the next order is still fillable against it, rather than reusing what was read
+before any of the round ran. The successor is derived from the fill's own
+arithmetic rather than read back from the chain, because waiting for a
+confirmation between links would cost a block per fill.
+
+**A failure ends that pool's chain, and nothing else.** After a fill fails,
+either it never reached the chain or it reached it and the reply did not come
+back, and the two are not distinguishable from outside. Every later fill in
+that chain rests on whichever is true, so the chain stops and the next round
+re-reads the chain, which is the authority on the question. Other pools are
+untouched — their chains never shared an input with this one.
+
+**Chain depth is exposure.** A chained transaction is invalid if its parent
+never lands, so ten fills against one pool is one transaction's fate shared by
+ten. The depth a round will reach is bounded, and the default is ten.
+
+**Fills follow the reader's sequence, never the runner's preference.** The
+sequence is block height, then transaction index, then output index — all facts
+of the chain, so the order a batcher is obliged to follow is derivable by
+anyone from public data, and a run that departs from it is visible as such
+afterwards.
+
+**Every order comes back in one of four outcomes**, because they mean four
+different things to whoever is watching: `filled` is work done; `unfillable` is
+the normal resting state of an order waiting for a price; `declined` is the
+batcher choosing not to, under a stated rule; and `failed` is the only one that
+is ever an alarm. A monitor that cannot tell an idle market from a broken one
+pages for the first and stays silent through the second.
+
+### What the executor's float has to be
+
+A fill has two inputs and neither is the executor's — the order pays for its
+own execution out of `ex_fee` — so a batcher never funds a fill and needs no
+working capital to run one. Its only ada at stake is **collateral**, which
+every Plutus spend must name and which is taken only when a transaction is
+accepted and a script then fails. That makes the float question materially
+smaller than it is for a venue whose executor fronts trades, and it is worth
+settling the hosting and key-custody decisions against the real figure rather
+than the assumed one.
+
 ## Not here yet
 
-The batcher service — the process that watches, chains fills and holds a key.
-Finding the work and building the transaction are here; running it is the rest,
-and the build plan tracks it. Splash's executor is unlicensed and is not used,
-so this is written rather than adopted.
+Running the batcher in production: where it is hosted, how its key is held, and
+what watches it. The loop, the fill and the reading are here and tested; the
+operational half is a deployment decision the build plan tracks. Splash's
+executor is unlicensed and is not used, so this is written rather than adopted.
 
 ## Build and test
 
