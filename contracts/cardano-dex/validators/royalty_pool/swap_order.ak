@@ -162,6 +162,14 @@ validator swap_order {
           order_in.output_reference == own_ref,
           list.length(self.inputs) == 2,
           asset_quantity_of(pool_in.output.value, cfg.pool_nft) == 1,
+          // The input is validated against the NFT the ORDER names, and the
+          // successor is found by the NFT the POOL DATUM names. They have to
+          // be the same NFT for those two to be about the same pool. One unit
+          // of one is ever minted and the pool admits only one input carrying
+          // it, so they cannot really differ — this is the order saying so
+          // itself rather than resting on that, the way `withdraw_order.ak`
+          // already does.
+          pool_cfg.pool_nft == cfg.pool_nft,
           only_named_assets(self_value, [cfg.input, cfg.output]),
           direction_ok,
           executor_ok(cfg.permitted_executors, self.extra_signatories),
@@ -704,4 +712,61 @@ test partial_fill_leaving_a_stray_on_the_continuation_fails() fail {
       partial_buy(600_000, 600_000, 394_000, 2_200_000, order_address()),
     ),
   )
+}
+
+const other_nft: Asset = Asset { policy: #"aa", name: #"6f746865726e6674" }
+
+fn pool_value_carrying(n: Asset, lovelace: Int, tokens: Int) -> Value {
+  assets.from_lovelace(lovelace)
+    |> assets.add(tok.policy, tok.name, tokens)
+    |> assets.add(lq.policy, lq.name, max_lq_cap - 1_000_000)
+    |> assets.add(n.policy, n.name, 1)
+}
+
+/// The passing buy, reached through a shaper that can restate the NFT the
+/// pool's datum names and the NFT each side of the pool actually carries.
+fn buy_against(datum_nft: Asset, in_nft: Asset, out_nft: Asset) -> Transaction {
+  let cfg = SingleRoyaltyPoolConfig { ..pool_cfg(), pool_nft: datum_nft }
+  Transaction {
+    ..transaction.placeholder,
+    inputs: [
+      order_input(buy(), buy_order_value()),
+      Input {
+        output_reference: OutputReference {
+          transaction_id: #"01",
+          output_index: 0,
+        },
+        output: Output {
+          address: pool_address(),
+          value: pool_value_carrying(in_nft, 100_000_000, 100_000_000),
+          datum: InlineDatum(cfg),
+          reference_script: None,
+        },
+      },
+    ],
+    outputs: [
+      Output {
+        address: pool_address(),
+        value: pool_value_carrying(out_nft, 101_000_000, 100_000_000 - 976_372),
+        datum: InlineDatum(cfg),
+        reference_script: None,
+      },
+      out(
+        placer_address(),
+        assets.from_lovelace(1_000_000)
+          |> assets.add(tok.policy, tok.name, 976_372),
+        transaction.NoDatum,
+      ),
+    ],
+  }
+}
+
+/// The shaper reproduces the passing buy, so the rejection below differs from
+/// it in which NFT the pool's datum names alone.
+test buy_through_the_nft_shaper_passes() {
+  run(buy(), fill(), buy_against(nft, nft, nft))
+}
+
+test fill_where_the_pool_datum_names_another_nft_fails() fail {
+  run(buy(), fill(), buy_against(other_nft, nft, other_nft))
 }
