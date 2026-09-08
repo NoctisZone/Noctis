@@ -4,6 +4,7 @@
 //// the action carries its indices inside the constructor rather than beside
 //// it, which is the one departure from their `OrderRedeemer`.
 
+use aiken/builtin
 use aiken/collection/list
 use aiken/crypto.{VerificationKeyHash}
 use cardano/address.{Address, Inline, VerificationKey}
@@ -15,6 +16,24 @@ use splash/rational.{Rational}
 pub type OrderAction {
   Apply { pool_in_ix: Int, order_in_ix: Int, reward_out_ix: Int }
   Refund
+}
+
+/// `Apply`'s constructor index, for a script that has to know which arm a
+/// request is being spent under rather than only that the request is present.
+/// A redeemer reaches another validator as plain data, so the constructor is
+/// the only thing to recognise it by. Pinned by the test below, so reordering
+/// the type above breaks here, where the type lives — the same discipline
+/// `graduate_redeemer_index` gets in `launch_records.ak`.
+pub const apply_redeemer_index: Int = 0
+
+test apply_is_constructor_zero() {
+  let encoded: Data = Apply { pool_in_ix: 1, order_in_ix: 0, reward_out_ix: 1 }
+  builtin.un_constr_data(encoded).1st == apply_redeemer_index
+}
+
+test refund_is_not_that_constructor() {
+  let encoded: Data = Refund
+  builtin.un_constr_data(encoded).1st != apply_redeemer_index
 }
 
 /// A request to add liquidity: both assets in, LQ out to the placer.

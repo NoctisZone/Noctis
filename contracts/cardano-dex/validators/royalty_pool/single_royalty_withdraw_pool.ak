@@ -28,13 +28,15 @@
 
 use aiken/builtin
 use aiken/collection/list
+use aiken/collection/pairs
 use aiken/crypto.{blake2b_224}
 use aiken/primitive/bytearray
 use cardano/address.{Address, Credential, Inline, Script, VerificationKey}
 use cardano/assets.{ada_asset_name, ada_policy_id}
 use cardano/transaction.{
-  InlineDatum, Input, Output, OutputReference, Transaction,
+  InlineDatum, Input, Output, OutputReference, ScriptPurpose, Spend, Transaction,
 }
+use noctisswap/orders.{apply_redeemer_index}
 use splash/orders/royalty_withdraw.{
   RoyaltyWithdrawConfig, RoyaltyWithdrawRedeemer, WithdrawData,
   WithdrawRoyaltyDataToSign,
@@ -282,18 +284,47 @@ validator royalty_withdraw_pool(withdraw_request_vh: ByteArray) {
     // destination. Holding the destination anywhere else would make the
     // guarantee true of one way of completing a claim rather than of a claim.
     let creator = VerificationKey(blake2b_224(prev_pk))
+    // The whole payout rule, not half of it. The reward reaches the creator's
+    // key, and reaches it undelegated or delegated by the creator. A stake
+    // part is as much a part of an address as the payment part — staking
+    // rewards accrue to whoever it names, and it chooses the pool the balance
+    // is delegated to — so an address carrying the creator's payment key and
+    // someone else's stake key is not the creator's address. Both halves are
+    // held in this script, which runs on every royalty claim, so the guarantee
+    // is about a claim rather than about one way of completing one.
+    let delegated_by_the_creator = fn(o: Output) -> Bool {
+      when o.address.stake_credential is {
+        None -> True
+        Some(Inline(c)) -> c == creator
+        _ -> False
+      }
+    }
     let creator_is_paid = list.any(
       outputs,
       fn(o) {
         and {
           o.address.payment_credential == creator,
+          delegated_by_the_creator(o),
           asset_quantity_of(o.value, prev_pool_x) >= withdraw_x,
           asset_quantity_of(o.value, prev_pool_y) >= withdraw_y,
         }
       },
     )
 
-    creator_is_paid && prev_pool_identity && correct_order_input_address && correct_final_pool_address && correct_tokens_qty_in_pool && pool_identity && royalty_withdraw_ok && signature_is_correct && strict_inputs && final_pool_config_is_correct && correct_pool && correct_lovelace_token2token
+    // ...and the request is being SETTLED, not merely present. Its validator
+    // has one arm that completes a claim and one that returns the request to
+    // whoever placed it, and only the first is a settlement. Without this,
+    // every rule living in that arm would hold of one route to completing a
+    // claim rather than of a claim — and a request at this script can be
+    // reproduced by anyone, since its datum is public once placed.
+    let order_is_being_applied = when
+      pairs.get_first(self.redeemers, Spend(order_input.output_reference))
+    is {
+      Some(r) -> builtin.un_constr_data(r).1st == apply_redeemer_index
+      None -> False
+    }
+
+    creator_is_paid && order_is_being_applied && prev_pool_identity && correct_order_input_address && correct_final_pool_address && correct_tokens_qty_in_pool && pool_identity && royalty_withdraw_ok && signature_is_correct && strict_inputs && final_pool_config_is_correct && correct_pool && correct_lovelace_token2token
   }
 
   else(_) {
@@ -442,9 +473,21 @@ fn creator_reward() -> Output {
   }
 }
 
+/// The request spent under `Apply`, which is what a settlement carries. Only
+/// the constructor is read, so the fields are not modelled.
+fn applied() -> Pairs<ScriptPurpose, Data> {
+  [
+    Pair(
+      Spend(OutputReference { transaction_id: #"01", output_index: 0 }),
+      builtin.constr_data(apply_redeemer_index, []),
+    ),
+  ]
+}
+
 fn claim_tx_paying(at: Credential, nonce: Int, reward: Output) -> Transaction {
   Transaction {
     ..transaction.placeholder,
+    redeemers: applied(),
     inputs: [request(at), pool_in(nonce)],
     outputs: [pool_out(nonce), reward],
   }
@@ -527,6 +570,7 @@ fn backwards_claim_tx(
 ) -> Transaction {
   Transaction {
     ..transaction.placeholder,
+    redeemers: applied(),
     inputs: [request_signed(Script(request_vh), wd, sig), pool_in(3)],
     outputs: [
       creator_reward(),
@@ -630,12 +674,12 @@ test claim_that_pays_nobody_fails() fail {
     Script(#"0b"),
     Transaction {
       ..transaction.placeholder,
+      redeemers: applied(),
       inputs: [request(Script(request_vh)), pool_in(3)],
       outputs: [pool_out(3)],
     },
   )
 }
-
 
 /// Same claim as `creator_claim_at_the_parameterised_request_script_passes`,
 /// reached through a shaper that can restate the pool input's value, so the
@@ -643,6 +687,7 @@ test claim_that_pays_nobody_fails() fail {
 fn claim_tx_with_pool_value(v: assets.Value) -> Transaction {
   Transaction {
     ..transaction.placeholder,
+    redeemers: applied(),
     inputs: [
       request(Script(request_vh)),
       Input { ..pool_in(3), output: Output { ..pool_in(3).output, value: v } },
@@ -668,10 +713,75 @@ test claim_through_the_pool_value_shaper_passes() {
 /// assets and the reserves are untouched: the claim is refused because the
 /// input is not the pool, not because anything else about it is wrong.
 test claim_naming_an_input_without_the_pool_nft_fails() fail {
-  let impostor =
-    assets.from_lovelace(100_000_000)
-      |> assets.add(token.policy, token.name, 100_000_000)
-      |> assets.add(#"cc", #"6c71", 1_000)
-      |> assets.add(nft.policy, #"6f74686572", 1)
+  let impostor = assets.from_lovelace(100_000_000)
+    |> assets.add(token.policy, token.name, 100_000_000)
+    |> assets.add(#"cc", #"6c71", 1_000)
+    |> assets.add(nft.policy, #"6f74686572", 1)
   run_claim(claim_tx_with_pool_value(impostor))
+}
+
+fn creator_reward_delegated(stake: Credential) -> Output {
+  Output {
+    ..creator_reward(),
+    address: Address {
+      payment_credential: VerificationKey(blake2b_224(creator_pub_key)),
+      stake_credential: Some(Inline(stake)),
+    },
+  }
+}
+
+/// A reward the creator delegated themselves is what a creator would build,
+/// so the rejection below differs from it in whose key the stake part names.
+test claim_paid_to_a_reward_the_creator_delegated_passes() {
+  run_claim(
+    claim_tx_paying(
+      Script(request_vh),
+      3,
+      creator_reward_delegated(VerificationKey(blake2b_224(creator_pub_key))),
+    ),
+  )
+}
+
+/// The payment part reaches the creator and the stake part does not, so the
+/// staking rewards on the creator's own royalty, and the choice of where that
+/// balance is delegated, would belong to whoever set it.
+test claim_delegating_the_creators_payout_to_a_stranger_fails() fail {
+  run_claim(
+    claim_tx_paying(
+      Script(request_vh),
+      3,
+      creator_reward_delegated(VerificationKey(#"a7")),
+    ),
+  )
+}
+
+/// A request present but not being settled — spent under the arm that returns
+/// it to whoever placed it, which asks only for that placer's signature.
+test claim_whose_request_is_not_being_applied_fails() fail {
+  let t = claim_tx(Script(request_vh), 3)
+  royalty_withdraw_pool.withdraw(
+    request_vh,
+    RoyaltyWithdrawRedeemer { pool_in_ix: 1, order_in_ix: 0, hash: False },
+    Script(#"0b"),
+    Transaction {
+      ..t,
+      redeemers: [
+        Pair(
+          Spend(OutputReference { transaction_id: #"01", output_index: 0 }),
+          builtin.constr_data(apply_redeemer_index + 1, []),
+        ),
+      ],
+    },
+  )
+}
+
+/// And with no redeemer entry for the request at all.
+test claim_whose_request_has_no_redeemer_fails() fail {
+  let t = claim_tx(Script(request_vh), 3)
+  royalty_withdraw_pool.withdraw(
+    request_vh,
+    RoyaltyWithdrawRedeemer { pool_in_ix: 1, order_in_ix: 0, hash: False },
+    Script(#"0b"),
+    Transaction { ..t, redeemers: [] },
+  )
 }
