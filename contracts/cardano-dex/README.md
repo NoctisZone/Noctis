@@ -618,6 +618,56 @@ anyone holding the same hashes derives the same total. That path also excludes
 a creator's royalty claim, which moves the same pool the same way and would
 otherwise be counted as platform income.
 
+## What a browser may do here
+
+The venue splits cleanly in two, and the split was not designed — it fell out
+of what each side needs:
+
+- **The placer's side is browser-safe by construction.** Every module a person
+  placing an order needs — the pool reader, the quote engine, the order
+  tracker, the datum schemas — imports nothing but Lucid Evolution and pure
+  local code.
+- **The executor's and the platform's side is not.** Filling, batching and
+  collecting are built on a transaction library that signs with keys a server
+  holds, and the widget builds alias it to an empty module.
+
+So a browser can price, place, watch and withdraw, and can never move a pool.
+That is checked against the built bundle rather than the import graph — the
+shipped file contains no executor symbol at all.
+
+Two shapes make the placer's half possible:
+
+- **Placing an order is an ordinary payment.** Creating a UTXO at a script
+  address never runs that script, so a placement needs neither the order
+  validator nor the pool's.
+- **Cancelling is a real script spend, and it fits.** `swap_order` compiles to
+  3,448 bytes against the 16,384-byte transaction cap, so a browser can carry
+  it and the owner's exit needs no reference script and nobody's cooperation.
+  The launch curve is the contrast: its Cardano Launch validator is 14,226
+  bytes and cannot be spent from a browser at all, which is why that path
+  places orders and never touches the curve.
+
+Three rules the panel in front of this has to keep:
+
+- **`reward_pkh` must be a payment KEY hash.** The cancel arm asks whether it
+  appears in the transaction's required signers, and a script hash never can —
+  so an order naming one could be placed and would then be nobody's to take
+  back. An address carries a payment credential either way, so checking that a
+  hash exists is not enough; its kind is what matters.
+- **The refund goes where the ORDER says.** The destination was fixed when the
+  order was written, so a cancel is verifiable from the order alone rather
+  than from whatever address the signing wallet offers at the end. A
+  transaction builder's default is the wallet's own address, which is exactly
+  the wrong one.
+- **Two numbers, never conflated.** `guaranteedOut` is the floor the order is
+  bound to and the only promise; `expectedOut` describes a pool state that has
+  already passed by the time anyone signs.
+
+Reading a placer's own book costs one chain request per placement transaction,
+because an order's place in the fill sequence is a fact about the chain rather
+than about the order. Those positions never move once a transaction is on
+chain, so they are cached and a second look costs nothing.
+
 ## Not here yet
 
 Running the batcher in production: where it is hosted, how its key is held, and

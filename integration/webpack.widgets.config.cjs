@@ -226,6 +226,23 @@ module.exports = [
 	},
 ];
 
+// The NoctisSwap trading panel (2026-09-08) — the venue's placer side. Like
+// the curve's order widget it needs no Mesh alias block: placing an order is
+// an ordinary payment and cancelling carries a 3.4 KB validator, so its whole
+// import graph is Lucid Evolution plus pure local modules. The venue's fill,
+// batcher and collection modules ARE built on Mesh, and none of them is
+// reachable from this entry — which is what keeps a browser structurally
+// unable to touch a pool.
+module.exports.push({
+	...module.exports[1],
+	name: "venue-swap-widget",
+	entry: path.resolve(__dirname, "widget/venue-swap-widget-entry.ts"),
+	output: {
+		...module.exports[1].output,
+		filename: "venue-swap-widget.bundle.js",
+	},
+});
+
 // The CTO governance widget shares every build concern the DarkVeil widget
 // has (same SDK, same wasm, same shims) and differs only in its entry, so it
 // is that configuration with a different entry and filename.
