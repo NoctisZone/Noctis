@@ -283,15 +283,31 @@ fn lq() -> Asset {
   Asset { policy: lq_policy, name: name() }
 }
 
+/// The schedule this factory is deployed with, over `fee_den`: the creator
+/// takes 1.00%, the platform 0.10%, and 0.10% stays in the pool's own
+/// reserves, for a total take of 1.20% plus the batcher fee.
+///
+/// These are deployment parameters, so nothing compiles them in from here —
+/// they are written when the factory is applied. What this records is the
+/// decision, beside the rules it has to satisfy, and the test below is what
+/// holds those rules to accepting it. A bound tightened later in a way that
+/// excluded the schedule the platform actually deploys would otherwise be a
+/// green suite and an unmintable factory.
+const deployed_fee_num: Int = 99_900
+
+const deployed_treasury_fee: Int = 100
+
+const deployed_royalty_fee: Int = 1_000
+
 fn pool_cfg() -> SingleRoyaltyPoolConfig {
   SingleRoyaltyPoolConfig {
     pool_nft: nft(),
     pool_x: ada,
     pool_y: token,
     pool_lq: lq(),
-    fee_num: 99_700,
-    treasury_fee: 100,
-    royalty_fee: 1_000,
+    fee_num: deployed_fee_num,
+    treasury_fee: deployed_treasury_fee,
+    royalty_fee: deployed_royalty_fee,
     treasury_x: 0,
     treasury_y: 0,
     royalty_x: 0,
@@ -490,8 +506,11 @@ fn graduation_on(fee_num: Int, treasury_fee: Int, royalty_fee: Int) -> Bool {
   )
 }
 
-test graduation_through_the_schedule_shaper_passes() {
-  graduation_on(99_700, 100, 1_000)
+/// The shaper every schedule rejection below differs from by one field, run
+/// on the schedule the factory is really deployed with — so those rejections
+/// are stated against the live schedule rather than beside it.
+test the_deployed_schedule_is_one_this_factory_will_mint() {
+  graduation_on(deployed_fee_num, deployed_treasury_fee, deployed_royalty_fee)
 }
 
 test factory_with_a_numerator_above_the_denominator_fails() fail {
@@ -502,7 +521,7 @@ test factory_with_a_numerator_above_the_denominator_fails() fail {
 /// better than the schedule reads. The pool's own arithmetic refuses such a
 /// swap; refusing the pool at creation is what stops it being minted at all.
 test factory_with_a_negative_slice_fails() fail {
-  graduation_on(99_700, -1_000, 1_000)
+  graduation_on(deployed_fee_num, -1_000, deployed_royalty_fee)
 }
 
 /// A schedule that leaves nothing after both slices. `swap_ok`'s `net > 0`
@@ -523,9 +542,9 @@ fn run_with_authorities(
     redirect,
     treasury,
     #"ee",
-    99_700,
-    100,
-    1_000,
+    deployed_fee_num,
+    deployed_treasury_fee,
+    deployed_royalty_fee,
     initial,
     redeemer,
     lq_policy,

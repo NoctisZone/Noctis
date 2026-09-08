@@ -171,11 +171,19 @@ are final before any launch is minted against them.
 
 ## Fee model
 
-`fee_num`, `treasury_fee` and `royalty_fee` are numerators over `100_000`. The
-Noctis post-graduation split maps to `royalty_fee = 1_000` (creator 1.0%),
-`treasury_fee = 100` (platform 0.1%) and `fee_num = 99_700` (a 0.3% pool fee of
-which the 0.1% LP share is the part left in reserves). These are per-pool datum
-values set at creation, not constants of the validator.
+`fee_num`, `treasury_fee` and `royalty_fee` are numerators over `100_000`, and
+a swap is priced on what survives both slices — `fee_num - treasury_fee -
+royalty_fee` — so what the pool keeps is whatever `fee_num` leaves below the
+denominator.
+
+The Noctis post-graduation split is `royalty_fee = 1_000` (the creator's 1.0%),
+`treasury_fee = 100` (the platform's 0.1%) and `fee_num = 99_900`, leaving 0.1%
+in the pool's own reserves: a total take of **1.2%** plus the batcher fee.
+
+They are per-pool datum values rather than constants of the validator, but the
+factory writes them from its own parameters onto every pool it mints and no arm
+can raise or lower them afterwards, so a deployment's schedule is fixed at the
+moment its factory hash is.
 
 ## Not here yet
 
