@@ -452,8 +452,19 @@ export class VenueTreasuryWithdrawer {
    * zero-lovelace withdrawal at the treasury script — which is the whole point
    * of a withdrawal at a script credential: it runs the script, so its
    * presence is evidence the script approved.
+   *
+   * `fundingUtxos` overrides which of the wallet's UTXOs pay for it. A caller
+   * collecting from several pools at once has to say, because each collection
+   * would otherwise select from the same wallet snapshot and the second would
+   * name a UTXO the first had already spent. Given, these are used exactly —
+   * they are still checked against what the transaction needs, and the
+   * collateral is still held out of them.
    */
-  async build(plan: VenueTreasuryWithdrawalPlan, wallet: CurveSpendWallet): Promise<string> {
+  async build(
+    plan: VenueTreasuryWithdrawalPlan,
+    wallet: CurveSpendWallet,
+    opts: { fundingUtxos?: readonly MeshUTxO[] } = {},
+  ): Promise<string> {
     if (this.poolRef && plan.pool.address !== this.poolRef.scriptAddress) {
       throw new Error(
         `The pool UTXO sits at ${plan.pool.address}, but this withdrawer references a pool validator whose ` +
@@ -478,7 +489,7 @@ export class VenueTreasuryWithdrawer {
     const [changeAddress, collateral, walletUtxos] = await Promise.all([
       wallet.getChangeAddress(),
       wallet.getCollateral(),
-      wallet.getUtxos(),
+      opts.fundingUtxos ?? wallet.getUtxos(),
     ]);
     const collateralUtxo: MeshUTxO | undefined = collateral[0];
     if (!collateralUtxo) {
@@ -584,8 +595,12 @@ export class VenueTreasuryWithdrawer {
   }
 
   /** Builds, signs and submits. Returns the transaction hash. */
-  async submit(plan: VenueTreasuryWithdrawalPlan, wallet: CurveSpendWallet): Promise<string> {
-    const unsigned = await this.build(plan, wallet);
+  async submit(
+    plan: VenueTreasuryWithdrawalPlan,
+    wallet: CurveSpendWallet,
+    opts: { fundingUtxos?: readonly MeshUTxO[] } = {},
+  ): Promise<string> {
+    const unsigned = await this.build(plan, wallet, opts);
     return wallet.submitTx(await wallet.signTx(unsigned));
   }
 }

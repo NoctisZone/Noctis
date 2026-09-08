@@ -426,6 +426,9 @@ export interface VenueCollected {
   poolNft: string;
   /** Positive amounts, one per counter — what left the pool. */
   collected: VenueAccrued;
+  /** What those counters are denominated in, so a total can be taken. */
+  unitX: string;
+  unitY: string;
 }
 
 /**
@@ -442,5 +445,10 @@ export interface VenueCollected {
 export function venueCollectionFrom(args: { tx: HistoryTx; factoryPolicyId: string }): VenueCollected | null {
   const event = venuePoolEventFrom(args);
   if (event?.kind !== 'feeWithdrawal') return null;
-  return { poolNft: event.poolNft, collected: subtract(ZERO_ACCRUED, event.accrued) };
+  return {
+    poolNft: event.poolNft,
+    collected: subtract(ZERO_ACCRUED, event.accrued),
+    unitX: venueUnitOf(event.after.datum.pool_x),
+    unitY: venueUnitOf(event.after.datum.pool_y),
+  };
 }

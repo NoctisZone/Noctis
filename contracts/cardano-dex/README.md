@@ -567,6 +567,57 @@ same figure means something else entirely: what was owed when the walk began.
 The two are told apart by whether the walk reached the pool's opening, and by
 nothing else.
 
+### When to collect, and what one round can do
+
+The decision has two modes, and they weigh the token side differently on
+purpose — they are asking different questions, and what the alternative to
+acting *is* differs between them.
+
+- **threshold** — *is this pool worth going to today?* The alternative is
+  waiting, and waiting costs nothing: nothing decays, nothing expires, and the
+  tokens will still be there next time. So only the ADA counter counts, since
+  only it pays for the transaction. The default is **50 ADA**, chosen off the
+  curve rather than picked: the fee is 4.2% of a 10 ADA collection, 0.84% of
+  50, and 0.42% of 100 — each doubling halves the share, so 50 is where the
+  saving from waiting first falls under one percent and keeps shrinking.
+- **sweep** — *we are going anyway; is this pool worth including?* The
+  alternative is now leaving the money behind rather than waiting, so the whole
+  value counts, tokens included at what the pool itself would pay for them. A
+  pool holding less than one fee's worth in total is still left alone, because
+  paying to collect dust makes the record worse rather than tidier.
+
+A sweep exists for **disclosure, not profit**. The platform publishes its
+addresses and discloses quarterly, and sweeping first means the disclosure
+covers money the platform holds rather than money it is owed. It costs one fee
+per pool — a hundred pools is about 42 ADA a quarter — so the price of the
+cleaner record is small and known in advance.
+
+**Collections are independent of one another, which fills are not.** Two fills
+against one pool must chain, because the second reads state the first moved.
+Two collections against *different* pools share nothing on chain: any order,
+any block, and a failure ends only itself. What links them is off chain — every
+collection needs a wallet UTXO to pay its fee with, and two built against the
+same wallet snapshot name the same one.
+
+So a round **partitions the wallet** rather than serialising the work: one
+funding UTXO each, and never the collateral. Two consequences for whoever
+operates it:
+
+- **A round collects from at most as many pools as the wallet has spare
+  UTXOs.** Anything beyond that is deferred by name rather than built and
+  rejected.
+- **The count is self-sustaining.** Each collection consumes one funding UTXO
+  and produces one change output, so a wallet that starts a round with *n*
+  spare UTXOs ends with *n*. It is the shape of the float that matters and not
+  its size — one large UTXO collects from one pool per round.
+
+**A round reports what it submitted, and that is not yet what happened.** The
+published figure is read back off the chain instead, from the transactions
+themselves, so it rests on the ledger rather than on the job's intent and
+anyone holding the same hashes derives the same total. That path also excludes
+a creator's royalty claim, which moves the same pool the same way and would
+otherwise be counted as platform income.
+
 ## Not here yet
 
 Running the batcher in production: where it is hosted, how its key is held, and
