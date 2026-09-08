@@ -64,13 +64,16 @@ describe('the table itself', () => {
     expect(new Set(inTable)).toEqual(new Set(inBlueprint));
   });
 
-  // The venue names its redeemer types after the ACTION rather than after the
-  // validator, so the suffix sweep above would not find them however the file
-  // was loaded. Named individually instead, which is honest about the fact
-  // that this side is a list rather than a sweep.
-  it('records the venue redeemers a graduation sends', () => {
+  // The venue names most of its redeemer types after the ACTION rather than
+  // after the validator, so the suffix sweep above finds none of them. This is
+  // the same sweep widened to both spellings — a list of names checked by hand
+  // was what left `zk_anchor` unrecorded, and the venue has seven of these.
+  it('names every redeemer type the venue blueprint declares', () => {
+    const inBlueprint = Object.keys(venueBlueprint.definitions).filter(
+      (k) => k.endsWith('Redeemer') || k.endsWith('Action'),
+    );
     const inTable = REDEEMER_TABLES.filter((t) => t.package === 'venue').map((t) => t.definition);
-    expect(inTable).toContain('royalty_pool/pool_mint/MintAction');
+    expect(new Set(inTable)).toEqual(new Set(inBlueprint));
   });
 });
 

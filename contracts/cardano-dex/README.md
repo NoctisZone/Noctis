@@ -219,10 +219,68 @@ limits. A launch that declined staking spends roughly two thirds of that. The
 figures are for the current build and are worth re-measuring when a validator
 in either package changes.
 
+## How a swap fills
+
+A swap request meets the pool **alone**. `swap_order.ak` requires the
+transaction to have exactly two inputs, so one fill is one order against one
+pool, and throughput comes from chaining transactions rather than from packing
+them.
+
+That is a guarantee, not a limit. Orders able to net against each other inside
+a single transaction would pay the creator and the platform on the difference
+only; here every order meets the pool by itself, so both fee slices are taken
+on its whole input.
+
+| | what it is |
+|---|---|
+| input 0 / 1 | the pool and the order, in the ledger's own order |
+| output 0 | the pool, its reserves moved and its two counters credited |
+| output 1 | the placer's reward, or the order continuing with the rest to trade |
+| output 2 | the executor's payment, when it takes one |
+
+Both inputs are named **by index** in the two redeemers, and the transaction
+builder sorts inputs before serialising them — so the numbers are positions
+after that sort, not the order a caller listed them in. The submitter predicts
+the sort and then decodes the finished transaction to confirm the prediction
+held, because getting it wrong is silent: the transaction is well formed, both
+scripts run, and each checks the wrong input.
+
+**The executor supplies nothing.** With only two inputs there is no room for
+one of its own, so the order carries `ex_fee` lovelace and the transaction
+balances out of it. `ex_fee` is a ceiling rather than a price: every rule the
+order states about it is an inequality, so an executor may take less and leave
+the difference with the placer.
+
+**Measured cost.** Evaluated against a real script context with
+`aiken tx simulate`:
+
+| fill | pool `Swap` | order `Fill` | size | fee |
+|---|---|---|---|---|
+| buy, ADA in | 710,423 mem | 583,396 mem | 934 B | 0.433230 ADA |
+| sell, token in | 713,723 mem | 637,597 mem | 887 B | 0.431162 ADA |
+| partial buy | 710,423 mem | 723,359 mem | 1,079 B | 0.439610 ADA |
+
+Each row is one transaction that really validates, priced with the budgets the
+same run measured. A 100 ADA trade against a 20,000 ADA pool; the fee moves
+with the transaction's size rather than with the trade's.
+
+The dearest of the three spends **1,433,782** memory units and **494,857,489**
+cpu steps — under a tenth of what one mainnet transaction is allowed. Both
+validators are referenced rather than carried: the two together are 7.3 KB and
+would fit, but carrying them costs a further 0.21 ADA on every fill forever.
+
+An order therefore has to set aside about **1.4 ADA**: the fill's own fee, plus
+the smallest output the protocol's per-byte minimum admits, because an
+executor's payment has nowhere else to go. For scale, mainnet's block budget
+runs out at roughly **40 to 45 fills** — the cpu-step limit binds first — which
+is a ceiling the chain sets rather than one the venue does.
+
 ## Not here yet
 
-The batcher. Splash's executor is unlicensed and is not used, so this is
-written rather than adopted; the build plan tracks it.
+The batcher itself — the service that watches for orders and chains fills. The
+transaction it builds, and the arithmetic it has to agree with, are here; the
+build plan tracks the rest. Splash's executor is unlicensed and is not used, so
+this is written rather than adopted.
 
 ## Build and test
 
