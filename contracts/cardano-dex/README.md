@@ -306,12 +306,34 @@ For scale, mainnet's block budget runs out at roughly **40 to 45 fills** — the
 cpu-step limit binds first — which is a ceiling the chain sets rather than one
 the venue does.
 
+## What is a pool, and what is an order
+
+Both venue scripts are shared: every pool in the venue sits at one address and
+every swap request at another, so an address proves nothing and anyone may
+park anything at either. The two sides need different answers.
+
+**A pool is authenticated, and its own datum cannot do it.** A datum names the
+NFT it claims to be identified by, so a forger names one they minted
+themselves and satisfies any test drawn from the datum alone. A genuine pool
+NFT can only have come from the factory, whose policy is a deployment fact no
+on-chain actor can influence — so a pool is a UTXO holding exactly one asset
+under that policy, tagged with the pool role, whose datum names that same
+asset. The pool's LQ token shares the policy and is deliberately not a
+candidate: it is fungible, so a balance of it says nothing about identity.
+
+**An order needs no authentication, because it is a request.** Nobody forges a
+claim on somebody else's funds by writing a datum; an order can only ever spend
+itself. What matters is that a malformed one is counted rather than thrown or
+quietly dropped — a reader that reports three pools where the chain holds four
+is indistinguishable from a chain that holds three, and the difference is a
+launch whose market has silently stopped trading.
+
 ## Not here yet
 
-The batcher itself — the service that watches for orders and chains fills. The
-transaction it builds, and the arithmetic it has to agree with, are here; the
-build plan tracks the rest. Splash's executor is unlicensed and is not used, so
-this is written rather than adopted.
+The batcher service — the process that watches, chains fills and holds a key.
+Finding the work and building the transaction are here; running it is the rest,
+and the build plan tracks it. Splash's executor is unlicensed and is not used,
+so this is written rather than adopted.
 
 ## Build and test
 
