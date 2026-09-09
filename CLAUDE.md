@@ -459,10 +459,19 @@ User Wallet (Midnight primary; Cardano for DV eligibility only)
 - Gas: ~0.17 ADA deducted from escrow balance automatically
 
 **Stream B — LP Trading Fees (post-graduation, ongoing)**
-- Accrues: CSwap pool trading fees (~0.3% of DEX volume)
-- Paid: Directly to fee_recipient, not via escrow
+- Accrues: the graduated pool's own trading fees — at the venue's own
+  post-graduation share (see FEE SPLIT), or a third-party DEX's LP schedule
+- Paid: to the active fee recipient through `lp_escrow.ak`'s `HarvestFees`
+  redeemer. **Not "directly, bypassing the escrow"** — the LP position is locked
+  at a script address, so a payout is always a transaction that spends the
+  escrow UTXO, whatever "directly" means at the DEX's own level
+- What `HarvestFees` guarantees: the locked position and the escrow's own value
+  are both left byte-for-byte unchanged, and the recipient really receives the
+  harvested amount — so the lovelace has to arrive from the DEX side of that
+  same transaction. Signed by the recipient, the only party a harvest is for
 - Continues: Indefinitely while pool has volume
-- Redirected to CTO wallet if governance vote passes
+- Redirected to the community wallet if a CTO vote passes — `active_fee_recipient`
+  switches on the same `cto_triggered` flag `Migrate`'s authorisation reads
 
 These are **two entirely different income mechanisms**. Do not conflate them in the UI.
 
@@ -499,7 +508,7 @@ These are **two entirely different income mechanisms**. Do not conflate them in 
 > that the returned token is genuinely the target DEX's LP token for that pool
 > needs per-DEX knowledge, and arrives with the DEX integration work.
 
-> **Resolution (2026-07-10):** a new `HarvestFees` redeemer lets Stream B trading fees reach `fee_recipient` (the creator, or the community wallet once CTO is triggered — same redirect rule as everywhere else) WITHOUT touching the locked LP position, closing the gap between this file's "no `withdraw`, ever" invariant and Stream B's "paid directly to fee_recipient" description — the fee payout has to route through this contract since the LP itself lives here, a script address, not a wallet. **Deliberately DEX-agnostic and narrow:** the redeemer only verifies its OWN two invariants (the locked `lp_token_amount` is byte-for-byte unchanged; the correct recipient actually receives the harvested lovelace in the same transaction) and does not model or verify any specific DEX's real harvest call — that remains genuinely unconfirmed per-DEX (CSwap/Minswap/Splash/WingRiders/SundaeSwap), an open sub-question this always had. Permissionless, same "the invariant is the authorization" idiom as `ExpireCurve`/`ExecuteDexChange`/`Graduate` — nobody can gain anything by calling it incorrectly since the LP position literally cannot move.
+> **Resolution (2026-07-10):** a new `HarvestFees` redeemer lets Stream B trading fees reach `fee_recipient` (the creator, or the community wallet once CTO is triggered — same redirect rule as everywhere else) WITHOUT touching the locked LP position, closing the gap between this file's "no `withdraw`, ever" invariant and Stream B's "paid directly to fee_recipient" description — the fee payout has to route through this contract since the LP itself lives here, a script address, not a wallet. **Deliberately DEX-agnostic and narrow:** the redeemer only verifies its OWN two invariants (the locked `lp_token_amount` is byte-for-byte unchanged; the correct recipient actually receives the harvested lovelace in the same transaction) and does not model or verify any specific DEX's real harvest call — that remains genuinely unconfirmed per-DEX (CSwap/Minswap/Splash/WingRiders/SundaeSwap), an open sub-question this always had. **Authorised by the recipient's signature.** It began permissionless, on the reasoning that nobody can gain by calling it since the LP position cannot move — true, and not the whole question. The continuing output is identical to the input, so a caller could rebuild the escrow UTXO at a new reference for the price of a transaction fee, invalidating whatever was being built against the old one; the CTO anchor reads this UTXO as a reference input, and that is the community's own rescue path. The recipient is the only party a harvest is for, so requiring their signature costs nobody anything.
 
 ### Migration Whitelist (updatable — team multisig + 72h public notice)
 - CSwap *(default graduation DEX)*
