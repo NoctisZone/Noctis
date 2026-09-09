@@ -93,14 +93,19 @@ function keyHashFromAddress(address: string): string {
 const MIN_UTXO_LOVELACE = 2_000_000n;
 
 /**
- * staking_pool.ak's own `min_platform_claim_fee_lovelace`.
+ * staking_pool.ak's own `platform_charge_lovelace` — a flat 5 ada for taking
+ * rewards out of a pool, by either route.
  *
- * Mirrored here only so a fee below it fails with a legible message rather
- * than as an opaque on-chain script failure. The contract is the authority;
- * this is a courtesy check, and the same one
- * `tier-a-claims-submitter.ts` performs before a creator-fee claim.
+ * Mirrored here so the amount can be supplied without a caller having to know
+ * it, and so a short one fails with a legible message rather than as an opaque
+ * on-chain script failure. The contract remains the authority; this is a copy
+ * of a figure it names, not a second opinion about what the charge should be.
+ *
+ * There is no oracle call behind it. The contract names the charge in ada
+ * precisely because Aiken cannot know what a dollar is worth, so pricing one
+ * off chain would only reintroduce a number the chain never agreed to.
  */
-const MIN_PLATFORM_CLAIM_FEE_LOVELACE = 200_000n;
+export const PLATFORM_CHARGE_LOVELACE = 5_000_000n;
 
 export interface StakingConfig {
   blockfrostProjectId: string;
@@ -577,29 +582,40 @@ export class StakingSubmitter {
       payout: pos.amount + owed,
       signer: stakerAddress,
     }));
-    return (await this.payoutTo(lucid, loaded, stakerAddress, payout, tx)).complete();
+    const withPayout = await this.payoutTo(lucid, loaded, stakerAddress, payout, tx);
+    // An exit carries out every accrued reward along with the stake, so it
+    // pays the charge those rewards would have cost by the claim route.
+    // Nothing accrued is nothing to charge for, and the validator agrees:
+    // the charge is on the rewards, not on withdrawing a stake.
+    const { acc } = advance(loaded.datum, BigInt(validityRangeFor(nowMs, Number(loaded.datum.last_update_ms)).from));
+    const owed = owedAt(before, acc);
+    return (owed > 0n ? this.chargeGovernor(loaded, PLATFORM_CHARGE_LOVELACE, withPayout) : withPayout).complete();
   }
 
   /** Take what is owed and leave the position open. */
   /**
    * Claim accrued rewards.
    *
-   * @param platformClaimFeeLovelace  The real dollar-equivalent of
-   *   STAKING_CLAIM_FEE_USD, computed by the CALLER via
-   *   `ada-price-oracle.ts`'s `usdToMinAdaLovelace()`. This class stays
-   *   oracle-agnostic, the same convention `tier-a-claims-submitter.ts`
-   *   already follows for the creator-fee claim. Must be at least the
-   *   contract's own floor.
+   * @param platformClaimFeeLovelace  What to pay the governor. Defaults to
+   *   `PLATFORM_CHARGE_LOVELACE`, which is the figure the contract names, so a
+   *   caller has nothing to compute. Still accepted explicitly, and still
+   *   floor-checked, so a page holding a stale figure fails here with a legible
+   *   message instead of on chain.
    *
    *   It is a real output to the governor rather than a client convention,
    *   because `ClaimRewards` takes no signature: anyone can build this
    *   transaction themselves, so only the validator can make the charge stick.
    */
-  async claimCore(lucid: LucidEvolution, stakerAddress: string, platformClaimFeeLovelace: bigint, nowMs = Date.now()) {
-    if (platformClaimFeeLovelace < MIN_PLATFORM_CLAIM_FEE_LOVELACE) {
+  async claimCore(
+    lucid: LucidEvolution,
+    stakerAddress: string,
+    platformClaimFeeLovelace: bigint = PLATFORM_CHARGE_LOVELACE,
+    nowMs = Date.now(),
+  ) {
+    if (platformClaimFeeLovelace < PLATFORM_CHARGE_LOVELACE) {
       throw new Error(
-        `platformClaimFeeLovelace (${platformClaimFeeLovelace}) is below the contract's own floor ` +
-          `(${MIN_PLATFORM_CLAIM_FEE_LOVELACE}) — the transaction would fail on-chain.`,
+        `platformClaimFeeLovelace (${platformClaimFeeLovelace}) is below the contract's own charge ` +
+          `(${PLATFORM_CHARGE_LOVELACE}) — the transaction would fail on-chain.`,
       );
     }
     const loaded = await this.loadPool();
@@ -624,8 +640,8 @@ export class StakingSubmitter {
   }
 
   /**
-   * The flat claim charge, paid to the governor the pool was opened with and
-   * tagged with the pool input like every other settlement output.
+   * The flat charge, paid to the governor the pool was opened with and tagged
+   * with the pool input like every other settlement output.
    *
    * The validator nets this rather than merely reading the address, so the
    * charge has to be lovelace that really arrives — a transaction the governor
@@ -707,7 +723,10 @@ export class StakingSubmitter {
     return this.withWallet(walletApi, (lucid, address) => this.unstakeCore(lucid, address));
   }
 
-  claimRewardsWithWallet(walletApi: WalletApi, platformClaimFeeLovelace: bigint): Promise<{ txHash: string }> {
+  claimRewardsWithWallet(
+    walletApi: WalletApi,
+    platformClaimFeeLovelace: bigint = PLATFORM_CHARGE_LOVELACE,
+  ): Promise<{ txHash: string }> {
     return this.withWallet(walletApi, (lucid, address) => this.claimCore(lucid, address, platformClaimFeeLovelace));
   }
 
@@ -740,7 +759,12 @@ export class StakingSubmitter {
     return this.withKey(keyHex, address, (lucid) => this.unstakeCore(lucid, address, nowMs));
   }
 
-  claimWithKey(keyHex: string, address: string, platformClaimFeeLovelace: bigint, nowMs?: number) {
+  claimWithKey(
+    keyHex: string,
+    address: string,
+    platformClaimFeeLovelace: bigint = PLATFORM_CHARGE_LOVELACE,
+    nowMs?: number,
+  ) {
     return this.withKey(keyHex, address, (lucid) => this.claimCore(lucid, address, platformClaimFeeLovelace, nowMs));
   }
 

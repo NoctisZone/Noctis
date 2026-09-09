@@ -215,11 +215,11 @@ fn settlement_tx(payouts: List<Output>) -> Transaction {
   }
 }
 
-/// The staking pool's flat claim charge, tagged as settling the pool spend.
+/// The staking pool's flat charge, tagged as settling the pool spend.
 fn pool_claim_charge() -> Output {
   Output {
     address: from_verification_key(governor),
-    value: assets.from_lovelace(staking_pool.min_platform_claim_fee_lovelace),
+    value: assets.from_lovelace(staking_pool.platform_charge_lovelace),
     datum: InlineDatum(pool_ref),
     reference_script: None,
   }

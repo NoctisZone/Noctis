@@ -46,6 +46,7 @@ import {
   decodePoolRedeemer,
   extendedHexToBech32PrivateKey,
   keyHashFromAddress,
+  PLATFORM_CHARGE_LOVELACE,
   StakingSubmitter,
 } from '../staking-submitter.js';
 import { type StakingPoolDatumData, threadNftAssetName } from '../tier-a-schemas.js';
@@ -402,6 +403,39 @@ describe('unstakeCore', () => {
     expect(h.tx.calls.addSigner).toEqual([STAKER_ADDR]);
   });
 
+  it('charges the governor for the rewards an exit carries out', async () => {
+    const since = LAST_UPDATE_MS - UNSTAKE_LOCK_MS - 1n;
+    const positions = new StakeAccumulator();
+    positions.set(hexToBytes(STAKER_VKH), openPosition(1_000n, since));
+    const h = harness({ positions, datum: { total_staked: 1_000n } });
+
+    await h.submitter.unstakeCore(h.lucid as never, STAKER_ADDR, NOW_MS);
+
+    // An exit takes every accrued reward out with the stake, so it pays what
+    // those rewards would have cost by the claim route. Charging one arm and
+    // not the other would price the same tokens by which button was pressed.
+    const [govAddr, , govAssets] = h.tx.payToAddress[1] as [string, unknown, Record<string, bigint>];
+    expect(govAddr).toBe(addrFor(GOVERNOR_VKH));
+    expect(govAssets.lovelace).toBe(5_000_000n);
+  });
+
+  it('charges nothing for an exit that accrued nothing', async () => {
+    // An exhausted budget emits nothing, so this position is owed nothing and
+    // the exit is purely the staker's own stake coming back. The charge is on
+    // the rewards, and there are none.
+    const since = LAST_UPDATE_MS - UNSTAKE_LOCK_MS - 1n;
+    const positions = new StakeAccumulator();
+    positions.set(hexToBytes(STAKER_VKH), openPosition(1_000n, since));
+    const h = harness({ positions, datum: { total_staked: 1_000n, unallocated: 0n } });
+
+    await h.submitter.unstakeCore(h.lucid as never, STAKER_ADDR, NOW_MS);
+
+    const [addr, , assets] = h.tx.payToAddress[0] as [string, unknown, Record<string, bigint>];
+    expect(addr).toBe(STAKER_ADDR);
+    expect(assets[TOKEN_UNIT]).toBe(1_000n);
+    expect(h.tx.payToAddress).toHaveLength(1);
+  });
+
   it('empties the slot, so a full exit restores the tree a first stake started from', async () => {
     const since = LAST_UPDATE_MS - UNSTAKE_LOCK_MS - 1n;
     const positions = new StakeAccumulator();
@@ -428,29 +462,29 @@ describe('claimCore', () => {
 
   it("refuses a charge below the contract's own floor", async () => {
     const h = harness({ positions: staked(), datum: { total_staked: 1_000n } });
-    await expect(h.submitter.claimCore(h.lucid as never, STAKER_ADDR, 199_999n, NOW_MS)).rejects.toThrow(
-      /below the contract/i,
-    );
+    await expect(
+      h.submitter.claimCore(h.lucid as never, STAKER_ADDR, PLATFORM_CHARGE_LOVELACE - 1n, NOW_MS),
+    ).rejects.toThrow(/below the contract/i);
   });
 
   it('refuses a wallet with no open position', async () => {
     const h = harness();
-    await expect(h.submitter.claimCore(h.lucid as never, STAKER_ADDR, 1_000_000n, NOW_MS)).rejects.toThrow(
-      /no open staking position/i,
-    );
+    await expect(
+      h.submitter.claimCore(h.lucid as never, STAKER_ADDR, PLATFORM_CHARGE_LOVELACE, NOW_MS),
+    ).rejects.toThrow(/no open staking position/i);
   });
 
   it('refuses when nothing has accrued yet', async () => {
     // No elapsed time: the bound is clamped to the pool's own last update.
     const h = harness({ positions: staked(), datum: { total_staked: 1_000n, last_update_ms: BigInt(NOW_MS) } });
-    await expect(h.submitter.claimCore(h.lucid as never, STAKER_ADDR, 1_000_000n, NOW_MS)).rejects.toThrow(
-      /nothing has accrued/i,
-    );
+    await expect(
+      h.submitter.claimCore(h.lucid as never, STAKER_ADDR, PLATFORM_CHARGE_LOVELACE, NOW_MS),
+    ).rejects.toThrow(/nothing has accrued/i);
   });
 
   it('pays what is owed and charges the governor, without asking anyone to sign', async () => {
     const h = harness({ positions: staked(), datum: { total_staked: 1_000n } });
-    await h.submitter.claimCore(h.lucid as never, STAKER_ADDR, 1_055_950n, NOW_MS);
+    await h.submitter.claimCore(h.lucid as never, STAKER_ADDR, PLATFORM_CHARGE_LOVELACE, NOW_MS);
 
     expect(writtenRedeemer(h).index).toBe(STAKING_POOL_REDEEMER.ClaimRewards);
 
@@ -460,7 +494,9 @@ describe('claimCore', () => {
 
     const [govAddr, , govAssets] = h.tx.payToAddress[1] as [string, unknown, Record<string, bigint>];
     expect(govAddr).toBe(addrFor(GOVERNOR_VKH));
-    expect(govAssets.lovelace).toBe(1_055_950n);
+    // The literal, not the constant: a change to the charge should have to be
+    // made here too, deliberately, rather than pass unnoticed.
+    expect(govAssets.lovelace).toBe(5_000_000n);
 
     // ClaimRewards takes no signature by design — anyone may build it, and the
     // validator is what makes the charge stick.
@@ -471,7 +507,7 @@ describe('claimCore', () => {
     const positions = staked();
     const h = harness({ positions, datum: { total_staked: 1_000n } });
 
-    await h.submitter.claimCore(h.lucid as never, STAKER_ADDR, 1_055_950n, NOW_MS);
+    await h.submitter.claimCore(h.lucid as never, STAKER_ADDR, PLATFORM_CHARGE_LOVELACE, NOW_MS);
 
     const after = positions.get(hexToBytes(STAKER_VKH));
     expect(after.amount).toBe(1_000n);

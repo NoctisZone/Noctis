@@ -132,7 +132,23 @@ STAKING_ALLOC_PCT = 25 // % of total supply, optional per-launch toggle (2026-07
 STAKING_DURATION_MIN_DAYS = 1095 // Minimum staking pool runway (3 years) — creator must actively select, no default
 STAKING_DURATION_MAX_DAYS = 1825 // Maximum staking pool runway (5 years)
 STAKING_BONDING_PERIOD_DAYS = 7 // A newly-staked position earns nothing until seasoned this long — anti-gaming, enforced off-chain via the governor's snapshot formula
-STAKING_CLAIM_FEE_USD = 1 // Flat USD fee to claim accrued rewards — ADA (Cardano) or NIGHT (Midnight) at oracle spot price
+STAKING_CHARGE_ADA = 5 // CARDANO. Flat charge for taking accrued rewards out of a staking pool,
+                       // by either route: a claim, or an exit that carries rewards out with the
+                       // stake. Both arms charge it, so the same tokens cost the same to take
+                       // whichever route takes them; an exit that accrued nothing pays nothing,
+                       // because the charge is on the rewards and not on withdrawing a stake.
+                       // Replaced STAKING_CLAIM_FEE_USD on Cardano (2026-09-09). Named in ADA
+                       // rather than in dollars because Aiken has no in-circuit oracle: an
+                       // amount priced off chain is an amount the chain never agreed to, and
+                       // naming it outright is what makes the charge enforceable on a redeemer
+                       // anyone may build. 5 ADA is what $1 bought when it was set, and it also
+                       // sits clear of the protocol's own minimum ADA for the output that
+                       // carries it, so the figure named is the figure that binds.
+STAKING_CLAIM_FEE_USD = 1 // MIDNIGHT LAUNCH ONLY, from 2026-09-09 — NIGHT at oracle spot price.
+                          // Compact enforces that payment natively via the PSM's own circuits.
+                          // Whether Midnight should follow Cardano onto a fixed denomination is
+                          // an open question, not a decision made here — its own build blockers
+                          // come first
 // The whole claim fee goes to the single platform wallet. So does every
 // other stream, revenue or not: no launch fee, trade fee, forfeited DarkVeil
 // bond, claim fee or slashed challenge bond is split anywhere (2026-08-06,
@@ -702,7 +718,7 @@ This is a narrower, different thing from the platform-wide Community Yield Mecha
 2. **Fixed linear daily emission.** `daily_emission = pool_balance / duration_days`. The creator selects a duration between `STAKING_DURATION_MIN_DAYS` (1095, 3 years) and `STAKING_DURATION_MAX_DAYS` (1825, 5 years) at launch creation — no default, forced active selection, same pattern as vesting.
 3. **Pro-rata daily split.** Each day's emission splits among currently-staked holders in proportion to their staked balance.
 4. **Bonding period.** A newly-staked position earns nothing for `STAKING_BONDING_PERIOD_DAYS` (7 days) after staking — anti-gaming, prevents stake-right-before-snapshot-then-claim-then-unstake. Enforced entirely off-chain (see Reward Accounting below); no separate on-chain check exists for it.
-5. **Claiming.** Claimable from the holder's token profile on the Noctis platform. Costs a flat `STAKING_CLAIM_FEE_USD` ($1) fee, paid in ADA (Cardano) or NIGHT (Midnight Launch) at oracle spot price — same USD→ADA/NIGHT conversion machinery as the DarkVeil NIGHT bond (see ORACLE STRATEGY). Paid whole to the platform wallet — no split, matching every other fee on the platform.
+5. **Claiming, and exiting.** Claimable from the holder's token profile on the Noctis platform. On Cardano this costs a flat `STAKING_CHARGE_ADA` (5 ADA), enforced by `staking_pool.ak` itself rather than applied by the submitter — `ClaimRewards` takes no signature, so anyone may build that transaction and only the validator can make a charge stick. **The same charge applies to an exit**, because an exit takes every accrued reward out along with the stake: charging one arm and not the other would price the same tokens by which button was pressed. An exit from a position that accrued nothing pays nothing. Midnight Launch charges `STAKING_CLAIM_FEE_USD` ($1) in NIGHT at oracle spot price, through its own PSM. Paid whole to the platform wallet — no split, matching every other fee on the platform.
 6. **Top-ups.** A creator can add more tokens to an existing pool at any time. A top-up adds to `pool_balance` without changing the daily emission rate — it extends the runway further into the future rather than accelerating payouts. There is no stored duration or end-date on-chain at all (see Reward Accounting) — a top-up is just "add to the balance."
 
 ### Reward accounting — off-chain computed, on-chain verified (no in-circuit division anywhere)

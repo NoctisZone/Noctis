@@ -13,8 +13,7 @@
 // participant takes and two reads.
 // ============================================================================
 
-import { usdToMinAdaLovelace } from '../ada-price-oracle.js';
-import { StakingSubmitter } from '../staking-submitter.js';
+import { PLATFORM_CHARGE_LOVELACE, StakingSubmitter } from '../staking-submitter.js';
 import {
   CARDANO_NETWORK_MAP,
   jsonSafe,
@@ -114,13 +113,11 @@ async function main() {
     }
     case 'claim-rewards': {
       const { key, address } = signer();
-      // STAKING_CLAIM_FEE_USD, priced live. The contract's own check is a
-      // conservative 0.2 ADA floor because Aiken has no in-circuit oracle, so
-      // this real figure clears it comfortably. Reported alongside the hash so
-      // a caller can see what was actually charged.
-      const { minLovelace: platformClaimFeeLovelace } = await usdToMinAdaLovelace(1);
-      const claimed = await submitter().claimWithKey(key, address, platformClaimFeeLovelace, input.nowMs);
-      result = { ...claimed, platformClaimFeeLovelace: platformClaimFeeLovelace.toString() };
+      // The charge the contract itself names. Reported alongside the hash so a
+      // caller can see what was actually charged, and taken from the same
+      // constant the transaction pays so the two cannot disagree.
+      const claimed = await submitter().claimWithKey(key, address, PLATFORM_CHARGE_LOVELACE, input.nowMs);
+      result = { ...claimed, platformClaimFeeLovelace: PLATFORM_CHARGE_LOVELACE.toString() };
       break;
     }
     case 'top-up': {
@@ -134,13 +131,12 @@ async function main() {
       // Rebuilds the position tree from history and refuses to answer unless
       // it derives the root the pool actually carries.
       //
-      // The claim charge rides along because a browser cannot price it: the
-      // widget builds its own claim transaction and needs the figure, and this
-      // is the response the page already fetches. Priced here, server-side,
-      // like every other USD-denominated amount on the platform.
+      // The charge rides along because the widget builds its own claim
+      // transaction and needs the figure to display. It is the constant the
+      // contract names rather than a priced amount, so the page, this CLI and
+      // the validator are all quoting one number.
       const overview = await submitter().overview();
-      const { minLovelace: platformClaimFeeLovelace } = await usdToMinAdaLovelace(1);
-      result = { ...overview, platformClaimFeeLovelace: platformClaimFeeLovelace.toString() };
+      result = { ...overview, platformClaimFeeLovelace: PLATFORM_CHARGE_LOVELACE.toString() };
       break;
     }
     case 'read-position': {

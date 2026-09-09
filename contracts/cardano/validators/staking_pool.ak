@@ -99,19 +99,26 @@ pub const ms_per_day = 86_400_000
 /// it, claiming does not touch it.
 pub const unstake_lock_ms = 604_800_000
 
-/// STAKING_CLAIM_FEE_USD, as a floor rather than a peg.
+/// The platform's charge for taking rewards out of a pool: a flat 5 ada, paid
+/// to the governor the pool was opened with.
 ///
-/// Aiken has no in-circuit oracle, so a contract cannot know what a dollar is
-/// worth. This is the same deliberately conservative sanity floor both bonding
-/// curves already charge on a fee claim, at the same value: the real
-/// dollar-equivalent is computed off-chain from `integration/ada-usd-price.ts`
-/// and paid with margin above it in the normal case, while this refuses a
-/// claim that pays nothing at all.
+/// Named in ada rather than in dollars because Aiken has no in-circuit oracle,
+/// so a contract cannot know what a dollar is worth. Naming the amount outright
+/// is what makes the charge enforceable: a dollar converted off chain is a
+/// figure the submitter chooses, and a charge only the submitter applies is a
+/// charge anyone can decline by building their own transaction — `ClaimRewards`
+/// takes no signature at all. See `platform_fee_paid`.
 ///
-/// It has to live on chain rather than in the submitter, because `ClaimRewards`
-/// takes no signature — see `platform_fee_paid`. A charge only the submitter
-/// applies is a charge anyone can decline by building their own transaction.
-pub const min_platform_claim_fee_lovelace = 200_000
+/// The amount sits clear of the protocol's own minimum ada for the output that
+/// carries it, which a real claim measured at 1,055,950 lovelace, so the figure
+/// named here is the figure that binds.
+///
+/// Both arms that move rewards charge it. `ClaimRewards` takes the rewards and
+/// leaves the stake; `Unstake` takes the stake and every accrued reward with
+/// it. The same tokens therefore cost the same to take, whichever route takes
+/// them. An exit that accrued nothing pays nothing — the charge is on the
+/// rewards, not on withdrawing a stake.
+pub const platform_charge_lovelace = 5_000_000
 
 /// How long an exhausted pool waits for a top-up before it can be retired.
 pub const close_cooldown_ms = 7_776_000_000
@@ -328,7 +335,7 @@ fn platform_fee_paid(
         }
       },
     ),
-    settlement.net_lovelace_gain(self, credential) >= min_platform_claim_fee_lovelace,
+    settlement.net_lovelace_gain(self, credential) >= platform_charge_lovelace,
   }
 }
 
@@ -490,6 +497,19 @@ validator staking_pool {
                       pool,
                     ) - payout,
                     staker_paid(self, own_ref, pool, staker_vkh, payout),
+                    // An exit carries out every accrued reward along with the
+                    // stake, so it carries the charge a claim would have paid
+                    // for those same rewards. A position that accrued nothing
+                    // has nothing to charge for: the charge is on the rewards,
+                    // not on taking a stake back.
+                    or {
+                      owed == 0,
+                      platform_fee_paid(
+                        self,
+                        own_ref,
+                        pool.governor_pub_key_hash,
+                      ),
+                    },
                     own_output.datum == InlineDatum(expected),
                     output_value_clean(own_output),
                   }
@@ -896,13 +916,14 @@ test stake_rejects_an_understated_debt() {
 
 // -- Unstake ------------------------------------------------------------------
 
-fn run_unstake(
+fn run_unstake_paying(
   pool: StakingPoolDatum,
   pool_tokens: Int,
   before: Position,
   now: Int,
   signers: List<VerificationKeyHash>,
   payout_to: VerificationKeyHash,
+  fee: Int,
 ) -> Bool {
   let entries = [(staker, before)]
   let proof = stake_accumulator.proof_in(staker, entries)
@@ -933,10 +954,41 @@ fn run_unstake(
     own_ref(),
     tx(
       [pool_input(pool, pool_tokens)],
-      [pool_output(next, pool_tokens - payout), payout_output(payout_to, payout)],
+      list.concat(
+        [
+          pool_output(next, pool_tokens - payout),
+          payout_output(payout_to, payout),
+        ],
+        if fee == 0 {
+          []
+        } else {
+          [fee_output(fee)]
+        },
+      ),
       signers,
       now,
     ),
+  )
+}
+
+/// An exit paying the charge in full, which is what an exit carrying rewards
+/// has to do.
+fn run_unstake(
+  pool: StakingPoolDatum,
+  pool_tokens: Int,
+  before: Position,
+  now: Int,
+  signers: List<VerificationKeyHash>,
+  payout_to: VerificationKeyHash,
+) -> Bool {
+  run_unstake_paying(
+    pool,
+    pool_tokens,
+    before,
+    now,
+    signers,
+    payout_to,
+    platform_charge_lovelace,
   )
 }
 
@@ -975,6 +1027,132 @@ test unstake_cannot_be_redirected() {
   !run_unstake(pool, 3_651_000, before, opened_at + 8 * ms_per_day, [staker], other)
 }
 
+/// An exit carrying rewards pays for them. Without this, the same tokens cost
+/// nothing by one route and the full charge by the other.
+test unstake_is_refused_without_the_platform_charge() {
+  let (pool, before) = staked_pool()
+  !run_unstake_paying(
+    pool,
+    3_651_000,
+    before,
+    opened_at + 8 * ms_per_day,
+    [staker],
+    staker,
+    0,
+  )
+}
+
+/// One lovelace short is short. The amount named in the contract is the amount
+/// that binds, which is the whole reason it is named in ada.
+test unstake_is_refused_below_the_platform_charge() {
+  let (pool, before) = staked_pool()
+  !run_unstake_paying(
+    pool,
+    3_651_000,
+    before,
+    opened_at + 8 * ms_per_day,
+    [staker],
+    staker,
+    platform_charge_lovelace - 1,
+  )
+}
+
+test unstake_accepts_the_charge_exactly_at_the_floor() {
+  let (pool, before) = staked_pool()
+  run_unstake_paying(
+    pool,
+    3_651_000,
+    before,
+    opened_at + 8 * ms_per_day,
+    [staker],
+    staker,
+    platform_charge_lovelace,
+  )
+}
+
+/// The change trick, aimed at the exit's charge: the governor's own lovelace,
+/// spent into the transaction and handed straight back tagged. Every balance is
+/// honest and the governor is no better off, which is what netting refuses and
+/// tagging alone would not.
+test unstake_refuses_a_charge_that_is_only_the_governors_own_change() {
+  let (pool, before) = staked_pool()
+  let entries = [(staker, before)]
+  let proof = stake_accumulator.proof_in(staker, entries)
+  let now = opened_at + 8 * ms_per_day
+  let (acc, unallocated) = advance(pool, now)
+  let owed = owed_at(before, acc)
+  let payout = before.amount + owed
+  let (_, stake_root) =
+    stake_accumulator.transition(
+      pool.stake_root,
+      staker,
+      before,
+      no_position,
+      proof,
+    )
+  let next =
+    StakingPoolDatum {
+      ..pool,
+      stake_root: stake_root,
+      acc_reward_per_token: acc,
+      total_staked: pool.total_staked - before.amount,
+      unallocated: unallocated,
+      last_update_ms: now,
+      exhausted_at: exhausted_after(pool, unallocated, now),
+    }
+  let governor_input =
+    Input {
+      output_reference: OutputReference {
+        transaction_id: #"88",
+        output_index: 0,
+      },
+      output: Output {
+        address: from_verification_key(governor),
+        value: assets.from_lovelace(platform_charge_lovelace),
+        datum: transaction.NoDatum,
+        reference_script: None,
+      },
+    }
+  !staking_pool.spend(
+    Some(pool),
+    Unstake { staker_vkh: staker, before, proof },
+    own_ref(),
+    tx(
+      [pool_input(pool, 3_651_000), governor_input],
+      [
+        pool_output(next, 3_651_000 - payout),
+        payout_output(staker, payout),
+        fee_output(platform_charge_lovelace),
+      ],
+      [staker],
+      now,
+    ),
+  )
+}
+
+/// An exit from a pool with nothing left to emit accrued nothing, so there is
+/// nothing to charge for and it costs nothing. The stake itself was never what
+/// the charge was on.
+test unstake_without_rewards_owes_no_charge() {
+  let before = pos(1_000, 0, opened_at)
+  let pool =
+    StakingPoolDatum {
+      ..mock_pool(),
+      total_staked: 1_000,
+      unallocated: 0,
+      stake_root: stake_accumulator.root_of([(staker, before)]),
+    }
+  run_unstake_paying(
+    pool,
+    1_000,
+    before,
+    opened_at + 8 * ms_per_day,
+    [staker],
+    staker,
+    0,
+  )
+}
+
 // -- ClaimRewards -------------------------------------------------------------
 
 fn run_claim(
@@ -992,7 +1170,7 @@ fn run_claim(
     before,
     now,
     payout_to,
-    min_platform_claim_fee_lovelace,
+    platform_charge_lovelace,
     extra_inputs,
     extra_outputs,
   )
@@ -1084,7 +1262,7 @@ test claim_refuses_a_charge_below_the_floor() {
     before,
     opened_at + ms_per_day,
     staker,
-    min_platform_claim_fee_lovelace - 1,
+    platform_charge_lovelace - 1,
     [],
     [],
   )
@@ -1101,7 +1279,7 @@ test claim_accepts_a_charge_exactly_at_the_floor() {
     before,
     opened_at + ms_per_day,
     staker,
-    min_platform_claim_fee_lovelace,
+    platform_charge_lovelace,
     [],
     [],
   )
@@ -1121,7 +1299,7 @@ test claim_refuses_a_charge_that_is_only_the_governors_own_change() {
       },
       output: Output {
         address: from_verification_key(governor),
-        value: assets.from_lovelace(min_platform_claim_fee_lovelace),
+        value: assets.from_lovelace(platform_charge_lovelace),
         datum: transaction.NoDatum,
         reference_script: None,
       },
