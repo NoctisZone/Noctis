@@ -23,7 +23,7 @@ import { describe, expect, it } from 'vitest';
 import { MAX_PUBLISHABLE_SCRIPT_BYTES, MAX_TX_BYTES } from '../reference-script.js';
 
 interface Blueprint {
-  validators: Array<{ title: string; compiledCode: string }>;
+  validators: Array<{ title: string; compiledCode: string; hash?: string }>;
 }
 
 const blueprint: Blueprint = JSON.parse(
@@ -32,9 +32,13 @@ const blueprint: Blueprint = JSON.parse(
 
 /** Compiled size in bytes, keyed by validator module. */
 const sizes = new Map<string, number>();
+/** Compiled script hash, keyed by validator module. */
+const hashes = new Map<string, string>();
 for (const v of blueprint.validators) {
   const module = v.title.split('.')[0];
-  if (module) sizes.set(module, v.compiledCode.length / 2);
+  if (!module) continue;
+  sizes.set(module, v.compiledCode.length / 2);
+  if (v.hash) hashes.set(module, v.hash);
 }
 
 /**
@@ -229,21 +233,90 @@ for (const v of blueprint.validators) {
  * rewrites at the indices they already had. The rule is the same in both — put
  * the new field where the update sites are not — and it reads as opposite only
  * because the two records are laid out opposite ways.
+ *
+ * staking_pool +54, charging the exit. The exit arm reuses the netting helper
+ * and the constant the claim already had, so what it costs is the call and the
+ * short-circuit around it — a fraction of the +294 the charge cost when it was
+ * built, which is the ordinary shape of adding a second caller to a helper that
+ * already exists.
+ *
+ * bonding_curve_tier_b +5, and this one is not a source change at all. The
+ * committed blueprint had been built from a source state slightly earlier than
+ * the source committed beside it, so it recorded 14,953 and hash 04d70f3e while
+ * the tracked source builds to 14,958 and 19a184ae. Rebuilding on the same
+ * toolchain (aiken v1.1.23, stdlib v3.1.0) reproduced ten of the twelve
+ * validators byte-for-byte, which is what makes the two that moved readable as
+ * causes rather than noise. Whatever a blueprint records is only as good as the
+ * source it was built from, and only a local rebuild says which.
  */
 const RECORDED: Record<string, number> = {
   bonding_curve: 12_899,
-  bonding_curve_tier_b: 14_953,
+  bonding_curve_tier_b: 14_958,
   cto_governance: 7_962,
   cto_sybil_challenge: 2_123,
   curve_order: 1_775,
   launch_token_policy: 419,
   lp_escrow: 7_675,
   nhop_challenge: 2_093,
-  staking_pool: 5_447,
+  staking_pool: 5_501,
   token_metadata: 4_621,
   vesting: 5_786,
   zk_anchor: 2_634,
 };
+
+/**
+ * The compiled hash of each validator, which is what decides its address.
+ *
+ * Pinned for a reason the size register above cannot cover on its own: size is
+ * a proxy for change, and a poor one at the margin. Swapping a constant for
+ * another of the same width moves the hash and every address derived from it
+ * while leaving the length untouched, and nothing here would have said so.
+ *
+ * It also pins the blueprint to its own source. A committed blueprint is only
+ * as good as the source state it was built from, and the two can part company
+ * without anything failing — a drift of exactly that kind sat in this file
+ * unnoticed from 2026-09-07 until a rebuild on 2026-09-09 measured it. With
+ * these recorded, a blueprint rebuilt from different source says so here
+ * instead of waiting to be noticed.
+ *
+ * Same rule as the sizes: when a change moves one, update it in the same
+ * commit. A moved hash is a moved address, so anything already living at the
+ * old one has to be considered before the change ships.
+ */
+const RECORDED_HASHES: Record<string, string> = {
+  bonding_curve: '2e19896fb5796cf1e3bc4d7444280f2e7f67d000b4c3c0751a4a8fa3',
+  bonding_curve_tier_b: '19a184aecc03c8d1855715928807c7d011eadd471183e40626c14fe9',
+  cto_governance: 'a23a0f558e1bfa4df9310364f757af7aa544edeff1b897a76bd8e7ec',
+  cto_sybil_challenge: 'ea4ab6a5647bc6c2bc0bb0782a438045232282f60059884b74741a35',
+  curve_order: '989ea5f01db57706b5cffbd10a55f002b2d41594610b3980c9692718',
+  launch_token_policy: 'd77d785500b7bb5a80bdf8104651b13e59d546d222ce7ab22bb60965',
+  lp_escrow: '7c86166a586af82960a5a82a5d602dc1c5ad46d5730325a11f0474a9',
+  nhop_challenge: 'd35b50306175ea128b6f8f0ac28ba14511b60230aa37a4b55dc862c4',
+  staking_pool: '41313bf8fc3163390835de80c221db7692be0d7dc5fba7c11a423b40',
+  token_metadata: '3231abbdc46f762940e969d30a282277864346da2bc199d63dc40b9a',
+  vesting: '312d7ae3dbe50ee7dd4d553692cdf4f2c8ca11a96f1a45d83eb1ae11',
+  zk_anchor: '21ed55e104605486bed5e10afb33fcab1a500f00543ad91e40589fd9',
+};
+
+describe('compiled validator hashes', () => {
+  it('has a recorded hash for every validator in the blueprint', () => {
+    expect([...hashes.keys()].sort()).toEqual(Object.keys(RECORDED_HASHES).sort());
+  });
+
+  for (const [module, recorded] of Object.entries(RECORDED_HASHES)) {
+    it(`${module} hashes to ${recorded.slice(0, 12)}…`, () => {
+      expect(hashes.get(module)).toBe(recorded);
+    });
+  }
+
+  // A blake2b-224 script hash is 28 bytes. Anything else is not one, and an
+  // address derived from it would not be the address anyone meant.
+  for (const [module, recorded] of Object.entries(RECORDED_HASHES)) {
+    it(`${module}'s hash is 28 bytes of hex`, () => {
+      expect(recorded).toMatch(/^[0-9a-f]{56}$/);
+    });
+  }
+});
 
 describe('compiled validator sizes', () => {
   it('has a recorded size for every validator in the blueprint', () => {
