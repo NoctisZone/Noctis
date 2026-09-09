@@ -835,7 +835,7 @@ validator lp_escrow {
           harvested_amount > 0,
           new_datum == datum,
           // CRITICAL fix: lp_position_untouched only ever checked the
-          // LP TOKEN quantity, never lovelace — this permissionless
+          // LP TOKEN quantity, never lovelace — this
           // redeemer could previously be called with a trivial
           // harvested_amount (e.g. 1) while the entire real locked ADA
           // balance was diverted as unaccounted-for "change" in the same
@@ -861,8 +861,8 @@ validator lp_escrow {
           // their signature costs nobody anything and removes the churn.
           list.has(self.extra_signatories, active_fee_recipient(datum)),
           fee_recipient_paid(self, own_ref, datum, harvested_amount),
-          // HarvestFees is permissionless — the LP position's own
-          // continuing output can't be padded with junk assets either.
+          // The LP position's own continuing output can't be padded
+          // with junk assets either.
           lp_own_output_clean(self, own_ref),
         }
       }
