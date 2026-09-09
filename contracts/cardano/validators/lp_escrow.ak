@@ -65,8 +65,8 @@
 // this contract, whatever "directly" means at the DEX's own level. Added a
 // new `HarvestFees` redeemer and `fee_recipient_pub_key_hash` field
 // (CTO-redirectable, same pattern as Migrate's authorization). Deliberately
-// DEX-AGNOSTIC and narrow in scope: each whitelisted DEX (CSwap, Minswap,
-// Splash, WingRiders, SundaeSwap) has its own real harvest interface, none of which is
+// DEX-AGNOSTIC and narrow in scope: each whitelisted DEX (Minswap, Splash,
+// WingRiders, SundaeSwap, CSwap) has its own real harvest interface, none of which is
 // confirmed yet (still an open sub-question — "confirm fee harvesting
 // capability per DEX before finalising whitelist"), so this script cannot
 // verify the DEX-side call at all. What it CAN and DOES verify, regardless

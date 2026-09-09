@@ -134,7 +134,7 @@ Human sign-off gate. Three stages: website live, preprod contracts, mainnet.
 - [ ] Regression (Critical fix, 2026-07-30, see `local/SECURITY_AUDIT.md` for detail): confirm the fix holds against real preprod behavior, not just the simulator — 🔧 code-ready (13 regression tests pass; live preprod re-verification still needed since this closes a real fund-drain exploit)
 - [ ] N-hop challenge: submit a test challenge against a claimed allocation within 72h, confirm the 24h defense window and governor-adjudicated resolution both work
 - [ ] Public bonding curve opens on Cardano → buy tokens → price increases correctly
-- [ ] Bonding curve graduates at 100% sell-through → `Graduate` redeemer seeds LP to CSwap (preprod), verified by real value movement; if staking was enabled at launch creation, confirm the same transaction also seeds the staking pool
+- [ ] Bonding curve graduates at 100% sell-through → `Graduate` redeemer opens a NoctisSwap pool and seals the LP escrow against it (preprod), verified by real value movement; if staking was enabled at launch creation, confirm the same transaction also seeds the staking pool
 - [ ] LP enters escrow → 365-day lock confirmed → no withdraw() possible
 - [ ] Creator fee escrow accumulating correctly (1.0% of trades) — **on the Cardano Bonding Curve Cardano Launch contract itself, not a Midnight PSM** (the Creator Fee Escrow PSM never holds a real Cardano Launch fee)
 - [ ] Creator claims fee via `ClaimCreatorFees` on the Cardano curve contract → correct amount

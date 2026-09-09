@@ -736,8 +736,9 @@ For both launch types launches, the certificate is anchored to Cardano via an Ai
 
 ### DEX Graduation
 
-- **Default DEX:** CSwap
-- **Whitelist:** Minswap, Splash, WingRiders, SundaeSwap
+- **Graduation venue:** a NoctisSwap pool, created by the graduation transaction
+- **Default third-party DEX:** Minswap — the migration target after the LP lock, and the only one of the whitelisted names with a maintained public SDK
+- **Whitelist:** Minswap, Splash, WingRiders, SundaeSwap, CSwap
 - **Selection:** Creator chooses at launch wizard
 - **LP Pair:** Token/ADA (Cardano) or Token/NIGHT (Midnight Launch, when available)
 
