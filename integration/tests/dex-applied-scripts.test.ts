@@ -16,6 +16,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { scriptHashOf } from '../reference-script.js';
+import { readVenueFactoryParameters, VENUE_FACTORY_TITLE } from '../venue-pool.js';
 
 const CONTRACTS = join(import.meta.dirname, '..', '..', 'contracts');
 
@@ -25,7 +26,10 @@ interface AppliedValidator {
   parameters: Array<{ title: string; source: string; value: string }>;
   compiledCode: string;
   hash: string;
-  preprodAddress: string;
+  /** Only on the two whose parameters the package fixes on its own. */
+  preprodAddress?: string;
+  /** Only on the ones whose parameters come from a particular deployment. */
+  network?: string;
 }
 
 const applied = JSON.parse(readFileSync(join(CONTRACTS, 'cardano-dex', 'deployment', 'applied.json'), 'utf8')) as {
@@ -39,11 +43,71 @@ const venue = JSON.parse(readFileSync(join(CONTRACTS, 'cardano-dex', 'plutus.jso
 const byTitle = new Map(venue.validators.map((v) => [v.title, v]));
 
 describe('the applied venue scripts', () => {
-  it('records both of the ones the package can fix on its own', () => {
+  it('records exactly the venue scripts that have been applied so far', () => {
+    // Pinned rather than counted: an entry appearing here without anyone
+    // noticing is the failure this guards against, and a length check would
+    // not see a substitution.
     expect(applied.validators.map((v) => v.title)).toEqual([
+      // Fixed by the package alone — the same on every network.
       'royalty_pool/single_royalty_withdraw_pool.royalty_withdraw_pool.withdraw',
       'royalty_pool/pool.pool.spend',
+      // Fixed by a deployment — these carry the platform's own thread NFT
+      // policy and payout key, so they belong to one network.
+      'royalty_pool/redirect.redirect.withdraw',
+      'royalty_pool/treasury.treasury.withdraw',
+      'royalty_pool/pool_mint.pool_mint.mint',
     ]);
+  });
+
+  it('says which deployment an entry belongs to, whenever that is a question', () => {
+    // A hash derived from the platform's own keys is not portable, and an
+    // entry that does not say so invites being read as if it were.
+    const deploymentSpecific = [
+      'royalty_pool/redirect.redirect.withdraw',
+      'royalty_pool/treasury.treasury.withdraw',
+      'royalty_pool/pool_mint.pool_mint.mint',
+    ];
+    for (const v of applied.validators) {
+      if (deploymentSpecific.includes(v.title)) {
+        expect(v.network, `${v.title} does not name its network`).toBe('preprod');
+      } else {
+        expect(v.network, `${v.title} follows from the package, so it has no network`).toBeUndefined();
+      }
+    }
+  });
+
+  it('records the factory the way the graduation submitter reads it', () => {
+    // The real reader, not a copy of its rules. It rebuilds the pool's opening
+    // datum from exactly these values and the factory refuses a datum built
+    // from anything else, so a record it would reject is a record that cannot
+    // graduate a launch — better to learn that here.
+    const factory = applied.validators.find((v) => v.title === VENUE_FACTORY_TITLE);
+    expect(factory, 'the factory is not recorded').toBeDefined();
+    const params = readVenueFactoryParameters(factory as never);
+
+    // The fee schedule is the platform's published post-graduation split, and
+    // the denominator it is read against is fixed by the venue.
+    expect(params.feeNum + 0n).toBe(99_900n);
+    expect(params.treasuryFee).toBe(100n);
+    expect(params.royaltyFee).toBe(1_000n);
+    expect(params.feeNum + params.treasuryFee + params.royaltyFee).toBeLessThan(200_000n);
+    expect(params.treasuryFee + params.royaltyFee).toBeLessThan(params.feeNum);
+
+    // treasury.ak compares an output against VerificationKey(treasury_address),
+    // so this is a payment key hash. A whole address is 57 bytes and would not
+    // be a credential at all — a mistake that still applies cleanly and still
+    // yields a real, reachable address.
+    expect(params.treasuryAddressHex).toMatch(/^[0-9a-f]{56}$/);
+    expect(params.threadNftPolicy).toMatch(/^[0-9a-f]{56}$/);
+    expect(params.initialLq).toBe(1_000_000_000n);
+
+    // The two it chains from must be the entries recorded above, not the
+    // unapplied ones — applying the wrong dependency is the other way this
+    // record can look right and describe a script nobody deployed.
+    const byName = new Map(applied.validators.map((v) => [v.title, v]));
+    expect(params.redirectValidatorHash).toBe(byName.get('royalty_pool/redirect.redirect.withdraw')?.hash);
+    expect(params.treasuryValidatorHash).toBe(byName.get('royalty_pool/treasury.treasury.withdraw')?.hash);
+    expect(params.poolValidatorHash).toBe(byName.get('royalty_pool/pool.pool.spend')?.hash);
   });
 
   // The one that matters. Every other check here is about provenance; this one
