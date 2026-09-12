@@ -458,20 +458,39 @@ User Wallet (Midnight primary; Cardano for DV eligibility only)
 - Payment: Monthly manual claim, ADA
 - Gas: ~0.17 ADA deducted from escrow balance automatically
 
-**Stream B — LP Trading Fees (post-graduation, ongoing)**
-- Accrues: the graduated pool's own trading fees — at the venue's own
-  post-graduation share (see FEE SPLIT), or a third-party DEX's LP schedule
-- Paid: to the active fee recipient through `lp_escrow.ak`'s `HarvestFees`
-  redeemer. **Not "directly, bypassing the escrow"** — the LP position is locked
-  at a script address, so a payout is always a transaction that spends the
-  escrow UTXO, whatever "directly" means at the DEX's own level
-- What `HarvestFees` guarantees: the locked position and the escrow's own value
-  are both left byte-for-byte unchanged, and the recipient really receives the
-  harvested amount — so the lovelace has to arrive from the DEX side of that
-  same transaction. Signed by the recipient, the only party a harvest is for
-- Continues: Indefinitely while pool has volume
-- Redirected to the community wallet if a CTO vote passes — `active_fee_recipient`
-  switches on the same `cto_triggered` flag `Migrate`'s authorisation reads
+**Stream B — Pool Royalty (post-graduation, ongoing)**
+
+Call it the **pool royalty**, not "LP trading fees" (renamed 2026-09-12). A
+launch graduates onto a **NoctisSwap** pool, and the creator's post-graduation
+1.0% is charged *at the pool* to a royalty slot in the pool's own datum. It is
+not a share of LP fees and it does not pass through `lp_escrow.ak`.
+- Accrues: 1.0% of every trade against the pool, into the pool datum's own
+  royalty counter — see FEE SPLIT for the whole post-graduation schedule
+- Paid: the creator signs a withdraw request; the venue's claim path pays the
+  key hash that `royalty_pub_key` produces, delegated by the creator or not at
+  all. The destination is derived from the pool, never declared by the claim, so
+  the rule binds every claim rather than one route through one
+- What a claim guarantees: it draws a non-negative amount from each side, so the
+  counter it settles against can only fall, and the locked LP position is not
+  touched
+- Continues: indefinitely while the pool has volume
+- Redirected by a passed CTO vote: the `redirect` script rewrites
+  `royalty_pub_key` to the community wallet and bumps the pool nonce, so a
+  replaced key's old signatures die with it
+
+**The 0.1% left in the pool is not a stream.** It stays in the reserves, so the
+position held in escrow grows with volume. Nobody claims it, and it must never
+be shown as claimable.
+
+**`lp_escrow.ak`'s `HarvestFees` is the third-party-DEX path, not this one.** It
+applies to a position that has migrated to another whitelisted DEX after the
+365-day lock. It guarantees the locked position and the escrow's own value are
+left byte-for-byte unchanged and that the recipient really receives the
+harvested amount, and it is signed by the recipient, the only party a harvest is
+for. Its recipient follows the same `cto_triggered` flag `Migrate`'s
+authorisation reads. Note what the 2026-09-05 venue research established: every
+whitelisted Cardano DEX accrues LP fees into reserves, realised on withdrawal,
+so on those venues this pays out at migration rather than continuously.
 
 These are **two entirely different income mechanisms**. Do not conflate them in the UI.
 
@@ -508,7 +527,7 @@ These are **two entirely different income mechanisms**. Do not conflate them in 
 > that the returned token is genuinely the target DEX's LP token for that pool
 > needs per-DEX knowledge, and arrives with the DEX integration work.
 
-> **Resolution (2026-07-10):** a new `HarvestFees` redeemer lets Stream B trading fees reach `fee_recipient` (the creator, or the community wallet once CTO is triggered — same redirect rule as everywhere else) WITHOUT touching the locked LP position, closing the gap between this file's "no `withdraw`, ever" invariant and Stream B's "paid directly to fee_recipient" description — the fee payout has to route through this contract since the LP itself lives here, a script address, not a wallet. **Deliberately DEX-agnostic and narrow:** the redeemer only verifies its OWN two invariants (the locked `lp_token_amount` is byte-for-byte unchanged; the correct recipient actually receives the harvested lovelace in the same transaction) and does not model or verify any specific DEX's real harvest call — that remains genuinely unconfirmed per-DEX (Minswap first, then Splash/WingRiders/SundaeSwap/CSwap), an open sub-question this always had. **Authorised by the recipient's signature.** It began permissionless, on the reasoning that nobody can gain by calling it since the LP position cannot move — true, and not the whole question. The continuing output is identical to the input, so a caller could rebuild the escrow UTXO at a new reference for the price of a transaction fee, invalidating whatever was being built against the old one; the CTO anchor reads this UTXO as a reference input, and that is the community's own rescue path. The recipient is the only party a harvest is for, so requiring their signature costs nobody anything.
+> **Resolution (2026-07-10; `HarvestFees` was scoped to the third-party-DEX path on 2026-09-12 — see Stream B above, which is now the pool royalty and does not route through this contract):** a new `HarvestFees` redeemer lets a migrated position's trading fees reach `fee_recipient` (the creator, or the community wallet once CTO is triggered — same redirect rule as everywhere else) WITHOUT touching the locked LP position, closing the gap between this file's "no `withdraw`, ever" invariant and Stream B's "paid directly to fee_recipient" description — the fee payout has to route through this contract since the LP itself lives here, a script address, not a wallet. **Deliberately DEX-agnostic and narrow:** the redeemer only verifies its OWN two invariants (the locked `lp_token_amount` is byte-for-byte unchanged; the correct recipient actually receives the harvested lovelace in the same transaction) and does not model or verify any specific DEX's real harvest call — that remains genuinely unconfirmed per-DEX (Minswap first, then Splash/WingRiders/SundaeSwap/CSwap), an open sub-question this always had. **Authorised by the recipient's signature.** It began permissionless, on the reasoning that nobody can gain by calling it since the LP position cannot move — true, and not the whole question. The continuing output is identical to the input, so a caller could rebuild the escrow UTXO at a new reference for the price of a transaction fee, invalidating whatever was being built against the old one; the CTO anchor reads this UTXO as a reference input, and that is the community's own rescue path. The recipient is the only party a harvest is for, so requiring their signature costs nobody anything.
 
 ### Migration Whitelist (updatable — team multisig + 72h public notice)
 
@@ -522,7 +541,7 @@ governance path below, so the list is a plan rather than a deployed state.
 - Splash
 - WingRiders
 - SundaeSwap
-- CSwap *(no public SDK found; not the default, and not a migration target we can build for today)*
+- CSwap *(no public SDK found. Shown greyed out and non-selectable in the Create Wizard since 2026-09-09; it can return once there is something to build an integration against)*
 
 > **Resolution (2026-07-10):** the whitelist was previously described as "hardcoded, immutable" while `lp_escrow.ak`'s own file header already claimed "Option B — multisig + 72h notice" — the header described the intended design, but the actual `AddDex`/`RemoveDex` redeemers only ever required one governor signature with immediate effect. Fixed for real: a new `ProposeDexChange` redeemer requires `multisig_threshold`-of-`multisig_signers` real signatures (the M/N split is a deployment-time choice, not hardcoded) and starts a 72-hour public notice clock; `ExecuteDexChange` applies the change once the notice period has elapsed — permissionless, since the proposal was already public for the full window (same "the deadline is the authorization" pattern as the curve's `ExpireCurve`); `CancelPendingDexChange` lets the multisig withdraw a proposal before it takes effect. This is Option B from internal tracking, matching the user's confirmed choice — not yet Option C (on-chain protocol governance vote), which stays the eventual target once platform governance ships (see the Platform Governance open issue).
 

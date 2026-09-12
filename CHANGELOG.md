@@ -84,6 +84,16 @@ Notable changes to the Noctis Zone, by release. Internal development history pre
   policy id as a required input.
 - The LP escrow and vesting validators look the governance record's thread NFT
   up under its role-tagged name, as the record carries it.
+- The creator's post-graduation stream is called the pool royalty. It is charged
+  at the launch's NoctisSwap pool into a royalty slot in the pool's own datum,
+  keyed to the creator and paid to the key hash that slot produces, so the
+  destination is derived from the pool rather than declared by a claim. The
+  escrow's `HarvestFees` is the third-party-DEX path, for a position that has
+  migrated after the lock, and is documented as that.
+- The graduation CLI takes the creator's royalty public key from the launch
+  record rather than from whoever runs it. The record's copy is captured and
+  hash-checked when the launch is created, so a key that cannot be matched to the
+  launch's own creator is refused on the day it is offered.
 - The compiled-artifact guard records one fingerprint per compiled Compact contract, and each
   CLI is held to the artifacts of the contract it proves against. A build that carries no
   artifacts for a contract says so rather than proving against whatever it is pointed at.

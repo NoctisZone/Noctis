@@ -33,7 +33,8 @@ as though it were.
 Two of its inputs are decisions rather than derivations, and are recorded as
 such in each entry's `parameters`:
 
-- **`max_treasury_fee` is `100`, equal to the deployed `treasury_fee`.** So the
+- **`max_treasury_fee` is `100`, equal to the deployed `treasury_fee` — DECIDED
+  by the founder 2026-09-12, no longer a standing recommendation.** So the
   platform's own cut can be waived or reduced by the DAO arm and never raised.
   It matters more than it looks: `SetTreasuryFee` is bounded by this AND by the
   pool datum's `new_fee + royalty_fee < fee_num`, but that second bound works

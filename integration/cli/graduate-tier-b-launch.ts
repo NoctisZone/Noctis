@@ -60,8 +60,16 @@ interface GraduateInput {
   venueFactoryRef?: ReferencePointerInput;
   stakingPoolRef?: ReferencePointerInput;
   /**
-   * The creator's fee-recipient Ed25519 PUBLIC KEY, hex. Not derivable from
-   * an address — see the submitter's header. Captured at launch creation.
+   * The creator's fee-recipient Ed25519 PUBLIC KEY, hex. Not derivable from an
+   * address — see the submitter's header.
+   *
+   * Read it from the launch record's `creator_royalty_pub_key`, which the
+   * platform captures at registration out of the mint transaction's own witness
+   * set. Do not ask an operator for it: the platform's policy wallet signs that
+   * same transaction, so a hand-supplied key can be the WRONG signer's and
+   * nothing downstream can tell — a key always hashes to its own hash. The
+   * submitter re-checks whatever arrives here against the fee recipient the LP
+   * escrow recorded on chain, which is the check that actually binds.
    */
   creatorRoyaltyPubKeyHex: string;
   /**
