@@ -53,6 +53,24 @@ Notable changes to the Noctis Zone, by release. Internal development history pre
 - Registering a wallet's NIGHT for DUST generation reads its registration state
   from the chain, so re-running it reports that there is nothing to do instead of
   submitting again.
+- A price feed over a venue pool's own history: every trade with the side it was
+  taken from, the rate it realised, and the reserves it left. Rates stay exact
+  rationals end to end and are compared by cross-multiplication, because the
+  validator the pool is priced by compares integers — two prices a float cannot
+  tell apart are still two prices, and on a token worth a fraction of a lovelace
+  that is most of them. Bars bucket by wall time aligned to the epoch, leave an
+  empty bucket out rather than carrying the last price forward, and keep each
+  side's volume in its own total. The feed also says whether the walk behind it
+  reached the pool's opening, so a truncated read is never charted as a complete
+  history.
+- A monitor over the batcher's rounds, which alerts on one outcome and counts the
+  rest. A resting limit order and a declined one are the venue working; only an
+  attempted fill that did not happen pages. Liveness is measured on rounds rather
+  than on fills, so a market with nothing to fill stays quiet and a batcher that
+  has stopped does not. A round that threw before reading the chain is counted
+  apart from a round with failures in it — the first says nothing about the venue
+  — and pools read are tracked against the most ever seen, so a read returning
+  fewer of them is visible as a drop rather than as a quiet day.
 
 ### Changed
 
