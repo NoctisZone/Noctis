@@ -84,6 +84,7 @@ import { calculateMinLovelaceFromUTxO, PROTOCOL_PARAMETERS_DEFAULT } from '@luci
 import { blake2b } from '@noble/hashes/blake2.js';
 import { CAP_EMPTY_ROOT, bytesToHex as capBytesToHex } from './cap-accumulator-tree.js';
 import { CARDANO_NETWORK_MAP, loadPlutusBlueprint, type PlutusBlueprint, requireFieldsStrict } from './cli/cli-io.js';
+import { LP_RESERVE_PCT } from './launch-allocation.js';
 import {
   assertValidCip68BaseName,
   type BondingCurveDatumData,
@@ -340,7 +341,7 @@ export async function buildGenesisDatums(input: BuildGenesisDatumsInput) {
     throw new Error(`tier must be 'A' or 'B', got ${JSON.stringify(tier)}`);
   }
   const totalSupply = input.totalSupply ?? 1_000_000_000;
-  const lpReservePct = input.lpReservePct ?? 20;
+  const lpReservePct = input.lpReservePct ?? Number(LP_RESERVE_PCT);
   // Taking nothing is the default; a creator raises it deliberately or not at
   // all. `??` rather than `||` matters here — 0 is a real, chosen value.
   const creatorAllocPct = input.creatorAllocPct ?? 0;
@@ -418,8 +419,35 @@ export async function buildGenesisDatums(input: BuildGenesisDatumsInput) {
       `lpLockDurationMs must be >= 31,536,000,000 (lp_escrow.ak's own min_lock_duration), got ${lpLockDurationMs}`,
     );
   }
+  // The pool's token side is decided here and nowhere else.
+  //
+  // `lp_reserve_tokens` is a datum field the curve only ever READS: graduation
+  // compares the pool output's token balance to it. Nothing on chain requires
+  // it to be positive, and at zero the equality is satisfied by ABSENCE — the
+  // raise moves into a pool with no token side, and whoever supplies the fourth
+  // asset can take the whole raise back out.
+  //
+  // That is not an attacker's path: a genesis record exists only because the
+  // governor signed its thread-NFT mint, so this datum is authored under
+  // platform control. Which is exactly why the bound belongs HERE, beside the
+  // three above it, rather than costing a validator edit — the author is the
+  // one that has to be held to it.
+  if (!Number.isInteger(lpReservePct) || lpReservePct <= 0 || lpReservePct > 100) {
+    throw new Error(
+      `lpReservePct must be a positive integer percentage (LP_RESERVE_PCT is ${LP_RESERVE_PCT}), got ${lpReservePct}`,
+    );
+  }
 
   const lpReserveTokens = Math.floor((totalSupply * lpReservePct) / 100);
+  // Checked on the DERIVED figure too, not just the percentage: this is the
+  // number the datum carries, and a small enough supply floors a legitimate
+  // percentage to zero without the percentage ever looking wrong.
+  if (lpReserveTokens <= 0) {
+    throw new Error(
+      `Supply split leaves lp_reserve_tokens <= 0 (total=${totalSupply}, lpReservePct=${lpReservePct}) — ` +
+        'the pool would open with no token side.',
+    );
+  }
   const creatorAllocTokens = Math.floor((totalSupply * creatorAllocPct) / 100);
   const stakingReserveTokens = stakingEnabled ? Math.floor((totalSupply * stakingAllocPct) / 100) : 0;
   const walletCap = Math.floor((totalSupply * walletCapPct) / 100);

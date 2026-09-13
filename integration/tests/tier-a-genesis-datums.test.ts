@@ -75,3 +75,47 @@ describe('tier-a-genesis-datums.ts — the stall clock starts at the mint', () =
     expect(datum.curve_state).toBe('Inactive');
   });
 });
+
+// The pool's token side, which nothing on chain requires to exist.
+//
+// `lp_reserve_tokens` is only ever READ by the curve: graduation compares the
+// pool output's token balance to it. At zero that comparison is satisfied by
+// ABSENCE — the raise moves into a pool with no token side at all. The genesis
+// datum is authored under platform control, so this is the author's bound to
+// keep, and these are the tests that keep it.
+//
+// Each is the passing fixture plus ONE delta, so a failure can only be the
+// delta. The positive case above them is what stops all three passing for the
+// wrong reason.
+describe('tier-a-genesis-datums.ts — the pool always gets a token side', () => {
+  it('builds normally on the platform-fixed reserve, which is the control', async () => {
+    const g = await buildGenesisDatums(input({ tier: 'B' }));
+    const datum = Data.from(g.datums.bondingCurve, BondingCurveTierBDatumSchema);
+    expect(datum.lp_reserve_tokens).toBe(200_000_000n); // 20% of 1B
+    expect(g.supplySplit.lpReserveTokens).toBe(200_000_000);
+  });
+
+  it('refuses a zero reserve rather than minting a launch that cannot seed a pool', async () => {
+    await expect(buildGenesisDatums(input({ tier: 'B', lpReservePct: 0 }))).rejects.toThrow(
+      /lpReservePct must be a positive integer/,
+    );
+  });
+
+  it('refuses a negative or fractional percentage', async () => {
+    await expect(buildGenesisDatums(input({ lpReservePct: -20 }))).rejects.toThrow(/positive integer/);
+    await expect(buildGenesisDatums(input({ lpReservePct: 20.5 }))).rejects.toThrow(/positive integer/);
+  });
+
+  it('refuses more than the whole supply', async () => {
+    await expect(buildGenesisDatums(input({ lpReservePct: 101 }))).rejects.toThrow(/positive integer/);
+  });
+
+  // The percentage can be perfectly legitimate and still floor to nothing on a
+  // small enough supply, which is why the derived figure is checked too and not
+  // only the input.
+  it('refuses a reserve that floors to zero on a small supply, though the percentage is valid', async () => {
+    await expect(buildGenesisDatums(input({ totalSupply: 4, lpReservePct: 20 }))).rejects.toThrow(
+      /lp_reserve_tokens <= 0/,
+    );
+  });
+});

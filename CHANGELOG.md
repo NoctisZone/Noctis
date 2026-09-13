@@ -84,6 +84,13 @@ Notable changes to the Noctis Zone, by release. Internal development history pre
   policy id as a required input.
 - The LP escrow and vesting validators look the governance record's thread NFT
   up under its role-tagged name, as the record carries it.
+- A launch cannot be minted with no token side for its pool. The LP reserve
+  percentage is now bounded where the vesting window, the creator allocation and
+  the LP lock duration are already bounded, and the derived token figure is
+  checked as well as the percentage — a valid percentage still floors to nothing
+  on a small enough supply, and the figure the genesis datum carries is the
+  derived one. Graduation compares the pool's token balance against that field,
+  so at zero the comparison is satisfied by absence.
 - The creator's post-graduation stream is called the pool royalty. It is charged
   at the launch's NoctisSwap pool into a royalty slot in the pool's own datum,
   keyed to the creator and paid to the key hash that slot produces, so the
