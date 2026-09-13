@@ -372,7 +372,15 @@ export class StakingSubmitter {
   /** Everything a dashboard needs about this pool, in one call. */
   async overview(): Promise<PoolOverview> {
     const { utxo, datum, positions } = await this.loadPool();
-    const nowMs = BigInt(Date.now());
+    // Quote what a claim would actually pay, not what the clock says has
+    // accrued. A claim advances the pool to its validity range's LOWER bound,
+    // which sits a margin behind the clock so the range is already open when a
+    // node checks it against a lagging tip. Reading `Date.now()` here instead
+    // put the two a few minutes apart either side of every whole-token step,
+    // so the page offered a balance the submitter then refused to build.
+    // Emission is integer-quantised, so that disagreement is a whole token —
+    // visible, not a rounding edge. The margin is not the bug and must stay.
+    const nowMs = BigInt(validityRangeFor(Date.now(), Number(datum.last_update_ms)).from);
     const { acc } = advance(datum, nowMs);
     const tokenUnit = datum.token_policy_id + datum.token_asset_name;
 

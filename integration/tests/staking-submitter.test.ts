@@ -586,6 +586,35 @@ describe('overview and positionOf', () => {
     expect(o.currentAprPercent).not.toBeNull();
   });
 
+  it('quotes what a claim would pay, not what the clock says has accrued', async () => {
+    const positions = new StakeAccumulator();
+    const position = openPosition(1_000n, LAST_UPDATE_MS);
+    positions.set(hexToBytes(STAKER_VKH), position);
+    // The pool must hold more than an hour of emission, or `advance` clamps
+    // both instants to `unallocated` and they stop disagreeing.
+    const pool = { total_staked: 1_000n, unallocated: 1_000_000_000n };
+    const h = harness({ positions, datum: pool });
+
+    const nowMs = Number(LAST_UPDATE_MS) + 3_600_000;
+    vi.useFakeTimers();
+    vi.setSystemTime(nowMs);
+    try {
+      const datum = poolDatum({ ...pool, stake_root: bytesToHex(positions.root()) });
+      const claimInstant = BigInt(validityRangeFor(nowMs, Number(LAST_UPDATE_MS)).from);
+      const atClaim = owedAt(position, advance(datum, claimInstant).acc);
+      const atClock = owedAt(position, advance(datum, BigInt(nowMs)).acc);
+
+      // Without this the test proves nothing: the two instants have to really
+      // disagree, or reading either one would satisfy the assertion below.
+      expect(atClock).toBeGreaterThan(atClaim);
+
+      const o = await h.submitter.overview();
+      expect(o.positions[0].owed).toBe(atClaim);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('leaves the rate and the runway undefined while nothing is staked', async () => {
     const h = harness();
     const o = await h.submitter.overview();
