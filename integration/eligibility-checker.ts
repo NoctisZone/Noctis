@@ -6,7 +6,7 @@
 // (5 checks total). This module now covers checks #1, #2, #4, and #5.
 //
 //   #1 Wallet age >= 90 days on Cardano .......... checkWalletAge (below)
-//   #2 NIGHT balance >= $50 USD ................... checkNightBalance
+//   #2 bond-asset balance >= $50 USD ............. checkBondAssetBalance
 //       (below). Built 2026-07-13 on two independently-verified real
 //       building blocks: `indexer-client.ts`'s `getUnshieldedNightBalance`
 //       (a genuine third-party balance query via the public Midnight
@@ -83,11 +83,41 @@ export interface NightBalanceResult {
   sources: string[];
 }
 
+/**
+ * Which asset the DarkVeil bond is denominated in, and therefore which asset
+ * eligibility check #2 measures. The two must agree: checking a balance in one
+ * asset while the contract demands a bond in another would pass registrants
+ * who cannot actually register.
+ */
+export interface BondAssetConfig {
+  /**
+   * The unshielded token colour as 32-byte hex. Omit for native NIGHT.
+   */
+  tokenTypeHex?: string;
+  /** Atomic units per whole unit, as a power of ten. NIGHT and USDM are both 6. */
+  decimals: number;
+  /**
+   * True when one whole unit is one US dollar, so a USD threshold is a
+   * multiplication and this path consults no price feed at all. That is the
+   * property the denomination is chosen for: the figure a deploy seals and the
+   * figure a registration pays are the same figure, by arithmetic.
+   */
+  usdPegged: boolean;
+}
+
+/** Native NIGHT — what the bond was denominated in before it became configurable. */
+export const NIGHT_BOND_ASSET: BondAssetConfig = { decimals: 6, usdPegged: false };
+
 export interface DarkVeilEligibilityOptions {
   minWalletAgeDays: number;
   adaFlowLookbackDays: number;
   minNightUsd: number;
   indexerWsUrl: string;
+  /**
+   * Optional. Defaults to native NIGHT, which is what this check measured
+   * before the bond became asset-agnostic.
+   */
+  bondAsset?: BondAssetConfig;
 }
 
 export interface DarkVeilEligibilityResult {
@@ -189,13 +219,29 @@ export async function checkStakeKeyMatch(
  * ADA/USD price (usdToMinNightAtomic) — see that module for the
  * ORACLE STRATEGY correction on why there's no direct NIGHT/USD feed.
  */
-export async function checkNightBalance(
+export async function checkBondAssetBalance(
   indexerWsUrl: string,
   registrantAddress: string,
   minUsd: number,
+  asset: BondAssetConfig = NIGHT_BOND_ASSET,
 ): Promise<NightBalanceResult> {
+  if (asset.usdPegged) {
+    // A dollar of a dollar-pegged token is one token. Deliberately no oracle
+    // call on this path — not a shortcut but the point of the denomination.
+    const [{ balance }] = await Promise.all([
+      getUnshieldedNightBalance(indexerWsUrl, registrantAddress, asset.tokenTypeHex),
+    ]);
+    const minRequiredAtomic = BigInt(Math.ceil(minUsd)) * 10n ** BigInt(asset.decimals);
+    return {
+      eligible: balance >= minRequiredAtomic,
+      balanceAtomic: balance,
+      minRequiredAtomic,
+      sources: ['usd-pegged'],
+    };
+  }
+
   const [{ balance }, threshold] = await Promise.all([
-    getUnshieldedNightBalance(indexerWsUrl, registrantAddress),
+    getUnshieldedNightBalance(indexerWsUrl, registrantAddress, asset.tokenTypeHex),
     usdToMinNightAtomic(minUsd),
   ]);
   return {
@@ -257,7 +303,12 @@ export async function checkDarkVeilEligibility(
   const [walletAge, stakeKeyMatch, nightBalance, noDirectAdaFlow] = await Promise.all([
     checkWalletAge(client, registrantAddress, options.minWalletAgeDays, currentTime),
     checkStakeKeyMatch(client, registrantAddress, creatorAddress),
-    checkNightBalance(options.indexerWsUrl, registrantAddress, options.minNightUsd),
+    checkBondAssetBalance(
+      options.indexerWsUrl,
+      registrantAddress,
+      options.minNightUsd,
+      options.bondAsset ?? NIGHT_BOND_ASSET,
+    ),
     checkNoDirectAdaFlow(client, registrantAddress, creatorAddress, options.adaFlowLookbackDays, currentTime),
   ]);
   return {

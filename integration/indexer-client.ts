@@ -182,11 +182,12 @@ export function consumeUnshieldedTransactions(
 export async function getUnshieldedNightBalances(
   indexerWsUrl: string,
   addresses: readonly string[],
+  tokenTypeHex?: string,
 ): Promise<NightBalanceResult[]> {
   if (addresses.length === 0) {
     return [];
   }
-  const nightTokenType = nativeToken().raw;
+  const nightTokenType = tokenTypeHex ?? nativeToken().raw;
   return Effect.runPromise(
     Effect.scoped(
       Effect.forEach(
@@ -208,8 +209,16 @@ export async function getUnshieldedNightBalances(
   );
 }
 
-export async function getUnshieldedNightBalance(indexerWsUrl: string, address: string): Promise<NightBalanceResult> {
-  const nightTokenType = nativeToken().raw;
+export async function getUnshieldedNightBalance(
+  indexerWsUrl: string,
+  address: string,
+  tokenTypeHex?: string,
+): Promise<NightBalanceResult> {
+  // Defaults to NIGHT so every existing caller keeps its behaviour. A bond
+  // denominated in a bridged stablecoin passes that asset's colour instead —
+  // the filter below is a plain equality test and never cared which colour it
+  // was given.
+  const nightTokenType = tokenTypeHex ?? nativeToken().raw;
   const stream = UnshieldedTransactions.run({
     address,
     transactionId: 0,
