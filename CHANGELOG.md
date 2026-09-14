@@ -74,6 +74,20 @@ Notable changes to the Noctis Zone, by release. Internal development history pre
 
 ### Changed
 
+- A launch names the token its DarkVeil bond is posted in. The bond amount was
+  always set per launch; the asset is now set with it, sealed at deploy and read
+  by every path that moves a bond — the registration that takes it, both refund
+  routes, the forfeiture sweep and the disputed-bond claim. A launch that wants
+  the bond in the native token says so by omission, and behaves as it did. On a
+  Midnight Launch the bond and the curve are separately denominated: the colour
+  governs the bond alone, and every trade, fee and liquidity payment stays
+  native, because that launch prices its curve in the native token.
+
+- Registration eligibility weighs the asset the bond is actually posted in,
+  rather than naming one. Where a whole unit of that asset is a dollar, the
+  threshold is a multiplication and no price source is read, so the figure a
+  deploy seals and the figure a registration pays are the same figure.
+
 - A Cardano Launch graduates onto the venue. The curve's `Graduate` seeds the
   output that carries the launch's pool NFT, minted by the venue's factory
   policy in the same transaction, with the whole raise and the LP reserve; the
