@@ -145,6 +145,13 @@ Notable changes to the Noctis Zone, by release. Internal development history pre
 
 ### Fixed
 
+- A trading wallet no longer spends the output it set aside as collateral. A
+  script spend requires collateral and collateral must be pure ada, so the
+  smallest such output is the one set aside — and the same one ordinary coin
+  selection reached for first. Collateral survives a successful spend but an
+  input does not, so the trade went through and left the wallet without the
+  pure-ada output its next trade needed. Selection now holds that output back,
+  and a transaction that could only balance by consuming it is refused.
 - The DarkVeil claim-record fetch carries the wallet-control proof the server
   requires; the widget signs the challenge through the wallet it is given.
 - A launch that opted into a staking pool now graduates. The pool takes its own
