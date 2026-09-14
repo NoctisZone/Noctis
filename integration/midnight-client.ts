@@ -324,6 +324,13 @@ export class NoctisMidnightClient {
       totalSupply: bigint;
       maxWalletPercent: bigint;
       bondAmount: bigint;
+      /**
+       * The unshielded token colour the DarkVeil bond is posted in, 32 bytes.
+       * All zeroes is nativeToken() (NIGHT) and reproduces the original
+       * behaviour; any other value is a real Midnight colour, e.g. a bridged
+       * stablecoin. Sealed by the constructor — a registrant can never name it.
+       */
+      bondTokenColour: Uint8Array;
       walletCap: bigint;
       dvAllocation: bigint;
       dvPrice: bigint;
@@ -381,6 +388,7 @@ export class NoctisMidnightClient {
         args.totalSupply,
         args.maxWalletPercent,
         args.bondAmount,
+        args.bondTokenColour,
         args.walletCap,
         args.dvAllocation,
         args.dvPrice,
@@ -461,6 +469,13 @@ export class NoctisMidnightClient {
       totalSupply: bigint;
       maxWalletPercent: bigint;
       bondAmount: bigint;
+      /**
+       * The unshielded token colour the DarkVeil bond is posted in, 32 bytes.
+       * All zeroes is nativeToken() (NIGHT) and reproduces the original
+       * behaviour; any other value is a real Midnight colour, e.g. a bridged
+       * stablecoin. Sealed by the constructor — a registrant can never name it.
+       */
+      bondTokenColour: Uint8Array;
       walletCap: bigint;
       basePrice: bigint;
       maxPrice: bigint;
@@ -515,6 +530,7 @@ export class NoctisMidnightClient {
         args.totalSupply,
         args.maxWalletPercent,
         args.bondAmount,
+        args.bondTokenColour,
         args.walletCap,
         args.basePrice,
         args.maxPrice,

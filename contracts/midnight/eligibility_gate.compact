@@ -310,11 +310,32 @@ sealed ledger totalSupply: Uint<128>;
 // Maximum per-wallet percentage (5 = 5%)
 sealed ledger maxWalletPercent: Uint<8>;
 
-// NIGHT bond amount required for DarkVeil registration
+// Bond amount required for DarkVeil registration, in the atomic units of
+// bondTokenColour below — NOT necessarily NIGHT. A USD-denominated bond in a
+// USD stablecoin is a fixed integer for the life of the launch, which is the
+// whole reason the pair below is sealed rather than re-derived per call.
 sealed ledger bondAmount: Uint<128>;
 
+// The unshielded token the bond is posted in. 32 zero bytes is nativeToken()
+// (NIGHT) and reproduces this contract's original behaviour exactly; any other
+// value is a real Midnight colour, e.g. a bridged stablecoin.
+//
+// SEALED, and that is the security property, not a convenience: if a caller
+// could name the colour, a registrant would simply mint a worthless token and
+// bond that. Sealing it at deploy is what makes the bond cost anything. It is
+// read — never taken as an argument — by every circuit below that moves a bond.
+//
+// Verified before this was written rather than assumed (the standing rule for
+// anything Compact): receiveUnshielded/sendUnshielded are generic over colour,
+// a colour derived from a FOREIGN contract address is accepted, and a circuit
+// receiving one records a real unshielded INPUT with no mint — i.e. custody of
+// someone else's token, which is exactly what a bridged stablecoin bond is.
+sealed ledger bondTokenColour: Bytes<32>;
+
 // Track locked bonds by user (refundable on cancellation, or partially on
-// a normal DarkVeil close via claimRatioBondRefund)
+// a normal DarkVeil close via claimRatioBondRefund). Amounts are in
+// bondTokenColour's units; one launch has one bond colour, so no per-entry
+// colour is carried here.
 export ledger lockedBonds: Map<Bytes<32>, Uint<128>>;
 
 // Nullifier set — prevents double-registration (commitment-nullifier pattern)
@@ -718,6 +739,7 @@ constructor(
   totalSupply_: Uint<128>,
   maxWalletPercent_: Uint<8>,
   bondAmount_: Uint<128>,
+  bondTokenColour_: Bytes<32>,
   walletCap_: Uint<128>,
   dvAllocation_: Uint<128>,
   dvPrice_: Uint<128>,
@@ -761,6 +783,14 @@ constructor(
   // this ceiling, no bond refund could ever succeed for the whole launch.
   assert(disclose(bondAmount_ <= 17592186044415), "bondAmount exceeds verifyRatioRefund's safe range"); // 2^44 - 1
   bondAmount = disclose(bondAmount_);
+  // The colour the bond is posted in, fixed for the life of the launch. No
+  // validation is possible or wanted here: every 32-byte value is a
+  // well-formed colour, and 32 zero bytes is deliberately legal — that is
+  // nativeToken(), and passing it makes this contract behave exactly as it
+  // did before the bond became asset-agnostic. Which colour is a real,
+  // liquid asset is a deploy-time question, answered where the deploy
+  // arguments are assembled, not in circuit.
+  bondTokenColour = disclose(bondTokenColour_);
 
   // walletCap MUST equal totalSupply * maxWalletPercent / 100, computed
   // off-chain (Compact circuits can't divide) and passed in directly.
@@ -946,7 +976,7 @@ export circuit registerForDarkVeil(): [] {
   // adds a ledger-enforced constraint that this transaction includes a
   // matching unshielded NIGHT input of exactly bondAmount addressed to
   // this contract.
-  receiveUnshielded(nativeToken(), disclose(bondAmount));
+  receiveUnshielded(bondTokenColour, disclose(bondAmount));
 
   // Lock the NIGHT bond
   lockedBonds.insert(disclose(caller.bytes), disclose(bondAmount));
@@ -1016,7 +1046,7 @@ export circuit claimBondRefund(recipientAddr: Bytes<32>): [] {
   lockedBonds.insert(disclose(caller.bytes), disclose(0));
 
   const dest = right<ContractAddress, UserAddress>(disclose(UserAddress { bytes: recipientAddr }));
-  sendUnshielded(nativeToken(), disclose(bond), dest);
+  sendUnshielded(bondTokenColour, disclose(bond), dest);
 }
 
 // Claim a RATIO-BASED partial NIGHT bond refund — for a DarkVeil that
@@ -1070,14 +1100,14 @@ export circuit claimRatioBondRefund(
   lockedBonds.insert(disclose(caller.bytes), disclose(0));
 
   const dest = right<ContractAddress, UserAddress>(disclose(UserAddress { bytes: recipientAddr }));
-  sendUnshielded(nativeToken(), disclose(claimedRefund), dest);
+  sendUnshielded(bondTokenColour, disclose(claimedRefund), dest);
 
   // Route the forfeited remainder to the platform. One destination, so no
   // share to claim and nothing to verify — the amount is fully determined by
   // the bond and the refund already checked above.
   const forfeited = (bond - claimedRefund) as Uint<128>;
   const platformDest = right<ContractAddress, UserAddress>(disclose(UserAddress { bytes: platformAddr }));
-  sendUnshielded(nativeToken(), disclose(forfeited), platformDest);
+  sendUnshielded(bondTokenColour, disclose(forfeited), platformDest);
 }
 
 // ============================================================================
@@ -1469,7 +1499,7 @@ export circuit sweepForfeitedBond(registrantKey: Bytes<32>): [] {
   lockedBonds.insert(disclose(registrantKey), disclose(0));
 
   const platformDest = right<ContractAddress, UserAddress>(disclose(UserAddress { bytes: platformAddr }));
-  sendUnshielded(nativeToken(), disclose(bond), platformDest);
+  sendUnshielded(bondTokenColour, disclose(bond), platformDest);
 }
 
 // ============================================================================
@@ -1614,7 +1644,7 @@ export circuit claimDisputedBond(
   lockedBonds.insert(disclose(caller.bytes), disclose(0));
 
   const dest = right<ContractAddress, UserAddress>(disclose(UserAddress { bytes: recipientAddr }));
-  sendUnshielded(nativeToken(), disclose(bond), dest);
+  sendUnshielded(bondTokenColour, disclose(bond), dest);
 }
 
 // ============================================================================

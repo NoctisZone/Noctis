@@ -40,7 +40,8 @@ const constructorArgs = [
   b32(2),
   1_000_000_000n,
   5n,
-  10_000_000n,
+  10_000_000n, // bondAmount
+  b32(144), // bondTokenColour
   50_000_000n,
   150_000_000n,
   3n,

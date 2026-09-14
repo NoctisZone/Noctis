@@ -18,6 +18,13 @@
 /** 2^44 - 1 — verifyRatioRefund's ceiling, asserted by the constructor. */
 export const MAX_BOND_AMOUNT = 17_592_186_044_415n;
 
+/**
+ * The native token's colour: 32 zero bytes. Deploying with this makes the bond
+ * NIGHT-denominated, which is what the contract did before the bond became
+ * asset-agnostic — so it is a legal value, not a rejected one.
+ */
+export const NATIVE_TOKEN_COLOUR_HEX = '00'.repeat(32);
+
 export interface EligibilityGateDeployInput {
   launchIdHex: string;
   allowlistRootHex: string;
@@ -28,6 +35,12 @@ export interface EligibilityGateDeployInput {
   totalSupply: string | number;
   maxWalletPercent: string | number;
   bondAmount: string | number;
+  /**
+   * The unshielded colour the bond is posted in, 32 bytes hex. OPTIONAL, and
+   * it defaults to the native token so an existing caller keeps its current
+   * behaviour rather than silently acquiring a new one.
+   */
+  bondTokenColourHex?: string;
   dvAllocation: string | number;
   dvPrice: string | number;
   allowlistSize: string | number;
@@ -43,6 +56,7 @@ export interface EligibilityGateDeployArgs {
   totalSupply: bigint;
   maxWalletPercent: bigint;
   bondAmount: bigint;
+  bondTokenColour: Uint8Array;
   walletCap: bigint;
   dvAllocation: bigint;
   dvPrice: bigint;
@@ -140,6 +154,11 @@ export function resolveEligibilityGateDeployArgs(input: EligibilityGateDeployInp
   const totalSupply = toBigInt(input.totalSupply, 'totalSupply');
   const maxWalletPercent = toBigInt(input.maxWalletPercent, 'maxWalletPercent');
   const bondAmount = toBigInt(input.bondAmount, 'bondAmount');
+  // Every 32-byte value is a well-formed colour, so there is nothing to
+  // validate about its SHAPE beyond the length fromHex32 already enforces.
+  // What is worth stating is that all-zero is meaningful rather than missing:
+  // it is nativeToken(). A deploy that means NIGHT says so by omission.
+  const bondTokenColour = fromHex32(input.bondTokenColourHex ?? NATIVE_TOKEN_COLOUR_HEX, 'bondTokenColourHex');
   const dvAllocation = toBigInt(input.dvAllocation, 'dvAllocation');
   const dvPrice = toBigInt(input.dvPrice, 'dvPrice');
   const allowlistSize = toBigInt(input.allowlistSize, 'allowlistSize');
@@ -191,6 +210,7 @@ export function resolveEligibilityGateDeployArgs(input: EligibilityGateDeployInp
     totalSupply,
     maxWalletPercent,
     bondAmount,
+    bondTokenColour,
     walletCap,
     dvAllocation,
     dvPrice,
