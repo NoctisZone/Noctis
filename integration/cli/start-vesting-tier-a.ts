@@ -60,11 +60,10 @@ async function main() {
     blockfrostProjectId: input.blockfrostProjectId,
     blockfrostUrl: input.blockfrostUrl,
     network: CARDANO_NETWORK_MAP[input.network],
-    // Graduate/SealLock scripts aren't needed for this call, but the
-    // submitter's constructor derives every validator address up front —
-    // pass the real compiled code for all of them regardless. The two
-    // reference pointers stay unset: startVesting never builds TX1.
-    bondingCurveScriptCbor: loadValidatorCbor(blueprint, 'bonding_curve.bonding_curve.spend'),
+    // Graduate/SealLock scripts aren't needed for this call. The curve is now
+    // derived on demand rather than in the constructor, so this no longer
+    // names one at all — startVesting never reads curve state and never builds
+    // TX1, and vesting is shared across launch types while a curve is not.
     lpEscrowScriptCbor: loadValidatorCbor(blueprint, 'lp_escrow.lp_escrow.spend'),
     vestingScriptCbor: loadValidatorCbor(blueprint, 'vesting.vesting.spend'),
     stakingPoolScriptCbor: loadValidatorCbor(blueprint, 'staking_pool.staking_pool.spend'),

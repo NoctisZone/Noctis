@@ -88,7 +88,20 @@ export interface TierAClaimsConfig {
   blockfrostUrl: string;
   network: LucidNetwork;
   vestingScriptCbor: string;
-  bondingCurveScriptCbor: string;
+  /**
+   * Optional, and only the creator-fee paths need it.
+   *
+   * Vesting is shared across launch types; the bonding curve is not, and the
+   * curve address derived from this is read by `readCurveDatum` and the
+   * `claimCreatorFees` arms alone — `claimVested` never touches it. Requiring
+   * it made every vesting caller name a curve validator it does not use, which
+   * is how the vesting CLIs came to load a validator belonging to a launch
+   * path they do not serve.
+   *
+   * Derived lazily below, so omitting it costs nothing until a path that
+   * genuinely needs a curve asks for one, and then says so by name.
+   */
+  bondingCurveScriptCbor?: string;
   launchIdHex: string;
   /**
    * The launch's thread-NFT policy id, hex, from the platform's own record of
@@ -103,8 +116,38 @@ export class TierAClaimsSubmitter {
   private lucidPromise: Promise<LucidEvolution>;
   private vestingValidator: SpendingValidator;
   private vestingAddress: string;
-  private bondingCurveValidator: SpendingValidator;
-  private bondingCurveAddress: string;
+  private bondingCurveCache?: { validator: SpendingValidator; address: string };
+
+  /**
+   * The curve validator and its address, derived on first use.
+   *
+   * A caller that never reads curve state never supplies one, and never gets
+   * an error about one. A caller that does and did not is told exactly which
+   * field is missing, rather than failing later against an address derived
+   * from nothing.
+   */
+  private get bondingCurve(): { validator: SpendingValidator; address: string } {
+    if (!this.bondingCurveCache) {
+      const script = this.config.bondingCurveScriptCbor;
+      if (!script) {
+        throw new Error(
+          'This operation reads bonding-curve state, but no bondingCurveScriptCbor was given. ' +
+            'Supply the compiled curve validator for this launch.',
+        );
+      }
+      const validator: SpendingValidator = { type: 'PlutusV3', script };
+      this.bondingCurveCache = { validator, address: validatorToAddress(this.config.network, validator) };
+    }
+    return this.bondingCurveCache;
+  }
+
+  private get bondingCurveValidator(): SpendingValidator {
+    return this.bondingCurve.validator;
+  }
+
+  private get bondingCurveAddress(): string {
+    return this.bondingCurve.address;
+  }
 
   constructor(private config: TierAClaimsConfig) {
     this.vestingValidator = {
@@ -112,11 +155,6 @@ export class TierAClaimsSubmitter {
       script: config.vestingScriptCbor,
     };
     this.vestingAddress = validatorToAddress(config.network, this.vestingValidator);
-    this.bondingCurveValidator = {
-      type: 'PlutusV3',
-      script: config.bondingCurveScriptCbor,
-    };
-    this.bondingCurveAddress = validatorToAddress(config.network, this.bondingCurveValidator);
     this.lucidPromise = Lucid(new Blockfrost(config.blockfrostUrl, config.blockfrostProjectId), config.network);
     // Nothing awaits this until a method runs, so a caller that constructs the
     // submitter and then fails before calling one leaves the rejection with no
