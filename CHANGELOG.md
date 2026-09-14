@@ -168,6 +168,12 @@ Notable changes to the Noctis Zone, by release. Internal development history pre
   onto the root the pool actually carries, and the proofs built from them are
   accepted. Reading a pool still re-derives that root and refuses to go on when it
   disagrees.
+- A staking position is quoted at the instant a claim would settle it. Reading a
+  pool advances it to the same validity-range bound a claim uses, rather than to
+  the reader's own clock, so the amount shown is the amount a claim pays out. That
+  bound opens behind the clock so a claim is already valid against the chain tip,
+  and emission is whole units, so the two readings differed by a visible amount
+  rather than a rounding step.
 
 ---
 
