@@ -8,9 +8,7 @@
 // caller). Never logged. Output: {txHash} on stdout.
 // ============================================================================
 
-import { usdToMinAdaLovelace } from '../ada-price-oracle.js';
-import { BlockfrostClient } from '../blockfrost-client.js';
-import { TierAClaimsSubmitter } from '../tier-a-claims-submitter.js';
+import { PLATFORM_CHARGE_LOVELACE, TierAClaimsSubmitter } from '../tier-a-claims-submitter.js';
 import {
   CARDANO_NETWORK_MAP,
   loadPlutusBlueprint,
@@ -60,17 +58,11 @@ async function main() {
     threadNftPolicyId: input.threadNftPolicyId,
   });
 
-  // bonding_curve.ak now requires a real, on-chain-enforced $1 ADA
-  // platform claim fee paid alongside every ClaimCreatorFees. Computed here
-  // via the same real Orcfax oracle already built for staking_pool.ak's
-  // identical STAKING_CLAIM_FEE_USD — the contract's own on-chain
-  // check is only a conservative 0.2 ADA floor (Aiken has no in-circuit
-  // oracle access), so this real, live-priced amount comfortably clears it.
-  const _blockfrostClient = new BlockfrostClient({
-    apiKey: input.blockfrostProjectId,
-    network: input.network,
-  });
-  const { minLovelace: platformClaimFeeLovelace } = await usdToMinAdaLovelace(1);
+  // bonding_curve.ak enforces the platform's charge on every
+  // ClaimCreatorFees, and names the amount outright in ada. Quote that figure
+  // rather than pricing one here: no oracle is in the path on either side, so
+  // the CLI and the chain cannot disagree about what a claim costs.
+  const platformClaimFeeLovelace = PLATFORM_CHARGE_LOVELACE;
 
   const result = await submitter.claimCreatorFees(
     input.creatorPrivateKeyExtendedHex,

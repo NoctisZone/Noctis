@@ -358,13 +358,10 @@ pub type BondingCurveRedeemer {
   /// `graduation_funds_left_curve`). Buyers' principal cannot leave by this
   /// path. (2) `platform_claim_fee`: a real, on-chain-enforced flat charge
   /// paid INTO the curve alongside the claim, accruing to
-  /// `platform_fees_accrued`. It approximates CLAUDE.md's
-  /// `STAKING_CLAIM_FEE_USD` ($1) precedent, but as a real on-chain minimum
-  /// rather than a client convention. Aiken has no in-circuit oracle access,
-  /// so `min_platform_claim_fee_lovelace` below is a deliberately
-  /// conservative SANITY FLOOR, not a live $1 peg — the real $1-equivalent is
-  /// computed off-chain via `integration/ada-usd-price.ts` and paid with
-  /// margin above the floor in the normal case.
+  /// `platform_fees_accrued`. Aiken has no in-circuit oracle access, so the
+  /// charge is named outright in ada by `platform_charge_lovelace` below and
+  /// enforced at that figure — the charge the chain applies is the charge the
+  /// platform quotes, rather than a floor a self-built transaction can sit on.
   ClaimCreatorFees { amount: Int, platform_claim_fee: Int }
   /// Governor claims accrued treasury fees.
   ///
@@ -487,15 +484,20 @@ const bps_denominator = 10_000
 /// than a launch has any use for and costs a couple of hundred bytes at worst.
 const max_batcher_allowlist = 8
 
-/// Deliberately conservative SANITY FLOOR for ClaimCreatorFees's new
-/// platform_claim_fee, not a precise $1 peg (Aiken has no in-circuit oracle
-/// access — same constraint Compact has). 0.2 ADA comfortably undershoots
-/// $1's real ADA value across ADA's entire realistic historical trading
-/// range; the real $1-equivalent is computed off-chain via the already-
-/// real usdToMinAdaLovelace() Orcfax oracle and paid with margin above
-/// this floor in the normal case. Same "fixed ADA figure, not oracle-
-/// verified in-circuit" idiom as NHOP_CHALLENGE_BOND (25 ADA).
-const min_platform_claim_fee_lovelace = 200_000
+/// The platform's charge on a creator-fee claim, paid INTO the curve.
+///
+/// Named in ada rather than in dollars because Aiken has no in-circuit oracle,
+/// so a contract cannot know what a dollar is worth. Naming the amount outright
+/// is what makes the charge enforceable: a dollar converted off chain is a
+/// figure the submitter chooses, and a charge only the submitter applies is a
+/// charge anyone can decline by building their own transaction.
+///
+/// The amount sits clear of the protocol's own minimum ada for the output that
+/// carries it, which a real claim measured at 1,055,950 lovelace, so the figure
+/// named here is the figure that binds. Same "fixed ADA figure, not oracle-
+/// verified in-circuit" idiom as NHOP_CHALLENGE_BOND (25 ADA), and the same
+/// figure as `staking_pool.ak`'s own `platform_charge_lovelace`.
+const platform_charge_lovelace = 5_000_000
 
 /// 90 days in MILLISECONDS — max time a curve can sit Active without
 /// reaching Graduated before anyone can force-expire it. Not a
@@ -1514,7 +1516,7 @@ validator bonding_curve {
           // its own, and no reader should have to work that out.
           amount > 0,
           amount <= datum.creator_fees_accrued,
-          platform_claim_fee >= min_platform_claim_fee_lovelace,
+          platform_claim_fee >= platform_charge_lovelace,
           curve_balance_net_ok,
           recipient_paid,
           new_datum == BondingCurveDatum {
@@ -4161,7 +4163,7 @@ fn claim_creator_fees_tx(
   let continuing_output =
     Output {
       address: own_address,
-      value: assets.merge(mock_curve_nft(), assets.from_lovelace(1_199_800)),
+      value: assets.merge(mock_curve_nft(), assets.from_lovelace(1_000_000 - 200 + platform_charge_lovelace)),
       datum: InlineDatum(new_datum),
       reference_script: None,
     }
@@ -4188,13 +4190,13 @@ test claim_creator_fees_succeeds_via_creator_when_no_cto() {
     BondingCurveDatum {
       ..datum,
       creator_fees_accrued: 300,
-      platform_fees_accrued: 200_000,
+      platform_fees_accrued: platform_charge_lovelace,
     }
   let (own_ref, self) = claim_creator_fees_tx(datum, new_datum, #"11", #"11")
 
   bonding_curve.spend(
     Some(datum),
-    ClaimCreatorFees { amount: 200, platform_claim_fee: 200_000 },
+    ClaimCreatorFees { amount: 200, platform_claim_fee: platform_charge_lovelace },
     own_ref,
     self,
   )
@@ -4211,7 +4213,7 @@ test claim_creator_fees_rejects_untagged_payout() {
     BondingCurveDatum {
       ..datum,
       creator_fees_accrued: 300,
-      platform_fees_accrued: 200_000,
+      platform_fees_accrued: platform_charge_lovelace,
     }
   let (own_ref, self) = claim_creator_fees_tx(datum, new_datum, #"11", #"11")
   expect [continuing, payout] = self.outputs
@@ -4223,7 +4225,7 @@ test claim_creator_fees_rejects_untagged_payout() {
 
   !bonding_curve.spend(
     Some(datum),
-    ClaimCreatorFees { amount: 200, platform_claim_fee: 200_000 },
+    ClaimCreatorFees { amount: 200, platform_claim_fee: platform_charge_lovelace },
     own_ref,
     untagged,
   )
@@ -4244,7 +4246,7 @@ test claim_creator_fees_rejects_creator_once_cto_triggered() {
     BondingCurveDatum {
       ..datum,
       creator_fees_accrued: 300,
-      platform_fees_accrued: 200_000,
+      platform_fees_accrued: platform_charge_lovelace,
     }
   // Original creator (#"11") signs, not the community wallet — must now be
   // rejected.
@@ -4252,7 +4254,7 @@ test claim_creator_fees_rejects_creator_once_cto_triggered() {
 
   !bonding_curve.spend(
     Some(datum),
-    ClaimCreatorFees { amount: 200, platform_claim_fee: 200_000 },
+    ClaimCreatorFees { amount: 200, platform_claim_fee: platform_charge_lovelace },
     own_ref,
     self,
   )
@@ -4270,13 +4272,13 @@ test claim_creator_fees_succeeds_via_community_wallet_once_cto_triggered() {
     BondingCurveDatum {
       ..datum,
       creator_fees_accrued: 300,
-      platform_fees_accrued: 200_000,
+      platform_fees_accrued: platform_charge_lovelace,
     }
   let (own_ref, self) = claim_creator_fees_tx(datum, new_datum, #"ee", #"ee")
 
   bonding_curve.spend(
     Some(datum),
-    ClaimCreatorFees { amount: 200, platform_claim_fee: 200_000 },
+    ClaimCreatorFees { amount: 200, platform_claim_fee: platform_charge_lovelace },
     own_ref,
     self,
   )
@@ -4293,7 +4295,7 @@ test claim_creator_fees_rejects_draining_more_than_amount() {
     BondingCurveDatum {
       ..datum,
       creator_fees_accrued: 300,
-      platform_fees_accrued: 200_000,
+      platform_fees_accrued: platform_charge_lovelace,
     }
   let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
   let own_address = from_verification_key(#"cc")
@@ -4334,7 +4336,7 @@ test claim_creator_fees_rejects_draining_more_than_amount() {
 
   !bonding_curve.spend(
     Some(datum),
-    ClaimCreatorFees { amount: 200, platform_claim_fee: 200_000 },
+    ClaimCreatorFees { amount: 200, platform_claim_fee: platform_charge_lovelace },
     own_ref,
     self,
   )
@@ -4356,7 +4358,7 @@ test claim_creator_fees_rejects_platform_fee_below_floor() {
         reference_script: None,
       },
     }
-  // platform_claim_fee of 10 lovelace — far below the 200,000 floor.
+  // platform_claim_fee of 10 lovelace — far below the charge.
   let continuing_output =
     Output {
       address: own_address,

@@ -21,7 +21,7 @@ vi.mock('@lucid-evolution/lucid', async (importOriginal) => {
 });
 
 import { CML, credentialToAddress, Lucid } from '@lucid-evolution/lucid';
-import { TierAClaimsSubmitter } from '../tier-a-claims-submitter.js';
+import { PLATFORM_CHARGE_LOVELACE, TierAClaimsSubmitter } from '../tier-a-claims-submitter.js';
 import { threadNftAssetName } from '../tier-a-schemas.js';
 
 function fakeKeyHash(fill: number): string {
@@ -343,9 +343,9 @@ describe('TierAClaimsSubmitter.claimCreatorFees', () => {
   it('rejects once the CTO has been triggered (fees now route to community wallet)', async () => {
     const { builder } = makeFakeTxBuilder();
     const { submitter } = makeSubmitter(builder, [], [{ datum: curveDatum({ cto_triggered: true }), assets: {} }]);
-    await expect(submitter.claimCreatorFees(REAL_EXTENDED_KEY_HEX, CREATOR_ADDR, 100n, 200_000n)).rejects.toThrow(
-      /CTO has been triggered/,
-    );
+    await expect(
+      submitter.claimCreatorFees(REAL_EXTENDED_KEY_HEX, CREATOR_ADDR, 100n, PLATFORM_CHARGE_LOVELACE),
+    ).rejects.toThrow(/CTO has been triggered/);
   });
 
   it('rejects a claim amount exceeding accrued creator fees', async () => {
@@ -355,23 +355,25 @@ describe('TierAClaimsSubmitter.claimCreatorFees', () => {
       [],
       [{ datum: curveDatum({ creator_fees_accrued: 100n }), assets: {} }],
     );
-    await expect(submitter.claimCreatorFees(REAL_EXTENDED_KEY_HEX, CREATOR_ADDR, 101n, 200_000n)).rejects.toThrow(
-      /exceeds accrued creator fees/,
-    );
+    await expect(
+      submitter.claimCreatorFees(REAL_EXTENDED_KEY_HEX, CREATOR_ADDR, 101n, PLATFORM_CHARGE_LOVELACE),
+    ).rejects.toThrow(/exceeds accrued creator fees/);
   });
 
-  it("rejects a platformClaimFeeLovelace below the contract's own 0.2 ADA floor", async () => {
+  it('rejects a platformClaimFeeLovelace one lovelace below the charge the contract enforces', async () => {
     const { builder } = makeFakeTxBuilder();
     const { submitter } = makeSubmitter(builder, [], [{ datum: curveDatum(), assets: {} }]);
-    await expect(submitter.claimCreatorFees(REAL_EXTENDED_KEY_HEX, CREATOR_ADDR, 100n, 199_999n)).rejects.toThrow(
-      /below the contract's own floor/,
-    );
+    await expect(
+      submitter.claimCreatorFees(REAL_EXTENDED_KEY_HEX, CREATOR_ADDR, 100n, PLATFORM_CHARGE_LOVELACE - 1n),
+    ).rejects.toThrow(/below the charge the contract/);
   });
 
-  it('accepts a platformClaimFeeLovelace exactly at the floor', async () => {
+  it('accepts a platformClaimFeeLovelace exactly at the charge', async () => {
     const { builder } = makeFakeTxBuilder();
     const { submitter } = makeSubmitter(builder, [], [{ datum: curveDatum(), assets: {} }]);
-    await expect(submitter.claimCreatorFees(REAL_EXTENDED_KEY_HEX, CREATOR_ADDR, 100n, 200_000n)).resolves.toEqual({
+    await expect(
+      submitter.claimCreatorFees(REAL_EXTENDED_KEY_HEX, CREATOR_ADDR, 100n, PLATFORM_CHARGE_LOVELACE),
+    ).resolves.toEqual({
       txHash: 'claims-tx-1',
     });
   });
@@ -392,25 +394,25 @@ describe('TierAClaimsSubmitter.claimCreatorFees', () => {
       ],
     );
 
-    await submitter.claimCreatorFees(REAL_EXTENDED_KEY_HEX, CREATOR_ADDR, 500_000n, 200_001n); // just above the floor, odd to test remainder
+    await submitter.claimCreatorFees(REAL_EXTENDED_KEY_HEX, CREATOR_ADDR, 500_000n, PLATFORM_CHARGE_LOVELACE + 1n); // one above the charge, odd to test remainder
 
     const payload = calls.payToContract![1] as {
       value: Record<string, unknown>;
     };
     expect(payload.value.creator_fees_accrued).toBe(500_000n); // 1,000,000 - 500,000 claimed
     // No split any more: the whole claim fee accrues to the one platform line.
-    expect(payload.value.platform_fees_accrued).toBe(200_001n);
+    expect(payload.value.platform_fees_accrued).toBe(PLATFORM_CHARGE_LOVELACE + 1n);
 
     const assetsArg = calls.payToContract![2] as Record<string, bigint>;
     // lovelace: existing 5,000,000 - amount(500,000) + platformClaimFee(200,001)
-    expect(assetsArg.lovelace).toBe(5_000_000n - 500_000n + 200_001n);
+    expect(assetsArg.lovelace).toBe(5_000_000n - 500_000n + (PLATFORM_CHARGE_LOVELACE + 1n));
   });
 
   it('pays the claimed amount to the creator and requires the creator as signer', async () => {
     const { builder, calls, payToAddressCalls } = makeFakeTxBuilder();
     const { submitter } = makeSubmitter(builder, [], [{ datum: curveDatum(), assets: {} }]);
 
-    await submitter.claimCreatorFees(REAL_EXTENDED_KEY_HEX, CREATOR_ADDR, 100n, 200_000n);
+    await submitter.claimCreatorFees(REAL_EXTENDED_KEY_HEX, CREATOR_ADDR, 100n, PLATFORM_CHARGE_LOVELACE);
     expect(calls.addSigner).toEqual([CREATOR_ADDR]);
     const [addr, , assets] = payToAddressCalls[0] as [string, unknown, Record<string, bigint>];
     expect(addr).toBe(CREATOR_ADDR);
@@ -422,7 +424,7 @@ describe('TierAClaimsSubmitter.claimCreatorFees', () => {
     const walletApi = { __marker: 'creator-wallet' };
     const { submitter, fakeLucid } = makeSubmitter(builder, [], [{ datum: curveDatum(), assets: {} }]);
 
-    await submitter.claimCreatorFeesWithWallet(walletApi as never, 100n, 200_000n);
+    await submitter.claimCreatorFeesWithWallet(walletApi as never, 100n, PLATFORM_CHARGE_LOVELACE);
     expect(fakeLucid.selectWallet.fromAPI).toHaveBeenCalledWith(walletApi);
   });
 });

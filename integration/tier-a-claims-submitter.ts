@@ -59,6 +59,17 @@ import {
   VestingDatumSchema,
 } from './tier-a-schemas.js';
 
+/**
+ * The platform's charge on a creator-fee claim, as `bonding_curve.ak` names it
+ * (`platform_charge_lovelace`) and enforces it.
+ *
+ * Declared here rather than imported from the quadratic curve's submitter:
+ * each validator names its own charge in the house style, and this class
+ * submits to the linear one. The figures match, and a test pins them together
+ * so they cannot drift apart silently.
+ */
+export const PLATFORM_CHARGE_LOVELACE = 5_000_000n;
+
 function fromHex(hex: string): Uint8Array {
   return new Uint8Array(Buffer.from(hex, 'hex'));
 }
@@ -313,12 +324,11 @@ export class TierAClaimsSubmitter {
    * `platformClaimFeeLovelace` (paid INTO the curve, opposite direction),
    * matching the fixed contract's new two-field redeemer exactly.
    *
-   * @param platformClaimFeeLovelace  Real $1-equivalent, computed by the
-   *   CALLER via ada-price-oracle.ts's usdToMinAdaLovelace() — this class
-   *   stays oracle-agnostic, same convention as claimAmount/
-   *   currentTimestampMs above being caller-computed for ClaimVested.
-   *   Must be >= the contract's own min_platform_claim_fee_lovelace floor
-   *   (200,000 lovelace / 0.2 ADA) or the transaction will fail on-chain.
+   * @param platformClaimFeeLovelace  What the claim pays the platform.
+   *   Defaults to `PLATFORM_CHARGE_LOVELACE`, which is the figure the contract
+   *   names, so a caller has nothing to compute and no oracle is in the path.
+   *   A lower value is refused here rather than on chain, so a caller holding
+   *   a stale figure fails legibly instead of as an opaque script error.
    */
   private async claimCreatorFeesCore(
     lucid: LucidEvolution,
@@ -341,10 +351,10 @@ export class TierAClaimsSubmitter {
         `Requested amount (${amount}) exceeds accrued creator fees (${curveDatum.creator_fees_accrued}).`,
       );
     }
-    const MIN_PLATFORM_CLAIM_FEE_LOVELACE = 200_000n;
-    if (platformClaimFeeLovelace < MIN_PLATFORM_CLAIM_FEE_LOVELACE) {
+    if (platformClaimFeeLovelace < PLATFORM_CHARGE_LOVELACE) {
       throw new Error(
-        `platformClaimFeeLovelace (${platformClaimFeeLovelace}) is below the contract's own floor (${MIN_PLATFORM_CLAIM_FEE_LOVELACE}) — the transaction would fail on-chain.`,
+        `platformClaimFeeLovelace (${platformClaimFeeLovelace}) is below the charge the contract ` +
+          `enforces (${PLATFORM_CHARGE_LOVELACE}) — the transaction would fail on-chain.`,
       );
     }
 

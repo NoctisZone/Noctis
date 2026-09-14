@@ -82,10 +82,14 @@ import { extendedHexToBech32PrivateKey, loadValidator } from './tier-a-curve-sub
 import type { BondingCurveTierBDatumData } from './tier-a-schemas.js';
 import { BondingCurveTierBDatumSchema, capProofToPlutus, settlementDatum } from './tier-a-schemas.js';
 
-// The platform claim fee — mirrors bonding_curve_tier_b.ak's
-// `min_platform_claim_fee_lovelace`. It is a floor on what the claim pays the
-// platform, and it goes to one address: the fee is not divided.
-const MIN_PLATFORM_CLAIM_FEE_LOVELACE = 200_000n;
+// The platform's charge on a creator-fee claim — the same figure
+// bonding_curve_tier_b.ak names as `platform_charge_lovelace`, and the figure
+// that validator enforces. It goes to one address: the charge is not divided.
+//
+// Exported so the CLI and the page quote the contract's number rather than
+// computing one of their own; a charge the submitter picks is a charge a
+// self-built transaction can decline.
+export const PLATFORM_CHARGE_LOVELACE = 5_000_000n;
 
 // Pricing and the fee split are mirrors of bonding_curve_tier_b.ak's own
 // arithmetic, kept in one place for both tiers and the history reader — see
@@ -953,7 +957,7 @@ export class LucidTierBCurveSubmitter {
     signerPrivateKeyExtendedHex: string,
     signerAddress: string,
     amount: bigint,
-    platformClaimFeeLovelace: bigint = MIN_PLATFORM_CLAIM_FEE_LOVELACE,
+    platformClaimFeeLovelace: bigint = PLATFORM_CHARGE_LOVELACE,
   ): Promise<{ txHash: string }> {
     const lucid = await this.lucidPromise;
     const bech32Key = extendedHexToBech32PrivateKey(signerPrivateKeyExtendedHex);
@@ -975,7 +979,7 @@ export class LucidTierBCurveSubmitter {
   async claimCreatorFeesWithWallet(
     walletApi: WalletApi,
     amount: bigint,
-    platformClaimFeeLovelace: bigint = MIN_PLATFORM_CLAIM_FEE_LOVELACE,
+    platformClaimFeeLovelace: bigint = PLATFORM_CHARGE_LOVELACE,
   ): Promise<{ txHash: string }> {
     this.refuseBrowserWalletWhenReferenced('fee claim');
     const lucid = await this.lucidPromise;
@@ -998,9 +1002,10 @@ export class LucidTierBCurveSubmitter {
     amount: bigint,
     platformClaimFeeLovelace: bigint,
   ): Promise<{ curveUtxo: UTxO; spend: CurveSpendDescription }> {
-    if (platformClaimFeeLovelace < MIN_PLATFORM_CLAIM_FEE_LOVELACE) {
+    if (platformClaimFeeLovelace < PLATFORM_CHARGE_LOVELACE) {
       throw new Error(
-        `platform_claim_fee ${platformClaimFeeLovelace} is below the on-chain floor ${MIN_PLATFORM_CLAIM_FEE_LOVELACE}.`,
+        `platform_claim_fee ${platformClaimFeeLovelace} is below the charge the contract enforces ` +
+          `(${PLATFORM_CHARGE_LOVELACE}) — the transaction would fail on-chain.`,
       );
     }
 

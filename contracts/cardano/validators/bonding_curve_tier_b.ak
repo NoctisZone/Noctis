@@ -410,9 +410,9 @@ pub type BondingCurveTierBRedeemer {
   /// doc comment for the full reasoning. (1) Value conservation verified by
   /// real value movement, so buyers' principal cannot leave by this path.
   /// (2) `platform_claim_fee`, a real on-chain-enforced flat charge paid INTO
-  /// the curve and accruing to `platform_fees_accrued`, with the same
-  /// deliberately conservative sanity floor since Aiken has no in-circuit
-  /// oracle access.
+  /// the curve and accruing to `platform_fees_accrued`, held to the figure
+  /// `platform_charge_lovelace` names so the charge the chain enforces is the
+  /// charge the platform quotes.
   ClaimCreatorFees { amount: Int, platform_claim_fee: Int }
   /// Fix: same missing value-conservation gap as ClaimCreatorFees,
   /// fixed the same way — no new fee added here (the governor is claiming
@@ -527,15 +527,22 @@ const bps_denominator = 10_000
 /// than a launch has any use for and costs a couple of hundred bytes at worst.
 const max_batcher_allowlist = 8
 
-/// Fix (2026-07-21): ported verbatim from the linear curve's bonding_curve.ak —
-/// deliberately conservative SANITY FLOOR for ClaimCreatorFees's
-/// new platform_claim_fee, not a precise $1 peg (Aiken has no in-circuit
-/// oracle access). 0.2 ADA comfortably undershoots $1's real ADA value
-/// across ADA's entire realistic historical trading range; the real
-/// $1-equivalent is computed off-chain via the same usdToMinAdaLovelace()
-/// Orcfax oracle the linear curve uses, paid with margin above this floor in the
-/// normal case.
-const min_platform_claim_fee_lovelace = 200_000
+/// The platform's charge on a creator-fee claim, paid INTO the curve.
+///
+/// Named in ada rather than in dollars because Aiken has no in-circuit oracle,
+/// so a contract cannot know what a dollar is worth. Naming the amount outright
+/// is what makes the charge enforceable: a dollar converted off chain is a
+/// figure the submitter chooses, and a charge only the submitter applies is a
+/// charge anyone can decline by building their own transaction.
+///
+/// The amount sits clear of the protocol's own minimum ada for the output that
+/// carries it, which a real claim measured at 1,055,950 lovelace, so the figure
+/// named here is the figure that binds.
+///
+/// Same figure and same reasoning as `staking_pool.ak`'s own
+/// `platform_charge_lovelace`: one charge, named once per validator in the
+/// house style, so the page, the CLI and the chain all cite one number.
+const platform_charge_lovelace = 5_000_000
 
 /// 90 days in MILLISECONDS — same default and rationale as the linear curve's
 /// bonding_curve.ak.
@@ -1802,7 +1809,7 @@ validator bonding_curve_tier_b {
           // its own, and no reader should have to work that out.
           amount > 0,
           amount <= datum.creator_fees_accrued,
-          platform_claim_fee >= min_platform_claim_fee_lovelace,
+          platform_claim_fee >= platform_charge_lovelace,
           curve_balance_net_ok,
           recipient_paid,
           new_datum == BondingCurveTierBDatum {
@@ -4828,8 +4835,10 @@ test tier_b_dissolve_cto_succeeds_with_real_anchored_vote() {
 /// Shared shape for the ClaimCreatorFees success-path tests
 /// below — same as the linear curve's claim_creator_fees_tx. Curve holds 1,000,000
 /// lovelace going in; claimer takes `amount` (200) out and pays
-/// `platform_claim_fee` (exactly the floor, 200,000) in, so the curve's
-/// continuing output must show 1,000,000 - 200 + 200,000 = 1,199,800.
+/// `platform_claim_fee` (exactly `platform_charge_lovelace`) in, so the curve's
+/// continuing output must show 1,000,000 - 200 + the charge. Written as that
+/// expression rather than as a total, so the arithmetic cannot drift out of
+/// step with the constant the next time the charge moves.
 fn tier_b_claim_creator_fees_tx(
   datum: BondingCurveTierBDatum,
   new_datum: BondingCurveTierBDatum,
@@ -4851,7 +4860,7 @@ fn tier_b_claim_creator_fees_tx(
   let continuing_output =
     Output {
       address: own_address,
-      value: assets.merge(mock_curve_nft(), assets.from_lovelace(1_199_800)),
+      value: assets.merge(mock_curve_nft(), assets.from_lovelace(1_000_000 - 200 + platform_charge_lovelace)),
       datum: InlineDatum(new_datum),
       reference_script: None,
     }
@@ -4879,13 +4888,13 @@ test tier_b_claim_creator_fees_succeeds_via_creator_when_no_cto() {
     BondingCurveTierBDatum {
       ..datum,
       creator_fees_accrued: 300,
-      platform_fees_accrued: 200_000,
+      platform_fees_accrued: platform_charge_lovelace,
     }
   let (own_ref, self) = tier_b_claim_creator_fees_tx(datum, new_datum, #"11", #"11")
 
   bonding_curve_tier_b.spend(
     Some(datum),
-    ClaimCreatorFees { amount: 200, platform_claim_fee: 200_000 },
+    ClaimCreatorFees { amount: 200, platform_claim_fee: platform_charge_lovelace },
     own_ref,
     self,
   )
@@ -4902,7 +4911,7 @@ test tier_b_claim_creator_fees_rejects_untagged_payout() {
     BondingCurveTierBDatum {
       ..datum,
       creator_fees_accrued: 300,
-      platform_fees_accrued: 200_000,
+      platform_fees_accrued: platform_charge_lovelace,
     }
   let (own_ref, self) = tier_b_claim_creator_fees_tx(datum, new_datum, #"11", #"11")
   expect [continuing, payout] = self.outputs
@@ -4914,7 +4923,7 @@ test tier_b_claim_creator_fees_rejects_untagged_payout() {
 
   !bonding_curve_tier_b.spend(
     Some(datum),
-    ClaimCreatorFees { amount: 200, platform_claim_fee: 200_000 },
+    ClaimCreatorFees { amount: 200, platform_claim_fee: platform_charge_lovelace },
     own_ref,
     untagged,
   )
@@ -4932,7 +4941,7 @@ test tier_b_claim_creator_fees_rejects_creator_once_cto_triggered() {
     BondingCurveTierBDatum {
       ..datum,
       creator_fees_accrued: 300,
-      platform_fees_accrued: 200_000,
+      platform_fees_accrued: platform_charge_lovelace,
     }
   // Original creator (#"11") signs, not the community wallet — must now be
   // rejected.
@@ -4940,7 +4949,7 @@ test tier_b_claim_creator_fees_rejects_creator_once_cto_triggered() {
 
   !bonding_curve_tier_b.spend(
     Some(datum),
-    ClaimCreatorFees { amount: 200, platform_claim_fee: 200_000 },
+    ClaimCreatorFees { amount: 200, platform_claim_fee: platform_charge_lovelace },
     own_ref,
     self,
   )
@@ -4958,20 +4967,20 @@ test tier_b_claim_creator_fees_succeeds_via_community_wallet_once_cto_triggered(
     BondingCurveTierBDatum {
       ..datum,
       creator_fees_accrued: 300,
-      platform_fees_accrued: 200_000,
+      platform_fees_accrued: platform_charge_lovelace,
     }
   let (own_ref, self) = tier_b_claim_creator_fees_tx(datum, new_datum, #"ee", #"ee")
 
   bonding_curve_tier_b.spend(
     Some(datum),
-    ClaimCreatorFees { amount: 200, platform_claim_fee: 200_000 },
+    ClaimCreatorFees { amount: 200, platform_claim_fee: platform_charge_lovelace },
     own_ref,
     self,
   )
 }
 
 test tier_b_claim_creator_fees_rejects_platform_fee_below_floor() {
-  // Fix regression: platform_claim_fee below the 200,000 floor must
+  // Fix regression: a platform_claim_fee below the charge must
   // be rejected, same as the linear curve's identical test.
   let datum =
     BondingCurveTierBDatum { ..mock_datum(Active, 0), creator_fees_accrued: 500 }
@@ -5023,6 +5032,64 @@ test tier_b_claim_creator_fees_rejects_platform_fee_below_floor() {
   )
 }
 
+test tier_b_claim_creator_fees_rejects_one_lovelace_below_the_charge() {
+  // The sibling test above pays 10 lovelace, which is refused whatever the
+  // charge happens to be -- so it cannot tell one figure from another. This
+  // one pays exactly one lovelace short, so it passes only while the contract
+  // enforces this amount and no lower one. Value conservation still holds on
+  // the continuing output, which is what leaves the charge as the only reason
+  // to refuse.
+  let short = platform_charge_lovelace - 1
+  let datum =
+    BondingCurveTierBDatum { ..mock_datum(Active, 0), creator_fees_accrued: 500 }
+  let new_datum =
+    BondingCurveTierBDatum {
+      ..datum,
+      creator_fees_accrued: 300,
+      platform_fees_accrued: short,
+    }
+  let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
+  let own_address = from_verification_key(#"cc")
+  let own_input =
+    Input {
+      output_reference: own_ref,
+      output: Output {
+        address: own_address,
+        value: assets.merge(mock_curve_nft(), assets.from_lovelace(1_000_000)),
+        datum: InlineDatum(datum),
+        reference_script: None,
+      },
+    }
+  let continuing_output =
+    Output {
+      address: own_address,
+      value: assets.merge(mock_curve_nft(), assets.from_lovelace(1_000_000 - 200 + short)),
+      datum: InlineDatum(new_datum),
+      reference_script: None,
+    }
+  let recipient_payout =
+    Output {
+      address: from_verification_key(#"11"),
+      value: assets.from_lovelace(200),
+      datum: InlineDatum(own_ref),
+      reference_script: None,
+    }
+  let self =
+    Transaction {
+      ..transaction.placeholder,
+      inputs: [own_input],
+      outputs: [continuing_output, recipient_payout],
+      extra_signatories: [#"11"],
+    }
+
+  !bonding_curve_tier_b.spend(
+    Some(datum),
+    ClaimCreatorFees { amount: 200, platform_claim_fee: short },
+    own_ref,
+    self,
+  )
+}
+
 test tier_b_claim_creator_fees_rejects_value_drain_attempt() {
   // Fix regression: the datum decrements amount correctly but the
   // curve's real lovelace balance is untouched (no real payout, no real
@@ -5059,7 +5126,7 @@ test tier_b_claim_creator_fees_rejects_value_drain_attempt() {
 
   !bonding_curve_tier_b.spend(
     Some(datum),
-    ClaimCreatorFees { amount: 200, platform_claim_fee: 200_000 },
+    ClaimCreatorFees { amount: 200, platform_claim_fee: platform_charge_lovelace },
     own_ref,
     self,
   )

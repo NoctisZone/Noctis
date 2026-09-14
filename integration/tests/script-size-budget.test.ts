@@ -248,10 +248,19 @@ for (const v of blueprint.validators) {
  * validators byte-for-byte, which is what makes the two that moved readable as
  * causes rather than noise. Whatever a blueprint records is only as good as the
  * source it was built from, and only a local rebuild says which.
+ *
+ * bonding_curve +1 and bonding_curve_tier_b +1, naming the platform charge on a
+ * creator-fee claim in ada. The figure moved from 200,000 to 5,000,000 so that
+ * it clears the protocol's own minimum ada for the output carrying it (a real
+ * claim measured 1,055,950) — below that, min-ada is what binds and the number
+ * written in the contract never applies. One byte is the whole cost: it is the
+ * same constant in the same position, one CBOR width wider. The ten validators
+ * that did not change are byte-for-byte identical, which is what makes these
+ * two readable as the cause.
  */
 const RECORDED: Record<string, number> = {
-  bonding_curve: 12_899,
-  bonding_curve_tier_b: 14_958,
+  bonding_curve: 12_900,
+  bonding_curve_tier_b: 14_959,
   cto_governance: 7_962,
   cto_sybil_challenge: 2_123,
   curve_order: 1_775,
@@ -284,8 +293,8 @@ const RECORDED: Record<string, number> = {
  * old one has to be considered before the change ships.
  */
 const RECORDED_HASHES: Record<string, string> = {
-  bonding_curve: '2e19896fb5796cf1e3bc4d7444280f2e7f67d000b4c3c0751a4a8fa3',
-  bonding_curve_tier_b: '19a184aecc03c8d1855715928807c7d011eadd471183e40626c14fe9',
+  bonding_curve: 'c09be1f979036f3985b65b126e4f7c45702005e2592f2e5d13eea90a',
+  bonding_curve_tier_b: 'db245f0b95e6c569a098a7637e820d19030b7cd57e123a8d0b5cac2b',
   cto_governance: 'a23a0f558e1bfa4df9310364f757af7aa544edeff1b897a76bd8e7ec',
   cto_sybil_challenge: 'ea4ab6a5647bc6c2bc0bb0782a438045232282f60059884b74741a35',
   curve_order: '989ea5f01db57706b5cffbd10a55f002b2d41594610b3980c9692718',
