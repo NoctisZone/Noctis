@@ -74,6 +74,20 @@ function walletUtxo(txHash: string, index: number, lovelace: string): MeshUTxO {
   };
 }
 
+/** A wallet UTXO that carries a token as well as ada -- what change from a buy looks like. */
+function tokenBearingUtxo(txHash: string, index: number, lovelace: string): MeshUTxO {
+  return {
+    input: { txHash, outputIndex: index },
+    output: {
+      address: WALLET_ADDRESS,
+      amount: [
+        { unit: 'lovelace', quantity: lovelace },
+        { unit: TOKEN_UNIT, quantity: '500000' },
+      ],
+    },
+  };
+}
+
 function fakeWallet(): CurveSpendWallet {
   return {
     getChangeAddress: vi.fn().mockResolvedValue(WALLET_ADDRESS),
@@ -158,6 +172,46 @@ describe('MeshCurveSpender', () => {
     const hex = await s.build(buyPlan(s.scriptAddress), wallet);
     const inputs = deserializeTx(hex).body().inputs().toCore();
     expect(inputs.map((i) => i.txId)).not.toContain('dd'.repeat(32));
+  });
+
+  // The sibling of the test above, and the reason trading wallets stopped.
+  //
+  // getCollateral() deliberately nominates the SMALLEST pure-ada UTXO the
+  // wallet owns, so a large one is not tied up. That is also precisely what a
+  // size-led coin selection reaches for first, and nothing marks the nominated
+  // output as reserved -- so the same UTXO can be named as collateral AND
+  // spent as an ordinary input. Collateral is not consumed when a script
+  // succeeds, but an input is: the trade goes through, the wallet's last
+  // pure-ada output is gone, and its NEXT trade cannot be built at all.
+  //
+  // Both cases are modelled on the REAL wallet rather than on fakeWallet(),
+  // whose collateral is not in its own getUtxos() and therefore could never be
+  // selected -- which is why no existing test sees this.
+  it('never funds itself by spending its own collateral', async () => {
+    const collateral = walletUtxo('cc'.repeat(32), 0, '5000000');
+    const wallet = fakeWallet();
+    wallet.getUtxos = vi.fn().mockResolvedValue([tokenBearingUtxo('aa'.repeat(32), 0, '400000000'), collateral]);
+    wallet.getCollateral = vi.fn().mockResolvedValue([collateral]);
+
+    const s = spender(TIER_B);
+    const hex = await s.build(buyPlan(s.scriptAddress), wallet);
+    const inputs = deserializeTx(hex).body().inputs().toCore();
+    expect(inputs.map((i) => i.txId)).not.toContain('cc'.repeat(32));
+  });
+
+  // The case that decides it. Here the wallet cannot afford the trade WITHOUT
+  // consuming its collateral, so the two possible behaviours are visibly
+  // different: spend the collateral and succeed, or refuse. Refusing is the
+  // correct one -- a trade that leaves the wallet unable to trade again has
+  // not succeeded, it has borrowed from the next transaction.
+  it('refuses a trade it could only afford by eating its own collateral', async () => {
+    const collateral = walletUtxo('cc'.repeat(32), 0, '5000000');
+    const wallet = fakeWallet();
+    wallet.getUtxos = vi.fn().mockResolvedValue([tokenBearingUtxo('aa'.repeat(32), 0, '11000000'), collateral]);
+    wallet.getCollateral = vi.fn().mockResolvedValue([collateral]);
+
+    const s = spender(TIER_B);
+    await expect(s.build(buyPlan(s.scriptAddress), wallet)).rejects.toThrow();
   });
 
   it('refuses to build without collateral, saying what is missing', async () => {

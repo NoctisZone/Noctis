@@ -272,9 +272,30 @@ function toMesh(assets: PlanAssets): Asset[] {
  * carries the more fee input selection reaches for.
  *
  * Same hazard the publisher already guards against, from the other side.
+ *
+ * `reserved` is the UTXO nominated as collateral, and it is the same hazard
+ * again from a third side. A Plutus spend needs collateral and collateral must
+ * be pure ada, so `getCollateral()` picks the SMALLEST pure-ada output the
+ * wallet owns — which is exactly what a size-led selection reaches for first.
+ * Nothing else marks it as reserved, so without this the same output is named
+ * as collateral AND spent as an ordinary input.
+ *
+ * That is survivable once and fatal in a sequence. Collateral is not consumed
+ * when a script succeeds, but an input is: the trade goes through, the wallet's
+ * last pure-ada output is gone, its change comes back carrying tokens, and the
+ * NEXT trade cannot be built at all — which is what took trading wallets out
+ * one at a time, each holding plenty of ada.
+ *
+ * Pass nothing when choosing collateral itself, or the candidate list excludes
+ * the very thing it is trying to find.
  */
-export function spendableForFees(utxos: readonly MeshUTxO[]): MeshUTxO[] {
-  return utxos.filter((u) => !u.output.scriptRef && !u.output.scriptHash);
+export function spendableForFees(utxos: readonly MeshUTxO[], reserved?: MeshUTxO): MeshUTxO[] {
+  return utxos.filter(
+    (u) =>
+      !u.output.scriptRef &&
+      !u.output.scriptHash &&
+      !(reserved && u.input.txHash === reserved.input.txHash && u.input.outputIndex === reserved.input.outputIndex),
+  );
 }
 
 /**
@@ -425,7 +446,7 @@ export class MeshCurveSpender {
       collateralUtxo.output.amount,
       collateralUtxo.output.address,
     )
-      .selectUtxosFrom(spendableForFees(walletUtxos))
+      .selectUtxosFrom(spendableForFees(walletUtxos, collateralUtxo))
       .changeAddress(changeAddress)
       .setNetwork(this.config.network);
 
@@ -523,7 +544,7 @@ export class MeshCurveSpender {
       collateralUtxo.output.amount,
       collateralUtxo.output.address,
     )
-      .selectUtxosFrom(spendableForFees(walletUtxos))
+      .selectUtxosFrom(spendableForFees(walletUtxos, collateralUtxo))
       .changeAddress(changeAddress)
       .setNetwork(this.config.network);
 
@@ -670,7 +691,7 @@ export class MeshCurveSpender {
       collateralUtxo.output.amount,
       collateralUtxo.output.address,
     )
-      .selectUtxosFrom(spendableForFees(walletUtxos))
+      .selectUtxosFrom(spendableForFees(walletUtxos, collateralUtxo))
       .changeAddress(changeAddress)
       .setNetwork(this.config.network);
 
