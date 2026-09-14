@@ -10,12 +10,15 @@ services:
   #   Node 1.0.0 / Ledger 8.1.0 / Indexer 4.3.3 / Proof Server 8.1.0
   # Do NOT bump this tag without re-confirming the whole quadruple together.
   proof-server:
-    # Per project direction (2026-07-23): track the LATEST proof-server tag.
-    # As of this date `latest` and `8.1.0` are the same image digest
-    # (801bbc0340e9); the version-quadruple caveat from the README still
-    # applies — if you bump this, re-confirm the compact compiler / ledger /
-    # indexer all agree.
-    image: midnightntwrk/proof-server:latest
+    # Pinned to the exact version above, NOT `latest`. Tracking `latest`
+    # was the direction while the two were the same image, and they still
+    # are — but 9.0.0 release candidates and a 10.0.0 alpha now exist, so
+    # the publisher moves `latest` the day a stable 9.0.0 ships. This file
+    # is provisioned rarely and by hand, so that move would most likely be
+    # discovered on a fresh VM running a proof server built for a ledger
+    # version no network runs — surfacing as the 400 or 500 the header
+    # above describes, naming neither the image nor the version.
+    image: midnightntwrk/proof-server:8.1.0
     container_name: noctis-proof-server
     restart: unless-stopped
     # The image's ENTRYPOINT is `bash -c`, so `command` must be a SINGLE
