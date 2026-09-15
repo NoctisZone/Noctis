@@ -16,6 +16,10 @@ STAGED=$(git diff --cached --name-only --diff-filter=ACM)
 FAIL=0
 ALLOW=".githooks/hygiene-allow.txt"
 
+# The ID shapes, the allowlist that keeps them usable, and the two
+# doc-specific patterns all live in one file both hooks read.
+. "$(dirname "$0")/id-patterns.sh"
+
 # Drop hits that match a reviewed exception (path + substring, both required).
 filter_allowed() {
   if [ ! -f "$ALLOW" ]; then cat; return; fi
@@ -53,11 +57,16 @@ scan() {
   done
 }
 
-# 1. Internal issue-tracker IDs. ROADMAP.md's A1-E4 section numbering is a
-#    separate, legitimate scheme and is excluded the same way manual passes do.
-HITS=$(scan '\b(T[0-9]+|D[0-9]+|MN-[0-9]+|T-[A-Z][A-Z-]*|C-[0-9]+)\b' 'ROADMAP.md' | filter_allowed)
+# 1. Internal IDs, in every letter -- see id-patterns.sh for why the shapes are
+#    matched wholesale and the legitimate tokens subtracted by name instead.
+#    ROADMAP.md numbers its own PUBLIC deliverables per track in the same file
+#    that defines them; lockfiles are machine-written base64 that hits these
+#    shapes by coincidence. CLAUDE.md is NOT excluded here -- it is handled by
+#    hygiene-allow.txt, one reviewed line at a time, which is tighter.
+HITS=$(scan "$ID_SHAPES" 'ROADMAP.md|package-lock.json|*.lock' \
+  | sed -E "s#$ID_ALLOW##g" | grep -E "$ID_SHAPES" | filter_allowed)
 if [ -n "$HITS" ]; then
-  echo "BLOCKED: internal issue-tracker IDs. These belong only in local/ — never in a repo."
+  echo "BLOCKED: internal IDs (issue tracker or security-audit finding). These belong only in local/ — never in a repo."
   echo "$HITS"
   FAIL=1
 fi
