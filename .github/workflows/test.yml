@@ -13,9 +13,15 @@ name: Test
 # `npm ci`'s strict lockfile-sync check even from a freshly-regenerated,
 # real-Linux lockfile).
 
+# A guard that runs only on the default branch cannot protect the weeks a
+# change spends being written, and it did not: a feature branch carrying the
+# venue build and repeated validator edits recorded NO workflow runs at all
+# over its whole life, because nothing pushed to it matched this trigger. A
+# check that never executes is indistinguishable from a check that passes.
+# Pull requests stay gated to the default branch; pushes are not.
 on:
   push:
-    branches: [main]
+    branches: ['**']
   pull_request:
     branches: [main]
 
