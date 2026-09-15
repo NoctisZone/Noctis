@@ -235,7 +235,6 @@ export const REDEEMER_TABLES: ReadonlyArray<{
     indices: VENUE_ROYALTY_WITHDRAW_REDEEMER,
     package: 'venue',
   },
-  { definition: 'bonding_curve/BondingCurveRedeemer', indices: BONDING_CURVE_REDEEMER },
   { definition: 'bonding_curve_tier_b/BondingCurveTierBRedeemer', indices: BONDING_CURVE_TIER_B_REDEEMER },
   { definition: 'curve_order/OrderRedeemer', indices: CURVE_ORDER_REDEEMER },
   { definition: 'cto_governance/CtoGovernanceRedeemer', indices: CTO_GOVERNANCE_REDEEMER },

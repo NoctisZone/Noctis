@@ -30,7 +30,6 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { PLATFORM_CHARGE_LOVELACE as LINEAR_CURVE_CHARGE } from '../tier-a-claims-submitter.js';
 import { PLATFORM_CHARGE_LOVELACE as QUADRATIC_CURVE_CHARGE } from '../tier-b-curve-submitter.js';
 
 const VALIDATORS = join(process.cwd(), '..', 'contracts', 'cardano', 'validators');
@@ -48,10 +47,9 @@ function chargeDeclaredIn(validator: string): bigint {
 describe('the platform charge is one figure, on chain and off', () => {
   const staking = 'staking_pool.ak';
   const quadratic = 'bonding_curve_tier_b.ak';
-  const linear = 'bonding_curve.ak';
 
   it('every validator that charges declares the same amount', () => {
-    const declared = [staking, quadratic, linear].map((v) => [v, chargeDeclaredIn(v)] as const);
+    const declared = [staking, quadratic].map((v) => [v, chargeDeclaredIn(v)] as const);
     const distinct = new Set(declared.map(([, amount]) => amount.toString()));
     expect(
       distinct.size,
@@ -61,10 +59,6 @@ describe('the platform charge is one figure, on chain and off', () => {
 
   it('the quadratic curve submitter quotes what that validator enforces', () => {
     expect(QUADRATIC_CURVE_CHARGE).toBe(chargeDeclaredIn(quadratic));
-  });
-
-  it('the linear curve submitter quotes what that validator enforces', () => {
-    expect(LINEAR_CURVE_CHARGE).toBe(chargeDeclaredIn(linear));
   });
 
   it('the charge clears the protocol minimum ada a real claim measured', () => {

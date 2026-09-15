@@ -89,7 +89,11 @@ for (const v of blueprint.validators) {
  * also changes the validator's HASH, which moves the script address — any
  * published reference script for it has to be re-derived rather than reused.
  *
- * Last moved by token_metadata +113: authenticating the curve reference
+ * Last moved by token_metadata +172: it decodes the curve it reads as a
+ * reference input, and that is the quadratic curve now — the linear one left
+ * the build, and its two rows left this register with it.
+ *
+ * Previously moved by token_metadata +113: authenticating the curve reference
  * input by its thread NFT rather than by a large token holding, which a
  * graduated curve no longer has, and requiring a metadata revision to keep
  * the two keys CIP-68's fungible sub-standard mandates.
@@ -259,7 +263,6 @@ for (const v of blueprint.validators) {
  * two readable as the cause.
  */
 const RECORDED: Record<string, number> = {
-  bonding_curve: 12_900,
   bonding_curve_tier_b: 14_959,
   cto_governance: 7_962,
   cto_sybil_challenge: 2_123,
@@ -268,7 +271,7 @@ const RECORDED: Record<string, number> = {
   lp_escrow: 7_675,
   nhop_challenge: 2_093,
   staking_pool: 5_501,
-  token_metadata: 4_621,
+  token_metadata: 4_793,
   vesting: 5_786,
   zk_anchor: 2_634,
 };
@@ -293,7 +296,6 @@ const RECORDED: Record<string, number> = {
  * old one has to be considered before the change ships.
  */
 const RECORDED_HASHES: Record<string, string> = {
-  bonding_curve: 'c09be1f979036f3985b65b126e4f7c45702005e2592f2e5d13eea90a',
   bonding_curve_tier_b: 'db245f0b95e6c569a098a7637e820d19030b7cd57e123a8d0b5cac2b',
   cto_governance: 'a23a0f558e1bfa4df9310364f757af7aa544edeff1b897a76bd8e7ec',
   cto_sybil_challenge: 'ea4ab6a5647bc6c2bc0bb0782a438045232282f60059884b74741a35',
@@ -302,7 +304,7 @@ const RECORDED_HASHES: Record<string, string> = {
   lp_escrow: '7c86166a586af82960a5a82a5d602dc1c5ad46d5730325a11f0474a9',
   nhop_challenge: 'd35b50306175ea128b6f8f0ac28ba14511b60230aa37a4b55dc862c4',
   staking_pool: '41313bf8fc3163390835de80c221db7692be0d7dc5fba7c11a423b40',
-  token_metadata: '3231abbdc46f762940e969d30a282277864346da2bc199d63dc40b9a',
+  token_metadata: '1e4fe3bf0e6a282951860e0e69b735e21a4b3ad498274163c5c33ca9',
   vesting: '312d7ae3dbe50ee7dd4d553692cdf4f2c8ca11a96f1a45d83eb1ae11',
   zk_anchor: '21ed55e104605486bed5e10afb33fcab1a500f00543ad91e40589fd9',
 };
@@ -367,7 +369,6 @@ describe('compiled validator sizes', () => {
   // one script a graduation DOES carry must leave room for everything else.
   // The full built transaction is measured in mesh-curve-spend.test.ts.
   describe('the graduation transaction', () => {
-    const curveA = RECORDED.bonding_curve ?? 0;
     const curveB = RECORDED.bonding_curve_tier_b ?? 0;
     const lp = RECORDED.lp_escrow ?? 0;
     const pool = RECORDED.staking_pool ?? 0;
@@ -376,8 +377,7 @@ describe('compiled validator sizes', () => {
     // a real build at ~2.5 KB; doubled for margin.
     const GRADUATION_OVERHEAD = 5_000;
 
-    it('cannot carry both of its big validators, either tier — they must be referenced', () => {
-      expect(curveA + lp).toBeGreaterThan(MAX_TX_BYTES);
+    it('cannot carry both of its big validators — they must be referenced', () => {
       expect(curveB + lp).toBeGreaterThan(MAX_TX_BYTES);
     });
 

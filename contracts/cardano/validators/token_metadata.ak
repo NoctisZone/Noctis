@@ -18,10 +18,10 @@
 // while its name, logo and description stay updatable for the life of the
 // launch — by the creator, and by the community once CTO has passed.
 //
-// Authorization mirrors bonding_curve.ak's TriggerCTO/DissolveCTO pattern
+// Authorization mirrors bonding_curve_tier_b.ak's TriggerCTO/DissolveCTO pattern
 // for the CTO-triggered half (same governance event — same
 // cto_governance_credential + thread_nft_policy values as the launch's own
-// bonding_curve.ak datum — one passed CTO vote flips both fee authority and
+// bonding_curve_tier_b.ak datum — one passed CTO vote flips both fee authority and
 // metadata authority together, not two independent mechanisms).
 //
 // Security-audit fix (this session, aiken-dex-security-audit pass): the
@@ -33,7 +33,7 @@
 // — sending value+datum to a script address never runs that script's
 // validator, only spending FROM it does. The fix: pre-CTO signer authority
 // is now ALWAYS re-derived LIVE from the real, unforgeable
-// bonding_curve.ak UTXO for that launch_id (read as a reference input,
+// bonding_curve_tier_b.ak UTXO for that launch_id (read as a reference input,
 // matched by address + launch_id) — never trusted as a self-declared field
 // on this contract's own datum. A forged UTXO can still be created (nothing
 // stops locking a first output with junk content), but it can never be
@@ -49,7 +49,7 @@
 use aiken/collection/list
 use aiken/crypto.{VerificationKeyHash}
 use aiken/interval
-use bonding_curve.{BondingCurveDatum}
+use bonding_curve_tier_b.{BondingCurveTierBDatum}
 use cardano/address.{Address, Credential, from_verification_key}
 use cardano/assets.{AssetName, PolicyId}
 use cardano/transaction
@@ -73,7 +73,7 @@ use noctis/thread_nft
 /// never has to know about any of it.
 pub type NoctisMetadataExtra {
   launch_id: ByteArray,
-  // Fixed at genesis — this launch's own bonding_curve.ak credential (same
+  // Fixed at genesis — this launch's own bonding_curve_tier_b.ak credential (same
   // "no constructor params, one fixed address shared across every launch,
   // launch_id disambiguates" pattern already used for
   // cto_governance_credential). Paired with thread_nft_policy below:
@@ -82,7 +82,7 @@ pub type NoctisMetadataExtra {
   // full reasoning.
   bonding_curve_credential: Credential,
   // This launch's own native token identity, exactly as it appears in
-  // bonding_curve.ak's own datum. `token_asset_name` is the CIP-67 label-333
+  // bonding_curve_tier_b.ak's own datum. `token_asset_name` is the CIP-67 label-333
   // name the curve actually holds; the reference NFT guarding THIS UTXO is
   // the label-100 name over the same base, derived by own_reference_nft.
   token_policy_id: PolicyId,
@@ -130,7 +130,7 @@ pub type TokenMetadataRedeemer {
 
 /// Find this validator's own continuing output (same address as the input
 /// being spent) and decode its inline datum. Identical idiom to every other
-/// validator in this codebase (bonding_curve.ak, lp_escrow.ak,
+/// validator in this codebase (bonding_curve_tier_b.ak, lp_escrow.ak,
 /// cto_governance.ak, vesting.ak, staking_pool.ak, zk_anchor.ak).
 fn own_continuing_datum(
   self: Transaction,
@@ -146,7 +146,7 @@ fn own_continuing_datum(
   new_datum
 }
 
-/// Closes the same double-satisfaction risk bonding_curve.ak's own fix
+/// Closes the same double-satisfaction risk bonding_curve_tier_b.ak's own fix
 /// closes — at most one of this validator's own UTXOs may be spent/created
 /// per transaction.
 fn single_own_utxo(self: Transaction, own_address: Address) -> Bool {
@@ -171,7 +171,7 @@ fn single_own_utxo(self: Transaction, own_address: Address) -> Bool {
 }
 
 /// The real, unforgeable creator identity for `datum.launch_id`, read LIVE
-/// from the genuine bonding_curve.ak reference input every time — never
+/// from the genuine bonding_curve_tier_b.ak reference input every time — never
 /// trusted as a value stored on this contract's own datum, which anyone can
 /// write when they first lock a UTXO here.
 ///
@@ -191,7 +191,7 @@ fn live_curve_creator(
       },
     )
   expect InlineDatum(curve_raw_datum) = curve_ref_input.output.datum
-  expect curve_datum: BondingCurveDatum = curve_raw_datum
+  expect curve_datum: BondingCurveTierBDatum = curve_raw_datum
   expect curve_datum.launch_id == datum.extra.launch_id
   // The curve's THREAD NFT, not a quantity of the launch token.
   //
@@ -263,9 +263,9 @@ fn own_continuing_output(self: Transaction, own_address: Address) -> Output {
 }
 
 /// Tamper-proof "did CTO really pass" check — literal reuse of
-/// bonding_curve.ak's cto_vote_verified (same reference-input +
+/// bonding_curve_tier_b.ak's cto_vote_verified (same reference-input +
 /// governance-thread-NFT authentication; see that function's own doc
-/// comment in bonding_curve.ak for the full reasoning on why address
+/// comment in bonding_curve_tier_b.ak for the full reasoning on why address
 /// matching alone is not sufficient).
 fn cto_vote_verified(
   self: Transaction,
@@ -371,7 +371,7 @@ validator token_metadata {
             cip68.has_required_fungible_fields(new_metadata),
             // Security-audit fix: current_timestamp was previously entirely
             // self-declared with no correspondence-to-reality check, unlike
-            // bonding_curve.ak's ActivateCurve (see that file's own fix
+            // bonding_curve_tier_b.ak's ActivateCurve (see that file's own fix
             // note on why self-declared timestamps without a validity-range
             // check are a real gap class in this codebase).
             interval.contains(self.validity_range, current_timestamp),
@@ -455,15 +455,18 @@ fn mock_metadata() -> Pairs<ByteArray, Data> {
   [Pair("name", name), Pair("ticker", ticker)]
 }
 
-fn mock_curve_datum(launch_id: ByteArray, creator_pub_key_hash: VerificationKeyHash) -> BondingCurveDatum {
-  BondingCurveDatum {
+fn mock_curve_datum(
+  launch_id: ByteArray,
+  creator_pub_key_hash: VerificationKeyHash,
+) -> BondingCurveTierBDatum {
+  BondingCurveTierBDatum {
     launch_id: launch_id,
     creator_pub_key_hash: creator_pub_key_hash,
     governor_pub_key_hash: #"22",
     base_price: 100,
     max_price: 1000,
     curve_supply: 1000,
-    curve_state: bonding_curve.Active,
+    curve_state: bonding_curve_tier_b.Active,
     phase_started_at: 0,
     tokens_sold: 0,
     total_raised: 0,
@@ -488,6 +491,16 @@ fn mock_curve_datum(launch_id: ByteArray, creator_pub_key_hash: VerificationKeyH
     // nothing here ever batches.
     cap_root: cap_accumulator.root_of([]),
     batcher_allowlist: [],
+    // DarkVeil settlement and venue fields, at the curve's own fixture values.
+    // This fixture is only ever read for its launch_id and creator key.
+    dv_allocation_root: #"00",
+    dv_reserve_tokens: 150,
+    dv_claim_opened_at: 0,
+    claimed_bits: #"00",
+    dv_settled: False,
+    dv_claim_window: 86_400_000,
+    dv_settlement_window: 1_800_000,
+    pool_nft_policy: #"0f",
   }
 }
 
@@ -501,7 +514,10 @@ fn mock_reference_nft() -> assets.Value {
   )
 }
 
-fn mock_curve_ref_input(curve_address: Address, curve_datum: BondingCurveDatum) -> Input {
+fn mock_curve_ref_input(
+  curve_address: Address,
+  curve_datum: BondingCurveTierBDatum,
+) -> Input {
   Input {
     output_reference: OutputReference { transaction_id: #"ab", output_index: 0 },
     output: Output {
@@ -624,7 +640,7 @@ fn mock_cto_governance_datum(
 
 /// A reference input at the given address holding the given
 /// CtoGovernanceDatum, carrying the genuine governance thread NFT — mirrors
-/// bonding_curve.ak's own mock_cto_ref_input exactly.
+/// bonding_curve_tier_b.ak's own mock_cto_ref_input exactly.
 fn mock_cto_ref_input(cto_address: Address, cto_datum: CtoGovernanceDatum) -> Input {
   Input {
     output_reference: OutputReference { transaction_id: #"cd", output_index: 0 },
@@ -644,7 +660,7 @@ fn mock_cto_ref_input(cto_address: Address, cto_datum: CtoGovernanceDatum) -> In
   }
 }
 
-/// Same forgery shape as bonding_curve.ak's regression test — a UTXO at
+/// Same forgery shape as bonding_curve_tier_b.ak's regression test — a UTXO at
 /// cto_governance_credential with a fully forged "Passed / Executed" datum
 /// but WITHOUT the real governance thread NFT in its value.
 fn mock_forged_cto_ref_input(cto_address: Address, cto_datum: CtoGovernanceDatum) -> Input {
@@ -718,7 +734,7 @@ test update_metadata_succeeds_by_real_creator_pre_cto() {
 test update_metadata_fails_by_forged_creator_key_pre_cto() {
   // The exact same-style forgery this fix closes: a UTXO whose datum claims
   // launch_id #"01", but the caller signs with a key that is NOT the real
-  // bonding_curve.ak creator for that launch (real key is real_creator_key,
+  // bonding_curve_tier_b.ak creator for that launch (real key is real_creator_key,
   // #"11" — the attacker signs with their own #"99" instead). Even though
   // the transaction cites the real curve reference input (publicly
   // readable by anyone), the signer check must still fail.
@@ -795,7 +811,7 @@ test update_metadata_fails_by_forged_reference_input_without_the_thread_nft() fa
 // clean False) when no matching reference input exists — a trap rejects
 // the transaction exactly the same as a clean False would, but the test
 // itself must be marked `fail` to assert on that, per this codebase's own
-// convention (bonding_curve.ak's trigger_cto_rejects_without_reference_input).
+// convention (bonding_curve_tier_b.ak's trigger_cto_rejects_without_reference_input).
 test update_metadata_fails_without_a_real_curve_reference_input() fail {
   // No bonding_curve reference input at all — even a valid-looking
   // creator signature must not be enough on its own.
