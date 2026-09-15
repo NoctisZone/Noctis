@@ -235,12 +235,12 @@ describe('loadPlutusBlueprint / loadValidatorCbor', () => {
     const blueprint = {
       validators: [
         {
-          title: 'bonding_curve.bonding_curve.spend',
+          title: 'bonding_curve_tier_b.bonding_curve_tier_b.spend',
           compiledCode: 'deadbeef',
         },
       ],
     };
-    expect(loadValidatorCbor(blueprint, 'bonding_curve.bonding_curve.spend')).toBe('deadbeef');
+    expect(loadValidatorCbor(blueprint, 'bonding_curve_tier_b.bonding_curve_tier_b.spend')).toBe('deadbeef');
   });
 
   it('loadValidatorCbor throws the exact "<title> not found in plutus.json." message every CLI file already uses', () => {

@@ -29,9 +29,13 @@ const blueprint = JSON.parse(
   readFileSync(join(import.meta.dirname, '..', '..', 'contracts', 'cardano', 'plutus.json'), 'utf8'),
 ) as { validators: Array<{ title: string; compiledCode: string; hash: string }> };
 
-const TIER_A = blueprint.validators.find((v) => v.title === 'bonding_curve.bonding_curve.spend');
-const TIER_B = blueprint.validators.find((v) => v.title === 'bonding_curve_tier_b.bonding_curve_tier_b.spend');
-if (!TIER_A || !TIER_B) throw new Error('blueprint is missing a curve');
+// Two real, distinct validators. Which two does not matter to anything here
+// — what is under test is that a script is recognised by what it compiles
+// to rather than by what it is called — so these are simply a live curve and
+// a live escrow.
+const CURVE = blueprint.validators.find((v) => v.title === 'bonding_curve_tier_b.bonding_curve_tier_b.spend');
+const ESCROW = blueprint.validators.find((v) => v.title === 'lp_escrow.lp_escrow.spend');
+if (!CURVE || !ESCROW) throw new Error('blueprint is missing a validator this test needs');
 
 const venue = JSON.parse(
   readFileSync(join(import.meta.dirname, '..', '..', 'contracts', 'cardano-dex', 'plutus.json'), 'utf8'),
@@ -71,8 +75,8 @@ describe('currentScriptHashes', () => {
   // script be reclaimed.
   it('agrees with the hash the blueprint recorded', () => {
     const hashes = currentScriptHashes(blueprint.validators);
-    expect(hashes.has(TIER_A.hash.toLowerCase())).toBe(true);
-    expect(hashes.has(TIER_B.hash.toLowerCase())).toBe(true);
+    expect(hashes.has(ESCROW.hash.toLowerCase())).toBe(true);
+    expect(hashes.has(CURVE.hash.toLowerCase())).toBe(true);
   });
 });
 
@@ -83,7 +87,7 @@ describe('findReferenceScripts', () => {
 
   it('marks a live curve as current, and names it', () => {
     const found = findReferenceScripts(
-      [utxo('aa'.repeat(32), '75000000', applyCborEncoding(TIER_B.compiledCode))],
+      [utxo('aa'.repeat(32), '75000000', applyCborEncoding(CURVE.compiledCode))],
       blueprint.validators,
     );
     expect(found[0]?.isCurrent).toBe(true);
@@ -126,9 +130,9 @@ describe('what may be spent', () => {
   it('never returns a live validator, however it is mixed in', () => {
     const found = findReferenceScripts(
       [
-        utxo('aa'.repeat(32), '75000000', applyCborEncoding(TIER_A.compiledCode)),
+        utxo('aa'.repeat(32), '75000000', applyCborEncoding(ESCROW.compiledCode)),
         utxo('bb'.repeat(32), '75000000', SUPERSEDED),
-        utxo('cc'.repeat(32), '75000000', applyCborEncoding(TIER_B.compiledCode)),
+        utxo('cc'.repeat(32), '75000000', applyCborEncoding(CURVE.compiledCode)),
       ],
       blueprint.validators,
     );
@@ -177,13 +181,13 @@ describe('what may be spent', () => {
   // not consult the caller at all.
   it('refuses a live script that was explicitly named, and says why', () => {
     const found = findReferenceScripts(
-      [utxo('aa'.repeat(32), '75000000', applyCborEncoding(TIER_A.compiledCode))],
+      [utxo('aa'.repeat(32), '75000000', applyCborEncoding(ESCROW.compiledCode))],
       blueprint.validators,
     );
     const named = [found[0]?.scriptHash ?? ''];
     expect(reclaimable(found, named)).toEqual([]);
     expect(refusedApprovals(found, named)).toEqual([
-      { scriptHash: found[0]?.scriptHash, reason: 'a current build compiles to this script (bonding_curve)' },
+      { scriptHash: found[0]?.scriptHash, reason: 'a current build compiles to this script (lp_escrow)' },
     ]);
   });
 
@@ -196,8 +200,8 @@ describe('what may be spent', () => {
   it('returns nothing at all when every script is live', () => {
     const found = findReferenceScripts(
       [
-        utxo('aa'.repeat(32), '75000000', applyCborEncoding(TIER_A.compiledCode)),
-        utxo('cc'.repeat(32), '75000000', applyCborEncoding(TIER_B.compiledCode)),
+        utxo('aa'.repeat(32), '75000000', applyCborEncoding(ESCROW.compiledCode)),
+        utxo('cc'.repeat(32), '75000000', applyCborEncoding(CURVE.compiledCode)),
       ],
       blueprint.validators,
     );
@@ -232,7 +236,7 @@ describe('what may be spent', () => {
   it('totals only what it would actually spend', () => {
     const found = findReferenceScripts(
       [
-        utxo('aa'.repeat(32), '75000000', applyCborEncoding(TIER_A.compiledCode)),
+        utxo('aa'.repeat(32), '75000000', applyCborEncoding(ESCROW.compiledCode)),
         utxo('bb'.repeat(32), '55000000', SUPERSEDED),
         utxo('dd'.repeat(32), '5000000', applyCborEncoding('590002')),
       ],

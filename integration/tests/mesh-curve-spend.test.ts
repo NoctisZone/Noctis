@@ -55,7 +55,9 @@ function venueValidator(title: string) {
 }
 
 const TIER_B = validator('bonding_curve_tier_b.bonding_curve_tier_b.spend');
-const TIER_A = validator('bonding_curve.bonding_curve.spend');
+// Any live validator that is not the curve under test: the wrong-script and
+// wrong-address cases only need a script that differs from it.
+const OTHER = validator('vesting.vesting.spend');
 
 const BUYER_KEY_HASH = '11'.repeat(28);
 // A real enterprise address for that key hash. Coin selection rejects an
@@ -144,7 +146,7 @@ describe('MeshCurveSpender', () => {
         new MeshCurveSpender({
           network: 'preprod',
           compiledScriptCbor: TIER_B.compiledCode,
-          referenceScript: { txHash: REF_TX, outputIndex: 0, scriptHash: TIER_A.hash },
+          referenceScript: { txHash: REF_TX, outputIndex: 0, scriptHash: OTHER.hash },
           provider: fakeProvider(),
         }),
     ).toThrow(/stale/i);
@@ -152,7 +154,7 @@ describe('MeshCurveSpender', () => {
 
   it('refuses to spend a UTXO locked by some other script', async () => {
     const s = spender(TIER_B);
-    const plan = buyPlan(scriptAddressOf(TIER_A.compiledCode, 0));
+    const plan = buyPlan(scriptAddressOf(OTHER.compiledCode, 0));
     await expect(s.build(plan, fakeWallet())).rejects.toThrow(/would need the validator/i);
   });
 
@@ -225,10 +227,7 @@ describe('MeshCurveSpender', () => {
   // The claims that matter, checked against the decoded transaction
   // ==========================================================================
 
-  for (const [tier, v] of [
-    ['the linear curve', TIER_A],
-    ['Cardano Launch', TIER_B],
-  ] as const) {
+  for (const [tier, v] of [['Cardano Launch', TIER_B]] as const) {
     describe(`${tier}`, () => {
       it('leaves the validator out of the witness set entirely', async () => {
         const s = spender(v);
@@ -435,7 +434,7 @@ describe('MeshCurveSpender — graduation', () => {
   }
 
   function graduationSpender() {
-    return spender(TIER_A, graduationProvider());
+    return spender(TIER_B, graduationProvider());
   }
 
   it('carries ONLY the pool validator — the curve and the escrow are referenced', async () => {
@@ -457,7 +456,7 @@ describe('MeshCurveSpender — graduation', () => {
     expect(hex.length / 2 + 500).toBeLessThan(MAX_TX_BYTES);
     // And the same transaction with the two referenced validators carried
     // instead is over the cap — which is why they are referenced.
-    const embeddedEquivalent = hex.length / 2 + rawScriptSize(TIER_A.compiledCode) + rawScriptSize(LP.compiledCode);
+    const embeddedEquivalent = hex.length / 2 + rawScriptSize(TIER_B.compiledCode) + rawScriptSize(LP.compiledCode);
     expect(embeddedEquivalent).toBeGreaterThan(MAX_TX_BYTES);
   });
 
