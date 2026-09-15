@@ -32,9 +32,24 @@
 
 import { createCipheriv, createDecipheriv, createHmac, pbkdf2, randomBytes } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, readFile, rename, stat, unlink, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+
+/**
+ * How many past snapshots to keep beside the live one, and how far apart.
+ *
+ * The live file is rewritten every 30 seconds, so generations spaced by the
+ * save loop would cover barely a minute and protect against nothing. What they
+ * have to survive is a fault that is only RECOGNISED much later: a dust wallet
+ * that reaches the chain tip and is then wedged by a rewound sync stream keeps
+ * banking happily, so by the time the wedge is visible the healthy state has
+ * been overwritten many times. Six generations ten minutes apart give an hour
+ * of recoverable history, which is the scale that matters when the alternative
+ * is replaying ~1.5M dust entries again.
+ */
+const SNAPSHOT_GENERATIONS = 6;
+const GENERATION_INTERVAL_MS = 10 * 60 * 1000;
 
 /** PBKDF2 work factor. Matches the reference implementation this pattern came from. */
 const PBKDF2_ITERATIONS = 600_000;
@@ -173,6 +188,34 @@ export class WalletStateStore {
     private readonly passphrase: string,
   ) {}
 
+  #generationPath(target: string, index: number): string {
+    return `${target}.gen${index}`;
+  }
+
+  /**
+   * Preserve the current snapshot as a generation, if the newest one is old
+   * enough to be worth displacing.
+   *
+   * Copied rather than renamed. Renaming would be cheaper, but it leaves a
+   * window in which no live snapshot exists at all, and a process killed inside
+   * that window comes back with nothing to resume from — which is the exact
+   * outcome this whole module exists to prevent. A 15 MB copy every ten minutes
+   * is not worth that risk.
+   */
+  async #keepGeneration(target: string): Promise<void> {
+    const newest = this.#generationPath(target, 1);
+    const [live, latest] = await Promise.all([stat(target).catch(() => null), stat(newest).catch(() => null)]);
+    if (!live) return; // Nothing live yet — the first save has no past to keep.
+    if (latest && Date.now() - latest.mtimeMs < GENERATION_INTERVAL_MS) return;
+
+    // Oldest first, so each slot is free before anything moves into it.
+    await unlink(this.#generationPath(target, SNAPSHOT_GENERATIONS)).catch(() => {});
+    for (let index = SNAPSHOT_GENERATIONS - 1; index >= 1; index--) {
+      await rename(this.#generationPath(target, index), this.#generationPath(target, index + 1)).catch(() => {});
+    }
+    await copyFile(target, newest).catch(() => {});
+  }
+
   #pathFor(accountId: string): string {
     // Account ids are internal role names (`buyer_3`, `wallet_seed`), but this
     // builds a filesystem path, so anything that could climb out of the
@@ -303,6 +346,8 @@ export class WalletStateStore {
     // is killed mid-write leaves a truncated file — discarding every snapshot
     // taken before it. Rename is atomic, so a kill leaves either the previous
     // complete snapshot or the new one, never a torn mix.
+    await this.#keepGeneration(target);
+
     const temporary = `${target}.${process.pid}.tmp`;
     await writeFile(temporary, JSON.stringify(file), { mode: 0o600 });
     await rename(temporary, target);
