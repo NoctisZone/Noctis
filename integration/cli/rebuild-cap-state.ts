@@ -17,7 +17,7 @@ import { Blockfrost, Data, Lucid, validatorToAddress } from '@lucid-evolution/lu
 import { rebuildCapAccumulator } from '../cap-accumulator-from-history.js';
 import { bytesToHex } from '../cap-accumulator-tree.js';
 import { selectLaunchUtxo } from '../launch-utxo-lookup.js';
-import { BondingCurveDatumSchema, BondingCurveTierBDatumSchema } from '../tier-a-schemas.js';
+import { BondingCurveTierBDatumSchema } from '../tier-a-schemas.js';
 import { TierATradeHistoryReader } from '../tier-a-trade-history-reader.js';
 import {
   CARDANO_NETWORK_MAP,
@@ -37,13 +37,20 @@ interface Input {
   threadNftPolicyId: string;
   blockfrostProjectId: string;
   blockfrostUrl: string;
-  tier: 'A' | 'B';
+  tier: 'B';
 }
 
-const CURVE_TITLE: Record<'A' | 'B', string> = {
-  A: 'bonding_curve.bonding_curve.spend',
-  B: 'bonding_curve_tier_b.bonding_curve_tier_b.spend',
-};
+const CURVE_TITLE = 'bonding_curve_tier_b.bonding_curve_tier_b.spend';
+
+// The linear-curve path is retired, so the only tier this resolves is the
+// quadratic one. Checked at runtime rather than left to the type: input
+// arrives as JSON, and a retired tier silently resolving to a different
+// validator would run this command against a contract nobody named.
+function requireLiveTier(tier: string): void {
+  if (tier !== 'B') {
+    throw new Error(`tier must be "B" - the linear-curve path is retired (got "${tier}")`);
+  }
+}
 
 async function main() {
   const input = parseJsonStdin<Input>(await readStdin());
@@ -55,22 +62,23 @@ async function main() {
     'blockfrostUrl',
     'tier',
   ]);
+  requireLiveTier(input.tier);
 
   const network = CARDANO_NETWORK_MAP[input.network];
   const blueprint = loadPlutusBlueprint(__dirname);
-  const compiledScriptCbor = loadValidatorCbor(blueprint, CURVE_TITLE[input.tier]);
+  const compiledScriptCbor = loadValidatorCbor(blueprint, CURVE_TITLE);
   const curveAddress = validatorToAddress(network, { type: 'PlutusV3', script: compiledScriptCbor });
 
   // The root to check against comes from the launch's own authenticated UTXO,
   // not from any argument — the point of the check is lost if the caller can
   // supply what it is checked against.
   const lucid = await Lucid(new Blockfrost(input.blockfrostUrl, input.blockfrostProjectId), network);
-  const schema = input.tier === 'B' ? BondingCurveTierBDatumSchema : BondingCurveDatumSchema;
+  const schema = BondingCurveTierBDatumSchema;
   const found = selectLaunchUtxo<{ cap_root: string; launch_id: string; thread_nft_policy: string }>(
     await lucid.utxosAt(curveAddress),
     curveAddress,
     input.launchIdHex,
-    input.tier === 'B' ? 'bondingCurveTierB' : 'bondingCurve',
+    'bondingCurveTierB',
     schema as never,
     input.threadNftPolicyId,
   );

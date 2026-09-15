@@ -477,10 +477,7 @@ export async function buildGenesisDatums(input: BuildGenesisDatumsInput) {
   // not the bundle supplies its own; see the input field's comment.
   const blueprint = input.blueprint ?? loadPlutusBlueprint(__dirname);
 
-  const bondingCurveValidator = loadValidator(
-    blueprint,
-    tier === 'B' ? 'bonding_curve_tier_b.bonding_curve_tier_b.spend' : 'bonding_curve.bonding_curve.spend',
-  );
+  const bondingCurveValidator = loadValidator(blueprint, 'bonding_curve_tier_b.bonding_curve_tier_b.spend');
   const vestingValidator = loadValidator(blueprint, 'vesting.vesting.spend');
   const lpEscrowValidator = loadValidator(blueprint, 'lp_escrow.lp_escrow.spend');
   const stakingPoolValidator = loadValidator(blueprint, 'staking_pool.staking_pool.spend');

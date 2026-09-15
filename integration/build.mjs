@@ -247,20 +247,10 @@ const usdToAdaCliConfig = {
 	logLevel: "info",
 };
 
-const activateCurveCliConfig = {
-	entryPoints: [join(__dirname, "cli/activate-tier-a-curve.ts")],
-	outfile: join(__dirname, "cli/dist/activate-tier-a-curve.cjs"),
-	bundle: true,
-	platform: "node",
-	format: "cjs", // same __dirname/CML-WASM reasoning as readTierALaunchStateCliConfig
-	target: "node20",
-	sourcemap,
-	logLevel: "info",
-};
 
 // (2026-07-21): one consolidated action-dispatched CLI for Cardano Launch's
 // public curve (activate/buy/claim-*-fees/expire/claim-buyback) — same
-// __dirname/CML-WASM CJS reasoning as activateCurveCliConfig above (Lucid
+// __dirname/CML-WASM CJS reasoning as the curve CLIs above (Lucid
 // Evolution's own bundled CML dependency needs a real __dirname at runtime,
 // which ESM output doesn't provide the same way).
 const tierBCurveActionCliConfig = {
@@ -313,60 +303,10 @@ const anchorDvAllocationRootCliConfig = {
 	logLevel: "info",
 };
 
-const buyCurveCliConfig = {
-	entryPoints: [join(__dirname, "cli/buy-tier-a-curve.ts")],
-	outfile: join(__dirname, "cli/dist/buy-tier-a-curve.cjs"),
-	bundle: true,
-	platform: "node",
-	format: "cjs",
-	target: "node20",
-	sourcemap,
-	logLevel: "info",
-};
 
-const sellCurveCliConfig = {
-	entryPoints: [join(__dirname, "cli/sell-tier-a-curve.ts")],
-	outfile: join(__dirname, "cli/dist/sell-tier-a-curve.cjs"),
-	bundle: true,
-	platform: "node",
-	format: "cjs",
-	target: "node20",
-	sourcemap,
-	logLevel: "info",
-};
 
-const expireCurveCliConfig = {
-	entryPoints: [join(__dirname, "cli/expire-tier-a-curve.ts")],
-	outfile: join(__dirname, "cli/dist/expire-tier-a-curve.cjs"),
-	bundle: true,
-	platform: "node",
-	format: "cjs",
-	target: "node20",
-	sourcemap,
-	logLevel: "info",
-};
 
-const claimBuybackCliConfig = {
-	entryPoints: [join(__dirname, "cli/claim-buyback-tier-a.ts")],
-	outfile: join(__dirname, "cli/dist/claim-buyback-tier-a.cjs"),
-	bundle: true,
-	platform: "node",
-	format: "cjs",
-	target: "node20",
-	sourcemap,
-	logLevel: "info",
-};
 
-const graduateLaunchCliConfig = {
-	entryPoints: [join(__dirname, "cli/graduate-tier-a-launch.ts")],
-	outfile: join(__dirname, "cli/dist/graduate-tier-a-launch.cjs"),
-	bundle: true,
-	platform: "node",
-	format: "cjs", // same __dirname/CML-WASM reasoning as readTierALaunchStateCliConfig
-	target: "node20",
-	sourcemap,
-	logLevel: "info",
-};
 
 const graduateTierBLaunchCliConfig = {
 	entryPoints: [join(__dirname, "cli/graduate-tier-b-launch.ts")],
@@ -529,16 +469,6 @@ const claimVestedCliConfig = {
 	logLevel: "info",
 };
 
-const claimCreatorFeesCliConfig = {
-	entryPoints: [join(__dirname, "cli/claim-creator-fees-tier-a.ts")],
-	outfile: join(__dirname, "cli/dist/claim-creator-fees-tier-a.cjs"),
-	bundle: true,
-	platform: "node",
-	format: "cjs", // same __dirname/CML-WASM reasoning as readTierALaunchStateCliConfig
-	target: "node20",
-	sourcemap,
-	logLevel: "info",
-};
 
 const readTradeHistoryCliConfig = {
 	entryPoints: [join(__dirname, "cli/read-tier-a-trade-history.ts")],
@@ -892,19 +822,12 @@ async function copyWasmFiles() {
 		dirname(buildGenesisDatumsCliConfig.outfile),
 		dirname(usdToAdaCliConfig.outfile),
 		dirname(mintLaunchCliConfig.outfile),
-		dirname(activateCurveCliConfig.outfile),
-		dirname(buyCurveCliConfig.outfile),
-		dirname(sellCurveCliConfig.outfile),
-		dirname(graduateLaunchCliConfig.outfile),
 		dirname(graduateTierBLaunchCliConfig.outfile),
 		dirname(startVestingCliConfig.outfile),
 		dirname(proposeDexChangeCliConfig.outfile),
 		dirname(executeDexChangeCliConfig.outfile),
 		dirname(migrateLpToMinswapCliConfig.outfile),
 		dirname(claimVestedCliConfig.outfile),
-		dirname(claimCreatorFeesCliConfig.outfile),
-		dirname(expireCurveCliConfig.outfile),
-		dirname(claimBuybackCliConfig.outfile),
 		dirname(readTradeHistoryCliConfig.outfile),
 		dirname(checkCtoCreatorActivityCliConfig.outfile),
 		dirname(checkCtoBadgeStatusCliConfig.outfile),
@@ -1057,19 +980,12 @@ async function run() {
 		buildGenesisDatumsCliConfig,
 		usdToAdaCliConfig,
 		mintLaunchCliConfig,
-		activateCurveCliConfig,
-		buyCurveCliConfig,
-		sellCurveCliConfig,
-		graduateLaunchCliConfig,
 		graduateTierBLaunchCliConfig,
 		startVestingCliConfig,
 		proposeDexChangeCliConfig,
 		executeDexChangeCliConfig,
 		migrateLpToMinswapCliConfig,
 		claimVestedCliConfig,
-		claimCreatorFeesCliConfig,
-		expireCurveCliConfig,
-		claimBuybackCliConfig,
 		readTradeHistoryCliConfig,
 		checkCtoCreatorActivityCliConfig,
 		checkCtoBadgeStatusCliConfig,

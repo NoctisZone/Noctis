@@ -1,9 +1,9 @@
 // ============================================================================
 // Noctis Zone — Cardano Preprod milestone, Phase 5
 // StartVesting (vesting.ak) — standalone, independently retriable.
-// (2026-07-17): split out of graduate-tier-a-launch.ts's single tx once
-// embedding all 3 validators in one transaction exceeded Cardano's real
-// 16384-byte tx size cap. Verified independent of Graduate/SealLock (no
+// (2026-07-17): split out of the graduation transaction once embedding all
+// 3 validators in one transaction exceeded Cardano's real 16384-byte tx
+// size cap. Verified independent of Graduate/SealLock (no
 // cross-contract check in either direction) — see
 // tier-a-graduation-submitter.ts's own header for the full trail. Exists as
 // its own CLI both for the normal graduate() flow's TX2 and for recovery:

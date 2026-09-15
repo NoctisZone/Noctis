@@ -20,8 +20,8 @@ import { BatcherSubmitter } from '../batcher-submitter.js';
 import { capAccumulatorFromHex } from '../cap-accumulator-tree.js';
 import { selectLaunchUtxo } from '../launch-utxo-lookup.js';
 import { OrderSubmitter } from '../order-submitter.js';
-import type { BondingCurveDatumData, BondingCurveTierBDatumData } from '../tier-a-schemas.js';
-import { BondingCurveDatumSchema, BondingCurveTierBDatumSchema } from '../tier-a-schemas.js';
+import type { BondingCurveTierBDatumData } from '../tier-a-schemas.js';
+import { BondingCurveTierBDatumSchema } from '../tier-a-schemas.js';
 import {
   CARDANO_NETWORK_MAP,
   jsonSafe,
@@ -42,7 +42,7 @@ interface Input {
   threadNftPolicyId: string;
   blockfrostProjectId: string;
   blockfrostUrl: string;
-  tier: 'A' | 'B';
+  tier: 'B';
   /**
    * Where this tier's curve validator is published, from
    * `publish-reference-script`. Required: a batch carries N cap proofs on top
@@ -66,10 +66,17 @@ interface Input {
   nowMs?: number;
 }
 
-const CURVE_TITLE: Record<'A' | 'B', string> = {
-  A: 'bonding_curve.bonding_curve.spend',
-  B: 'bonding_curve_tier_b.bonding_curve_tier_b.spend',
-};
+const CURVE_TITLE = 'bonding_curve_tier_b.bonding_curve_tier_b.spend';
+
+// The linear-curve path is retired, so the only tier this resolves is the
+// quadratic one. Checked at runtime rather than left to the type: input
+// arrives as JSON, and a retired tier silently resolving to a different
+// validator would run this command against a contract nobody named.
+function requireLiveTier(tier: string): void {
+  if (tier !== 'B') {
+    throw new Error(`tier must be "B" - the linear-curve path is retired (got "${tier}")`);
+  }
+}
 
 async function main() {
   const input = parseJsonStdin<Input>(await readStdin());
@@ -82,9 +89,10 @@ async function main() {
     'blockfrostUrl',
     'tier',
   ]);
+  requireLiveTier(input.tier);
 
   const blueprint = loadPlutusBlueprint(__dirname);
-  const curveScriptCbor = loadValidatorCbor(blueprint, CURVE_TITLE[input.tier]);
+  const curveScriptCbor = loadValidatorCbor(blueprint, CURVE_TITLE);
   const orderScriptCbor = loadValidatorCbor(blueprint, 'curve_order.curve_order.spend');
   const network = CARDANO_NETWORK_MAP[input.network];
 
@@ -109,12 +117,12 @@ async function main() {
   // The curve, through the same authenticated lookup every submitter uses:
   // the launch's thread NFT is what makes the UTXO the real one.
   const lucid = await Lucid(new Blockfrost(input.blockfrostUrl, input.blockfrostProjectId), network);
-  const schema = input.tier === 'A' ? BondingCurveDatumSchema : BondingCurveTierBDatumSchema;
-  const found = selectLaunchUtxo<BondingCurveDatumData | BondingCurveTierBDatumData>(
+  const schema = BondingCurveTierBDatumSchema;
+  const found = selectLaunchUtxo<BondingCurveTierBDatumData>(
     await lucid.utxosAt(batcher.curveAddress),
     batcher.curveAddress,
     input.launchIdHex,
-    input.tier === 'A' ? 'bondingCurve' : 'bondingCurveTierB',
+    'bondingCurveTierB',
     schema as never,
     input.threadNftPolicyId,
   );
@@ -137,7 +145,7 @@ async function main() {
   }));
 
   const plan = planBatch({
-    shape: input.tier === 'A' ? 'linear' : 'quadratic',
+    shape: 'quadratic',
     curve: found.datum,
     capState: capAccumulatorFromHex(input.capState ?? []),
     orders: candidates,

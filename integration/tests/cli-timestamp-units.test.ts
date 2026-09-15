@@ -44,7 +44,9 @@ describe('CLI timestamp fields are milliseconds, and say so', () => {
     // the interface style changed — the failure mode that makes a source
     // scanner worse than no test.
     const total = cliFiles.reduce((n, f) => n + timestampFields(f.source).length, 0);
-    expect(total).toBeGreaterThanOrEqual(10);
+    // Lowered from 10 with the linear curve's CLI retirement; the point is
+    // that the scan still finds fields, not that it finds a fixed number.
+    expect(total).toBeGreaterThanOrEqual(8);
   });
 
   it.each(cliFiles.map((f) => f.name))('%s declares no seconds-denominated timestamp field', (name) => {

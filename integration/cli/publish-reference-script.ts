@@ -53,7 +53,8 @@ declare const __dirname: string;
 interface PublishReferenceScriptInput {
   network: CurveNetwork;
   /**
-   * The validator's title in plutus.json, e.g. `bonding_curve.bonding_curve.spend`.
+   * The validator's title in plutus.json, e.g.
+   * `bonding_curve_tier_b.bonding_curve_tier_b.spend`.
    * Omit when passing `compiledScriptCbor`; it is then only a label.
    */
   validatorTitle: string;

@@ -36,7 +36,7 @@ interface Input {
   blockfrostProjectId: string;
   blockfrostUrl: string;
   /** Which curve these orders may be applied against. */
-  tier: 'A' | 'B';
+  tier: 'B';
 
   // place
   ownerMnemonic?: string;
@@ -57,14 +57,22 @@ interface Input {
   callerMnemonic?: string;
 }
 
-const CURVE_TITLE: Record<'A' | 'B', string> = {
-  A: 'bonding_curve.bonding_curve.spend',
-  B: 'bonding_curve_tier_b.bonding_curve_tier_b.spend',
-};
+const CURVE_TITLE = 'bonding_curve_tier_b.bonding_curve_tier_b.spend';
+
+// The linear-curve path is retired, so the only tier this resolves is the
+// quadratic one. Checked at runtime rather than left to the type: input
+// arrives as JSON, and a retired tier silently resolving to a different
+// validator would run this command against a contract nobody named.
+function requireLiveTier(tier: string): void {
+  if (tier !== 'B') {
+    throw new Error(`tier must be "B" - the linear-curve path is retired (got "${tier}")`);
+  }
+}
 
 async function main() {
   const input = parseJsonStdin<Input>(await readStdin());
   requireFieldsFalsy(input, ['action', 'network', 'launchIdHex', 'blockfrostProjectId', 'blockfrostUrl', 'tier']);
+  requireLiveTier(input.tier);
 
   const blueprint = loadPlutusBlueprint(__dirname);
   const submitter = new OrderSubmitter({
@@ -72,7 +80,7 @@ async function main() {
     blockfrostUrl: input.blockfrostUrl,
     network: CARDANO_NETWORK_MAP[input.network],
     compiledScriptCbor: loadValidatorCbor(blueprint, 'curve_order.curve_order.spend'),
-    curveScriptCbor: loadValidatorCbor(blueprint, CURVE_TITLE[input.tier]),
+    curveScriptCbor: loadValidatorCbor(blueprint, CURVE_TITLE),
   });
 
   let result: unknown;

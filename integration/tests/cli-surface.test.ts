@@ -54,8 +54,10 @@ function consoleCalls(src: string): string[] {
 describe('CLI entry points', () => {
   it('finds the entry points to check', () => {
     // If a refactor moves or renames the directory this file silently covers
-    // nothing, so the count is asserted rather than assumed.
-    expect(entryPoints.length).toBeGreaterThanOrEqual(50);
+    // nothing, so the count is asserted rather than assumed. The floor is a
+    // guard against matching nothing, not a pin on the exact surface: it came
+    // down from 50 when the linear curve's seven CLIs were retired with it.
+    expect(entryPoints.length).toBeGreaterThanOrEqual(40);
   });
 
   it.each(entryPoints)('%s handles a rejected main()', (file) => {

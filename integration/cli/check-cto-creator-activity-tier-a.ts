@@ -39,7 +39,7 @@
 // ============================================================================
 
 import { Blockfrost, Data, Lucid, validatorToAddress } from '@lucid-evolution/lucid';
-import { BondingCurveDatumSchema, BondingCurveTierBDatumSchema, loadValidator } from '../tier-a-schemas.js';
+import { BondingCurveTierBDatumSchema, loadValidator } from '../tier-a-schemas.js';
 import { TierATradeHistoryReader } from '../tier-a-trade-history-reader.js';
 import { CARDANO_NETWORK_MAP, loadPlutusBlueprint, parseJsonStdin, readStdin, requireFieldsFalsy } from './cli-io.js';
 
@@ -47,7 +47,7 @@ declare const __dirname: string;
 
 interface CheckCreatorActivityInput {
   launchIdHex: string;
-  tier: 'A' | 'B';
+  tier: 'B';
   network: 'preview' | 'preprod' | 'mainnet';
   blockfrostProjectId: string;
   blockfrostUrl: string;
@@ -58,16 +58,15 @@ async function main() {
   const input = parseJsonStdin<CheckCreatorActivityInput>(raw);
 
   requireFieldsFalsy(input, ['launchIdHex', 'tier', 'network', 'blockfrostProjectId', 'blockfrostUrl']);
-  if (input.tier !== 'A' && input.tier !== 'B') {
-    throw new Error(`tier must be "A" or "B" (got "${input.tier}")`);
+  if (input.tier !== 'B') {
+    throw new Error(`tier must be "B" - the linear-curve path is retired (got "${input.tier}")`);
   }
 
   // __dirname resolves relative to the BUNDLED .cjs's own location
   // (cli/dist/), same gotcha read-tier-a-launch-state.ts already documents.
   const blueprint = loadPlutusBlueprint(__dirname);
 
-  const validatorExportName =
-    input.tier === 'A' ? 'bonding_curve.bonding_curve.spend' : 'bonding_curve_tier_b.bonding_curve_tier_b.spend';
+  const validatorExportName = 'bonding_curve_tier_b.bonding_curve_tier_b.spend';
   const bondingCurveValidator = loadValidator(blueprint, validatorExportName);
 
   const network = CARDANO_NETWORK_MAP[input.network];
@@ -77,7 +76,7 @@ async function main() {
 
   // --- Current balance: live datum read, same pattern as
   // read-tier-a-launch-state.ts's findLaunchUtxo. ---
-  const datumSchema = input.tier === 'A' ? BondingCurveDatumSchema : BondingCurveTierBDatumSchema;
+  const datumSchema = BondingCurveTierBDatumSchema;
   const utxos = await lucid.utxosAt(bondingCurveAddress);
   let creatorFeesAccrued: bigint | null = null;
   for (const utxo of utxos) {
