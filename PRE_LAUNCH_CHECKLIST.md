@@ -22,27 +22,27 @@ Human sign-off gate. Three stages: website live, preprod contracts, mainnet.
 
 ### Public pages — desktop
 
-- [ ] **Home page** — hero renders, stat blocks correct, CTA buttons navigate correctly, nav links work, footer links work — 🔧 code-ready (A1, shipped 2026-06-09)
-- [ ] **Launches index** — card grid loads, filter tabs work (ALL/LIVE/DARKVEIL ACTIVE/UPCOMING/GRADUATED/DV FAILED), search works, tier filter works, sort works — 🔧 code-ready (A2, shipped 2026-06-09; card data still partly mock, see A9)
+- [ ] **Home page** — hero renders, stat blocks correct, CTA buttons navigate correctly, nav links work, footer links work — 🔧 code-ready (shipped 2026-06-09)
+- [ ] **Launches index** — card grid loads, filter tabs work (ALL/LIVE/DARKVEIL ACTIVE/UPCOMING/GRADUATED/DV FAILED), search works, tier filter works, sort works — 🔧 code-ready (shipped 2026-06-09; card data still partly mock)
 - [ ] **Launch detail page (Cardano Launch — e.g. /launch-phantom/)** — all sections render: header, progress bar, DV registration panel, bonding curve chart placeholder, LP info, creator info
-- [ ] **DV Registration** — eligibility checklist renders, allocation display correct, NIGHT bond amount correct ($50 USD), registration form present — 🔧 code-ready (A3, shipped 2026-06-09)
-- [ ] **How It Works** — all step cards render, FAQ accordion opens/closes, guides link band renders above "Choose your tier" and every link resolves — 🔧 code-ready desktop (A4)
+- [ ] **DV Registration** — eligibility checklist renders, allocation display correct, NIGHT bond amount correct ($50 USD), registration form present — 🔧 code-ready (shipped 2026-06-09)
+- [ ] **How It Works** — all step cards render, FAQ accordion opens/closes, guides link band renders above "Choose your tier" and every link resolves — 🔧 code-ready desktop
 - [ ] **How-To Guides (/how-to/)** — hero spacing clears the fixed nav, sticky quick-nav jumps to all 4 categories, every guide accordion opens/closes, all in-page links resolve
 - [ ] **Staking (/staking/)** — discovery grid lists staking-enabled launches, search + status tabs + tier filter work, "My staking" gate shows until a wallet connects, then totals (projects / staked / rewards earned) and per-project rows populate and link to the right launch
-- [ ] **Transparency page** — all 10 sections present, all default collapsed, expand/collapse works, wallet addresses placeholder text correct — 🔧 code-ready desktop (A5)
-- [ ] **Create Launch wizard** — all 6 steps accessible, chain selector works, DEX selector has no default (forced selection), vesting slider has no default, fee display matches CLAUDE.md's current launch fee constants — 🔧 code-ready desktop (A6, every launch type wired)
+- [ ] **Transparency page** — all 10 sections present, all default collapsed, expand/collapse works, wallet addresses placeholder text correct — 🔧 code-ready desktop
+- [ ] **Create Launch wizard** — all 6 steps accessible, chain selector works, DEX selector has no default (forced selection), vesting slider has no default, fee display matches CLAUDE.md's current launch fee constants — 🔧 code-ready desktop (every launch type wired)
 
 ---
 
 ### Public pages — mobile (iPhone + Android)
 
-- [ ] **Home page** — logo above heading, heading centred, stat blocks below CTA buttons, nav hamburger works, wallet connect hidden from nav, footer 2-col — 🔧 code-ready (A1)
-- [ ] **Launches index** — status filter dropdown works, search full-width, filter bar has side padding, no horizontal scroll — 🔧 code-ready (A2)
+- [ ] **Home page** — logo above heading, heading centred, stat blocks below CTA buttons, nav hamburger works, wallet connect hidden from nav, footer 2-col — 🔧 code-ready
+- [ ] **Launches index** — status filter dropdown works, search full-width, filter bar has side padding, no horizontal scroll — 🔧 code-ready
 - [ ] **Launch detail** — body stacks vertically (sidebar below main), no overflow
-- [ ] **DV Registration** — stacked layout, logo visible, form usable — 🔧 code-ready (A3)
-- [ ] **How It Works** — readable on mobile, no overflow — mobile audit still pending (A7)
-- [ ] **Transparency** — sections expand/collapse on mobile, no overflow — mobile audit still pending (A7)
-- [ ] **Create Launch wizard** — all steps usable on mobile, form fields don't overflow — mobile audit still pending (A7)
+- [ ] **DV Registration** — stacked layout, logo visible, form usable — 🔧 code-ready
+- [ ] **How It Works** — readable on mobile, no overflow — mobile audit still pending
+- [ ] **Transparency** — sections expand/collapse on mobile, no overflow — mobile audit still pending
+- [ ] **Create Launch wizard** — all steps usable on mobile, form fields don't overflow — mobile audit still pending
 
 ---
 

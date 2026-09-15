@@ -49,6 +49,51 @@ done
 
 [ -z "$REMOTE_REF_BASE" ] && exit 0
 
+# --------------------------------------------------------------------------
+# Internal ID shapes, matched for EVERY letter.
+#
+# The old pattern named the prefixes in use: T/D/MN/C for the issue tracker,
+# then M/F/H/L/I/RC/CRIT once the security audits grew their own numbering.
+# Naming them is the flaw. A pattern extended one scheme at a time is always
+# one scheme behind whoever invents the next, and the schemes above were not
+# planned in advance either. So every letter matches now, in the three shapes
+# every scheme so far has used:
+#     letter + digits    T24   D5   A7
+#     PREFIX-digits      MN-6  C-1  M-2  RC-3  CRIT-1
+#     letter-WORD        T-AUDIT
+ID_SHAPES='\b([A-Z][0-9]{1,3}|[A-Z]{1,4}-[0-9]{1,4}|[A-Z]-[A-Z][A-Z-]+)\b'
+
+# Matching every letter also matches real technical identifiers, so those are
+# subtracted BY NAME. That is the whole trade, and it is the right way round:
+# an unlisted token blocks by default, so a numbering scheme invented next
+# month is caught on its first push rather than discovered afterwards. Add an
+# entry only for a token whose meaning is public and obvious from the token.
+#   L1/L2  Cardano layers          P0     bonding-curve base price
+#   R2/S3  object-storage APIs     V1-V3  Plutus and Minswap versions
+#   E1/E2  ROADMAP.md track items, cited elsewhere only alongside their source
+#   CIP/MIP/CAIP/BIP  published improvement proposals
+#   SHA/AES/UTF       algorithms and encodings
+#   BSD/GPL/MPL/BY    SPDX licence identifiers
+# "Stream A1" is a phrase rather than a token: the two creator-fee streams are
+# public product vocabulary, and only that phrase may carry the shape.
+ID_ALLOW='\b(L1|L2|P0|R2|S3|V1|V2|V3|E1|E2|Stream A[0-9](/A[0-9])?|CIP-[0-9]+|MIP-[0-9]+|CAIP-[0-9]+|BIP-[0-9]+|SHA-[0-9]+|AES-[0-9]+|UTF-[0-9]+|BSD-[0-9]+|L?GPL-[0-9]+|MPL-[0-9]+|BY-[0-9]+)\b'
+
+# CLAUDE.md states the hygiene rule and has to quote the shapes it forbids;
+# ROADMAP.md numbers its own public deliverables per track (A1, B7, D1...) --
+# a scheme that collides in shape with the private tracker's, but is defined
+# in that same public file, so it reveals nothing. Lockfiles are machine-
+# written base64 that hits these shapes by coincidence: package-lock.json
+# alone carries five such collisions today.
+ID_EXCLUDE="':(exclude).githooks/' ':(exclude)CLAUDE.md' ':(exclude)ROADMAP.md' ':(exclude)package-lock.json' ':(exclude)*.lock'"
+
+# Those two docs are exempt from the SHAPE scan, not from scanning. They are
+# still swept for the dash forms below, where every security-audit finding ID
+# lives, minus only the three literals CLAUDE.md quotes as examples. So a
+# finding ID pasted into the policy document itself is still refused -- the
+# exemption must not become the blind spot that hid the last one.
+ID_DASH='\b([A-Z]{1,4}-[0-9]{1,4}|[A-Z]-[A-Z][A-Z-]+)\b'
+DOC_ALLOW='\b(T-AUDIT|MN-6|C-1)\b'
+
 for RANGE in $REMOTE_REF_BASE; do
   # .githooks/ is excluded from the CONTENT scan because these hooks necessarily
   # contain the very patterns they block — the pattern definitions themselves
@@ -102,53 +147,59 @@ for RANGE in $REMOTE_REF_BASE; do
   check "local machine path" \
     "C:\\\\+Users\\\\+[A-Za-z]|/home/jinx|/mnt/c/Users|AppData[\\\\/]+Local[\\\\/]+Temp"
 
-  check "internal issue-tracker ID" \
-    "\b(T[0-9]{1,3}|D[0-9]{1,2}|MN-[0-9]+|T-[A-Z][A-Z-]+|C-[0-9]+)\b" case
-
-  # Security-audit finding IDs are a SEPARATE numbering scheme from the issue
-  # tracker above, and were missed by it for months: the pattern covered
-  # T/D/MN/C but not the severity-lettered findings in SECURITY_AUDIT.md, so
-  # references like a "M-2/M-3 gate" sat in shipped source comments and pushed
-  # cleanly every time. An ID on its own is close to meaningless to an outsider,
-  # but it correlates a specific line of public code to a specific private
-  # finding, which is exactly the pairing the hygiene rule exists to prevent.
-  check "security-audit finding ID" \
-    "\b(M-[0-9]+|F-[0-9]+|H-[0-9]+|L-[0-9]+|I-[0-9]+|RC-[0-9]+|CRIT-[0-9]+)\b" case
+  # Tracker IDs and security-audit finding IDs are one check now, because with
+  # every letter matched they are one pattern. An ID on its own is close to
+  # meaningless to an outsider, but it correlates a specific line of public
+  # code to a specific private entry, which is exactly the pairing the hygiene
+  # rule exists to prevent.
+  #
+  # The ID scan takes its own, narrower diff: CLAUDE.md and ROADMAP.md
+  # legitimately carry these shapes, while the secret and infra checks above
+  # must keep seeing every file without exception. Commit messages are scanned
+  # whole -- a message naming a tracker item is the leak this started as.
+  #
+  # Allowed tokens are subtracted FIRST and the remainder re-tested, so a line
+  # carrying both "Cardano L1" and a real ID still reports, and a line carrying
+  # only "CIP-68" does not.
+  DIFF_IDS=$(eval "git diff $RANGE -- . $ID_EXCLUDE" 2>/dev/null | grep '^+' | grep -v '^+++')
+  ID_HITS=$(printf '%s\n%s\n' "$DIFF_IDS" "$MSGS" \
+    | grep -nE "$ID_SHAPES" | sed -E "s#$ID_ALLOW##g" | grep -E "$ID_SHAPES" | head -5)
+  if [ -n "$ID_HITS" ]; then
+    echo "BLOCKED [internal ID - issue tracker or security-audit finding] in $RANGE:"
+    echo "$ID_HITS" | cut -c1-160
+    echo ""
+    FAIL=1
+  fi
 done
 
 # Everything above scans only the range being pushed, which is what lets a leak
 # already sitting in the tree stay invisible: it was pushed once, under whatever
-# patterns existed that day, and is never looked at again. Both ID schemes are
-# therefore ALSO swept across the whole tracked tree. That sweep is what would
-# have caught the finding IDs above, and it is deliberately limited to the exact
-# ID patterns -- verified to match nothing in the tree today -- so it cannot
-# block a push on a false positive the way a prose pattern could.
+# patterns existed that day, and is never looked at again. The ID shapes are
+# therefore ALSO swept across the whole tracked tree, so the guarantee is about
+# the tree as it stands rather than about one range: what is tracked here today
+# carries no ID in any of these shapes that is not on the allowlist below.
 sweep() {
+  # $1 pattern, $2 the WHOLE pathspec after --, $3 an extra
+  # allowlist on top of ID_ALLOW, $4 the label to report under.
   # -I skips binary files: a PNG whose bytes happen to contain a matching
   # sequence would otherwise block every push forever.
-  hits=$(eval "git grep -nEI \"\$1\" -- . $2" 2>/dev/null | head -5)
+  hits=$(eval "git grep -nEI \"\$1\" -- $2" 2>/dev/null \
+    | sed -E "s#$ID_ALLOW##g" | sed -E "s#$3##g" | grep -E "$1" | head -5)
   if [ -n "$hits" ]; then
-    echo "BLOCKED [$3 already in the tracked tree]:"
+    echo "BLOCKED [$4 already in the tracked tree]:"
     echo "$hits" | cut -c1-160
     echo ""
     FAIL=1
   fi
 }
 
-# CLAUDE.md states the hygiene rule and has to quote the shapes it forbids, and
-# ROADMAP.md numbers its own public deliverables D1..D4 -- a scheme that collides
-# in shape with the private tracker's but is defined in that same public file, so
-# it reveals nothing. Both are exempt from THIS pattern only.
-sweep "\b(T[0-9]{1,3}|D[0-9]{1,2}|MN-[0-9]+|T-[A-Z][A-Z-]+|C-[0-9]+)\b" \
-  "':(exclude).githooks/' ':(exclude)CLAUDE.md' ':(exclude)ROADMAP.md'" \
-  "tracker ID"
+# A pattern that cannot match subtracts nothing, which is how the general sweep
+# asks for no allowlist beyond ID_ALLOW.
+NEVER='\bZZZZ-NEVER-MATCHES-ZZZZ\b'
 
-# No public document has a legitimate use for a severity-lettered finding ID, so
-# this one sweeps the docs too -- otherwise the exemption above would become the
-# blind spot that hid the last one.
-sweep "\b(M-[0-9]+|F-[0-9]+|H-[0-9]+|L-[0-9]+|I-[0-9]+|RC-[0-9]+|CRIT-[0-9]+)\b" \
-  "':(exclude).githooks/'" \
-  "security-audit finding ID"
+sweep "$ID_SHAPES" ". $ID_EXCLUDE" "$NEVER" "internal ID"
+
+sweep "$ID_DASH" "CLAUDE.md ROADMAP.md" "$DOC_ALLOW" "security-audit finding ID"
 
 if [ "$FAIL" = "1" ]; then
   cat <<'EOF'
