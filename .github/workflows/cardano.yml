@@ -4,9 +4,9 @@ name: Cardano contracts
 #
 # WHY THIS EXISTS
 # ---------------
-# Until now neither checks.yml nor test.yml touched Aiken at all — the Cardano
-# validators were never compiled or tested in CI, only locally. This closes
-# that, and adds one guard the TypeScript side depends on.
+# Until this workflow, neither checks.yml nor test.yml touched Aiken at all —
+# the Cardano validators were never compiled or tested in CI, only locally.
+# This closes that, and adds one guard the TypeScript side depends on.
 #
 # THE FRESHNESS GUARD, AND THE GAP IT CLOSES
 # ------------------------------------------
@@ -25,44 +25,75 @@ name: Cardano contracts
 # fix and a whole validator were missing from it for days), so this is a
 # regression guard, not a hypothetical.
 #
-# Verified locally before this workflow was written (2026-08-02): `aiken build`
-# is deterministic here — a fresh build reproduced the committed plutus.json
-# byte-for-byte (310,955 bytes) — and `aiken check` passes 294 checks with 0
-# errors. Neither step was added speculatively.
+# WHY IT RUNS ON EVERY BRANCH, NOT JUST main
+# ------------------------------------------
+# It used to run only on main, which is not where validators are edited. A
+# guard that fires only after a branch merges cannot protect the weeks of
+# validator work that happen before that, and it did not: a feature branch
+# carrying substantial validator changes recorded ZERO runs of this workflow
+# over its whole life, because no push to it ever matched the trigger. The
+# freshness guard was correct the entire time and simply never executed.
 #
-# The 10 warnings aiken currently emits (unused private constants) are NOT
-# treated as failures: `--deny-warnings` is deliberately not used, so this job
-# does not fail on pre-existing lint debt it was not written to fix.
+# A blueprint is also where the cost of being wrong is highest and latest: a
+# hash is an address, and a hash that drifts from its source is only noticed
+# once something is deployed to the wrong one. That is precisely the failure
+# this job is cheap enough to catch on every push.
+#
+# WHY IT COVERS BOTH PACKAGES
+# ---------------------------
+# There are two Aiken packages, and only the launch validators were ever built
+# here. `contracts/cardano-dex` — the trading venue, the newest code and the
+# only package whose validators are parameterised before deployment — had never
+# been compiled or tested by CI on any branch. Its blueprint is the source of
+# the unapplied hashes that `dex-applied-scripts.test.ts` checks the deployment
+# record against, so a stale one there would let that test verify a deployment
+# against the wrong bytes. Both packages are built the same way and pin the
+# same compiler, so the matrix costs one line and closes that asymmetry.
+#
+# Verified locally before each package was added: a fresh `aiken build`
+# reproduces the committed blueprint byte for byte in both, on the compiler the
+# respective aiken.toml pins. Neither leg was added speculatively.
+#
+# Warnings are NOT treated as failures: `--deny-warnings` is deliberately not
+# used, so this job does not fail on pre-existing lint debt it was not written
+# to fix.
 
 on:
   push:
-    branches: [main]
+    branches: ['**']
   pull_request:
     branches: [main]
 
 jobs:
   aiken:
-    name: Aiken — check, build, blueprint freshness
+    name: Aiken — ${{ matrix.package }}
     runs-on: ubuntu-latest
+    strategy:
+      # Both legs always report. A failure in one package says nothing about
+      # the other, and cancelling the sibling would hide that.
+      fail-fast: false
+      matrix:
+        package: [cardano, cardano-dex]
     defaults:
       run:
-        working-directory: contracts/cardano
+        working-directory: contracts/${{ matrix.package }}
 
     steps:
       - uses: actions/checkout@v4
 
-      # Read the compiler pin from aiken.toml rather than hardcoding it here,
-      # so the toolchain used by CI can never silently drift from the version
-      # the project actually declares.
+      # Read the compiler pin from the package's own aiken.toml rather than
+      # hardcoding it here, so the toolchain used by CI can never silently
+      # drift from the version that package actually declares — and so the two
+      # packages are free to pin different compilers without this file caring.
       - name: Resolve the pinned Aiken version from aiken.toml
         id: aiken-version
         run: |
           version="$(grep -E '^compiler[[:space:]]*=' aiken.toml | head -1 | sed -E 's/.*"(.*)".*/\1/')"
           if [ -z "$version" ]; then
-            echo "Could not read the compiler pin from contracts/cardano/aiken.toml" >&2
+            echo "Could not read the compiler pin from contracts/${{ matrix.package }}/aiken.toml" >&2
             exit 1
           fi
-          echo "Using Aiken $version (from aiken.toml)"
+          echo "Using Aiken $version (from contracts/${{ matrix.package }}/aiken.toml)"
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
       - uses: aiken-lang/setup-aiken@v1
@@ -72,7 +103,7 @@ jobs:
       - name: Confirm the installed toolchain matches the pin
         run: aiken --version
 
-      # The real validator test suite (294 checks as of 2026-08-02).
+      # The real validator test suite for this package.
       - name: aiken check
         run: aiken check
 
@@ -86,12 +117,13 @@ jobs:
         run: |
           if ! git diff --exit-code -- plutus.json; then
             echo ""
-            echo "::error file=contracts/cardano/plutus.json::plutus.json is out of date with the .ak sources."
+            echo "::error file=contracts/${{ matrix.package }}/plutus.json::plutus.json is out of date with the .ak sources."
             echo "A validator changed but the compiled blueprint was not regenerated."
-            echo "Fix: run 'aiken build' in contracts/cardano and commit the updated plutus.json."
-            echo "This matters because integration/tests/schema-drift-guard.test.ts checks the"
-            echo "TypeScript datum mirrors against this file — a stale blueprint makes that"
-            echo "guard verify the mirrors against the wrong contract."
+            echo "Fix: run 'aiken build' in contracts/${{ matrix.package }} and commit the updated plutus.json."
+            echo "This matters because a hash is an address: every script address, every"
+            echo "reference script and every applied-parameter chain derives from these bytes,"
+            echo "and a blueprint that has drifted from its source sends work to an address"
+            echo "that is real, reachable and wrong."
             exit 1
           fi
           echo "plutus.json matches a fresh build of the current .ak sources."
@@ -101,6 +133,6 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: plutus-json
-          path: contracts/cardano/plutus.json
+          name: plutus-json-${{ matrix.package }}
+          path: contracts/${{ matrix.package }}/plutus.json
           if-no-files-found: warn
