@@ -94,6 +94,7 @@ function poolDatum(overrides: Partial<StakingPoolDatumData> = {}): StakingPoolDa
     last_update_ms: LAST_UPDATE_MS,
     exhausted_at: null,
     governor_pub_key_hash: GOVERNOR_VKH,
+    unstake_lock_ms: 604_800_000n,
     ...overrides,
   } as StakingPoolDatumData;
 }

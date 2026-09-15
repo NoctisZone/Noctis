@@ -24,7 +24,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Constr, credentialToAddress, Data, type Data as LucidData } from '@lucid-evolution/lucid';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { BONDING_CURVE_REDEEMER } from '../redeemer-indices.js';
+import { BONDING_CURVE_TIER_B_REDEEMER } from '../redeemer-indices.js';
 import { buildGenesisDatums } from '../tier-a-genesis-datums.js';
 import {
   BONDING_CURVE_ACTIONS,
@@ -66,6 +66,7 @@ async function curveDatum() {
     maxPrice: 75,
     vestDays: 90,
     genesisTimestampMs: 1_785_000_000_000,
+    tier: 'B',
   });
   return { hex: g.datums.bondingCurve, launchId: g.launchIdHex ?? LAUNCH_ID };
 }
@@ -123,7 +124,7 @@ function chainFetch(utxos: Array<{ tx_hash: string; inline_datum: string | null 
 /** A redeemer as Lucid encodes it, so the decoder reads real bytes. */
 const redeemerCbor = (index: number, fields: LucidData[]) => Data.to(new Constr(index, fields));
 
-function reader(tier: 'A' | 'B' = 'A') {
+function reader(tier: 'B' = 'B') {
   return new TierATradeHistoryReader({
     blockfrostProjectId: 'k',
     blockfrostUrl: 'https://bf.test',
@@ -142,8 +143,8 @@ describe('action tables', () => {
     // The drift bug: these indices come from redeemer-indices.ts, which is
     // pinned against the compiled blueprint. If a table were rebuilt by hand
     // the names below would move.
-    for (const [name, index] of Object.entries(BONDING_CURVE_REDEEMER)) {
-      expect(BONDING_CURVE_ACTIONS[index][0]).toBe(name);
+    for (const [name, index] of Object.entries(BONDING_CURVE_TIER_B_REDEEMER)) {
+      expect(BONDING_CURVE_TIER_B_ACTIONS[index][0]).toBe(name);
     }
   });
 
@@ -188,7 +189,7 @@ describe('getCurveTradeHistory', () => {
       blockfrostUrl: 'https://bf.test',
       bondingCurveAddress: CURVE_ADDR,
       launchIdHex: launchId,
-      tier: 'A',
+      tier: 'B',
     });
     vi.stubGlobal(
       'fetch',
@@ -215,7 +216,7 @@ describe('getCurveTradeHistory', () => {
       blockfrostUrl: 'https://bf.test',
       bondingCurveAddress: CURVE_ADDR,
       launchIdHex: launchId,
-      tier: 'A',
+      tier: 'B',
     });
     vi.stubGlobal(
       'fetch',
@@ -236,9 +237,9 @@ describe('getCurveTradeHistory', () => {
       blockfrostUrl: 'https://bf.test',
       bondingCurveAddress: CURVE_ADDR,
       launchIdHex: launchId,
-      tier: 'A',
+      tier: 'B',
     });
-    const cbor = redeemerCbor(BONDING_CURVE_REDEEMER.BuyTokens, [1000n, BUYER]);
+    const cbor = redeemerCbor(BONDING_CURVE_TIER_B_REDEEMER.BuyTokens, [1000n, BUYER]);
     vi.stubGlobal(
       'fetch',
       chainFetch(
@@ -279,7 +280,7 @@ describe('getCurveTradeHistory', () => {
       blockfrostUrl: 'https://bf.test',
       bondingCurveAddress: CURVE_ADDR,
       launchIdHex: launchId,
-      tier: 'A',
+      tier: 'B',
     });
     vi.stubGlobal(
       'fetch',
@@ -299,7 +300,7 @@ describe('getCurveTradeHistory', () => {
             ],
             redeemerCbor: {
               order: redeemerCbor(0, []),
-              curve: redeemerCbor(BONDING_CURVE_REDEEMER.BuyTokens, [500n, BUYER]),
+              curve: redeemerCbor(BONDING_CURVE_TIER_B_REDEEMER.BuyTokens, [500n, BUYER]),
             },
           },
           { hash: 'genesis', blockTime: 100 },
@@ -321,7 +322,7 @@ describe('getCurveTradeHistory', () => {
       blockfrostUrl: 'https://bf.test',
       bondingCurveAddress: CURVE_ADDR,
       launchIdHex: launchId,
-      tier: 'A',
+      tier: 'B',
     });
     vi.stubGlobal(
       'fetch',
@@ -334,7 +335,7 @@ describe('getCurveTradeHistory', () => {
             spends: 'genesis',
             inlineDatum: hex,
             redeemers: [{ purpose: 'spend', script_hash: SCRIPT_HASH, redeemer_data_hash: 'curveHash' }],
-            redeemerCbor: { curveHash: redeemerCbor(BONDING_CURVE_REDEEMER.BuyTokens, [10n, CREATOR]) },
+            redeemerCbor: { curveHash: redeemerCbor(BONDING_CURVE_TIER_B_REDEEMER.BuyTokens, [10n, CREATOR]) },
           },
           { hash: 'genesis', blockTime: 100 },
         ],
@@ -355,7 +356,7 @@ describe('getCurveTradeHistory', () => {
       blockfrostUrl: 'https://bf.test',
       bondingCurveAddress: CURVE_ADDR,
       launchIdHex: launchId,
-      tier: 'A',
+      tier: 'B',
     });
     vi.stubGlobal(
       'fetch',
@@ -387,7 +388,7 @@ describe('getCurveTradeHistory', () => {
       blockfrostUrl: 'https://bf.test',
       bondingCurveAddress: CURVE_ADDR,
       launchIdHex: launchId,
-      tier: 'A',
+      tier: 'B',
     });
     vi.stubGlobal(
       'fetch',
@@ -419,7 +420,7 @@ describe('getCurveTradeHistory', () => {
       blockfrostUrl: 'https://bf.test',
       bondingCurveAddress: CURVE_ADDR,
       launchIdHex: launchId,
-      tier: 'A',
+      tier: 'B',
     });
     const f = chainFetch(
       [{ tx_hash: 'newest', inline_datum: hex }],
@@ -430,7 +431,7 @@ describe('getCurveTradeHistory', () => {
           spends: 'older',
           inlineDatum: hex,
           redeemers: [{ purpose: 'spend', script_hash: SCRIPT_HASH, redeemer_data_hash: 'curveHash' }],
-          redeemerCbor: { curveHash: redeemerCbor(BONDING_CURVE_REDEEMER.BuyTokens, [1n, BUYER]) },
+          redeemerCbor: { curveHash: redeemerCbor(BONDING_CURVE_TIER_B_REDEEMER.BuyTokens, [1n, BUYER]) },
         },
         { hash: 'older', blockTime: 200 },
       ],

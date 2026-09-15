@@ -501,6 +501,7 @@ fn mock_curve_datum(
     dv_claim_window: 86_400_000,
     dv_settlement_window: 1_800_000,
     pool_nft_policy: #"0f",
+    staking_unstake_lock_ms: 604_800_000,
   }
 }
 

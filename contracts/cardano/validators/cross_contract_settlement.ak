@@ -100,6 +100,7 @@ fn pool_datum() -> staking_pool_datum.StakingPoolDatum {
     last_update_ms: 0,
     exhausted_at: Some(0),
     governor_pub_key_hash: governor,
+    unstake_lock_ms: staking_pool_datum.max_unstake_lock_ms,
   }
 }
 

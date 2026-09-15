@@ -172,6 +172,11 @@ export const BondingCurveTierBDatumShape = Data.Object({
   // NFT, and the LP escrow holds the LQ position. Declared at genesis, never
   // rewritten, last in the datum.
   pool_nft_policy: Data.Bytes(),
+  /// How long a staked position must sit before it may leave, in ms. A
+  /// per-launch term so a rehearsal can run in a day while production keeps
+  /// the platform's seven; the validator caps it at seven, so this can only
+  /// ever shorten the lock. Declared at genesis, never rewritten, last.
+  staking_unstake_lock_ms: Data.Integer(),
 });
 export type BondingCurveTierBDatumData = Data.Static<typeof BondingCurveTierBDatumShape>;
 export const BondingCurveTierBDatumSchema = BondingCurveTierBDatumShape as unknown as BondingCurveTierBDatumData;
@@ -557,6 +562,10 @@ export const StakingPoolDatumShape = Data.Object({
   /// own platform fees to. Last, matching the .ak field order, which appends
   /// it so the five fields above keep the indices every redeemer rewrites.
   governor_pub_key_hash: Data.Bytes(),
+  /// The lock on leaving, copied from the curve's term at genesis so the
+  /// pool enforces it without consulting the curve. Appended after the
+  /// governor key for the same index-stability reason it was.
+  unstake_lock_ms: Data.Integer(),
 });
 export type StakingPoolDatumData = Data.Static<typeof StakingPoolDatumShape>;
 export const StakingPoolDatumSchema = StakingPoolDatumShape as unknown as StakingPoolDatumData;

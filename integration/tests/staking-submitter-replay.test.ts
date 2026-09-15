@@ -67,6 +67,7 @@ function poolDatum(overrides: Partial<StakingPoolDatumData> = {}): StakingPoolDa
     last_update_ms: BigInt(VALIDATED_AT_MS) - 600_000n,
     exhausted_at: null,
     governor_pub_key_hash: '11'.repeat(28),
+    unstake_lock_ms: 604_800_000n,
     ...overrides,
   } as StakingPoolDatumData;
 }

@@ -119,6 +119,10 @@ declare const __dirname: string;
 // Input
 // ============================================================================
 
+/** staking_pool.ak's `unstake_lock_ms`: the most a launch may lock a staked
+ *  position for, and the default when a launch names nothing shorter. */
+export const STAKING_UNSTAKE_LOCK_MAX_MS = 604_800_000;
+
 export interface BuildGenesisDatumsInput {
   network: 'preview' | 'preprod' | 'mainnet';
   // 'A' (default) → bonding_curve.ak / BondingCurveDatum.
@@ -131,7 +135,7 @@ export interface BuildGenesisDatumsInput {
   // ClaimDarkVeilTokens — `dv_amount <= curve_supply - tokens_sold`), so there
   // is NO separate DarkVeil token carve-out at genesis. vesting/lp_escrow are
   // the shared validators, identical for both tiers.
-  tier?: 'A' | 'B';
+  tier?: 'B';
   /** DarkVeil allocation as a % of total supply — Cardano Launch only, 10-20,
    *  default DV_ALLOC_DEFAULT. Drawn from curve_supply rather than carved out
    *  of it; see dv_reserve_tokens below. */
@@ -196,6 +200,13 @@ export interface BuildGenesisDatumsInput {
    * later.
    */
   stakingDurationDays?: number;
+  /**
+   * How long a staked position must sit before it may leave, in ms. Defaults
+   * to the platform's seven days, which is also the most the validator will
+   * accept — so a value here can only shorten the lock, which is what lets a
+   * rehearsal run in a day while production keeps the full period.
+   */
+  stakingUnstakeLockMs?: number;
   /** Overrides the pool's opening timestamp. Real POSIX ms; defaults to now. */
   mintedAtMs?: number;
 
@@ -336,9 +347,13 @@ export async function buildGenesisDatums(input: BuildGenesisDatumsInput) {
     'bondPayoutPubKeyHashHex',
   ]);
 
-  const tier = input.tier ?? 'A';
-  if (tier !== 'A' && tier !== 'B') {
-    throw new Error(`tier must be 'A' or 'B', got ${JSON.stringify(tier)}`);
+  // The linear path is retired: nothing defaults onto it, and a caller that
+  // names it is refused rather than handed a datum no validator decodes.
+  // Typed as string on purpose: the input arrives as JSON, so the field's
+  // declared type is a promise this check keeps rather than a fact it can rely on.
+  const tier: string = input.tier ?? 'B';
+  if (tier !== 'B') {
+    throw new Error(`tier must be "B" - the linear-curve path is retired (got "${String(input.tier)}")`);
   }
   const totalSupply = input.totalSupply ?? 1_000_000_000;
   const lpReservePct = input.lpReservePct ?? Number(LP_RESERVE_PCT);
@@ -385,6 +400,15 @@ export async function buildGenesisDatums(input: BuildGenesisDatumsInput) {
       `stakingDurationDays must be ${1095}-${1825} (STAKING_DURATION_MIN_DAYS..MAX_DAYS) when staking is enabled; ` +
         `got ${input.stakingDurationDays ?? 'nothing'}. It fixes the pool's emission rate for life and the curve ` +
         'pins that rate on chain, so there is no correcting it afterwards.',
+    );
+  }
+  // The ceiling is staking_pool.ak's own constant. A longer lock is refused on
+  // chain, so it is refused here first, with a message that says why.
+  const stakingUnstakeLockMs = input.stakingUnstakeLockMs ?? STAKING_UNSTAKE_LOCK_MAX_MS;
+  if (stakingEnabled && (stakingUnstakeLockMs < 0 || stakingUnstakeLockMs > STAKING_UNSTAKE_LOCK_MAX_MS)) {
+    throw new Error(
+      `stakingUnstakeLockMs must be 0..${STAKING_UNSTAKE_LOCK_MAX_MS} (the platform's seven days is the ceiling); ` +
+        `got ${input.stakingUnstakeLockMs}. A launch may shorten the lock on leaving, never lengthen it.`,
     );
   }
   const lpLockDurationMs = input.lpLockDurationMs ?? 31_536_000_000;
@@ -563,6 +587,7 @@ export async function buildGenesisDatums(input: BuildGenesisDatumsInput) {
     staking_pool_credential: stakingPoolCredential,
     staking_reserve_tokens: BigInt(stakingReserveTokens),
     staking_duration_days: BigInt(stakingDurationDays),
+    staking_unstake_lock_ms: BigInt(stakingUnstakeLockMs),
     staking_seeded: false,
     cto_governance_credential: ctoGovernanceCredential,
     thread_nft_policy: threadNftPolicyId,
@@ -718,6 +743,9 @@ export async function buildGenesisDatums(input: BuildGenesisDatumsInput) {
     // Who the flat claim charge is paid to. The same key the curve pays its
     // own platform fees to, so the pool can charge without consulting it.
     governor_pub_key_hash: input.governorPubKeyHashHex,
+    // The same term the curve carries, so the seeding check's genesis(...)
+    // reproduces this datum exactly.
+    unstake_lock_ms: BigInt(stakingUnstakeLockMs),
   };
 
   // 2026-08-03: the ZK anchor's own genesis datum — also never authored

@@ -89,7 +89,13 @@ for (const v of blueprint.validators) {
  * also changes the validator's HASH, which moves the script address — any
  * published reference script for it has to be re-derived rather than reused.
  *
- * Last moved by token_metadata +172: it decodes the curve it reads as a
+ * Last moved by the lock on leaving a staking position becoming a per-launch
+ * term: bonding_curve_tier_b +166 carries and bounds it, staking_pool +29
+ * reads its own datum's copy instead of a constant, and token_metadata +10
+ * decodes one more field of the curve datum it reads. Everything else is
+ * byte for byte what it was.
+ *
+ * Previously moved by token_metadata +172: it decodes the curve it reads as a
  * reference input, and that is the quadratic curve now — the linear one left
  * the build, and its two rows left this register with it.
  *
@@ -263,15 +269,15 @@ for (const v of blueprint.validators) {
  * two readable as the cause.
  */
 const RECORDED: Record<string, number> = {
-  bonding_curve_tier_b: 14_959,
+  bonding_curve_tier_b: 15_125,
   cto_governance: 7_962,
   cto_sybil_challenge: 2_123,
   curve_order: 1_775,
   launch_token_policy: 419,
   lp_escrow: 7_675,
   nhop_challenge: 2_093,
-  staking_pool: 5_501,
-  token_metadata: 4_793,
+  staking_pool: 5_530,
+  token_metadata: 4_803,
   vesting: 5_786,
   zk_anchor: 2_634,
 };
@@ -296,15 +302,15 @@ const RECORDED: Record<string, number> = {
  * old one has to be considered before the change ships.
  */
 const RECORDED_HASHES: Record<string, string> = {
-  bonding_curve_tier_b: 'db245f0b95e6c569a098a7637e820d19030b7cd57e123a8d0b5cac2b',
+  bonding_curve_tier_b: '665cb750c4d4979e2aed305f907b4c713c9f7db786de8b3a1ce5b772',
   cto_governance: 'a23a0f558e1bfa4df9310364f757af7aa544edeff1b897a76bd8e7ec',
   cto_sybil_challenge: 'ea4ab6a5647bc6c2bc0bb0782a438045232282f60059884b74741a35',
   curve_order: '989ea5f01db57706b5cffbd10a55f002b2d41594610b3980c9692718',
   launch_token_policy: 'd77d785500b7bb5a80bdf8104651b13e59d546d222ce7ab22bb60965',
   lp_escrow: '7c86166a586af82960a5a82a5d602dc1c5ad46d5730325a11f0474a9',
   nhop_challenge: 'd35b50306175ea128b6f8f0ac28ba14511b60230aa37a4b55dc862c4',
-  staking_pool: '41313bf8fc3163390835de80c221db7692be0d7dc5fba7c11a423b40',
-  token_metadata: '1e4fe3bf0e6a282951860e0e69b735e21a4b3ad498274163c5c33ca9',
+  staking_pool: 'a3a4bbe44fdd005d30ceca65e9c9a00ecb159131bcda4f7becd60360',
+  token_metadata: '2bace075b8cdcfd1fa0f7f5db6b592ff6209dd5ff916fc599d764223',
   vesting: '312d7ae3dbe50ee7dd4d553692cdf4f2c8ca11a96f1a45d83eb1ae11',
   zk_anchor: '21ed55e104605486bed5e10afb33fcab1a500f00543ad91e40589fd9',
 };

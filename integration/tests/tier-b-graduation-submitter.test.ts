@@ -116,6 +116,7 @@ function curveDatum(overrides: Record<string, unknown> = {}) {
     // The factory this launch was minted against. Graduate looks for a pool
     // output carrying an NFT under exactly this policy.
     pool_nft_policy: FACTORY_POLICY,
+    staking_unstake_lock_ms: 604_800_000n,
     ...overrides,
   };
 }
@@ -136,6 +137,7 @@ function poolDatum(overrides: Record<string, unknown> = {}) {
     unallocated: 0n,
     last_update_ms: 500n,
     exhausted_at: null,
+    unstake_lock_ms: 604_800_000n,
     ...overrides,
   };
 }

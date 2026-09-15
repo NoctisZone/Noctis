@@ -24,6 +24,12 @@ use aiken/crypto.{VerificationKeyHash}
 use cardano/assets.{AssetName, PolicyId}
 use noctis/stake_accumulator
 
+/// The most a launch may lock a staked position for, in ms: seven days, the
+/// platform's STAKING_BONDING_PERIOD_DAYS. Also the default a launch gets
+/// when it names nothing shorter. A per-launch value above this is refused
+/// by the curve before the pool is ever opened.
+pub const max_unstake_lock_ms = 604_800_000
+
 /// ONE per launch. Its own UTXO value holds every staked token AND the reward
 /// budget; the fields say which is which. See `staking_pool.ak` for what each
 /// one means and what may move it.
@@ -52,6 +58,12 @@ pub type StakingPoolDatum {
   /// rule; the reason is the same in both, and it is the update sites that
   /// decide it, not the reading order.
   governor_pub_key_hash: VerificationKeyHash,
+  /// How long a position must sit before `Unstake` will release it. A
+  /// per-launch term so a rehearsal can run in a day while production keeps
+  /// the full seven; copied from the curve at genesis so the pool enforces
+  /// it without consulting the curve. Appended after the governor key for
+  /// the same index-stability reason that one was.
+  unstake_lock_ms: Int,
 }
 
 /// The pool as the launch's mint transaction creates it: real, identified,
@@ -74,6 +86,7 @@ pub fn unfunded(
   duration_days: Int,
   minted_at: Int,
   governor_pub_key_hash: VerificationKeyHash,
+  unstake_lock_ms: Int,
 ) -> StakingPoolDatum {
   StakingPoolDatum {
     ..genesis(
@@ -86,6 +99,7 @@ pub fn unfunded(
       duration_days,
       minted_at,
       governor_pub_key_hash,
+      unstake_lock_ms,
     ),
     unallocated: 0,
   }
@@ -110,6 +124,7 @@ pub fn genesis(
   duration_days: Int,
   opened_at: Int,
   governor_pub_key_hash: VerificationKeyHash,
+  unstake_lock_ms: Int,
 ) -> StakingPoolDatum {
   StakingPoolDatum {
     launch_id,
@@ -125,6 +140,7 @@ pub fn genesis(
     last_update_ms: opened_at,
     exhausted_at: None,
     governor_pub_key_hash,
+    unstake_lock_ms,
   }
 }
 
@@ -134,12 +150,21 @@ pub fn genesis(
 /// would open a pool with nothing to pay — so a launch that opted into staking
 /// has to have really carved something out over a real period. Checked by the
 /// curve before `genesis` is ever evaluated.
-pub fn terms_are_real(reserve_tokens: Int, duration_days: Int) -> Bool {
+pub fn terms_are_real(
+  reserve_tokens: Int,
+  duration_days: Int,
+  unstake_lock_ms: Int,
+) -> Bool {
   and {
     reserve_tokens > 0,
     duration_days > 0,
     // A rate that floors to nothing is a pool that never pays out and can
     // never be closed, since closing needs the budget exhausted.
     reserve_tokens / duration_days > 0,
+    // A lock may be shortened for a rehearsal and never lengthened past the
+    // platform's own period: a longer one would hold stakers to a term the
+    // product never described.
+    unstake_lock_ms >= 0,
+    unstake_lock_ms <= max_unstake_lock_ms,
   }
 }

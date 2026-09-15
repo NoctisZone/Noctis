@@ -90,6 +90,9 @@ pub const acc_scale = 1_000_000_000_000
 pub const ms_per_day = 86_400_000
 
 /// STAKING_BONDING_PERIOD_DAYS, as a lock on LEAVING rather than on earning.
+/// This is the CEILING and the default; the value a given pool enforces is
+/// its own datum's `unstake_lock_ms`, set by the curve at genesis and never
+/// above this.
 ///
 /// Under a daily snapshot it had to be a gap in earning, because the thing to
 /// prevent was staking just before a snapshot and leaving just after. Accrual
@@ -97,7 +100,7 @@ pub const ms_per_day = 86_400_000
 /// snapshot to arrive just before, and that reason is gone. Kept as a real
 /// minimum commitment, which is what it now is: adding to a position restarts
 /// it, claiming does not touch it.
-pub const unstake_lock_ms = 604_800_000
+pub const unstake_lock_ms = staking_pool_datum.max_unstake_lock_ms
 
 /// The platform's charge for taking rewards out of a pool: a flat 5 ada, paid
 /// to the governor the pool was opened with.
@@ -490,7 +493,7 @@ validator staking_pool {
                 [own_output] -> and {
                     before.amount > 0,
                     list.has(self.extra_signatories, staker_vkh),
-                    now >= before.since + unstake_lock_ms,
+                    now >= before.since + pool.unstake_lock_ms,
                     proof_ok,
                     tokens_in(own_output.value, pool) == tokens_in(
                       own_input.output.value,
@@ -703,6 +706,7 @@ fn mock_pool() -> StakingPoolDatum {
     last_update_ms: opened_at,
     exhausted_at: None,
     governor_pub_key_hash: governor,
+    unstake_lock_ms: unstake_lock_ms,
   }
 }
 

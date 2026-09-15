@@ -323,6 +323,12 @@ pub type BondingCurveTierBDatum {
   // genesis and never rewritten, so it sits at the back with the other
   // read-only terms.
   pool_nft_policy: PolicyId,
+  // How long a staked position must sit before it may leave, in ms. A
+  // per-launch term, bounded above by the platform's own period, so a
+  // rehearsal can run in a day while production keeps the full seven. Handed
+  // to the pool at graduation by `Graduate`'s seeding check. Declared at
+  // genesis and never rewritten, so it sits at the back with the rest.
+  staking_unstake_lock_ms: Int,
 }
 
 /// One order inside a batch. The order's own UTXO holds the funds being spent
@@ -1218,13 +1224,15 @@ fn pool_seeding_output_ok(
   )
 }
 
-/// Same staking_seeding_output_ok pattern as the linear curve's bonding_curve.ak.
+/// A launch that opted into staking must open its pool with exactly the terms
+/// this datum carries, and those terms must be ones a pool can run on.
 fn staking_seeding_output_ok(self: Transaction, datum: BondingCurveTierBDatum) -> Bool {
   if !datum.staking_enabled {
     True
   } else if !staking_pool_datum.terms_are_real(
     datum.staking_reserve_tokens,
     datum.staking_duration_days,
+    datum.staking_unstake_lock_ms,
   ) {
     False
   } else {
@@ -1281,6 +1289,7 @@ fn staking_seeding_output_ok(self: Transaction, datum: BondingCurveTierBDatum) -
                   datum.staking_duration_days,
                   opened.last_update_ms,
                   datum.governor_pub_key_hash,
+                  datum.staking_unstake_lock_ms,
                 ),
               }
             }
@@ -2218,6 +2227,7 @@ fn mock_datum(
     // wants to test the allowlist changes exactly this line and nothing else.
     batcher_allowlist: [#"ba"],
     pool_nft_policy: #"0f",
+    staking_unstake_lock_ms: staking_pool_datum.max_unstake_lock_ms,
   }
 }
 
@@ -5907,6 +5917,7 @@ fn staking_genesis(
     datum.staking_duration_days,
     opened_at,
     datum.governor_pub_key_hash,
+    datum.staking_unstake_lock_ms,
   )
 }
 
