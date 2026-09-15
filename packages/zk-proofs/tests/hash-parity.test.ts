@@ -68,6 +68,7 @@ describe('eligibility-gate.ts — parity with the compiled circuit', () => {
       1_000_000_000n, // totalSupply
       5n, // maxWalletPercent
       1000n, // bondAmount
+      new Uint8Array(32), // bondTokenColour — 32 zero bytes is the native token
       50_000_000n, // walletCap
       500n, // dvAllocation — not exercised by this test
       90n, // dvPrice
@@ -154,6 +155,7 @@ describe('eligibility-gate.ts — the DarkVeil buy commitment', () => {
       1_000_000_000n, // totalSupply
       5n, // maxWalletPercent
       1000n, // bondAmount
+      new Uint8Array(32), // bondTokenColour — 32 zero bytes is the native token
       50_000_000n, // walletCap
       500n, // dvAllocation
       dvPrice,

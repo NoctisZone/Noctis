@@ -72,6 +72,7 @@ function deployWithRoot(root: Uint8Array, witnesses: Witnesses<PrivateState>) {
     1_000_000_000n, // totalSupply
     5n, // maxWalletPercent
     1000n, // bondAmount
+    new Uint8Array(32), // bondTokenColour — 32 zero bytes is the native token
     50_000_000n, // walletCap
     500n, // dvAllocation — not exercised by this file's registration-only tests
     90n, // dvPrice
