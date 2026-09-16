@@ -53,17 +53,31 @@ done
 # doc-specific patterns all live in one file both hooks read.
 . "$(dirname "$0")/id-patterns.sh"
 
+# Literal terms -- this project's own account names, host names, ports and
+# usernames -- are NOT written in this file, because this file is tracked and
+# public: a hook that names the thing it guards is itself the leak. They live
+# in the gitignored local/hygiene-deny.txt, one extended regex a line, and
+# are read here when that file exists. A clone without it still runs every
+# shape-based check below; only the literal check is absent there.
+DENY_FILE="$(git rev-parse --show-toplevel 2>/dev/null)/local/hygiene-deny.txt"
+DENY_LITERALS=""
+if [ -f "$DENY_FILE" ]; then
+  DENY_LITERALS=$(tr -d '\r' < "$DENY_FILE" | grep -v '^[[:space:]]*#' | grep -v '^[[:space:]]*$' | paste -sd '|' -)
+fi
+
 for RANGE in $REMOTE_REF_BASE; do
-  # .githooks/ is excluded from the CONTENT scan because these hooks necessarily
-  # contain the very patterns they block — the pattern definitions themselves
-  # are not leaks, and without this exclusion the hooks could never be pushed.
-  # Commit messages are still scanned in full, and every other path is too.
+  # .githooks/ is excluded from the SHAPE checks because the hooks necessarily
+  # spell out the shapes they block, and a shape is not a leak. A literal is,
+  # which is why the literal terms live in local/hygiene-deny.txt rather than
+  # here, and why the literal check below reads the hooks too: a hook can
+  # guard a name without containing it. Commit messages are scanned in full.
   # ADDED lines only. The hook gates what ENTERS the repo, and a full unified
   # diff also carries the removed lines -- so a commit whose whole purpose is to
   # DELETE a leak would match its own removals and be refused, making the one
   # commit that fixes a leak the one commit that cannot be pushed. Removing
   # something already public can never make it more public.
   DIFF=$(git diff "$RANGE" -- . ':(exclude).githooks/' 2>/dev/null | grep '^+' | grep -v '^+++')
+  DIFF_ALL=$(git diff "$RANGE" 2>/dev/null | grep '^+' | grep -v '^+++')
   MSGS=$(git log --format='%B' "$RANGE" 2>/dev/null)
   [ -z "$DIFF" ] && [ -z "$MSGS" ] && continue
 
@@ -100,11 +114,24 @@ for RANGE in $REMOTE_REF_BASE; do
   check "GitHub / cloud credential" \
     "ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|AKIA[0-9A-Z]{16}|sk_live_[0-9A-Za-z]{10,}"
 
+  # Shapes, never names: any home directory, a Windows user path with either
+  # slash, a numbered host, cPanel's own words. The names themselves are the
+  # literal check that follows.
   check "live server / hosting detail" \
-    "noctcrpd|server209|/home/noctcrpd|port[[:space:]]*21098|cpanel[[:space:]]*(user|password)"
+    "cpanel[[:space:]]*(user|password)|server[0-9]{2,4}\b|/home/[A-Za-z0-9_-]+/(public_html|lscache)"
 
   check "local machine path" \
-    "C:\\\\+Users\\\\+[A-Za-z]|/home/jinx|/mnt/c/Users|AppData[\\\\/]+Local[\\\\/]+Temp"
+    "C:[\\\\/]+Users[\\\\/]+[A-Za-z]|/home/[A-Za-z0-9_-]+|/mnt/c/Users|AppData[\\\\/]+Local[\\\\/]+Temp"
+
+  if [ -n "$DENY_LITERALS" ]; then
+    hits=$(printf '%s\n%s\n' "$DIFF_ALL" "$MSGS" | grep -nEi "$DENY_LITERALS" | head -5)
+    if [ -n "$hits" ]; then
+      echo "BLOCKED [a term listed in local/hygiene-deny.txt] in $RANGE:"
+      echo "$hits" | cut -c1-160
+      echo ""
+      FAIL=1
+    fi
+  fi
 
   # Tracker IDs and security-audit finding IDs are one check now, because with
   # every letter matched they are one pattern. An ID on its own is close to
@@ -159,6 +186,20 @@ NEVER='\bZZZZ-NEVER-MATCHES-ZZZZ\b'
 sweep "$ID_SHAPES" ". $ID_EXCLUDE" "$NEVER" "internal ID"
 
 sweep "$ID_DASH" "CLAUDE.md ROADMAP.md" "$DOC_ALLOW" "security-audit finding ID"
+
+# The same standard for machine paths and hosting detail: the tree as it stands
+# carries none in any of these shapes, outside the hooks that define them.
+sweep "C:[\\\\/]+Users[\\\\/]+[A-Za-z]|/home/[A-Za-z0-9_-]+|/mnt/c/Users|AppData[\\\\/]+Local[\\\\/]+Temp" \
+  ". ':(exclude).githooks/'" "$NEVER" "local machine path"
+
+sweep "cpanel[[:space:]]*(user|password)|server[0-9]{2,4}\b|/home/[A-Za-z0-9_-]+/(public_html|lscache)" \
+  ". ':(exclude).githooks/'" "$NEVER" "live server / hosting detail"
+
+# And the literal terms with the hooks INCLUDED, because a hook file was the
+# one place a literal used to sit unexamined.
+if [ -n "$DENY_LITERALS" ]; then
+  sweep "$DENY_LITERALS" "." "$NEVER" "a term listed in local/hygiene-deny.txt"
+fi
 
 if [ "$FAIL" = "1" ]; then
   cat <<'EOF'

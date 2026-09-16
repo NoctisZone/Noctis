@@ -26,6 +26,7 @@
 // copyWasmFiles()) was never affected.
 // ============================================================================
 
+const os = require("node:os");
 const path = require("node:path");
 const webpack = require("webpack");
 
@@ -40,8 +41,24 @@ const devtool =
 // sits on the theme commit that went live on 2026-07-30, several commits
 // behind. Building into it is silent: the bundle is produced successfully and
 // simply never reaches the running site.
+//
+// The site lives under this machine's own LocalWP root, so the path is
+// derived from the home directory rather than written out, and
+// NOCTIS_THEME_JS_DIR overrides it for a site that lives anywhere else.
 const THEME_JS_DIR =
-	"C:/Users/kruge/Local Sites/noctis-new-theme-test/app/public/wp-content/themes/noctis/assets/js";
+	process.env.NOCTIS_THEME_JS_DIR ||
+	path.join(
+		os.homedir(),
+		"Local Sites",
+		"noctis-new-theme-test",
+		"app",
+		"public",
+		"wp-content",
+		"themes",
+		"noctis",
+		"assets",
+		"js",
+	);
 
 // webpack 5 (unlike webpack 4) does NOT auto-polyfill Node globals for a
 // target:'web' build. Found the hard way (real runtime ReferenceError,
