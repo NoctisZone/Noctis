@@ -25,7 +25,7 @@
 //   verify the identical formula, just in two different languages.
 //
 // What's different from the linear curve's bonding_curve.ak:
-//   - Quadratic pricing, not linear (see verify_price below)
+//   - Quadratic pricing, not linear (see buy_cost and sell_proceeds below)
 //   - The wallet cap here is per-TRANSACTION, exactly as on the linear curve. Both
 //     tiers previously kept a cumulative per-wallet running total in the
 //     datum; a datum that grows with every new participant eventually
@@ -87,12 +87,15 @@ use aiken/interval.{Interval, IntervalBoundType}
 use aiken/primitive/bytearray
 use cardano/address.{Address, Credential, from_verification_key, with_delegation_key}
 use cardano/assets.{AssetName, PolicyId}
-use cardano/transaction.{Input, InlineDatum, Output, OutputReference, Transaction}
+use cardano/transaction.{
+  Input, InlineDatum, NoDatum, Output, OutputReference, Transaction,
+}
 use cto_governance.{
-  CtoGovernanceDatum, DissolveCTOProposal, Executed, Passed, PreCTO,
-  ProposalAnchor, ProposalType, SilenceLockTrigger,
+  CtoGovernanceDatum, DissolveCTOProposal, Executed, Passed, ProposalAnchor,
+  ProposalType, SilenceLockTrigger,
 }
 use noctis/bitmap
+use noctis/clock
 use noctis/cap_accumulator.{CapProofStep}
 use noctis/settlement
 use noctis/staking_pool_datum
@@ -471,7 +474,7 @@ pub type BondingCurveTierBRedeemer {
   /// redeemer encoding assigns each variant's on-chain constructor index by
   /// declaration order, and tier-b-curve-submitter.ts hardcodes those
   /// indices for every other action (e.g. `Constr(3, ...)` for
-  /// ClaimCreatorFees, `Constr(7, ...)` for ExpireCurve). Inserting a new
+  /// ClaimCreatorFees, `Constr(6, ...)` for ExpireCurve). Inserting a new
   /// variant anywhere but the end would silently shift every already-
   /// deployed index after it — appending here changes nothing for any
   /// existing action.
@@ -802,6 +805,70 @@ fn own_continuing_datum(
   new_datum
 }
 
+/// Every order a batch names is a UTxO this transaction spends. The order's
+/// own validator then runs beside this one, and the two name each other: the
+/// batch lists the order, and the order's spend requires this batch.
+fn order_is_an_input(self: Transaction, order_ref: OutputReference) -> Bool {
+  list.any(self.inputs, fn(input) { input.output_reference == order_ref })
+}
+
+/// No two orders in a batch share a reference, so one tagged settlement
+/// output can never discharge two of them.
+fn orders_distinct(orders: List<BatchOrder>) -> Bool {
+  let refs = list.map(orders, fn(order) { order.order_ref })
+  list.length(list.unique(refs)) == list.length(refs)
+}
+
+/// A fee claim moves lovelace only: the launch tokens the curve holds — the
+/// unsold supply and the LP and staking reserves — are all still there after.
+fn curve_tokens_unchanged(
+  self: Transaction,
+  own_ref: OutputReference,
+  datum: BondingCurveTierBDatum,
+) -> Bool {
+  let own_input = own_input_of(self, own_ref)
+  let own_output = own_output_required(self, own_input.output.address)
+  assets.quantity_of(
+    own_output.value,
+    datum.token_policy_id,
+    datum.token_asset_name,
+  ) == assets.quantity_of(
+    own_input.output.value,
+    datum.token_policy_id,
+    datum.token_asset_name,
+  )
+}
+
+/// The governance record — found by credential, proven by its thread NFT and
+/// launch id — still names this curve's community wallet. The governor's
+/// emergency freeze clears that field, and a cleared wallet is paid nothing.
+fn community_wallet_live(
+  self: Transaction,
+  datum: BondingCurveTierBDatum,
+) -> Bool {
+  expect Some(cto_ref_input) =
+    list.find(
+      self.reference_inputs,
+      fn(input) {
+        input.output.address.payment_credential == datum.cto_governance_credential
+      },
+    )
+  expect InlineDatum(cto_raw_datum) = cto_ref_input.output.datum
+  expect cto_datum: CtoGovernanceDatum = cto_raw_datum
+  and {
+    assets.quantity_of(
+      cto_ref_input.output.value,
+      datum.thread_nft_policy,
+      thread_nft.thread_asset_name(
+        thread_nft.role_cto_governance,
+        datum.launch_id,
+      ),
+    ) == 1,
+    cto_datum.launch_id == datum.launch_id,
+    cto_datum.community_wallet_hash == datum.community_pub_key_hash,
+  }
+}
+
 /// Fix: real evidence a vote actually passed, replacing a
 /// bare governor signature — same mechanism and reasoning as the linear curve's
 /// bonding_curve.ak's own cto_vote_verified (see that file's doc comment
@@ -824,7 +891,13 @@ fn cto_vote_verified(
   expect Some(executed) = cto_datum.last_executed_proposal
 
   let recipient_ok = when expected_recipient is {
-    Some(recipient) -> executed.allocation_recipient_hash == recipient
+    Some(recipient) -> and {
+        executed.allocation_recipient_hash == recipient,
+        // The record's LIVE community wallet must still name this recipient:
+        // an emergency freeze clears it, and a cleared wallet installs nowhere.
+        cto_datum.cto_state == cto_governance.CTOTriggered,
+        cto_datum.community_wallet_hash == recipient,
+      }
     None -> True
   }
 
@@ -1338,8 +1411,15 @@ validator bonding_curve_tier_b {
         // Public trading opens only after the full claim window AND the dead
         // window that follows it, so DarkVeil settlement is final before the
         // first public trade rather than merely likely to be.
+        let claim_deadline =
+          datum.dv_claim_opened_at + datum.dv_claim_window + datum.dv_settlement_window
         let window_closed =
-          !has_darkveil || current_timestamp >= datum.dv_claim_opened_at + datum.dv_claim_window + datum.dv_settlement_window
+          !has_darkveil || and {
+            current_timestamp >= claim_deadline,
+            // Closed for every moment this transaction is valid in, not only
+            // for the moment the builder named inside the range.
+            clock.past(self.validity_range, claim_deadline),
+          }
         and {
           // Permissionless once the deadline has passed — the same "the
           // deadline is the authorization" idiom as ExpireCurve, Graduate and
@@ -1368,6 +1448,10 @@ validator bonding_curve_tier_b {
             // launch's participation was.
             claimed_bits: #"",
           },
+          // Opening the curve moves nothing. Every other arm that only
+          // advances state pins the whole value the same way; this one is
+          // permissionless, which is exactly where the pin matters most.
+          curve_value_unchanged(self, own_ref),
         }
       }
 
@@ -1467,7 +1551,7 @@ validator bonding_curve_tier_b {
                   creator_acc + creator_fee,
                   platform_acc + platform_fee,
                   next_root,
-                  ok && order.amount > 0 && order.amount <= datum.curve_supply - sold && order.amount >= order.min_received && cap_ok && cap_after <= datum.wallet_cap && order.owner != datum.creator_pub_key_hash && tokens_paid_to(
+                  ok && order_is_an_input(self, order.order_ref) && order.amount > 0 && order.amount <= datum.curve_supply - sold && order.amount >= order.min_received && cap_ok && cap_after <= datum.wallet_cap && order.owner != datum.creator_pub_key_hash && tokens_paid_to(
                     self,
                     order.order_ref,
                     datum,
@@ -1504,7 +1588,7 @@ validator bonding_curve_tier_b {
                   creator_acc + creator_fee,
                   platform_acc + platform_fee,
                   next_root,
-                  ok && order.amount > 0 && new_sold >= 0 && net >= order.min_received && cap_ok && order.amount <= datum.wallet_cap && order.owner != datum.creator_pub_key_hash && order_proceeds_paid(
+                  ok && order_is_an_input(self, order.order_ref) && order.amount > 0 && new_sold >= 0 && net >= order.min_received && cap_ok && order.amount <= datum.wallet_cap && order.owner != datum.creator_pub_key_hash && order_proceeds_paid(
                     self,
                     order.order_ref,
                     order.owner,
@@ -1544,6 +1628,7 @@ validator bonding_curve_tier_b {
         and {
           datum.curve_state == Active,
           orders_ok,
+          orders_distinct(orders),
           // The batch's sells price from below the pre-batch position, so it
           // cannot sell back more than the curve has ever sold. Without this
           // the anchored range would start below zero.
@@ -1818,6 +1903,15 @@ validator bonding_curve_tier_b {
           // its own, and no reader should have to work that out.
           amount > 0,
           amount <= datum.creator_fees_accrued,
+          // A fee claim moves lovelace only: every launch token the curve
+          // holds — unsold supply and the reserves — stays in the curve.
+          curve_tokens_unchanged(self, own_ref, datum),
+          // Once redirected to the community, the payee must still be the
+          // wallet the governance record names now; a freeze clears it.
+          or {
+            !datum.cto_triggered,
+            community_wallet_live(self, datum),
+          },
           platform_claim_fee >= platform_charge_lovelace,
           curve_balance_net_ok,
           recipient_paid,
@@ -1841,6 +1935,7 @@ validator bonding_curve_tier_b {
           // its own, and no reader should have to work that out.
           amount > 0,
           amount <= datum.platform_fees_accrued,
+          curve_tokens_unchanged(self, own_ref, datum),
           new_datum == BondingCurveTierBDatum {
             ..datum,
             platform_fees_accrued: datum.platform_fees_accrued - amount,
@@ -1887,6 +1982,10 @@ validator bonding_curve_tier_b {
           // Bound the declared validity range's own width.
           validity_range_is_narrow(self.validity_range, max_validity_range_width),
           current_timestamp > datum.phase_started_at + max_curve_duration,
+          clock.strictly_past(
+            self.validity_range,
+            datum.phase_started_at + max_curve_duration,
+          ),
           new_datum == BondingCurveTierBDatum { ..datum, curve_state: Cancelled },
           curve_own_output_clean(self, own_ref),
           // curve_own_output_clean bounds how MANY assets the output carries;
@@ -2258,14 +2357,48 @@ fn mock_proposal_anchor(
   }
 }
 
+/// The state `ExecuteProposal` commits beside the proposal it records: a
+/// SilenceLockTrigger (or a FundAllocation on a launch under CTO) leaves the
+/// launch CTOTriggered with its recipient as the community wallet, a dissolve
+/// clears both, anything else leaves the genesis state.
+fn mock_cto_state(
+  executed: Option<ProposalAnchor>,
+) -> cto_governance.CtoAnchorState {
+  when executed is {
+    Some(p) ->
+      if p.proposal_type == cto_governance.DissolveCTOProposal {
+        cto_governance.CTODissolved
+      } else if p.proposal_type == cto_governance.SilenceLockTrigger || p.proposal_type == cto_governance.FundAllocation {
+        cto_governance.CTOTriggered
+      } else {
+        cto_governance.PreCTO
+      }
+    None -> cto_governance.PreCTO
+  }
+}
+
+fn mock_community_wallet(
+  executed: Option<ProposalAnchor>,
+) -> VerificationKeyHash {
+  when executed is {
+    Some(p) ->
+      if p.proposal_type == cto_governance.SilenceLockTrigger || p.proposal_type == cto_governance.FundAllocation {
+        p.allocation_recipient_hash
+      } else {
+        #""
+      }
+    None -> #""
+  }
+}
+
 fn mock_cto_governance_datum(
   launch_id: ByteArray,
   last_executed_proposal: Option<ProposalAnchor>,
 ) -> CtoGovernanceDatum {
   CtoGovernanceDatum {
     launch_id: launch_id,
-    cto_state: PreCTO,
-    community_wallet_hash: #"",
+    cto_state: mock_cto_state(last_executed_proposal),
+    community_wallet_hash: mock_community_wallet(last_executed_proposal),
     governor_credential_hash: #"22",
     total_supply: 1_000_000,
     quorum_bps: 500,
@@ -3512,7 +3645,9 @@ fn run_buy_batch_signed(
   let self =
     Transaction {
       ..transaction.placeholder,
-      inputs: [own_input],
+      // The curve plus one spent UTxO per order the batch names, as the order
+      // validator's own UTxOs are spent beside the curve in a real batch.
+      inputs: list.concat([own_input], order_inputs(orders)),
       outputs: list.concat([continuing], owner_outputs),
       extra_signatories: [#"ba"],
     }
@@ -3531,6 +3666,25 @@ fn run_buy_batch_signed(
 /// slice of the batch's single range, rounded UP exactly as the validator
 /// rounds it. Defined once so a fixture cannot quietly price differently from
 /// the redeemer it is meant to be checking.
+/// One spent UTxO per order the batch names — the shape the order validator's
+/// own UTxOs take beside the curve in a real batch transaction.
+fn order_inputs(orders: List<BatchOrder>) -> List<Input> {
+  list.map(
+    orders,
+    fn(order) {
+      Input {
+        output_reference: order.order_ref,
+        output: Output {
+          address: from_verification_key(#"0d"),
+          value: assets.from_lovelace(2_000_000),
+          datum: NoDatum,
+          reference_script: None,
+        },
+      }
+    },
+  )
+}
+
 fn two_buy_uniform_total(datum: BondingCurveTierBDatum) -> Int {
   uniform_buy_share(datum, two_buy_orders(), 400) + uniform_buy_share(
     datum,
@@ -3613,7 +3767,7 @@ fn run_buy_batch_drained(
   let self =
     Transaction {
       ..transaction.placeholder,
-      inputs: [own_input],
+      inputs: list.concat([own_input], order_inputs(orders)),
       outputs: list.concat([continuing], owner_outputs),
       extra_signatories: [#"ba"],
     }
@@ -4123,7 +4277,9 @@ fn run_activate(
       ..transaction.placeholder,
       inputs: [own_input],
       outputs: [continuing_output],
-      validity_range: interval.between(now - 100, now + 100),
+      // The range STARTS at `now`: whatever window the arm requires to be
+      // closed is closed for every moment the transaction is valid in.
+      validity_range: interval.between(now, now + 100),
     }
   bonding_curve_tier_b.spend(
     Some(datum),
@@ -4218,8 +4374,10 @@ test activate_curve_clears_the_claim_bitmap() {
               reference_script: None,
             },
           ],
+          // The range STARTS at the deadline: the window is closed for every
+          // moment the transaction is valid in.
           validity_range: interval.between(
-            test_curve_opens - 100,
+            test_curve_opens,
             test_curve_opens + 100,
           ),
         }
@@ -4445,8 +4603,10 @@ test expire_curve_succeeds_after_deadline_with_no_signature() {
       ..transaction.placeholder,
       inputs: [own_input],
       outputs: [continuing_output],
+      // The range starts past the deadline, so the curve is expired for every
+      // moment the transaction is valid in.
       validity_range: interval.between(
-        past_deadline - 100,
+        past_deadline,
         past_deadline + 100,
       ),
     }
@@ -4494,8 +4654,10 @@ test expire_curve_rejects_padded_continuing_output() {
       ..transaction.placeholder,
       inputs: [own_input],
       outputs: [continuing_output],
+      // The range starts past the deadline, so the curve is expired for every
+      // moment the transaction is valid in.
       validity_range: interval.between(
-        past_deadline - 100,
+        past_deadline,
         past_deadline + 100,
       ),
     }
@@ -4979,7 +5141,22 @@ test tier_b_claim_creator_fees_succeeds_via_community_wallet_once_cto_triggered(
       creator_fees_accrued: 300,
       platform_fees_accrued: platform_charge_lovelace,
     }
-  let (own_ref, self) = tier_b_claim_creator_fees_tx(datum, new_datum, #"ee", #"ee")
+  let (own_ref, built) = tier_b_claim_creator_fees_tx(datum, new_datum, #"ee", #"ee")
+  // A payout to the community wallet re-reads the governance record, which
+  // must still name that wallet: the freeze that clears it stops the payout.
+  let self =
+    Transaction {
+      ..built,
+      reference_inputs: [
+        mock_cto_ref_input(
+          from_verification_key(#"dd"),
+          mock_cto_governance_datum(
+            datum.launch_id,
+            Some(mock_proposal_anchor(SilenceLockTrigger, Passed, Executed, #"ee")),
+          ),
+        ),
+      ],
+    }
 
   bonding_curve_tier_b.spend(
     Some(datum),
@@ -6432,7 +6609,7 @@ test tier_b_expire_curve_rejects_value_drain() {
       ..transaction.placeholder,
       inputs: [own_input],
       outputs: [drained_output, taken],
-      validity_range: interval.between(past_deadline - 100, past_deadline + 100),
+      validity_range: interval.between(past_deadline, past_deadline + 100),
     }
 
   !bonding_curve_tier_b.spend(
@@ -6517,7 +6694,7 @@ test tier_b_expire_curve_succeeds_from_inactive_after_deadline() {
       ..transaction.placeholder,
       inputs: [own_input],
       outputs: [continuing_output],
-      validity_range: interval.between(past_deadline - 100, past_deadline + 100),
+      validity_range: interval.between(past_deadline, past_deadline + 100),
     }
 
   bonding_curve_tier_b.spend(
@@ -6604,7 +6781,7 @@ test tier_b_expire_curve_rejects_from_dv_claim_even_past_the_deadline() {
       ..transaction.placeholder,
       inputs: [own_input],
       outputs: [continuing_output],
-      validity_range: interval.between(past_deadline - 100, past_deadline + 100),
+      validity_range: interval.between(past_deadline, past_deadline + 100),
     }
 
   !bonding_curve_tier_b.spend(
@@ -6755,4 +6932,254 @@ test tier_b_claim_buyback_rejects_refunding_the_buyer_with_their_own_ada() {
   let redeemer = ClaimBuyback { token_amount: 10, buyer_key_hash: #"dd" }
 
   !bonding_curve_tier_b.spend(Some(datum), redeemer, own_ref, self)
+}
+
+// ============================================================================
+// Opening, fee claims, batches, expiry and the community wallet — pinned
+// 2026-09
+// ============================================================================
+
+/// A value one lovelace short of `value`.
+fn minus_one_ada(value: assets.Value) -> assets.Value {
+  assets.merge(
+    assets.without_lovelace(value),
+    assets.from_lovelace(assets.lovelace_of(value) - 1_000_000),
+  )
+}
+
+/// Opening the curve moves nothing: the permissionless arm pins the whole value
+/// like every other state-only arm.
+test activate_curve_rejects_a_value_drain() {
+  let datum =
+    BondingCurveTierBDatum {
+      ..mock_datum(Inactive, 0),
+      dv_settled: True,
+      dv_reserve_tokens: 0,
+      claimed_bits: #"",
+    }
+  let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
+  let own_address = from_verification_key(#"cc")
+  let own_input =
+    Input {
+      output_reference: own_ref,
+      output: Output {
+        address: own_address,
+        value: mock_curve_funded(),
+        datum: InlineDatum(datum),
+        reference_script: None,
+      },
+    }
+  let new_datum =
+    BondingCurveTierBDatum {
+      ..datum,
+      curve_state: Active,
+      phase_started_at: 500,
+      claimed_bits: #"",
+    }
+  let drained =
+    Output {
+      address: own_address,
+      value: minus_one_ada(mock_curve_funded()),
+      datum: InlineDatum(new_datum),
+      reference_script: None,
+    }
+  !bonding_curve_tier_b.spend(
+    Some(datum),
+    ActivateCurve { current_timestamp: 500 },
+    own_ref,
+    Transaction {
+      ..transaction.placeholder,
+      inputs: [own_input],
+      outputs: [drained],
+      validity_range: interval.between(500, 600),
+    },
+  )
+}
+
+/// A fee claim moves lovelace only: one that also carries launch tokens out of
+/// the curve is refused.
+test tier_b_claim_creator_fees_rejects_taking_tokens_with_the_fee() {
+  let datum =
+    BondingCurveTierBDatum { ..mock_datum(Active, 0), creator_fees_accrued: 500 }
+  let new_datum =
+    BondingCurveTierBDatum {
+      ..datum,
+      creator_fees_accrued: 300,
+      platform_fees_accrued: platform_charge_lovelace,
+    }
+  let (own_ref, built) = tier_b_claim_creator_fees_tx(datum, new_datum, #"11", #"11")
+  let curve_address = from_verification_key(#"cc")
+  // The curve arrives holding 100 more tokens than the claim returns to it.
+  let self =
+    Transaction {
+      ..built,
+      inputs: list.map(
+        built.inputs,
+        fn(input) {
+          if input.output.address == curve_address {
+            Input {
+              ..input,
+              output: Output {
+                ..input.output,
+                value: assets.add(input.output.value, #"33", "tok", 100),
+              },
+            }
+          } else {
+            input
+          }
+        },
+      ),
+    }
+  !bonding_curve_tier_b.spend(
+    Some(datum),
+    ClaimCreatorFees { amount: 200, platform_claim_fee: platform_charge_lovelace },
+    own_ref,
+    self,
+  )
+}
+
+/// No two orders in a batch may share a reference: one tagged payout could
+/// otherwise discharge both.
+test batch_rejects_two_orders_sharing_a_reference() {
+  let d = mock_datum(Active, 0)
+  let orders =
+    when two_buy_orders() is {
+      [first, second] -> [first, BatchOrder { ..second, order_ref: first.order_ref }]
+      other -> other
+    }
+  !run_buy_batch(
+    d,
+    orders,
+    [tok_out(0, #"de", 400), tok_out(0, #"df", 300)],
+    two_buy_uniform_total(d),
+  )
+}
+
+/// Expired means expired for every moment the transaction is valid in: a
+/// range that begins before the deadline is refused even when the named
+/// timestamp is past it.
+test tier_b_expire_curve_rejects_a_range_that_starts_before_the_deadline() {
+  let datum =
+    BondingCurveTierBDatum { ..mock_datum(Inactive, 0), phase_started_at: 0 }
+  let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
+  let own_address = from_verification_key(#"cc")
+  let own_input =
+    Input {
+      output_reference: own_ref,
+      output: Output {
+        address: own_address,
+        value: mock_curve_funded(),
+        datum: InlineDatum(datum),
+        reference_script: None,
+      },
+    }
+  let new_datum = BondingCurveTierBDatum { ..datum, curve_state: Cancelled }
+  let continuing_output =
+    Output {
+      address: own_address,
+      value: mock_curve_funded(),
+      datum: InlineDatum(new_datum),
+      reference_script: None,
+    }
+  let past_deadline = 7_776_000_001
+  let self =
+    Transaction {
+      ..transaction.placeholder,
+      inputs: [own_input],
+      outputs: [continuing_output],
+      validity_range: interval.between(past_deadline - 100, past_deadline + 100),
+    }
+  !bonding_curve_tier_b.spend(
+    Some(datum),
+    ExpireCurve { current_timestamp: past_deadline },
+    own_ref,
+    self,
+  )
+}
+
+/// The governance record, with a SilenceLockTrigger naming `wallet` executed;
+/// `live` is whether the record still names it (a freeze clears it).
+fn tier_b_silence_record(wallet: VerificationKeyHash, live: Bool) -> Input {
+  let record =
+    mock_cto_governance_datum(
+      #"01",
+      Some(mock_proposal_anchor(SilenceLockTrigger, Passed, Executed, wallet)),
+    )
+  mock_cto_ref_input(
+    from_verification_key(#"dd"),
+    if live {
+      record
+    } else {
+      CtoGovernanceDatum { ..record, community_wallet_hash: #"" }
+    },
+  )
+}
+
+/// A wallet the governor has frozen installs nowhere: the record must still
+/// name the recipient the trigger would install.
+test tier_b_trigger_cto_rejects_a_frozen_community_wallet() {
+  let datum = mock_datum(Active, 0)
+  let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
+  let own_address = from_verification_key(#"cc")
+  let own_input =
+    Input {
+      output_reference: own_ref,
+      output: Output {
+        address: own_address,
+        value: mock_curve_funded(),
+        datum: InlineDatum(datum),
+        reference_script: None,
+      },
+    }
+  let new_datum =
+    BondingCurveTierBDatum {
+      ..datum,
+      cto_triggered: True,
+      community_pub_key_hash: #"ee",
+    }
+  let continuing_output =
+    Output {
+      address: own_address,
+      value: mock_curve_funded(),
+      datum: InlineDatum(new_datum),
+      reference_script: None,
+    }
+  !bonding_curve_tier_b.spend(
+    Some(datum),
+    TriggerCTO { community_pub_key_hash: #"ee" },
+    own_ref,
+    Transaction {
+      ..transaction.placeholder,
+      inputs: [own_input],
+      reference_inputs: [tier_b_silence_record(#"ee", False)],
+      outputs: [continuing_output],
+    },
+  )
+}
+
+/// Once redirected, a fee claim is paid only while the record still names the
+/// community wallet: the freeze that clears it stops the payout.
+test tier_b_claim_creator_fees_rejects_a_frozen_community_wallet() {
+  let datum =
+    BondingCurveTierBDatum {
+      ..mock_datum(Active, 0),
+      creator_fees_accrued: 500,
+      cto_triggered: True,
+      community_pub_key_hash: #"ee",
+    }
+  let new_datum =
+    BondingCurveTierBDatum {
+      ..datum,
+      creator_fees_accrued: 300,
+      platform_fees_accrued: platform_charge_lovelace,
+    }
+  let (own_ref, built) = tier_b_claim_creator_fees_tx(datum, new_datum, #"ee", #"ee")
+  let self =
+    Transaction { ..built, reference_inputs: [tier_b_silence_record(#"ee", False)] }
+  !bonding_curve_tier_b.spend(
+    Some(datum),
+    ClaimCreatorFees { amount: 200, platform_claim_fee: platform_charge_lovelace },
+    own_ref,
+    self,
+  )
 }

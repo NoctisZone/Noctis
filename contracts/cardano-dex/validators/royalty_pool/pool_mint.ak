@@ -215,6 +215,12 @@ validator pool_mint(
           escrow.lock_timestamp > 0,
           escrow.lp_token_policy_id == own_policy,
           escrow.lp_token_name == lq_name,
+          // A factory deployed with no opening position would give the escrow
+          // nothing to seal and brick every graduation; one above the cap
+          // could not be represented in the pool. Both are refused here rather
+          // than discovered at the first graduation.
+          initial_lq > 0,
+          initial_lq <= max_lq_cap,
           escrow.lp_token_amount == initial_lq,
           asset_quantity_of(escrow_out.value, lq) == initial_lq,
         }

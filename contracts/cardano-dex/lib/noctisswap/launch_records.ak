@@ -135,6 +135,13 @@ pub type LpEscrowDatum {
 /// Every state record of a launch carries one NFT under the platform's thread
 /// NFT policy, named by a one-byte role tag and the first 31 bytes of the
 /// launch id. The launch package owns tags 00 to 06.
+///
+/// The venue binds a pool to its launch by this name alone: the pool's datum
+/// carries no launch id, so two launches sharing a 31-byte prefix would be
+/// indistinguishable here. The launch package keeps that from arising — launch
+/// ids are blake2b hashes derived by the genesis builder, never assigned — and
+/// its own validators additionally match the full 32-byte id. Carrying the
+/// full id in the pool datum is the pin to add when that type is next extended.
 pub const role_cto_governance: ByteArray = #"00"
 
 /// The Cardano Launch bonding curve. The factory requires this record to be

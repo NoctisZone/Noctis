@@ -216,7 +216,7 @@ fn live_curve_creator(
       curve_ref_input.output.value,
       datum.extra.thread_nft_policy,
       thread_nft.thread_asset_name(
-        thread_nft.role_bonding_curve,
+        thread_nft.role_bonding_curve_tier_b,
         datum.extra.launch_id,
       ),
     ) == 1
@@ -285,7 +285,13 @@ fn cto_vote_verified(
   expect Some(executed) = cto_datum.last_executed_proposal
 
   let recipient_ok = when expected_recipient is {
-    Some(recipient) -> executed.allocation_recipient_hash == recipient
+    Some(recipient) -> and {
+        executed.allocation_recipient_hash == recipient,
+        // The record's LIVE community wallet must still name this recipient:
+        // an emergency freeze clears it, and a cleared wallet installs nowhere.
+        cto_datum.cto_state == cto_governance.CTOTriggered,
+        cto_datum.community_wallet_hash == recipient,
+      }
     None -> True
   }
 
@@ -530,7 +536,7 @@ fn mock_curve_ref_input(
         assets.from_lovelace(2_000_000),
         assets.from_asset(
           #"c0ffee",
-          thread_nft.thread_asset_name(thread_nft.role_bonding_curve, #"01"),
+          thread_nft.thread_asset_name(thread_nft.role_bonding_curve_tier_b, #"01"),
           1,
         ),
       ),
@@ -611,14 +617,48 @@ fn mock_proposal_anchor(
   }
 }
 
+/// The state `ExecuteProposal` commits beside the proposal it records: a
+/// SilenceLockTrigger (or a FundAllocation on a launch under CTO) leaves the
+/// launch CTOTriggered with its recipient as the community wallet, a dissolve
+/// clears both, anything else leaves the genesis state.
+fn mock_cto_state(
+  executed: Option<ProposalAnchor>,
+) -> cto_governance.CtoAnchorState {
+  when executed is {
+    Some(p) ->
+      if p.proposal_type == cto_governance.DissolveCTOProposal {
+        cto_governance.CTODissolved
+      } else if p.proposal_type == cto_governance.SilenceLockTrigger || p.proposal_type == cto_governance.FundAllocation {
+        cto_governance.CTOTriggered
+      } else {
+        cto_governance.PreCTO
+      }
+    None -> cto_governance.PreCTO
+  }
+}
+
+fn mock_community_wallet(
+  executed: Option<ProposalAnchor>,
+) -> VerificationKeyHash {
+  when executed is {
+    Some(p) ->
+      if p.proposal_type == cto_governance.SilenceLockTrigger || p.proposal_type == cto_governance.FundAllocation {
+        p.allocation_recipient_hash
+      } else {
+        #""
+      }
+    None -> #""
+  }
+}
+
 fn mock_cto_governance_datum(
   launch_id: ByteArray,
   last_executed_proposal: Option<ProposalAnchor>,
 ) -> CtoGovernanceDatum {
   CtoGovernanceDatum {
     launch_id: launch_id,
-    cto_state: cto_governance.PreCTO,
-    community_wallet_hash: #"",
+    cto_state: mock_cto_state(last_executed_proposal),
+    community_wallet_hash: mock_community_wallet(last_executed_proposal),
     governor_credential_hash: #"22",
     total_supply: 1_000_000,
     quorum_bps: 500,
@@ -1205,7 +1245,7 @@ test update_metadata_succeeds_after_graduation_when_the_curve_holds_no_tokens() 
           assets.from_lovelace(2_000_000),
           assets.from_asset(
             #"c0ffee",
-            thread_nft.thread_asset_name(thread_nft.role_bonding_curve, #"01"),
+            thread_nft.thread_asset_name(thread_nft.role_bonding_curve_tier_b, #"01"),
             1,
           ),
         ),
@@ -1258,7 +1298,7 @@ test update_metadata_fails_with_another_launchs_thread_nft() fail {
           assets.from_lovelace(2_000_000),
           assets.from_asset(
             #"c0ffee",
-            thread_nft.thread_asset_name(thread_nft.role_bonding_curve, #"02"),
+            thread_nft.thread_asset_name(thread_nft.role_bonding_curve_tier_b, #"02"),
             1,
           ),
         ),
@@ -1326,6 +1366,93 @@ test update_metadata_fails_when_a_revision_drops_a_required_field() {
       new_metadata: non_conformant_metadata(),
       current_timestamp: 2000,
     },
+    own_ref,
+    self,
+  )
+}
+
+// ============================================================================
+// The reference NFT stays, and the community wallet is read live — pinned
+// 2026-09
+// ============================================================================
+
+/// The continuing output must keep this launch's own CIP-68 reference NFT: an
+/// update that lets it go is refused.
+test update_metadata_rejects_dropping_the_reference_nft() {
+  let (curve_credential, _curve_address, curve_ref_input) = mock_curve_setup()
+  let datum = mock_datum(curve_credential)
+  let (own_input, own_ref, own_address) = mock_own_input(datum)
+  let new_datum =
+    TokenMetadataDatum {
+      ..datum,
+      metadata: updated_metadata(),
+      extra: NoctisMetadataExtra {
+        ..datum.extra,
+        metadata_revision: 2,
+        last_updated_ts: 2000,
+      },
+    }
+  let bare =
+    Output {
+      ..mock_continuing_output(own_address, new_datum),
+      value: assets.from_lovelace(2_000_000),
+    }
+  let self =
+    Transaction {
+      ..transaction.placeholder,
+      inputs: [own_input],
+      reference_inputs: [curve_ref_input],
+      outputs: [bare],
+      extra_signatories: [real_creator_key],
+    }
+  !token_metadata.spend(
+    Some(datum),
+    UpdateMetadata { new_metadata: updated_metadata(), current_timestamp: 2000 },
+    own_ref,
+    self,
+  )
+}
+
+/// A wallet the governor has frozen installs nowhere.
+test trigger_cto_rejects_a_frozen_community_wallet() {
+  let (curve_credential, _curve_address, curve_ref_input) = mock_curve_setup()
+  let cto_address = from_verification_key(#"aa")
+  let cto_credential = cto_address.payment_credential
+  let datum =
+    TokenMetadataDatum {
+      ..mock_datum(curve_credential),
+      extra: NoctisMetadataExtra {
+        ..mock_datum(curve_credential).extra,
+        cto_governance_credential: cto_credential,
+      },
+    }
+  let (own_input, own_ref, own_address) = mock_own_input(datum)
+  let new_datum =
+    TokenMetadataDatum {
+      ..datum,
+      extra: NoctisMetadataExtra {
+        ..datum.extra,
+        cto_triggered: True,
+        community_pub_key_hash: #"ee",
+      },
+    }
+  let executed_proposal =
+    mock_proposal_anchor(SilenceLockTrigger, Passed, Executed, #"ee")
+  let frozen_record =
+    CtoGovernanceDatum {
+      ..mock_cto_governance_datum(datum.extra.launch_id, Some(executed_proposal)),
+      community_wallet_hash: #"",
+    }
+  let self =
+    Transaction {
+      ..transaction.placeholder,
+      inputs: [own_input],
+      reference_inputs: [curve_ref_input, mock_cto_ref_input(cto_address, frozen_record)],
+      outputs: [mock_continuing_output(own_address, new_datum)],
+    }
+  !token_metadata.spend(
+    Some(datum),
+    TriggerCTO { community_pub_key_hash: #"ee" },
     own_ref,
     self,
   )

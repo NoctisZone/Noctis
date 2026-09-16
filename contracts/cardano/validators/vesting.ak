@@ -62,7 +62,7 @@ use noctis/settlement
 use noctis/thread_nft
 use cto_governance.{
   CtoGovernanceDatum, DissolveCTOProposal, Executed, FundAllocation, Passed,
-  PreCTO, ProposalAnchor, ProposalType, SilenceLockTrigger,
+  ProposalAnchor, ProposalType, SilenceLockTrigger,
 }
 
 /// Fix (2026-07-19, full-suite security audit): CRITICAL finding —
@@ -271,7 +271,13 @@ fn cto_vote_verified(
   expect Some(executed) = cto_datum.last_executed_proposal
 
   let recipient_ok = when expected_recipient is {
-    Some(recipient) -> executed.allocation_recipient_hash == recipient
+    Some(recipient) -> and {
+        executed.allocation_recipient_hash == recipient,
+        // The record's LIVE community wallet must still name this recipient:
+        // an emergency freeze clears it, and a cleared wallet installs nowhere.
+        cto_datum.cto_state == cto_governance.CTOTriggered,
+        cto_datum.community_wallet_hash == recipient,
+      }
     None -> True
   }
 
@@ -463,6 +469,9 @@ validator vesting {
             vesting_state: Vesting,
             vest_start_timestamp: start_timestamp,
           },
+          // Starting the clock moves nothing: the whole allocation stays put,
+          // as it does on every other arm that only advances state.
+          vesting_value_unchanged(self, own_ref),
         }
       }
 
@@ -624,6 +633,9 @@ validator vesting {
             ),
           ) == 1,
           cto_datum.launch_id == datum.launch_id,
+          // The governor's emergency brake clears the record's community
+          // wallet; while it is cleared, nothing is paid out of this reserve.
+          cto_datum.community_wallet_hash != #"",
           executed.proposal_type == FundAllocation,
           executed.outcome == Passed,
           executed.execution_status == Executed,
@@ -762,14 +774,48 @@ fn mock_proposal_anchor(
   }
 }
 
+/// The state `ExecuteProposal` commits beside the proposal it records: a
+/// SilenceLockTrigger (or a FundAllocation on a launch under CTO) leaves the
+/// launch CTOTriggered with its recipient as the community wallet, a dissolve
+/// clears both, anything else leaves the genesis state.
+fn mock_cto_state(
+  executed: Option<ProposalAnchor>,
+) -> cto_governance.CtoAnchorState {
+  when executed is {
+    Some(p) ->
+      if p.proposal_type == cto_governance.DissolveCTOProposal {
+        cto_governance.CTODissolved
+      } else if p.proposal_type == cto_governance.SilenceLockTrigger || p.proposal_type == cto_governance.FundAllocation {
+        cto_governance.CTOTriggered
+      } else {
+        cto_governance.PreCTO
+      }
+    None -> cto_governance.PreCTO
+  }
+}
+
+fn mock_community_wallet(
+  executed: Option<ProposalAnchor>,
+) -> VerificationKeyHash {
+  when executed is {
+    Some(p) ->
+      if p.proposal_type == cto_governance.SilenceLockTrigger || p.proposal_type == cto_governance.FundAllocation {
+        p.allocation_recipient_hash
+      } else {
+        #""
+      }
+    None -> #""
+  }
+}
+
 fn mock_cto_governance_datum(
   launch_id: ByteArray,
   last_executed_proposal: Option<ProposalAnchor>,
 ) -> CtoGovernanceDatum {
   CtoGovernanceDatum {
     launch_id: launch_id,
-    cto_state: PreCTO,
-    community_wallet_hash: #"",
+    cto_state: mock_cto_state(last_executed_proposal),
+    community_wallet_hash: mock_community_wallet(last_executed_proposal),
     governor_credential_hash: #"22",
     total_supply: 1_000_000,
     quorum_bps: 500,
@@ -2015,4 +2061,178 @@ test claim_vested_rejects_a_million_an_hour_into_a_ninety_day_vest() {
     own_ref,
     self,
   )
+}
+
+// ============================================================================
+// The allocation stays put on every state-only arm, and the community wallet
+// is read live — pinned 2026-09
+// ============================================================================
+
+/// The whole allocation as the vesting UTxO holds it.
+fn vesting_value_with_allocation() -> assets.Value {
+  assets.merge(mock_thread_nft(), assets.from_asset(#"33", "tok", 100_000_000))
+}
+
+fn vesting_input(datum: VestingDatum, own_ref: OutputReference) -> Input {
+  Input {
+    output_reference: own_ref,
+    output: Output {
+      address: from_verification_key(#"cc"),
+      value: vesting_value_with_allocation(),
+      datum: InlineDatum(datum),
+      reference_script: None,
+    },
+  }
+}
+
+fn vesting_output(datum: VestingDatum, value: assets.Value) -> Output {
+  Output {
+    address: from_verification_key(#"cc"),
+    value: value,
+    datum: InlineDatum(datum),
+    reference_script: None,
+  }
+}
+
+/// Starting the clock moves nothing: the allocation is refused a way out.
+test start_vesting_rejects_a_value_drain() {
+  let datum = mock_datum(NotStarted, 0)
+  let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
+  let new_datum =
+    VestingDatum { ..datum, vesting_state: Vesting, vest_start_timestamp: 500 }
+  let self =
+    Transaction {
+      ..transaction.placeholder,
+      inputs: [vesting_input(datum, own_ref)],
+      outputs: [vesting_output(new_datum, mock_thread_nft())],
+      extra_signatories: [#"22"],
+      validity_range: interval.between(400, 600),
+    }
+  !vesting.spend(Some(datum), StartVesting { start_timestamp: 500 }, own_ref, self)
+}
+
+/// The control: the same start with the allocation kept is accepted.
+test start_vesting_accepts_when_the_allocation_stays() {
+  let datum = mock_datum(NotStarted, 0)
+  let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
+  let new_datum =
+    VestingDatum { ..datum, vesting_state: Vesting, vest_start_timestamp: 500 }
+  let self =
+    Transaction {
+      ..transaction.placeholder,
+      inputs: [vesting_input(datum, own_ref)],
+      outputs: [vesting_output(new_datum, vesting_value_with_allocation())],
+      extra_signatories: [#"22"],
+      validity_range: interval.between(400, 600),
+    }
+  vesting.spend(Some(datum), StartVesting { start_timestamp: 500 }, own_ref, self)
+}
+
+/// A genuine SilenceLockTrigger record naming `wallet` as the community
+/// wallet; `live` is whether the record still names it (a freeze clears it).
+fn silence_record(launch_id: ByteArray, wallet: VerificationKeyHash, live: Bool) -> Input {
+  let record =
+    mock_cto_governance_datum(
+      launch_id,
+      Some(mock_proposal_anchor(SilenceLockTrigger, Passed, Executed, wallet)),
+    )
+  mock_cto_ref_input(
+    from_verification_key(#"aa"),
+    if live {
+      record
+    } else {
+      CtoGovernanceDatum { ..record, community_wallet_hash: #"" }
+    },
+  )
+}
+
+fn run_trigger(record: Input, keep_allocation: Bool) -> Bool {
+  let datum = mock_datum(Vesting, 0)
+  let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
+  let new_datum =
+    VestingDatum {
+      ..datum,
+      cto_triggered: True,
+      community_treasury_wallet: #"ee",
+      vesting_state: CTOFrozen,
+    }
+  let out_value =
+    if keep_allocation {
+      vesting_value_with_allocation()
+    } else {
+      mock_thread_nft()
+    }
+  vesting.spend(
+    Some(datum),
+    TriggerCTO { community_treasury_wallet: #"ee" },
+    own_ref,
+    Transaction {
+      ..transaction.placeholder,
+      inputs: [vesting_input(datum, own_ref)],
+      reference_inputs: [record],
+      outputs: [vesting_output(new_datum, out_value)],
+    },
+  )
+}
+
+/// Freezing the schedule redirects who may later claim and moves nothing now.
+test trigger_cto_rejects_a_value_drain() {
+  !run_trigger(silence_record(#"01", #"ee", True), False)
+}
+
+test trigger_cto_accepts_when_the_allocation_stays() {
+  run_trigger(silence_record(#"01", #"ee", True), True)
+}
+
+/// A wallet the governor has frozen installs nowhere: the record must still
+/// name the recipient the trigger would install.
+test trigger_cto_rejects_a_frozen_community_wallet() {
+  !run_trigger(silence_record(#"01", #"ee", False), True)
+}
+
+/// While the record's community wallet is cleared, nothing is paid out of the
+/// reserve — the brake reaches the payout itself.
+test claim_community_allocation_rejects_while_the_wallet_is_frozen() {
+  let datum =
+    VestingDatum {
+      ..mock_datum(CTOFrozen, 0),
+      cto_triggered: True,
+      community_treasury_wallet: #"ee",
+    }
+  let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
+  let claim_amount = 30_000_000
+  let new_datum = VestingDatum { ..datum, last_claimed_allocation_timestamp: 500 }
+  let continuing_output =
+    vesting_output(
+      new_datum,
+      assets.merge(
+        mock_thread_nft(),
+        assets.from_asset(#"33", "tok", 100_000_000 - claim_amount),
+      ),
+    )
+  let delivery_output =
+    Output {
+      address: from_verification_key(#"ee"),
+      value: assets.from_asset(#"33", "tok", claim_amount),
+      datum: InlineDatum(own_ref),
+      reference_script: None,
+    }
+  let executed_proposal =
+    ProposalAnchor {
+      ..mock_proposal_anchor(FundAllocation, Passed, Executed, #"ee"),
+      allocation_amount: claim_amount,
+    }
+  let frozen_record =
+    CtoGovernanceDatum {
+      ..mock_cto_governance_datum(datum.launch_id, Some(executed_proposal)),
+      community_wallet_hash: #"",
+    }
+  let self =
+    Transaction {
+      ..transaction.placeholder,
+      inputs: [vesting_input(datum, own_ref)],
+      reference_inputs: [mock_cto_ref_input(from_verification_key(#"aa"), frozen_record)],
+      outputs: [continuing_output, delivery_output],
+    }
+  !vesting.spend(Some(datum), ClaimCommunityAllocation, own_ref, self)
 }

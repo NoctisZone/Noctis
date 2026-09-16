@@ -90,10 +90,11 @@ use noctis/lp_escrow_datum.{
   Cancelled, Locked,
 }
 use noctis/settlement
+use noctis/clock
 use noctis/thread_nft
 use cto_governance.{
-  CtoGovernanceDatum, DissolveCTOProposal, Executed, Passed, PreCTO,
-  ProposalAnchor, ProposalType, SilenceLockTrigger,
+  CtoGovernanceDatum, DissolveCTOProposal, Executed, Passed, ProposalAnchor,
+  ProposalType, SilenceLockTrigger,
 }
 
 /// Same finding/fix as the linear curve's bonding_curve.ak — see that file's
@@ -257,7 +258,13 @@ fn cto_vote_verified(
   expect Some(executed) = cto_datum.last_executed_proposal
 
   let recipient_ok = when expected_recipient is {
-    Some(recipient) -> executed.allocation_recipient_hash == recipient
+    Some(recipient) -> and {
+        executed.allocation_recipient_hash == recipient,
+        // The record's LIVE community wallet must still name this recipient:
+        // an emergency freeze clears it, and a cleared wallet installs nowhere.
+        cto_datum.cto_state == cto_governance.CTOTriggered,
+        cto_datum.community_wallet_hash == recipient,
+      }
     None -> True
   }
 
@@ -298,7 +305,7 @@ fn is_authorized(datum: LpEscrowDatum, self: Transaction) -> Bool {
     datum.cto_triggered && list.has(
       self.extra_signatories,
       datum.community_wallet_hash,
-    )
+    ) && community_wallet_live(self, datum)
   )
 }
 
@@ -432,7 +439,12 @@ fn replacement_position_returned(
   when list.find(self.outputs, fn(output) { output.address == own_address }) is {
     None -> False
     Some(own_output) ->
-      assets.quantity_of(own_output.value, new_lp_policy_id, new_lp_name) == new_lp_amount
+      and {
+        assets.quantity_of(own_output.value, new_lp_policy_id, new_lp_name) == new_lp_amount,
+        // The escrow's own ADA stays with the escrow; a migration moves the
+        // position, not the UTxO's lovelace.
+        assets.lovelace_of(own_output.value) >= assets.lovelace_of(own_input.output.value),
+      }
   }
 }
 
@@ -449,6 +461,34 @@ fn lp_value_unchanged(self: Transaction, own_ref: OutputReference) -> Bool {
 /// own wallet, or (once CTO has been triggered) the community wallet.
 /// Mirrors `is_authorized`'s exact same governor-vs-community switch, just
 /// for a payment destination instead of a signature check.
+/// The governance record — found by credential, proven by its thread NFT and
+/// launch id — still names this escrow's community wallet. The governor's
+/// emergency freeze clears that field, and a cleared wallet is paid nothing
+/// and authorises nothing.
+fn community_wallet_live(self: Transaction, datum: LpEscrowDatum) -> Bool {
+  expect Some(cto_ref_input) =
+    list.find(
+      self.reference_inputs,
+      fn(input) {
+        input.output.address.payment_credential == datum.cto_governance_credential
+      },
+    )
+  expect InlineDatum(cto_raw_datum) = cto_ref_input.output.datum
+  expect cto_datum: CtoGovernanceDatum = cto_raw_datum
+  and {
+    assets.quantity_of(
+      cto_ref_input.output.value,
+      datum.thread_nft_policy,
+      thread_nft.thread_asset_name(
+        thread_nft.role_cto_governance,
+        datum.launch_id,
+      ),
+    ) == 1,
+    cto_datum.launch_id == datum.launch_id,
+    cto_datum.community_wallet_hash == datum.community_wallet_hash,
+  }
+}
+
 fn active_fee_recipient(datum: LpEscrowDatum) -> VerificationKeyHash {
   if datum.cto_triggered {
     datum.community_wallet_hash
@@ -685,6 +725,7 @@ validator lp_escrow {
           // 72-hour public notice period entirely.
           validity_range_is_narrow(self.validity_range, max_validity_range_width),
           current_timestamp >= pending.proposed_at + dex_change_notice_period,
+          clock.past(self.validity_range, pending.proposed_at + dex_change_notice_period),
           new_datum == LpEscrowDatum {
             ..datum,
             dex_whitelist: new_whitelist,
@@ -732,12 +773,18 @@ validator lp_escrow {
           // make `is_lock_expired` trivially true from genesis.
           datum.lock_timestamp != 0,
           is_lock_expired(datum, current_timestamp),
+          // Expired for every moment this transaction is valid in, not only
+          // for the moment the builder named inside the range.
+          clock.past(self.validity_range, datum.lock_timestamp + datum.lock_duration),
           // LP_MIGRATION_COOLDOWN: at least 90 days since the last move.
           // Zero means the position has never migrated, so the only gate is
           // the 365-day lock above.
           or {
             datum.last_migration_timestamp == 0,
-            current_timestamp >= datum.last_migration_timestamp + migration_cooldown,
+            clock.past(
+              self.validity_range,
+              datum.last_migration_timestamp + migration_cooldown,
+            ),
           },
           interval.contains(self.validity_range, current_timestamp),
           validity_range_is_narrow(self.validity_range, max_validity_range_width),
@@ -759,6 +806,11 @@ validator lp_escrow {
           // amount is not a position — without that bound, declaring zero
           // would satisfy the check while nothing returned.
           new_lp_amount > 0,
+          // The replacement is a DEX position, never one of the platform's own
+          // state tokens: this escrow's thread NFT, already in the UTxO, would
+          // otherwise satisfy "the new position came back" while the whole
+          // real position left.
+          new_lp_policy_id != datum.thread_nft_policy,
           replacement_position_returned(
             self,
             own_ref,
@@ -875,6 +927,12 @@ validator lp_escrow {
           // The recipient is the only party a harvest is for, so requiring
           // their signature costs nobody anything and removes the churn.
           list.has(self.extra_signatories, active_fee_recipient(datum)),
+          // Once redirected to the community, the payee must still be the
+          // wallet the governance record names now; a freeze clears it.
+          or {
+            !datum.cto_triggered,
+            community_wallet_live(self, datum),
+          },
           fee_recipient_paid(self, own_ref, datum, harvested_amount),
           // The LP position's own continuing output can't be padded
           // with junk assets either.
@@ -980,14 +1038,48 @@ fn mock_proposal_anchor(
   }
 }
 
+/// The state `ExecuteProposal` commits beside the proposal it records: a
+/// SilenceLockTrigger (or a FundAllocation on a launch under CTO) leaves the
+/// launch CTOTriggered with its recipient as the community wallet, a dissolve
+/// clears both, anything else leaves the genesis state.
+fn mock_cto_state(
+  executed: Option<ProposalAnchor>,
+) -> cto_governance.CtoAnchorState {
+  when executed is {
+    Some(p) ->
+      if p.proposal_type == cto_governance.DissolveCTOProposal {
+        cto_governance.CTODissolved
+      } else if p.proposal_type == cto_governance.SilenceLockTrigger || p.proposal_type == cto_governance.FundAllocation {
+        cto_governance.CTOTriggered
+      } else {
+        cto_governance.PreCTO
+      }
+    None -> cto_governance.PreCTO
+  }
+}
+
+fn mock_community_wallet(
+  executed: Option<ProposalAnchor>,
+) -> VerificationKeyHash {
+  when executed is {
+    Some(p) ->
+      if p.proposal_type == cto_governance.SilenceLockTrigger || p.proposal_type == cto_governance.FundAllocation {
+        p.allocation_recipient_hash
+      } else {
+        #""
+      }
+    None -> #""
+  }
+}
+
 fn mock_cto_governance_datum(
   launch_id: ByteArray,
   last_executed_proposal: Option<ProposalAnchor>,
 ) -> CtoGovernanceDatum {
   CtoGovernanceDatum {
     launch_id: launch_id,
-    cto_state: PreCTO,
-    community_wallet_hash: #"",
+    cto_state: mock_cto_state(last_executed_proposal),
+    community_wallet_hash: mock_community_wallet(last_executed_proposal),
     governor_credential_hash: #"22",
     total_supply: 1_000_000,
     quorum_bps: 500,
@@ -1990,15 +2082,23 @@ test dissolve_cto_rejects_if_not_triggered() fail {
       datum: InlineDatum(new_datum),
       reference_script: None,
     }
-  // No CTO was ever triggered on this launch, so no real DissolveCTOProposal
-  // could legitimately exist for it — omitting the reference input entirely
-  // (rather than fabricating one) is the honest way to model that; the
-  // `expect` panic is what should reject this, same as the
-  // rejects_without_reference_input case above.
+  // A genuine executed DissolveCTOProposal is referenced, so the ONE thing
+  // this transaction lacks is a triggered CTO to dissolve: that is the clause
+  // that refuses it, not a missing reference input (which
+  // rejects_without_reference_input covers separately).
   let self =
     Transaction {
       ..transaction.placeholder,
       inputs: [own_input],
+      reference_inputs: [
+        mock_cto_ref_input(
+          cto_address,
+          mock_cto_governance_datum(
+            datum.launch_id,
+            Some(mock_proposal_anchor(DissolveCTOProposal, Passed, Executed, #"")),
+          ),
+        ),
+      ],
       outputs: [continuing_output],
     }
 
@@ -2057,6 +2157,17 @@ test migrate_succeeds_via_community_wallet_after_cto() {
       // community wallet signs, not governor
       extra_signatories: [#"ee"],
       validity_range: interval.between(1000 + min_lock_duration, 1000 + min_lock_duration + 100),
+      // The community wallet's authority is re-read from the governance
+      // record, which must still name it: a freeze that clears it revokes it.
+      reference_inputs: [
+        mock_cto_ref_input(
+          from_verification_key(#"aa"),
+          mock_cto_governance_datum(
+            datum.launch_id,
+            Some(mock_proposal_anchor(SilenceLockTrigger, Passed, Executed, #"ee")),
+          ),
+        ),
+      ],
     }
   let redeemer =
     Migrate {
@@ -2412,8 +2523,10 @@ test execute_dex_change_succeeds_after_notice_period() {
       inputs: [own_input],
       outputs: [continuing_output],
       // no signatures at all — execution is permissionless once due
+      // The range STARTS when the notice period ends, so the change is due for
+      // every moment the transaction is valid in.
       validity_range: interval.between(
-        dex_change_notice_period - 100,
+        dex_change_notice_period,
         dex_change_notice_period + 100,
       ),
     }
@@ -2487,8 +2600,10 @@ test execute_dex_change_rejects_value_drain_attempt() {
       ..transaction.placeholder,
       inputs: [own_input],
       outputs: [continuing_output, drain_output],
+      // The range STARTS when the notice period ends, so the change is due for
+      // every moment the transaction is valid in.
       validity_range: interval.between(
-        dex_change_notice_period - 100,
+        dex_change_notice_period,
         dex_change_notice_period + 100,
       ),
     }
@@ -2638,8 +2753,10 @@ test execute_dex_change_rejects_with_no_pending_change() fail {
       ..transaction.placeholder,
       inputs: [own_input],
       outputs: [continuing_output],
+      // The range STARTS when the notice period ends, so the change is due for
+      // every moment the transaction is valid in.
       validity_range: interval.between(
-        dex_change_notice_period - 100,
+        dex_change_notice_period,
         dex_change_notice_period + 100,
       ),
     }
@@ -2882,8 +2999,18 @@ test harvest_fees_pays_the_community_wallet_once_cto_triggered() {
       inputs: [own_input],
       outputs: [continuing_output, harvest_payout],
       // Post-CTO the recipient IS the community wallet, so that is the
-      // signature a harvest now needs.
+      // signature a harvest now needs — and the governance record must still
+      // name that wallet, since a freeze that clears it stops the payout.
       extra_signatories: [#"ee"],
+      reference_inputs: [
+        mock_cto_ref_input(
+          from_verification_key(#"aa"),
+          mock_cto_governance_datum(
+            datum.launch_id,
+            Some(mock_proposal_anchor(SilenceLockTrigger, Passed, Executed, #"ee")),
+          ),
+        ),
+      ],
     }
 
   lp_escrow.spend(Some(datum), HarvestFees { harvested_amount: 50_000 }, own_ref, self)
@@ -3547,4 +3674,211 @@ test harvest_fees_rejects_paying_the_recipient_with_their_own_ada() {
     }
 
   !lp_escrow.spend(Some(datum), HarvestFees { harvested_amount: 50_000 }, own_ref, self)
+}
+
+// ============================================================================
+// What a migration may declare, what stays behind, and the live community
+// wallet — pinned 2026-09
+// ============================================================================
+
+/// The governance record with a SilenceLockTrigger naming `wallet` executed;
+/// `live` is whether the record still names it (a freeze clears it).
+fn escrow_silence_record(wallet: VerificationKeyHash, live: Bool) -> Input {
+  let record =
+    mock_cto_governance_datum(
+      #"01",
+      Some(mock_proposal_anchor(SilenceLockTrigger, Passed, Executed, wallet)),
+    )
+  mock_cto_ref_input(
+    from_verification_key(#"aa"),
+    if live {
+      record
+    } else {
+      CtoGovernanceDatum { ..record, community_wallet_hash: #"" }
+    },
+  )
+}
+
+/// A migration after the lock, by the community wallet, with the escrow
+/// holding `escrow_lovelace` and returning `returned_lovelace`, declaring the
+/// replacement `(policy, name, amount)` and receiving `continuing_value`.
+fn run_migration(
+  escrow_lovelace: Int,
+  new_policy: PolicyId,
+  new_name: AssetName,
+  new_amount: Int,
+  continuing_value: assets.Value,
+  record: Input,
+) -> Bool {
+  let target_dex = from_script(#"aa")
+  let datum =
+    LpEscrowDatum {
+      ..mock_datum(Locked, 1000),
+      dex_whitelist: [target_dex.payment_credential],
+      cto_triggered: True,
+      community_wallet_hash: #"ee",
+    }
+  let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
+  let own_address = from_verification_key(#"cc")
+  let own_input =
+    Input {
+      output_reference: own_ref,
+      output: Output {
+        address: own_address,
+        value: assets.merge(mock_thread_nft(), assets.from_lovelace(escrow_lovelace)),
+        datum: InlineDatum(datum),
+        reference_script: None,
+      },
+    }
+  let migration_output =
+    Output {
+      address: target_dex,
+      value: assets.merge(
+        assets.from_asset(#"33", "lp", 1000),
+        assets.from_lovelace(escrow_lovelace),
+      ),
+      datum: transaction.NoDatum,
+      reference_script: None,
+    }
+  let migrated_datum =
+    LpEscrowDatum {
+      ..datum,
+      lp_token_policy_id: new_policy,
+      lp_token_name: new_name,
+      lp_token_amount: new_amount,
+      last_migration_timestamp: 1000 + min_lock_duration,
+    }
+  let continuing =
+    Output {
+      address: own_address,
+      value: continuing_value,
+      datum: InlineDatum(migrated_datum),
+      reference_script: None,
+    }
+  lp_escrow.spend(
+    Some(datum),
+    Migrate {
+      new_lp_policy_id: new_policy,
+      new_lp_name: new_name,
+      new_lp_amount: new_amount,
+      target_dex_credential: target_dex.payment_credential,
+      current_timestamp: 1000 + min_lock_duration,
+    },
+    own_ref,
+    Transaction {
+      ..transaction.placeholder,
+      inputs: [own_input],
+      outputs: [migration_output, continuing],
+      extra_signatories: [#"ee"],
+      validity_range: interval.between(
+        1000 + min_lock_duration,
+        1000 + min_lock_duration + 100,
+      ),
+      reference_inputs: [record],
+    },
+  )
+}
+
+/// The control: a real replacement comes back, the escrow keeps its ADA.
+test migrate_accepts_a_real_replacement_with_the_escrow_ada_kept() {
+  run_migration(
+    2_000_000,
+    mock_new_lp_policy,
+    mock_new_lp_name,
+    mock_new_lp_amount,
+    assets.merge(mock_thread_nft_with_new_lp(), assets.from_lovelace(2_000_000)),
+    escrow_silence_record(#"ee", True),
+  )
+}
+
+/// The escrow's own thread NFT is not a replacement position, however the
+/// redeemer names it.
+test migrate_rejects_the_thread_nft_as_the_replacement() {
+  !run_migration(
+    2_000_000,
+    #"c0ffee",
+    thread_nft.thread_asset_name(thread_nft.role_lp_escrow, #"01"),
+    1,
+    assets.merge(mock_thread_nft(), assets.from_lovelace(2_000_000)),
+    escrow_silence_record(#"ee", True),
+  )
+}
+
+/// A migration moves the position, not the escrow UTxO's lovelace.
+test migrate_rejects_taking_the_escrow_ada() {
+  !run_migration(
+    2_000_000,
+    mock_new_lp_policy,
+    mock_new_lp_name,
+    mock_new_lp_amount,
+    mock_thread_nft_with_new_lp(),
+    escrow_silence_record(#"ee", True),
+  )
+}
+
+/// The community wallet's authority is read from the governance record; a
+/// wallet the governor has frozen authorises nothing.
+test migrate_rejects_a_frozen_community_wallet() {
+  !run_migration(
+    2_000_000,
+    mock_new_lp_policy,
+    mock_new_lp_name,
+    mock_new_lp_amount,
+    assets.merge(mock_thread_nft_with_new_lp(), assets.from_lovelace(2_000_000)),
+    escrow_silence_record(#"ee", False),
+  )
+}
+
+/// A harvest to the community wallet is paid only while the record still
+/// names that wallet.
+test harvest_fees_rejects_a_frozen_community_wallet() {
+  let datum =
+    LpEscrowDatum {
+      ..mock_datum(Locked, 0),
+      cto_triggered: True,
+      community_wallet_hash: #"ee",
+    }
+  let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
+  let own_address = from_verification_key(#"cc")
+  let held =
+    assets.merge(
+      mock_thread_nft(),
+      assets.merge(assets.from_lovelace(2_000_000), assets.from_asset(#"33", "lp", 1000)),
+    )
+  let own_input =
+    Input {
+      output_reference: own_ref,
+      output: Output {
+        address: own_address,
+        value: held,
+        datum: InlineDatum(datum),
+        reference_script: None,
+      },
+    }
+  let continuing_output =
+    Output {
+      address: own_address,
+      value: held,
+      datum: InlineDatum(datum),
+      reference_script: None,
+    }
+  let harvest_payout =
+    Output {
+      address: from_verification_key(#"ee"),
+      value: assets.from_lovelace(50_000),
+      datum: InlineDatum(own_ref),
+      reference_script: None,
+    }
+  !lp_escrow.spend(
+    Some(datum),
+    HarvestFees { harvested_amount: 50_000 },
+    own_ref,
+    Transaction {
+      ..transaction.placeholder,
+      inputs: [own_input],
+      outputs: [continuing_output, harvest_payout],
+      extra_signatories: [#"ee"],
+      reference_inputs: [escrow_silence_record(#"ee", False)],
+    },
+  )
 }

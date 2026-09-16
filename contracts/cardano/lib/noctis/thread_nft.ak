@@ -25,6 +25,16 @@
 //// pair) means an NFT can still be traced back to its launch by eye on a
 //// block explorer.
 ////
+//// THE INVARIANT THIS RESTS ON. Two launch ids sharing their first 31 bytes
+//// would name the SAME thread NFT for every role, and the venue's pool NFT
+//// (which carries no launch id of its own beyond this name) would be the one
+//// place that cannot tell them apart. Every launch-package validator therefore
+//// also matches the datum's full 32-byte `launch_id` wherever it trusts a
+//// thread NFT, and the genesis builder MUST derive launch ids by hash — never
+//// assign them by hand or by counter — so that the prefix is unique by
+//// construction. The deploy checklist states this; `truncation_is_31_bytes`
+//// below pins the truncation itself.
+////
 //// Distinct tags for the two Cardano curves are deliberate: they are
 //// different scripts at different addresses and a launch is only ever one of
 //// the two, so a shared tag would buy nothing and would let a linear-curve token be

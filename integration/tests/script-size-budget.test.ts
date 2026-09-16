@@ -44,6 +44,48 @@ for (const v of blueprint.validators) {
 /**
  * Measured 2026-08-08. Update in the same commit that moves one. Newest first.
  *
+ * Last moved by the adversarial pass over the launch package, 2026-09-16 —
+ * ten validators at once; launch_token_policy alone is byte for byte what it
+ * was. Each figure is a guarantee the validator now makes:
+ *
+ *  - bonding_curve_tier_b +691: activating a curve keeps its value exactly;
+ *    a fee claim takes the fee and leaves the token reserve; a batch settles
+ *    each order once and only an order it spends; every deadline arm is
+ *    measured against the validity range's lower bound; a payee is the
+ *    community wallet only when the governance record is triggered and names
+ *    it. 15,816 against the 16,052 B publish limit leaves 236 B — the
+ *    validator to watch, and the reason the next field added to its datum
+ *    has to be costed before it is written.
+ *  - curve_order +2,769: an order is filled only by a batch of its own
+ *    launch's curve that names it — it now decodes the curve's datum and the
+ *    curve's redeemer — a sell fill is measured net of the order's own
+ *    deposit, and cancelling an expired sell returns its lovelace too.
+ *  - cto_sybil_challenge +1,260 and nhop_challenge +1,192: both take the
+ *    thread-NFT policy as a parameter and require, at open, a governance
+ *    record that names the governor; the bond floor is on chain; a sybil
+ *    challenge commits to the challenged identity and reveals it only when
+ *    upheld. Parameterised, so the DEPLOYED hash is the applied one, not the
+ *    blueprint's recorded here.
+ *  - lp_escrow +503: a migration's replacement position is under a policy
+ *    other than the escrow's own thread NFT and the escrow keeps its ada; a
+ *    harvest or migration by the community wallet re-reads the governance
+ *    record and needs a wallet that is live.
+ *  - staking_pool +305: a never-funded pool is funded only by its launch's
+ *    graduation (read through the curve's own redeemer); an exhausted pool is
+ *    refilled only by the creator or the governor; a stake that compounds a
+ *    reward pays the charge; closing delivers the whole value to the creator.
+ *  - cto_governance +195: the anchored bundle reference binds the allocation
+ *    amount and recipient; an allocation names a positive amount and a payee;
+ *    the window arms compare against the validity range's lower bound.
+ *  - vesting +81 and token_metadata +46: starting a schedule keeps the
+ *    allocation exactly; the community claim needs a live wallet; the metadata
+ *    validator reads the curve under the role its thread NFT actually carries.
+ *  - zk_anchor −21: `value_unchanged` compares the whole value, a shorter
+ *    equality than the lovelace read it replaces.
+ *
+ * Every one of the ten hashes moved, so every one of their reference scripts
+ * has to be re-derived before the next deploy.
+ *
  * Last moved by bonding_curve_tier_b +271: the DarkVeil claim and settlement
  * windows became datum fields instead of compiled constants, so a launch
  * states its own terms and OpenDvClaim bounds them before starting the clock
@@ -269,17 +311,17 @@ for (const v of blueprint.validators) {
  * two readable as the cause.
  */
 const RECORDED: Record<string, number> = {
-  bonding_curve_tier_b: 15_125,
-  cto_governance: 7_962,
-  cto_sybil_challenge: 2_123,
-  curve_order: 1_775,
+  bonding_curve_tier_b: 15_816,
+  cto_governance: 8_157,
+  cto_sybil_challenge: 3_383,
+  curve_order: 4_544,
   launch_token_policy: 419,
-  lp_escrow: 7_675,
-  nhop_challenge: 2_093,
-  staking_pool: 5_530,
-  token_metadata: 4_803,
-  vesting: 5_786,
-  zk_anchor: 2_634,
+  lp_escrow: 8_178,
+  nhop_challenge: 3_285,
+  staking_pool: 5_835,
+  token_metadata: 4_849,
+  vesting: 5_867,
+  zk_anchor: 2_613,
 };
 
 /**
@@ -302,17 +344,17 @@ const RECORDED: Record<string, number> = {
  * old one has to be considered before the change ships.
  */
 const RECORDED_HASHES: Record<string, string> = {
-  bonding_curve_tier_b: '665cb750c4d4979e2aed305f907b4c713c9f7db786de8b3a1ce5b772',
-  cto_governance: 'a23a0f558e1bfa4df9310364f757af7aa544edeff1b897a76bd8e7ec',
-  cto_sybil_challenge: 'ea4ab6a5647bc6c2bc0bb0782a438045232282f60059884b74741a35',
-  curve_order: '989ea5f01db57706b5cffbd10a55f002b2d41594610b3980c9692718',
+  bonding_curve_tier_b: 'cacf42199fa107916db59de6b635da51258b5bf499f0c6e479b8cc86',
+  cto_governance: '2acc12d791956e7da4c72c2cf1c4a8ceee74b9d7e33973cc973fa022',
+  cto_sybil_challenge: 'f08befe8c02028948af4d01dfc27121bfdd7dd6582e582fd5a216441',
+  curve_order: 'bc9e33b3e17caa01d36c16a776f3c7527236de13911519abf19d5740',
   launch_token_policy: 'd77d785500b7bb5a80bdf8104651b13e59d546d222ce7ab22bb60965',
-  lp_escrow: '7c86166a586af82960a5a82a5d602dc1c5ad46d5730325a11f0474a9',
-  nhop_challenge: 'd35b50306175ea128b6f8f0ac28ba14511b60230aa37a4b55dc862c4',
-  staking_pool: 'a3a4bbe44fdd005d30ceca65e9c9a00ecb159131bcda4f7becd60360',
-  token_metadata: '2bace075b8cdcfd1fa0f7f5db6b592ff6209dd5ff916fc599d764223',
-  vesting: '312d7ae3dbe50ee7dd4d553692cdf4f2c8ca11a96f1a45d83eb1ae11',
-  zk_anchor: '21ed55e104605486bed5e10afb33fcab1a500f00543ad91e40589fd9',
+  lp_escrow: '0c93febe5966945efac06debcc4b6acab376c3c3cda6836cf12db687',
+  nhop_challenge: '0d70cb4bcea572833ea9367f569e71042ada1e34f218c1677ad245fb',
+  staking_pool: '1f4afea6652972deb367192ff26207c0a599b5f1ed0683a45cd41cdd',
+  token_metadata: '874b93fe79f6725dbf94d1bcd6e31ab7935f343c9e885d7edbb27d67',
+  vesting: 'd6d1ce3fff91223a4533429c110a72c1359c89fc79dc29831496c63d',
+  zk_anchor: '95750d0fe26787711f9937916194681047e15d8652f13a0b65b382e4',
 };
 
 describe('compiled validator hashes', () => {

@@ -57,6 +57,8 @@ import type {
   WalletApi,
 } from '@lucid-evolution/lucid';
 import {
+  applyDoubleCborEncoding,
+  applyParamsToScript,
   Blockfrost,
   Constr,
   credentialToAddress,
@@ -66,6 +68,7 @@ import {
   validatorToAddress,
   validatorToScriptHash,
 } from '@lucid-evolution/lucid';
+import { blake2b } from '@noble/hashes/blake2.js';
 import { CTO_SYBIL_MINT_REDEEMER } from './redeemer-indices.js';
 
 // ============================================================================
@@ -75,7 +78,9 @@ import { CTO_SYBIL_MINT_REDEEMER } from './redeemer-indices.js';
 const CtoSybilChallengeDatumShape = Data.Object({
   launch_id: Data.Bytes(),
   governor_pub_key_hash: Data.Bytes(),
-  challenged_voter_key: Data.Bytes(),
+  // blake2b_256(voter_key ++ salt): the accused identity stays a commitment on
+  // this public chain until an upheld resolve reveals it.
+  challenged_voter_commitment: Data.Bytes(),
   challenged_proposal_id: Data.Bytes(),
   challenger_key_hash: Data.Bytes(),
   bond_amount: Data.Integer(),
@@ -95,6 +100,10 @@ const CtoSybilChallengeDatumSchema = CtoSybilChallengeDatumShape as unknown as C
 const ResolveChallengeRedeemerShape = Data.Object({
   upheld: Data.Boolean(),
   current_timestamp: Data.Integer(),
+  // The reveal. Checked by the validator only when `upheld`, so a dismissed
+  // challenge never publishes the identity.
+  voter_key: Data.Bytes(),
+  salt: Data.Bytes(),
 });
 type ResolveChallengeRedeemerData = Data.Static<typeof ResolveChallengeRedeemerShape>;
 const ResolveChallengeRedeemerSchema = ResolveChallengeRedeemerShape as unknown as ResolveChallengeRedeemerData;
@@ -111,6 +120,12 @@ export interface SubmitChallengeParams {
   launchId: Uint8Array;
   governorPubKeyHash: Uint8Array;
   challengedVoterKey: Uint8Array;
+  /**
+   * Chosen by the challenger and KEPT: the datum carries only
+   * blake2b_256(voterKey ++ salt), and an upheld resolve must reveal both.
+   * Losing the salt means the challenge can be dismissed but never upheld.
+   */
+  salt: Uint8Array;
   challengedProposalId: Uint8Array;
   bondAmountLovelace: bigint;
   evidenceHash: Uint8Array;
@@ -125,11 +140,24 @@ export interface SubmitChallengeParams {
 
 export interface ResolveChallengeParams {
   launchId: Uint8Array;
-  /** Distinguishes multiple open challenges for the same launch (a launch may accumulate several over time). Matched against challenged_voter_key + challenged_proposal_id in the datum. */
+  /**
+   * Distinguishes multiple open challenges for the same launch (a launch may accumulate several over time).
+   * The datum carries blake2b_256(voterKey ++ salt), so key and salt together locate the challenge and, on an
+   * upheld resolve, open its commitment on chain.
+   */
   challengedVoterKey: Uint8Array;
+  salt: Uint8Array;
   challengedProposalId: Uint8Array;
   upheld: boolean;
   currentTimestamp: bigint;
+}
+
+/** The commitment a challenge is opened under: blake2b_256(voterKey ++ salt). */
+export function voterCommitment(voterKey: Uint8Array, salt: Uint8Array): Uint8Array {
+  const preimage = new Uint8Array(voterKey.length + salt.length);
+  preimage.set(voterKey, 0);
+  preimage.set(salt, voterKey.length);
+  return blake2b(preimage, { dkLen: 32 });
 }
 
 // ============================================================================
@@ -140,8 +168,15 @@ export interface CardanoCtoSybilChallengeSubmitterConfig {
   blockfrostProjectId: string;
   blockfrostUrl: string;
   network: LucidNetwork;
-  /** cto_sybil_challenge.ak's compiled PlutusV3 script CBOR — plutus.json's `validators[].compiledCode` for `cto_sybil_challenge.cto_sybil_challenge.spend`. One fixed address shared by every launch, same pattern as every other Cardano validator (no constructor params). */
+  /**
+   * cto_sybil_challenge.ak's compiled PlutusV3 script CBOR — plutus.json's `validators[].compiledCode` for
+   * `cto_sybil_challenge.cto_sybil_challenge.spend`, UNAPPLIED. The validator takes one parameter, the
+   * platform's thread NFT policy; the constructor applies it, so the address and the challenge token's policy
+   * are those of the applied script. One fixed address shared by every launch.
+   */
   compiledScriptCbor: string;
+  /** The platform's thread NFT policy id (hex), the validator's one parameter. */
+  threadNftPolicyId: string;
   /** Governor's private key — only used by resolveChallenge, never by submitChallenge (which is challenger-wallet-signed). */
   governorPrivateKey?: string;
 }
@@ -176,8 +211,11 @@ export class CardanoCtoSybilChallengeSubmitter {
   private challengeUnit: string;
 
   constructor(private config: CardanoCtoSybilChallengeSubmitterConfig) {
-    this.validator = { type: 'PlutusV3', script: config.compiledScriptCbor };
-    this.mintingPolicy = { type: 'PlutusV3', script: config.compiledScriptCbor };
+    // The one parameter, applied here once. A ByteArray parameter is passed as
+    // its hex string — Data's encoding of bytes — not wrapped in a Constr.
+    const applied = applyParamsToScript(applyDoubleCborEncoding(config.compiledScriptCbor), [config.threadNftPolicyId]);
+    this.validator = { type: 'PlutusV3', script: applied };
+    this.mintingPolicy = { type: 'PlutusV3', script: applied };
     this.scriptAddress = validatorToAddress(config.network, this.validator);
     this.challengeUnit = validatorToScriptHash(this.validator) + CHALLENGE_ASSET_NAME_HEX;
     this.lucidPromise = Lucid(new Blockfrost(config.blockfrostUrl, config.blockfrostProjectId), config.network);
@@ -225,10 +263,12 @@ export class CardanoCtoSybilChallengeSubmitter {
   private async findChallengeUtxo(
     lucid: LucidEvolution,
     challengedVoterKey: Uint8Array,
+    salt: Uint8Array,
     challengedProposalId: Uint8Array,
   ): Promise<UTxO> {
     const utxos = await lucid.utxosAt(this.scriptAddress);
-    const voterKeyHex = toHex(challengedVoterKey);
+    // The datum carries the commitment, not the key, so the match is on it.
+    const voterKeyHex = toHex(voterCommitment(challengedVoterKey, salt));
     const proposalIdHex = toHex(challengedProposalId);
     const matches: UTxO[] = [];
     for (const utxo of utxos) {
@@ -239,7 +279,7 @@ export class CardanoCtoSybilChallengeSubmitter {
       } catch {
         continue;
       }
-      if (decoded.challenged_voter_key !== voterKeyHex || decoded.challenged_proposal_id !== proposalIdHex) {
+      if (decoded.challenged_voter_commitment !== voterKeyHex || decoded.challenged_proposal_id !== proposalIdHex) {
         continue;
       }
       if ((utxo.assets[this.challengeUnit] ?? 0n) !== 1n) continue;
@@ -296,7 +336,7 @@ export class CardanoCtoSybilChallengeSubmitter {
     const datum: CtoSybilChallengeDatumData = {
       launch_id: toHex(params.launchId),
       governor_pub_key_hash: toHex(params.governorPubKeyHash),
-      challenged_voter_key: toHex(params.challengedVoterKey),
+      challenged_voter_commitment: toHex(voterCommitment(params.challengedVoterKey, params.salt)),
       challenged_proposal_id: toHex(params.challengedProposalId),
       challenger_key_hash: challengerKeyHash,
       bond_amount: params.bondAmountLovelace,
@@ -351,12 +391,20 @@ export class CardanoCtoSybilChallengeSubmitter {
     const lucid = await this.lucidPromise;
     lucid.selectWallet.fromPrivateKey(this.config.governorPrivateKey);
 
-    const challengeUtxo = await this.findChallengeUtxo(lucid, params.challengedVoterKey, params.challengedProposalId);
+    const challengeUtxo = await this.findChallengeUtxo(
+      lucid,
+      params.challengedVoterKey,
+      params.salt,
+      params.challengedProposalId,
+    );
     const datum = Data.from<CtoSybilChallengeDatumData>(this.requireDatum(challengeUtxo), CtoSybilChallengeDatumSchema);
 
     const redeemer: ResolveChallengeRedeemerData = {
       upheld: params.upheld,
       current_timestamp: params.currentTimestamp,
+      // The reveal: checked on chain only when upheld.
+      voter_key: toHex(params.challengedVoterKey),
+      salt: toHex(params.salt),
     };
 
     // The validator binds current_timestamp through

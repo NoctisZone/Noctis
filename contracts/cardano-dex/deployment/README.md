@@ -28,7 +28,7 @@ as though it were.
 |---|---|
 | `redirect` | `32c0b50e36e96f5475f9cfe505d64813d14421ef5036f163bd94df45` |
 | `treasury` | `c85a51bc67a1bddbc0cf279c28bbde5a85cbba9d0a853080d4af34a4` |
-| `pool_mint` — **the factory policy id** | `dca1616be3e58b4e20ffc4cebb6cde714fa0ddb9c3874c581f396c04` |
+| `pool_mint` — **the factory policy id** | `1e946a8b0fdcae2f025fa1cb0a746e5727792f0c1461697efc10dbe4` |
 
 Two of its inputs are decisions rather than derivations, and are recorded as
 such in each entry's `parameters`:

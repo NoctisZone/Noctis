@@ -83,7 +83,6 @@ Human sign-off gate. Three stages: website live, preprod contracts, mainnet.
 
 ### Cardano preprod (Cardano testnet)
 
-- [ ] Bonding Curve Contract (linear) deployed to preprod — note contract address
 - [ ] Bonding Curve Cardano Launch Contract deployed to preprod — note contract address; includes `ClaimDarkVeilTokens`
 - [ ] Vesting Contract deployed to preprod — note contract address
 - [ ] LP Escrow Contract deployed to preprod — note contract address

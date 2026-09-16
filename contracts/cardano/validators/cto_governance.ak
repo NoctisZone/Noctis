@@ -55,6 +55,7 @@ use cardano/assets.{PolicyId}
 use cardano/transaction.{Input, InlineDatum, Output, OutputReference, Transaction}
 use noctis/lp_escrow_datum.{Locked, LpEscrowDatum}
 use noctis/settlement
+use noctis/clock
 use noctis/thread_nft
 
 /// Same finding/fix as the linear curve's bonding_curve.ak — see that file's own
@@ -550,6 +551,12 @@ fn derive_proof_bundle_hash(
         bytearray.from_int_big_endian(base.start_timestamp, 8),
         bytearray.from_int_big_endian(base.end_timestamp, 8),
         target_dex_bytes(base.target_dex_credential),
+        // What an execution will PAY, and to WHOM, is part of what the
+        // ballot decided, so the reference commits to both: a relayer who
+        // anchors a genuine tally cannot swap in a payee of their own and
+        // still present the reference that ballot derives to.
+        bytearray.from_int_big_endian(base.allocation_amount, 16),
+        blake2b_256(base.allocation_recipient_hash),
       ],
     ),
   )
@@ -625,8 +632,9 @@ fn single_own_utxo(self: Transaction, own_address: Address) -> Bool {
 /// ExpireProposal, ClearProposal). Without this check, such a caller
 /// could spend the real governance UTXO and send the NFT to an address they
 /// control, then plant it in a forged governance UTXO — defeating the
-/// entire fix. Applied at the top of the validator (like single_own_utxo), so
-/// the NFT can never leave the genuine governance UTXO by any path.
+/// entire fix. Applied to every arm's result at the tail of the match (where
+/// `single_own_utxo`, by contrast, is checked arm by arm), so the NFT can
+/// never leave the genuine governance UTXO by any path.
 fn governance_nft_preserved(
   self: Transaction,
   own_ref: OutputReference,
@@ -900,6 +908,16 @@ validator cto_governance {
           creator_cap_ok,
           trigger_ok,
           dissolve_ok,
+          // The payee an execution will write, and the amount it will pay, are
+          // decided by the ballot and bound into the derived reference; a
+          // proposal that pays must therefore name a real payee and a real
+          // amount here.
+          when proposal_type is {
+            FundAllocation ->
+              allocation_amount > 0 && allocation_recipient_hash != #""
+            SilenceLockTrigger -> allocation_recipient_hash != #""
+            _ -> True
+          },
           // CRITICAL fix: a real relayer bond is now required and
           // actually paid into the contract's own value — closes the
           // "forge a vote result for free" gap. See CtoGovernanceDatum's
@@ -956,6 +974,9 @@ validator cto_governance {
           // this is what actually closes the forgery gap (a fraudulent
           // anchor can be voided by the governor before this point).
           current_timestamp >= proposal.anchor_timestamp + challenge_window,
+          // The window has elapsed for every moment this transaction is valid
+          // in, not only for the moment the builder named.
+          clock.past(self.validity_range, proposal.anchor_timestamp + challenge_window),
           current_timestamp <= proposal.anchor_timestamp + execution_window,
           new_datum == CtoGovernanceDatum {
             ..datum,
@@ -1035,6 +1056,10 @@ validator cto_governance {
           // redeemer is permissionless by design (same idiom as ExpireCurve).
           validity_range_is_narrow(self.validity_range, max_validity_range_width),
           current_timestamp > proposal.anchor_timestamp + execution_window,
+          clock.strictly_past(
+            self.validity_range,
+            proposal.anchor_timestamp + execution_window,
+          ),
           new_datum == CtoGovernanceDatum {
             ..datum,
             active_proposal: Some(expired_proposal),
@@ -1076,8 +1101,12 @@ validator cto_governance {
           datum.community_wallet_hash != #"",
           new_datum == CtoGovernanceDatum {
             ..datum,
-            // Cleared, never redirected — the empty hash is already what a
-            // dissolved CTO leaves behind, so downstream reads it the same way.
+            // Cleared, never redirected. Every downstream payout to the
+            // community wallet re-reads this record and refuses while the
+            // hash is empty, which is what makes clearing it a brake; a
+            // dissolve, by contrast, propagates by a DissolveCTO spend on
+            // each consumer, and the executed proposal recorded below stays
+            // as history.
             community_wallet_hash: #"",
           },
           single_own_utxo(self, own_input.output.address),
@@ -1719,7 +1748,7 @@ test anchor_reference_matches_the_pinned_cross_language_value() {
     0,
     mock_proposal_id(),
     mock_anchor_base(1000, 1500, 1500),
-  ) == #"9bc1ff165578a191d2bf2f09c462235cd7bc134b9befceb3a4e434198ed5bbf6"
+  ) == #"c04de299af23512ff11de1d4a0c5c2965f42635f4e34e5731c4fde5c63ad9277"
 }
 
 test anchor_reference_accepts_the_value_the_validator_derives() {
@@ -3381,5 +3410,144 @@ test emergency_freeze_rejects_when_no_wallet_is_set() {
   let new_datum = datum
   let (own_ref, self) =
     emergency_tx(datum, new_datum, datum.governor_credential_hash)
+  !cto_governance.spend(Some(datum), EmergencyFreezeCommunityWallet, own_ref, self)
+}
+
+// ============================================================================
+// Value conservation on the state-only arms, and what the reference commits
+// to — pinned 2026-09
+// ============================================================================
+
+/// The derived reference commits to the payee and the amount: the same ballot
+/// anchored with a different recipient, or a different amount, derives to a
+/// different reference, so a genuine tally cannot carry a swapped payee.
+test anchor_reference_binds_the_payee_and_the_amount() {
+  let base = mock_anchor_base(1000, 1500, 1500)
+  let reference = derive_proof_bundle_hash(#"01", 0, mock_proposal_id(), base)
+  and {
+    derive_proof_bundle_hash(
+      #"01",
+      0,
+      mock_proposal_id(),
+      ProposalAnchor { ..base, allocation_recipient_hash: #"a7" },
+    ) != reference,
+    derive_proof_bundle_hash(
+      #"01",
+      0,
+      mock_proposal_id(),
+      ProposalAnchor { ..base, allocation_amount: 1 },
+    ) != reference,
+  }
+}
+
+/// Expiring a proposal moves nothing: a continuing output short of the
+/// UTxO's lovelace is refused.
+test expire_proposal_rejects_a_value_drain() {
+  let proposal = mock_proposal(Passed, PendingExecution, 1000)
+  let datum = mock_datum(Some(proposal))
+  let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
+  let own_address = from_verification_key(#"cc")
+  let own_input =
+    Input {
+      output_reference: own_ref,
+      output: Output {
+        address: own_address,
+        value: assets.merge(mock_cto_nft_value(), assets.from_lovelace(2_000_000)),
+        datum: InlineDatum(datum),
+        reference_script: None,
+      },
+    }
+  let expired_proposal = ProposalAnchor { ..proposal, execution_status: Expired }
+  let new_datum =
+    CtoGovernanceDatum { ..datum, active_proposal: Some(expired_proposal) }
+  let continuing_output =
+    Output {
+      address: own_address,
+      value: mock_cto_nft_value(),
+      datum: InlineDatum(new_datum),
+      reference_script: None,
+    }
+  let current_timestamp = 1000 + 2_678_400_000
+  let self =
+    Transaction {
+      ..transaction.placeholder,
+      inputs: [own_input],
+      reference_inputs: [mock_lp_ref_input(mock_grad_ts)],
+      outputs: [continuing_output],
+      validity_range: interval.between(current_timestamp, current_timestamp + 100),
+    }
+  !cto_governance.spend(
+    Some(datum),
+    ExpireProposal { current_timestamp: current_timestamp },
+    own_ref,
+    self,
+  )
+}
+
+/// Clearing a settled proposal moves nothing either.
+test clear_proposal_rejects_a_value_drain() {
+  let proposal = mock_proposal(Passed, Executed, 1000)
+  let datum = mock_datum(Some(proposal))
+  let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
+  let own_address = from_verification_key(#"cc")
+  let own_input =
+    Input {
+      output_reference: own_ref,
+      output: Output {
+        address: own_address,
+        value: assets.merge(mock_cto_nft_value(), assets.from_lovelace(2_000_000)),
+        datum: InlineDatum(datum),
+        reference_script: None,
+      },
+    }
+  let new_datum = CtoGovernanceDatum { ..datum, active_proposal: None }
+  let continuing_output =
+    Output {
+      address: own_address,
+      value: mock_cto_nft_value(),
+      datum: InlineDatum(new_datum),
+      reference_script: None,
+    }
+  let self =
+    Transaction {
+      ..transaction.placeholder,
+      inputs: [own_input],
+      reference_inputs: [mock_lp_ref_input(mock_grad_ts)],
+      outputs: [continuing_output],
+      extra_signatories: [#"22"],
+    }
+  !cto_governance.spend(Some(datum), ClearProposal, own_ref, self)
+}
+
+/// The emergency freeze clears a wallet and moves nothing.
+test emergency_freeze_rejects_a_value_drain() {
+  let datum = frozen_datum()
+  let new_datum = CtoGovernanceDatum { ..datum, community_wallet_hash: #"" }
+  let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
+  let own_address = from_verification_key(#"cc")
+  let own_input =
+    Input {
+      output_reference: own_ref,
+      output: Output {
+        address: own_address,
+        value: assets.merge(mock_cto_nft_value(), assets.from_lovelace(2_000_000)),
+        datum: InlineDatum(datum),
+        reference_script: None,
+      },
+    }
+  let continuing_output =
+    Output {
+      address: own_address,
+      value: mock_cto_nft_value(),
+      datum: InlineDatum(new_datum),
+      reference_script: None,
+    }
+  let self =
+    Transaction {
+      ..transaction.placeholder,
+      inputs: [own_input],
+      outputs: [continuing_output],
+      extra_signatories: [datum.governor_credential_hash],
+    }
   !cto_governance.spend(Some(datum), EmergencyFreezeCommunityWallet, own_ref, self)
 }

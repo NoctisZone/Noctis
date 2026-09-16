@@ -88,10 +88,10 @@ The core innovation is **DarkVeil** — a zero-knowledge private buying phase wh
 │ - vesting.ak      │ │                   │ │ - creator_escrow  │ │                   │
 │ - nhop_challenge  │ │ Used by both      │ │ - treasury        │ │ Reached by every  │
 │                   │ │ launch types for  │ │ - staking_pool    │ │ launch type; a    │
-│ The legacy linear │ │ registration and  │ │ - Midnight LP     │ │ Midnight Launch   │
-│ path uses         │ │ private buying.   │ │   Escrow PSM      │ │ anchors by relay. │
-│ bonding_curve.ak  │ │                   │ │                   │ │                   │
-│ in its place.     │ │                   │ │                   │ │                   │
+│ The linear path   │ │ registration and  │ │ - Midnight LP     │ │ Midnight Launch   │
+│ was retired on    │ │ private buying.   │ │   Escrow PSM      │ │ anchors by relay. │
+│ 2026-09-05 and its│ │                   │ │                   │ │                   │
+│ validator removed.│ │                   │ │                   │ │                   │
 └───────────────────┘ └───────────────────┘ └───────────────────┘ └───────────────────┘
 ```
 
@@ -203,7 +203,7 @@ The subsections below describe each contract's real current circuits. 4.1–4.3 
 
 #### 4.2 Bonding Curve PSM (Midnight Launch only — merged with Eligibility Gate + DarkVeil)
 
-**Purpose:** Quadratic price discovery, NIGHT-denominated, for **Midnight Launch only**. The legacy linear path uses an Aiken contract on Cardano L1 (`contracts/cardano/bonding_curve.ak`); Cardano Launch uses a quadratic Aiken contract on Cardano L1 (`contracts/cardano/bonding_curve_tier_b.ak`). Neither Cardano curve has a Midnight-side counterpart anymore — see Section 10 for the curve-shape rationale.
+**Purpose:** Quadratic price discovery, NIGHT-denominated, for **Midnight Launch only**. The linear path was retired on 2026-09-05 and its validator removed from the tree; Cardano Launch uses a quadratic Aiken contract on Cardano L1 (`contracts/cardano/bonding_curve_tier_b.ak`). The Cardano curve has no Midnight-side counterpart — see Section 10 for the curve-shape rationale.
 
 **Corrected 2026-07-10:** this is not a standalone contract. `contracts/midnight/bonding_curve.compact` is the **merged** deployment for Midnight Launch — it contains the Eligibility Gate's cap-tracking logic, the DarkVeil phase's registration/commitment/reveal logic, and the public-phase buying logic, all sharing one `cumulativePurchases` ledger. This was forced by a real constraint: Compact has no working cross-contract call mechanism (verified against the compiler — every call form tested fails with "contract types are not yet implemented"), so three separate PSMs calling each other to enforce one shared 5% cap was never achievable. The file keeps the name `bonding_curve.compact` for historical reasons, but functionally it is Midnight Launch's entire Midnight-side launch contract.
 
@@ -592,9 +592,7 @@ Note the quadratic shape stays near `basePrice` for longer and then accelerates 
 price = basePrice + (tokensSold / curveSupply) * (maxPrice - basePrice)
 ```
 
-Verified the same way — a multiplication invariant, `price * curveSupply == basePrice * curveSupply + tokensSold * (maxPrice - basePrice)` — though Aiken/Plutus has no circuit-level division restriction, so this is a choice for exactness rather than a hard requirement. Lives in `contracts/cardano/bonding_curve.ak`, entirely separate from the Midnight PSM above. The linear path never touches Midnight — it has no DarkVeil phase to run there.
-
-With the same example parameters, at 50% sold: price = 0.0001 + 0.0009 × 0.5 = 0.00055 ADA — the straight-line midpoint, in contrast to both launch types's quadratic curve above.
+The linear curve this passage once described was retired on 2026-09-05 and its validator removed from the tree. The Cardano Launch curve (`contracts/cardano/bonding_curve_tier_b.ak`) prices every trade as the discrete sum of the quadratic price over the exact range of tokens it buys or sells (`buy_cost`, rounded up, and `sell_proceeds`, rounded down), so a trade of any size pays what the same tokens would have cost one at a time and a round trip can never come out ahead of the curve. It lives entirely on Cardano and has no Midnight-side counterpart.
 
 ### Graduation
 
@@ -626,7 +624,6 @@ netPayment  = grossPayment - creatorFee - platformFee
 
 | Accumulator | Contract | Withdrawal |
 |-------------|-----|------------|
-| `creatorFees` (linear) | `bonding_curve.ak` (Cardano) | Via that contract's own `ClaimCreatorFees` |
 | `creatorFees` (Cardano Launch, DarkVeil claim + public buy — ONE balance) | `bonding_curve_tier_b.ak` (Cardano) — `creator_fees_accrued` field | Via that contract's own `ClaimCreatorFees` |
 | `creatorFees` (Midnight Launch) | merged `bonding_curve.compact` (Midnight) | Via Creator Escrow PSM equivalent circuit |
 | `platformFees` (Cardano) | The curve contract itself — `platform_fees_accrued` | Via that contract's single `ClaimPlatformFees` redeemer |

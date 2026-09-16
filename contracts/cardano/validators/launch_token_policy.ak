@@ -24,6 +24,13 @@
 //// platform's behaviour: a launch's token supply is fixed at its first and
 //// only mint, and is verifiable from the policy id alone.
 ////
+//// NO BURN, EVER
+//// The same pins that fix the mint rule out its reverse: a negative quantity
+//// under this policy id fails the exact-quantity checks, so the supply the
+//// genesis transaction fixed can never be reduced under this policy either.
+//// A holder may still send tokens to an address nobody can spend from, but
+//// that is a transfer the chain sees as a transfer, not a burn.
+////
 //// THE CIP-68 PAIR
 //// One transaction mints two assets: the fungible supply under CIP-67 label
 //// 333, and a single reference NFT under label 100 carrying the same base

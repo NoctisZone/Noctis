@@ -157,6 +157,42 @@ Notable changes to the Noctis Zone, by release. Internal development history pre
   one" and reject the first cleanly. Both curves are smaller as a result and each fits
   in a single published reference script.
 
+### Security
+
+Guarantees the Cardano launch validators now make, each pinned by a test that
+fails when its check is removed:
+
+- A community-takeover result anchored on Cardano is bound to the payee and
+  the amount the ballot named. The anchored reference covers both fields, an
+  allocation must name a positive amount and a recipient, and the off-chain
+  derivation moved in step, held to a pinned cross-language vector.
+- Activating a curve and starting a vesting schedule are pure state
+  transitions: every asset stays exactly where it was. A fee claim from a
+  curve takes the fee and nothing else.
+- A trade batch settles each order exactly once, and only an order the
+  transaction itself spends.
+- A migrated liquidity position must come back as a token under a policy
+  other than the escrow's own thread token, and the escrow keeps its ada
+  across the move.
+- A staking pool is funded only by its launch's graduation; once its budget
+  is spent, only the creator or the governor may refill it. A stake that
+  compounds accrued rewards pays the same charge a claim does. Closing a pool
+  delivers its whole remaining value, dust included, to the creator.
+- The metadata validator recognises a launch's curve by the role its thread
+  token actually carries.
+- Every deadline is measured against the earliest moment the transaction can
+  be valid, so no deadline arm executes before the deadline has passed.
+- An order is filled only by a batch of its own launch's curve that names it.
+  A sell fill is measured net of the order's own deposit, and cancelling an
+  expired sell returns its ada as well as its tokens.
+- A challenge posts the platform's bond on chain and names a governor the
+  launch's own governance record confirms. A sybil challenge commits to the
+  challenged identity and reveals it only when the challenge is upheld.
+- An emergency freeze of a community wallet is honoured by every path that
+  pays or empowers that wallet.
+- The certificate anchor keeps its whole value, not only its ada, across
+  every key-holder action.
+- The venue factory refuses to open a pool with no liquidity-token supply.
 ### Fixed
 
 - A trading wallet no longer spends the output it set aside as collateral. A

@@ -28,12 +28,20 @@
 // ============================================================================
 
 use aiken/collection/list
+use aiken/collection/pairs
 use aiken/crypto.{VerificationKeyHash}
 use aiken/interval.{Interval, IntervalBoundType}
+use bonding_curve_tier_b.{
+  BatchOrder, BatchTrades, BondingCurveTierBDatum, BondingCurveTierBRedeemer,
+}
 use cardano/address.{Address, Credential, Inline, from_verification_key}
 use cardano/assets.{AssetName, PolicyId}
-use cardano/transaction.{Input, InlineDatum, Output, OutputReference, Transaction}
+use cardano/transaction.{
+  Input, InlineDatum, Output, OutputReference, Spend, Transaction,
+}
+use noctis/clock
 use noctis/settlement
+use noctis/thread_nft
 
 /// Same bound, and the same reason, as the curve validators': a caller must not
 /// be able to widen the validity range far enough to invent a "now".
@@ -195,13 +203,7 @@ validator curve_order {
         // makes the pricing trustworthy: this validator deliberately does not
         // recompute a price, it only holds the batcher to the owner's terms,
         // and the curve enforces the arithmetic.
-        let curve_spent =
-          list.any(
-            self.inputs,
-            fn(input: Input) {
-              input.output.address.payment_credential == datum.curve_credential
-            },
-          )
+        let curve_spent = curve_batch_names_this_order(self, datum, own_ref)
         // A buy is owed tokens and gets its unspent lovelace back; a sell is
         // owed lovelace and gets its unsold tokens back. Both directions are
         // read off the same tagged outputs.
@@ -218,7 +220,9 @@ validator curve_order {
           if datum.is_buy {
             tokens_returned
           } else {
-            lovelace_returned
+            // NET of the lovelace the order's own UTxO brought: its min-ADA
+            // deposit comes back with the proceeds and is not proceeds.
+            lovelace_returned - assets.lovelace_of(held.value)
           }
         // What the order actually holds, read from the real input — a datum
         // that lied about it could otherwise licence a larger spend than the
@@ -265,6 +269,9 @@ validator curve_order {
         // order confers nothing on whoever does it.
         and {
           current_timestamp > datum.deadline,
+          // Expired for every moment this transaction is valid in, not only
+          // for the moment the canceller named inside the range.
+          clock.strictly_past(self.validity_range, datum.deadline),
           interval.contains(self.validity_range, current_timestamp),
           validity_range_is_narrow(self.validity_range, max_validity_range_width),
           order_funds_returned(self, own_ref, datum, held, owner_address),
@@ -292,11 +299,73 @@ fn order_funds_returned(
   if datum.is_buy {
     lovelace_to(self, own_ref, owner_address) >= assets.lovelace_of(held.value)
   } else {
-    paid_to(self, own_ref, owner_address, datum.token_policy_id, datum.token_asset_name) >= assets.quantity_of(
-      held.value,
-      datum.token_policy_id,
-      datum.token_asset_name,
+    and {
+      paid_to(
+        self,
+        own_ref,
+        owner_address,
+        datum.token_policy_id,
+        datum.token_asset_name,
+      ) >= assets.quantity_of(
+        held.value,
+        datum.token_policy_id,
+        datum.token_asset_name,
+      ),
+      // A sell order's UTxO also carries its min-ADA deposit; a refund
+      // returns everything the order held, not only the tokens.
+      lovelace_to(self, own_ref, owner_address) >= assets.lovelace_of(held.value),
+    }
+  }
+}
+
+/// The counterparty is THIS launch's curve, spent under `BatchTrades`, and
+/// that batch lists this order. The curve is the input at the order's curve
+/// credential whose value carries the launch's curve thread NFT under the
+/// policy the curve's own datum names, with the launch id matched in full;
+/// its redeemer is read from the transaction, so the two validators name
+/// each other — the batch lists the order, the order requires the batch.
+fn curve_batch_names_this_order(
+  self: Transaction,
+  datum: OrderDatum,
+  own_ref: OutputReference,
+) -> Bool {
+  when
+    list.find(
+      self.inputs,
+      fn(input: Input) {
+        input.output.address.payment_credential == datum.curve_credential
+      },
     )
+  is {
+    Some(curve_in) -> {
+      expect InlineDatum(raw_curve) = curve_in.output.datum
+      expect curve: BondingCurveTierBDatum = raw_curve
+      let listed =
+        when pairs.get_first(self.redeemers, Spend(curve_in.output_reference)) is {
+          Some(raw_redeemer) -> {
+            expect curve_redeemer: BondingCurveTierBRedeemer = raw_redeemer
+            when curve_redeemer is {
+              BatchTrades { orders, .. } ->
+                list.any(orders, fn(order: BatchOrder) { order.order_ref == own_ref })
+              _ -> False
+            }
+          }
+          None -> False
+        }
+      and {
+        curve.launch_id == datum.launch_id,
+        assets.quantity_of(
+          curve_in.output.value,
+          curve.thread_nft_policy,
+          thread_nft.thread_asset_name(
+            thread_nft.role_bonding_curve_tier_b,
+            curve.launch_id,
+          ),
+        ) == 1,
+        listed,
+      }
+    }
+    None -> False
   }
 }
 
@@ -367,16 +436,105 @@ fn order_input(is_buy: Bool) -> Input {
   }
 }
 
+const thread_policy: PolicyId = #"c0ffee"
+
+fn curve_ref() -> OutputReference {
+  OutputReference { transaction_id: #"02", output_index: 0 }
+}
+
+/// This launch's curve as it stands when a batch fills orders: the same
+/// launch id and token as the order, the curve's thread NFT in its value.
+fn mock_curve_datum() -> BondingCurveTierBDatum {
+  BondingCurveTierBDatum {
+    launch_id: #"01",
+    creator_pub_key_hash: #"11",
+    governor_pub_key_hash: #"22",
+    base_price: 100,
+    max_price: 1000,
+    curve_supply: 1000,
+    curve_state: bonding_curve_tier_b.Active,
+    phase_started_at: 0,
+    tokens_sold: 0,
+    total_raised: 0,
+    creator_fees_accrued: 0,
+    platform_fees_accrued: 0,
+    wallet_cap: 500,
+    dv_allocation_root: #"00",
+    dv_reserve_tokens: 150,
+    dv_claim_opened_at: 0,
+    claimed_bits: #"00",
+    dv_settled: False,
+    token_policy_id: tok_policy,
+    token_asset_name: "tok",
+    lp_escrow_credential: from_verification_key(#"ff").payment_credential,
+    lp_reserve_tokens: 150,
+    lp_seeded: False,
+    community_pub_key_hash: #"",
+    cto_triggered: False,
+    staking_enabled: False,
+    staking_pool_credential: from_verification_key(#"aa").payment_credential,
+    staking_reserve_tokens: 0,
+    staking_duration_days: 0,
+    staking_seeded: False,
+    cto_governance_credential: from_verification_key(#"dd").payment_credential,
+    thread_nft_policy: thread_policy,
+    cap_root: #"00",
+    dv_claim_window: 86_400_000,
+    dv_settlement_window: 1_800_000,
+    batcher_allowlist: [],
+    pool_nft_policy: #"0f",
+    staking_unstake_lock_ms: 604_800_000,
+  }
+}
+
 fn curve_input() -> Input {
   Input {
-    output_reference: OutputReference { transaction_id: #"02", output_index: 0 },
+    output_reference: curve_ref(),
     output: Output {
       address: from_verification_key(#"cc"),
-      value: assets.from_lovelace(5_000_000),
-      datum: transaction.NoDatum,
+      value: assets.merge(
+        assets.from_lovelace(5_000_000),
+        assets.from_asset(
+          thread_policy,
+          thread_nft.thread_asset_name(thread_nft.role_bonding_curve_tier_b, #"01"),
+          1,
+        ),
+      ),
+      datum: InlineDatum(mock_curve_datum()),
       reference_script: None,
     },
   }
+}
+
+/// The curve spent under a `BatchTrades` that lists THIS order.
+fn curve_batch_redeemers() -> Pairs<transaction.ScriptPurpose, Data> {
+  let batch: Data =
+    BatchTrades {
+      orders: [
+        BatchOrder {
+          owner: owner_key,
+          order_ref: order_ref(),
+          is_buy: True,
+          amount: 100,
+          min_received: 100,
+          cap_committed_before: 0,
+          cap_proof: [],
+        },
+        // The fixtures' second order too, so a two-order fill is listed in
+        // full; an order this validator is not asked about is simply unused.
+        BatchOrder {
+          owner: owner_key,
+          order_ref: second_order_ref(),
+          is_buy: True,
+          amount: 100,
+          min_received: 100,
+          cap_committed_before: 100,
+          cap_proof: [],
+        },
+      ],
+      batcher_key_hash: #"ba",
+    }
+  [Pair(Spend(curve_ref()), batch)]
 }
 
 /// A payment that NAMES the order it settles — what a real fill or refund
@@ -421,6 +579,7 @@ test apply_order_accepts_a_fill_at_min_received() {
     Transaction {
       ..transaction.placeholder,
       inputs: [order_input(True), curve_input()],
+      redeemers: curve_batch_redeemers(),
       // The tokens asked for, and the 5 ADA the order was not allowed to spend.
       outputs: [to_owner_tokens(100), to_owner_ada(5_000_000)],
     }
@@ -461,6 +620,7 @@ test apply_order_accepts_a_fill_at_the_owners_own_address() {
     Transaction {
       ..transaction.placeholder,
       inputs: [order_input(True), curve_input()],
+      redeemers: curve_batch_redeemers(),
       outputs: [fill_to(owner_base_address(), 100), staked_change()],
     }
   curve_order.spend(Some(staked_order(True, 100)), ApplyOrder, order_ref(), self)
@@ -478,6 +638,7 @@ test apply_order_rejects_a_fill_paid_to_the_bare_enterprise_address() {
     Transaction {
       ..transaction.placeholder,
       inputs: [order_input(True), curve_input()],
+      redeemers: curve_batch_redeemers(),
       // to_owner_tokens/to_owner_ada pay from_verification_key(owner_key),
       // which has no stake credential at all.
       outputs: [to_owner_tokens(100), to_owner_ada(5_000_000)],
@@ -499,6 +660,7 @@ test apply_order_rejects_a_fill_carrying_someone_elses_stake_credential() {
     Transaction {
       ..transaction.placeholder,
       inputs: [order_input(True), curve_input()],
+      redeemers: curve_batch_redeemers(),
       outputs: [fill_to(hijacked, 100), staked_change()],
     }
   !curve_order.spend(Some(staked_order(True, 100)), ApplyOrder, order_ref(), self)
@@ -527,6 +689,7 @@ test apply_order_rejects_a_payment_that_settles_a_different_order() {
     Transaction {
       ..transaction.placeholder,
       inputs: [order_input(True), second_order_input(True), curve_input()],
+      redeemers: curve_batch_redeemers(),
       outputs: [to_owner_tokens(100), to_owner_ada(5_000_000)],
     }
   and {
@@ -555,6 +718,7 @@ test apply_order_accepts_two_of_one_owners_orders_paid_separately() {
     Transaction {
       ..transaction.placeholder,
       inputs: [order_input(True), second_order_input(True), curve_input()],
+      redeemers: curve_batch_redeemers(),
       outputs: [to_owner_tokens(100), to_owner_ada(5_000_000), second_fill],
     }
   and {
@@ -572,6 +736,7 @@ test apply_order_rejects_spending_more_of_the_order_than_allowed() {
     Transaction {
       ..transaction.placeholder,
       inputs: [order_input(True), curve_input()],
+      redeemers: curve_batch_redeemers(),
       outputs: [to_owner_tokens(100), to_other(True, 50_000_000)],
     }
   !curve_order.spend(Some(datum), ApplyOrder, order_ref(), self)
@@ -586,6 +751,7 @@ test apply_order_accepts_a_fill_that_returns_the_change() {
     Transaction {
       ..transaction.placeholder,
       inputs: [order_input(True), curve_input()],
+      redeemers: curve_batch_redeemers(),
       outputs: [to_owner_tokens(100), to_owner_ada(5_000_000), to_other(True, 45_000_000)],
     }
   curve_order.spend(Some(datum), ApplyOrder, order_ref(), self)
@@ -598,6 +764,7 @@ test apply_order_rejects_change_one_short() {
     Transaction {
       ..transaction.placeholder,
       inputs: [order_input(True), curve_input()],
+      redeemers: curve_batch_redeemers(),
       outputs: [to_owner_tokens(100), to_owner_ada(4_999_999), to_other(True, 45_000_001)],
     }
   !curve_order.spend(Some(datum), ApplyOrder, order_ref(), self)
@@ -610,6 +777,7 @@ test apply_order_rejects_a_fill_below_min_received() {
     Transaction {
       ..transaction.placeholder,
       inputs: [order_input(True), curve_input()],
+      redeemers: curve_batch_redeemers(),
       outputs: [to_owner_tokens(99)],
     }
   !curve_order.spend(Some(datum), ApplyOrder, order_ref(), self)
@@ -635,6 +803,7 @@ test apply_order_rejects_payment_to_anyone_but_the_owner() {
     Transaction {
       ..transaction.placeholder,
       inputs: [order_input(True), curve_input()],
+      redeemers: curve_batch_redeemers(),
       outputs: [to_other(False, 1000)],
     }
   !curve_order.spend(Some(datum), ApplyOrder, order_ref(), self)
@@ -764,4 +933,187 @@ test cancel_expired_rejects_a_wide_validity_range() {
     order_ref(),
     self,
   )
+}
+
+// ============================================================================
+// The clock, the counterparty, and what a sell is owed — pinned 2026-09
+// ============================================================================
+
+/// The timestamp a canceller names must sit inside the transaction's own range.
+test cancel_expired_rejects_a_timestamp_outside_the_range() {
+  let datum = mock_order(True, 100, 1_000)
+  let self =
+    Transaction {
+      ..transaction.placeholder,
+      inputs: [order_input(True)],
+      outputs: [to_owner_ada(50_000_000)],
+      validity_range: interval.between(1_900, 2_100),
+    }
+  !curve_order.spend(
+    Some(datum),
+    CancelExpiredOrder { current_timestamp: 3_000 },
+    order_ref(),
+    self,
+  )
+}
+
+/// Expired means expired for every moment the transaction is valid in: a
+/// range that begins before the deadline is refused even when the named
+/// timestamp is past it.
+test cancel_expired_rejects_a_range_that_starts_before_the_deadline() {
+  let datum = mock_order(True, 100, 1_000)
+  let self =
+    Transaction {
+      ..transaction.placeholder,
+      inputs: [order_input(True)],
+      outputs: [to_owner_ada(50_000_000)],
+      validity_range: interval.between(900, 1_100),
+    }
+  !curve_order.spend(
+    Some(datum),
+    CancelExpiredOrder { current_timestamp: 1_001 },
+    order_ref(),
+    self,
+  )
+}
+
+/// A sell order as it really sits on chain: its tokens AND the min-ADA that
+/// carries them.
+fn sell_order_input_with_deposit() -> Input {
+  let base = order_input(False)
+  Input {
+    ..base,
+    output: Output {
+      ..base.output,
+      value: assets.merge(base.output.value, assets.from_lovelace(2_000_000)),
+    },
+  }
+}
+
+/// An expired sell is refunded whole: returning the tokens but keeping the
+/// deposit is refused; returning both is accepted.
+test cancel_expired_sell_must_return_the_deposit_too() {
+  let datum = mock_order(False, 100, 1_000)
+  let tokens_only =
+    Transaction {
+      ..transaction.placeholder,
+      inputs: [sell_order_input_with_deposit()],
+      outputs: [to_owner_tokens(100)],
+      validity_range: interval.between(1_900, 2_100),
+    }
+  let whole =
+    Transaction {
+      ..tokens_only,
+      outputs: [
+        Output {
+          address: from_verification_key(owner_key),
+          value: assets.merge(
+            assets.from_asset(tok_policy, "tok", 100),
+            assets.from_lovelace(2_000_000),
+          ),
+          datum: InlineDatum(order_ref()),
+          reference_script: None,
+        },
+      ],
+    }
+  and {
+    !curve_order.spend(
+      Some(datum),
+      CancelExpiredOrder { current_timestamp: 2_000 },
+      order_ref(),
+      tokens_only,
+    ),
+    curve_order.spend(
+      Some(datum),
+      CancelExpiredOrder { current_timestamp: 2_000 },
+      order_ref(),
+      whole,
+    ),
+  }
+}
+
+/// A sell is owed its floor in NEW lovelace: the deposit that came back with
+/// the proceeds is not proceeds. Paying exactly the floor, deposit included,
+/// is refused; the floor on top of the deposit is accepted.
+test sell_fill_is_measured_net_of_the_deposit() {
+  let datum = mock_order(False, 10_000_000, 9_999)
+  let short =
+    Transaction {
+      ..transaction.placeholder,
+      inputs: [sell_order_input_with_deposit(), curve_input()],
+      redeemers: curve_batch_redeemers(),
+      outputs: [to_owner_ada(10_000_000)],
+    }
+  let full = Transaction { ..short, outputs: [to_owner_ada(12_000_000)] }
+  and {
+    !curve_order.spend(Some(datum), ApplyOrder, order_ref(), short),
+    curve_order.spend(Some(datum), ApplyOrder, order_ref(), full),
+  }
+}
+
+/// The counterparty must be the curve spent under `BatchTrades`: the same
+/// curve spent under any other arm is no counterparty.
+test apply_order_rejects_a_curve_spent_under_another_arm() {
+  let datum = mock_order(True, 100, 9_999)
+  let other_arm: Data = bonding_curve_tier_b.ActivateCurve { current_timestamp: 0 }
+  let self =
+    Transaction {
+      ..transaction.placeholder,
+      inputs: [order_input(True), curve_input()],
+      redeemers: [Pair(Spend(curve_ref()), other_arm)],
+      outputs: [to_owner_tokens(100), to_owner_ada(5_000_000)],
+    }
+  !curve_order.spend(Some(datum), ApplyOrder, order_ref(), self)
+}
+
+/// A batch that does not list this order does not fill it.
+test apply_order_rejects_a_batch_that_omits_it() {
+  let datum = mock_order(True, 100, 9_999)
+  let other_only: Data =
+    BatchTrades {
+      orders: [
+        BatchOrder {
+          owner: owner_key,
+          order_ref: second_order_ref(),
+          is_buy: True,
+          amount: 100,
+          min_received: 100,
+          cap_committed_before: 0,
+          cap_proof: [],
+        },
+      ],
+      batcher_key_hash: #"ba",
+    }
+  let self =
+    Transaction {
+      ..transaction.placeholder,
+      inputs: [order_input(True), curve_input()],
+      redeemers: [Pair(Spend(curve_ref()), other_only)],
+      outputs: [to_owner_tokens(100), to_owner_ada(5_000_000)],
+    }
+  !curve_order.spend(Some(datum), ApplyOrder, order_ref(), self)
+}
+
+/// Another launch's curve is no counterparty either.
+test apply_order_rejects_another_launches_curve() {
+  let datum = mock_order(True, 100, 9_999)
+  let base = curve_input()
+  let other_launch =
+    Input {
+      ..base,
+      output: Output {
+        ..base.output,
+        datum: InlineDatum(
+          BondingCurveTierBDatum { ..mock_curve_datum(), launch_id: #"02" },
+        ),
+      },
+    }
+  let self =
+    Transaction {
+      ..transaction.placeholder,
+      inputs: [order_input(True), other_launch],
+      redeemers: curve_batch_redeemers(),
+      outputs: [to_owner_tokens(100), to_owner_ada(5_000_000)],
+    }
+  !curve_order.spend(Some(datum), ApplyOrder, order_ref(), self)
 }

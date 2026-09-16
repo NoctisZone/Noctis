@@ -63,12 +63,16 @@
 // one spend without being able to redirect any of them.
 // ============================================================================
 
+use aiken/builtin
 use aiken/collection/list
+use aiken/collection/pairs
 use aiken/crypto.{VerificationKeyHash}
 use aiken/interval.{Interval, IntervalBoundType}
 use cardano/address.{Address, from_verification_key}
 use cardano/assets.{AssetName, PolicyId}
-use cardano/transaction.{Input, InlineDatum, Output, OutputReference, Transaction}
+use cardano/transaction.{
+  Input, InlineDatum, Output, OutputReference, Spend, Transaction,
+}
 use noctis/cap_accumulator.{CapProofStep}
 use noctis/settlement
 use noctis/stake_accumulator.{Position, no_position}
@@ -452,6 +456,14 @@ validator staking_pool {
                     // needs their consent: it restarts their lock.
                     list.has(self.extra_signatories, staker_vkh),
                     proof_ok,
+                    // Compounding folds the accrued reward into the stake, so
+                    // the reward is being TAKEN here as surely as by a claim;
+                    // the same charge applies, or the two routes would price
+                    // the same tokens by which button was pressed.
+                    or {
+                      owed == 0,
+                      platform_fee_paid(self, own_ref, pool.governor_pub_key_hash),
+                    },
                     // Only the stake arrives. Anything owed was already in
                     // this UTXO as budget and merely changes which side of
                     // `total_staked` it sits on, so no reward token moves.
@@ -587,6 +599,26 @@ validator staking_pool {
               when own_outputs is {
                 [own_output] -> and {
                     amount > 0,
+                    // A pool that has never held a budget is funded only by
+                    // the graduation that seeds it: the launch's own curve
+                    // must be spent under `Graduate` in this transaction.
+                    // Anyone else topping it up first would let a stake land
+                    // before the seed and leave the pool unable to ever match
+                    // the genesis state graduation pins.
+                    or {
+                      !never_funded(pool),
+                      funded_by_graduation(self, pool),
+                    },
+                    // Once the budget has run dry, only the launch's own
+                    // parties may refill it, so the close cooldown restarts
+                    // only by the creator's or the governor's decision.
+                    when pool.exhausted_at is {
+                      Some(_) -> or {
+                          list.has(self.extra_signatories, pool.creator_pub_key_hash),
+                          list.has(self.extra_signatories, pool.governor_pub_key_hash),
+                        }
+                      None -> True
+                    },
                     tokens_in(own_output.value, pool) == tokens_in(
                       own_input.output.value,
                       pool,
@@ -614,10 +646,11 @@ validator staking_pool {
                 // has not come back simply keeps the pool open, which costs
                 // nobody anything.
                 pool.total_staked == 0,
-                // No reward token left either: the budget is spent and every
-                // credited reward claimed. What remains is the min-ADA and the
-                // thread NFT.
-                tokens_in(own_input.output.value, pool) == 0,
+                // The budget is spent. Whatever tokens remain are the rounding
+                // dust the accumulator's floors leave behind — owed to no
+                // position, so they leave with the pool. A close that demanded
+                // an empty pool could never happen on a real one.
+                pool.unallocated == 0,
                 // The pool stops existing rather than continuing empty.
                 list.length(own_outputs) == 0,
                 list.any(
@@ -626,9 +659,9 @@ validator staking_pool {
                     and {
                       settlement.settles(output, own_ref),
                       output.address.payment_credential == creator,
-                      assets.without_lovelace(output.value) == assets.without_lovelace(
-                        own_input.output.value,
-                      ),
+                      // The WHOLE value, lovelace included: the residue is the
+                      // creator's, not the closer's.
+                      output.value == own_input.output.value,
                     }
                   },
                 ),
@@ -643,6 +676,49 @@ validator staking_pool {
 // ============================================================================
 // TESTS
 // ============================================================================
+
+/// A pool that has never held a budget: minted `unfunded`, not yet seeded by
+/// its graduation, and never exhausted (an exhausted pool also reads zero
+/// unallocated, but carries the moment it ran dry).
+fn never_funded(pool: StakingPoolDatum) -> Bool {
+  pool.unallocated == 0 && pool.exhausted_at == None
+}
+
+/// The launch's own curve is an input of this transaction, spent under its
+/// `Graduate` arm — the only spend that seeds a pool. The curve is found by
+/// its thread NFT, and its redeemer by constructor index, the same reading the
+/// venue's factory makes (`graduate_redeemer_index`).
+fn funded_by_graduation(self: Transaction, pool: StakingPoolDatum) -> Bool {
+  let curve_nft_name =
+    thread_nft.thread_asset_name(
+      thread_nft.role_bonding_curve_tier_b,
+      pool.launch_id,
+    )
+  when
+    list.find(
+      self.inputs,
+      fn(input) {
+        assets.quantity_of(
+          input.output.value,
+          pool.thread_nft_policy,
+          curve_nft_name,
+        ) == 1
+      },
+    )
+  is {
+    Some(curve_in) ->
+      when pairs.get_first(self.redeemers, Spend(curve_in.output_reference)) is {
+        Some(curve_redeemer) ->
+          builtin.un_constr_data(curve_redeemer).1st == graduate_redeemer_index
+        None -> False
+      }
+    None -> False
+  }
+}
+
+/// `Graduate`'s constructor index in `bonding_curve_tier_b`'s redeemer enum;
+/// pinned there by `graduate_is_constructor_eight`, mirrored by the venue.
+const graduate_redeemer_index: Int = 8
 
 const staker: VerificationKeyHash = #"dd"
 
@@ -1476,10 +1552,12 @@ test close_is_refused_while_anyone_is_still_staked() {
   !run_close(pool, 1_000, opened_at + close_cooldown_ms)
 }
 
-/// And refused while any reward token remains, which is what an unclaimed
-/// reward looks like from outside.
-test close_is_refused_while_any_reward_is_unclaimed() {
-  !run_close(exhausted_pool(), 5_000, opened_at + close_cooldown_ms)
+/// With nobody staked, every position was closed and paid on its way out, so
+/// tokens still in an exhausted pool are the rounding dust the accumulator's
+/// floors leave behind — owed to no one. They leave with the pool, to the
+/// creator, rather than holding the pool open forever.
+test close_carries_the_dust_to_the_creator() {
+  run_close(exhausted_pool(), 5_000, opened_at + close_cooldown_ms)
 }
 
 test close_is_refused_on_a_pool_that_was_never_exhausted() {
@@ -1628,6 +1706,155 @@ test two_pool_utxos_in_one_transaction_are_refused() {
       [pool_output(topped_up(pool, 500_000, now), 4_150_000)],
       [],
       now,
+    ),
+  )
+}
+
+// ============================================================================
+// Funding, refilling, compounding and closing — the guarantees pinned 2026-09
+// ============================================================================
+
+/// A pool that has never held a budget is funded by its graduation alone: a
+/// top-up with no curve spent under `Graduate` in the transaction is refused,
+/// however honest the amount.
+test an_unfunded_pool_cannot_be_topped_up_outside_its_graduation() {
+  let pool = StakingPoolDatum { ..mock_pool(), unallocated: 0 }
+  let now = opened_at + ms_per_day
+  !run_top_up(pool, topped_up(pool, 500_000, now), 500_000, now)
+}
+
+/// This launch's curve as the graduation spends it: its thread NFT in the
+/// value, at whatever address the curve lives.
+fn graduating_curve_input() -> Input {
+  Input {
+    output_reference: OutputReference { transaction_id: #"c0", output_index: 0 },
+    output: Output {
+      address: from_verification_key(#"c0"),
+      value: assets.merge(
+        assets.from_lovelace(2_000_000),
+        assets.from_asset(
+          nft_policy,
+          thread_nft.thread_asset_name(
+            thread_nft.role_bonding_curve_tier_b,
+            launch,
+          ),
+          1,
+        ),
+      ),
+      datum: transaction.NoDatum,
+      reference_script: None,
+    },
+  }
+}
+
+/// The graduation transaction — the launch's curve spent under `Graduate`
+/// beside the pool — funds it, and needs nobody's signature to do so.
+test the_graduation_funds_an_unfunded_pool() {
+  let pool = StakingPoolDatum { ..mock_pool(), unallocated: 0 }
+  let now = opened_at + ms_per_day
+  let curve = graduating_curve_input()
+  let base =
+    tx(
+      [pool_input(pool, 0), curve],
+      [pool_output(topped_up(pool, 3_650_000, now), 3_650_000)],
+      [],
+      now,
+    )
+  staking_pool.spend(
+    Some(pool),
+    TopUpPool { amount: 3_650_000 },
+    own_ref(),
+    Transaction {
+      ..base,
+      redeemers: [
+        Pair(
+          Spend(curve.output_reference),
+          builtin.constr_data(graduate_redeemer_index, []),
+        ),
+      ],
+    },
+  )
+}
+
+/// The same transaction with the curve spent under any OTHER arm funds
+/// nothing.
+test a_curve_spent_under_another_arm_does_not_fund_the_pool() {
+  let pool = StakingPoolDatum { ..mock_pool(), unallocated: 0 }
+  let now = opened_at + ms_per_day
+  let curve = graduating_curve_input()
+  let base =
+    tx(
+      [pool_input(pool, 0), curve],
+      [pool_output(topped_up(pool, 3_650_000, now), 3_650_000)],
+      [],
+      now,
+    )
+  !staking_pool.spend(
+    Some(pool),
+    TopUpPool { amount: 3_650_000 },
+    own_ref(),
+    Transaction {
+      ..base,
+      redeemers: [Pair(Spend(curve.output_reference), builtin.constr_data(0, []))],
+    },
+  )
+}
+
+/// Once the budget has run dry, only the launch's own parties may refill it,
+/// so the close cooldown restarts only by the creator's or the governor's decision.
+test a_stranger_cannot_refill_an_exhausted_pool() {
+  let pool = exhausted_pool()
+  let now = opened_at + ms_per_day
+  !run_top_up(pool, topped_up(pool, 1, now), 1, now)
+}
+
+test the_creator_may_refill_an_exhausted_pool() {
+  let pool = exhausted_pool()
+  let now = opened_at + ms_per_day
+  staking_pool.spend(
+    Some(pool),
+    TopUpPool { amount: 1 },
+    own_ref(),
+    tx([pool_input(pool, 0)], [pool_output(topped_up(pool, 1, now), 1)], [creator], now),
+  )
+}
+
+/// Compounding a reward into the stake takes the reward out of the budget as
+/// surely as a claim does, so it pays the same charge; without it the stake is
+/// refused.
+test compounding_a_reward_without_the_charge_is_refused() {
+  let before = pos(3, 0, opened_at - 8 * ms_per_day)
+  let pool =
+    StakingPoolDatum {
+      ..mock_pool(),
+      stake_root: stake_accumulator.root_of([(staker, before)]),
+      total_staked: 3,
+    }
+  let now = opened_at + ms_per_day
+  !run_stake(pool, 3, before, [(staker, before)], 1, now, [staker])
+}
+
+/// Closing pays the creator the WHOLE value, lovelace included; a closer who
+/// keeps the residue is refused.
+test a_closer_cannot_keep_the_residue_lovelace() {
+  let pool = exhausted_pool()
+  let due = opened_at + close_cooldown_ms
+  !staking_pool.spend(
+    Some(pool),
+    ClosePool,
+    own_ref(),
+    tx(
+      [pool_input(pool, 0)],
+      [
+        Output {
+          address: from_verification_key(creator),
+          value: assets.without_lovelace(pool_value(0)),
+          datum: InlineDatum(own_ref()),
+          reference_script: None,
+        },
+      ],
+      [],
+      due,
     ),
   )
 }

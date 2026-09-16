@@ -160,18 +160,19 @@ fn single_own_utxo(self: Transaction, own_address: Address) -> Bool {
 /// Fix: this contract is a pure anchor — no redeemer ever legitimately
 /// moves ADA in or out (unlike bonding_curve.ak/lp_escrow.ak, which accrue
 /// fees or hold real locked value). Every state-changing redeemer here only
-/// ever mutates the datum, so the continuing output's real lovelace must
-/// stay byte-for-byte unchanged. Closes the same "own_continuing_datum only
-/// checks datum, never value" root-cause pattern found in cto_governance.ak
-/// (§6c) — here fixed as a blanket check since there's no legitimate
-/// value-changing case to carve out.
+/// ever mutates the datum, so the continuing output's WHOLE value — lovelace,
+/// the thread NFT and anything else — must stay byte-for-byte unchanged, the
+/// same comparison the vesting and governance validators make. Closes the same
+/// "own_continuing_datum only checks datum, never value" root-cause pattern
+/// found in cto_governance.ak (§6c) — here fixed as a blanket check since
+/// there's no legitimate value-changing case to carve out.
 fn value_unchanged(self: Transaction, own_ref: OutputReference) -> Bool {
   expect Some(own_input) =
     list.find(self.inputs, fn(input) { input.output_reference == own_ref })
   let own_address = own_input.output.address
   expect Some(own_output) =
     list.find(self.outputs, fn(output) { output.address == own_address })
-  assets.lovelace_of(own_output.value) == assets.lovelace_of(own_input.output.value)
+  own_output.value == own_input.output.value
 }
 
 /// A script only ever sees the transaction's OWN DECLARED validity range,
@@ -912,8 +913,11 @@ test single_own_utxo_rejects_two_anchor_inputs_same_tx() {
 // An authorized relayer's AnchorCertificate call must not be usable
 // to also skim real lovelace out of the anchor UTXO — the datum-equality
 // check alone (pre-fix) never verified the continuing output's real value.
+/// Built from `anchor_certificate_succeeds_with_authorized_relayer` with ONE
+/// change — the continuing output is a lovelace short — so this refusal is
+/// about the value and nothing else.
 test anchor_certificate_rejects_value_drain_attempt() {
-  let datum = mock_datum()
+  let datum = mock_unanchored_datum()
   let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
   let own_address = from_verification_key(#"cc")
   let own_input =
@@ -929,7 +933,7 @@ test anchor_certificate_rejects_value_drain_attempt() {
   let new_datum =
     ZkAnchorDatum {
       ..datum,
-      cert_type: GraduationCert,
+      cert_type: DarkVeilCert,
       proof_bundle_hash: #"dd",
       proof_ipfs_cid: #"ee",
       anchor_timestamp: 2000,
@@ -938,8 +942,8 @@ test anchor_certificate_rejects_value_drain_attempt() {
   let continuing_output =
     Output {
       address: own_address,
-      // Correct datum, but only min-UTxO lovelace left — the difference
-      // would go to the relayer's own change output.
+      // Correct datum, but a lovelace short — the difference would go to the
+      // relayer's own change output.
       value: assets.merge(mock_anchor_nft(), assets.from_lovelace(1_000_000)),
       datum: InlineDatum(new_datum),
       reference_script: None,
@@ -950,10 +954,11 @@ test anchor_certificate_rejects_value_drain_attempt() {
       inputs: [own_input],
       outputs: [continuing_output],
       extra_signatories: [#"11"],
+      validity_range: interval.between(1_900, 2_100),
     }
   let redeemer =
     AnchorCertificate {
-      cert_type: GraduationCert,
+      cert_type: DarkVeilCert,
       proof_bundle_hash: #"dd",
       proof_ipfs_cid: #"ee",
       metadata_hash: #"ff",

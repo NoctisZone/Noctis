@@ -16,6 +16,11 @@ vi.mock('@lucid-evolution/lucid', async (importOriginal) => {
   return {
     ...actual,
     Lucid: vi.fn(),
+    // The fixture script is a stand-in, not real UPLC, so applying the thread
+    // NFT policy parameter passes the bytes through unchanged: SCRIPT_HASH
+    // below is derived from those same bytes.
+    applyParamsToScript: vi.fn((cbor: string) => cbor),
+    applyDoubleCborEncoding: vi.fn((cbor: string) => cbor),
     Data: {
       ...actual.Data,
       from: vi.fn((d: unknown) => d),
@@ -26,7 +31,7 @@ vi.mock('@lucid-evolution/lucid', async (importOriginal) => {
 
 import { credentialToAddress, Lucid, validatorToScriptHash } from '@lucid-evolution/lucid';
 import type { ResolveChallengeParams, SubmitChallengeParams } from '../cardano-cto-sybil-challenge-submitter.js';
-import { CardanoCtoSybilChallengeSubmitter, toHex } from '../cardano-cto-sybil-challenge-submitter.js';
+import { CardanoCtoSybilChallengeSubmitter, toHex, voterCommitment } from '../cardano-cto-sybil-challenge-submitter.js';
 
 // The challenge token, derived the way the submitter derives it: the policy is
 // the script's OWN hash, because `mint` and `spend` are two handlers of one
@@ -157,6 +162,7 @@ function makeSubmitter(
       blockfrostUrl: 'https://cardano-preprod.blockfrost.io/api/v0',
       network: 'Preprod',
       compiledScriptCbor: '590000',
+      threadNftPolicyId: fakeKeyHash(0x77),
       governorPrivateKey: opts.governorPrivateKey,
     }),
     fakeLucid,
@@ -172,6 +178,7 @@ function baseSubmitParams(overrides: Partial<SubmitChallengeParams> = {}): Submi
     launchId: fakeBytes(1),
     governorPubKeyHash: fakeBytes(2),
     challengedVoterKey: fakeBytes(3),
+    salt: fakeBytes(9),
     challengedProposalId: fakeBytes(4),
     bondAmountLovelace: 25_000_000n,
     evidenceHash: fakeBytes(5),
@@ -291,7 +298,7 @@ describe('CardanoCtoSybilChallengeSubmitter.resolveChallenge', () => {
     return {
       launch_id: toHex(fakeBytes(1)),
       governor_pub_key_hash: toHex(fakeBytes(2)),
-      challenged_voter_key: toHex(fakeBytes(3)),
+      challenged_voter_commitment: toHex(voterCommitment(fakeBytes(3), fakeBytes(9))),
       challenged_proposal_id: toHex(fakeBytes(4)),
       challenger_key_hash: challengerKeyHash,
       bond_amount: 25_000_000n,
@@ -306,6 +313,7 @@ describe('CardanoCtoSybilChallengeSubmitter.resolveChallenge', () => {
     return {
       launchId: fakeBytes(1),
       challengedVoterKey: fakeBytes(3),
+      salt: fakeBytes(9),
       challengedProposalId: fakeBytes(4),
       upheld: true,
       currentTimestamp: 5000n,
@@ -328,7 +336,7 @@ describe('CardanoCtoSybilChallengeSubmitter.resolveChallenge', () => {
       governorPrivateKey: 'ed25519_sk1fake',
       utxos: [
         {
-          datum: challengeDatum({ challenged_voter_key: toHex(fakeBytes(99)) }),
+          datum: challengeDatum({ challenged_voter_commitment: toHex(fakeBytes(99)) }),
           assets: {},
         },
       ],
@@ -388,6 +396,11 @@ describe('CardanoCtoSybilChallengeSubmitter.resolveChallenge', () => {
     };
     expect(redeemer.upheld).toBe(false);
     expect(redeemer.current_timestamp).toBe(12345n);
+    // The reveal rides in the redeemer; the validator checks it only when
+    // upheld, but the submitter always carries what it knows.
+    const reveal = calls.collectFrom![1] as { voter_key: string; salt: string };
+    expect(reveal.voter_key).toBe(toHex(fakeBytes(3)));
+    expect(reveal.salt).toBe(toHex(fakeBytes(9)));
     expect(calls.addSigner).toEqual([toHex(fakeBytes(2))]); // datum.governor_pub_key_hash
   });
 
