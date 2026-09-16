@@ -42,9 +42,11 @@ for (const v of blueprint.validators) {
   if (module && !modules.has(module)) modules.set(module, v);
 }
 
-const CURVE_A = modules.get('bonding_curve');
+// Two real, distinct scripts. The cases below need a second one only to
+// differ from the curve, so it is simply a live escrow.
+const ESCROW = modules.get('lp_escrow');
 const CURVE_B = modules.get('bonding_curve_tier_b');
-if (!CURVE_A || !CURVE_B) throw new Error('blueprint is missing a bonding curve');
+if (!ESCROW || !CURVE_B) throw new Error('blueprint is missing a validator this test needs');
 
 describe('scriptHashOf', () => {
   for (const [module, v] of modules) {
@@ -60,7 +62,7 @@ describe('scriptHashOf', () => {
     // Wrapping is what scriptHashOf does; a caller who skipped it would get a
     // different answer, and this pins that the two really do differ.
     const wrapped = scriptHashOf(CURVE_B.compiledCode);
-    const alsoWrapped = scriptHashOf(CURVE_A.compiledCode);
+    const alsoWrapped = scriptHashOf(ESCROW.compiledCode);
     expect(wrapped).not.toBe(alsoWrapped);
     expect(wrapped).toBe(CURVE_B.hash);
   });
@@ -75,9 +77,9 @@ describe('scriptAddressOf', () => {
   }
 
   it('separates mainnet from the test networks', () => {
-    expect(scriptAddressOf(CURVE_A.compiledCode, 1)).not.toBe(scriptAddressOf(CURVE_A.compiledCode, 0));
-    expect(scriptAddressOf(CURVE_A.compiledCode, 1).startsWith('addr1')).toBe(true);
-    expect(scriptAddressOf(CURVE_A.compiledCode, 0).startsWith('addr_test1')).toBe(true);
+    expect(scriptAddressOf(ESCROW.compiledCode, 1)).not.toBe(scriptAddressOf(ESCROW.compiledCode, 0));
+    expect(scriptAddressOf(ESCROW.compiledCode, 1).startsWith('addr1')).toBe(true);
+    expect(scriptAddressOf(ESCROW.compiledCode, 0).startsWith('addr_test1')).toBe(true);
   });
 });
 
@@ -101,14 +103,14 @@ describe('resolveReferenceScript', () => {
   // UTXOs are not locked by — so the mismatch has to be caught here, where the
   // message can say what actually happened.
   it('refuses a pointer published for a different build of the validator', () => {
-    const stale = { ...pointer, scriptHash: CURVE_A.hash };
+    const stale = { ...pointer, scriptHash: ESCROW.hash };
     expect(() => resolveReferenceScript(CURVE_B.compiledCode, stale, 0)).toThrow(/stale/i);
   });
 
   it('names both hashes so the mismatch can be acted on', () => {
-    const stale = { ...pointer, scriptHash: CURVE_A.hash };
+    const stale = { ...pointer, scriptHash: ESCROW.hash };
     expect(() => resolveReferenceScript(CURVE_B.compiledCode, stale, 0)).toThrow(
-      new RegExp(`${CURVE_A.hash}[\\s\\S]*${CURVE_B.hash}`),
+      new RegExp(`${ESCROW.hash}[\\s\\S]*${CURVE_B.hash}`),
     );
   });
 });
@@ -138,7 +140,7 @@ describe('referenceSurchargeLovelace', () => {
   });
 
   it('costs less than a fifth of an ADA on either curve', () => {
-    expect(referenceSurchargeLovelace(CURVE_A.compiledCode)).toBeLessThan(200_000);
+    expect(referenceSurchargeLovelace(ESCROW.compiledCode)).toBeLessThan(200_000);
     expect(referenceSurchargeLovelace(CURVE_B.compiledCode)).toBeLessThan(250_000);
   });
 });

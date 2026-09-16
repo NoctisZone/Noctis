@@ -15,6 +15,20 @@ Notable changes to the Noctis Zone, by release. Internal development history pre
 
 ### Added
 
+- A new Aiken package, `contracts/cardano-dex`, for an own trading venue for
+  graduated launches: a constant-product pool whose datum carries a creator fee
+  slot and a platform fee slot, so the creator's post-graduation share is charged
+  on every trade against the pool. The pool validator is ported from Splash's
+  royalty pool (CC0-1.0; provenance in the package's NOTICE) and keeps Splash's
+  datum layout, so their royalty-withdraw validator, vendored unchanged, applies
+  as is. One arm is new: a passed community-takeover vote can redirect the
+  creator's fee key, which Splash's own governance action does not allow. A
+  separate package; the venue's own scripts change no deployed validator's hash.
+  The package also carries the creator's claim request, a platform treasury
+  script, the governance-side redirect script, deposit, redeem and swap requests,
+  and the pool factory: one minting policy that creates a launch's pool NFT and
+  LQ token only in that launch's graduation transaction, on the authority of the
+  launch's own LP escrow.
 - A browser widget for CTO governance. A holder's Cardano wallet derives their
   launch-scoped voting identity and proves control of the address the snapshot
   names; a Midnight wallet pays for and submits the vote. Registration accepts
@@ -39,9 +53,68 @@ Notable changes to the Noctis Zone, by release. Internal development history pre
 - Registering a wallet's NIGHT for DUST generation reads its registration state
   from the chain, so re-running it reports that there is nothing to do instead of
   submitting again.
+- A price feed over a venue pool's own history: every trade with the side it was
+  taken from, the rate it realised, and the reserves it left. Rates stay exact
+  rationals end to end and are compared by cross-multiplication, because the
+  validator the pool is priced by compares integers — two prices a float cannot
+  tell apart are still two prices, and on a token worth a fraction of a lovelace
+  that is most of them. Bars bucket by wall time aligned to the epoch, leave an
+  empty bucket out rather than carrying the last price forward, and keep each
+  side's volume in its own total. The feed also says whether the walk behind it
+  reached the pool's opening, so a truncated read is never charted as a complete
+  history.
+- A monitor over the batcher's rounds, which alerts on one outcome and counts the
+  rest. A resting limit order and a declined one are the venue working; only an
+  attempted fill that did not happen pages. Liveness is measured on rounds rather
+  than on fills, so a market with nothing to fill stays quiet and a batcher that
+  has stopped does not. A round that threw before reading the chain is counted
+  apart from a round with failures in it — the first says nothing about the venue
+  — and pools read are tracked against the most ever seen, so a read returning
+  fewer of them is visible as a drop rather than as a quiet day.
 
 ### Changed
 
+- A launch names the token its DarkVeil bond is posted in. The bond amount was
+  always set per launch; the asset is now set with it, sealed at deploy and read
+  by every path that moves a bond — the registration that takes it, both refund
+  routes, the forfeiture sweep and the disputed-bond claim. A launch that wants
+  the bond in the native token says so by omission, and behaves as it did. On a
+  Midnight Launch the bond and the curve are separately denominated: the colour
+  governs the bond alone, and every trade, fee and liquidity payment stays
+  native, because that launch prices its curve in the native token.
+
+- Registration eligibility weighs the asset the bond is actually posted in,
+  rather than naming one. Where a whole unit of that asset is a dollar, the
+  threshold is a multiplication and no price source is read, so the figure a
+  deploy seals and the figure a registration pays are the same figure.
+
+- A Cardano Launch graduates onto the venue. The curve's `Graduate` seeds the
+  output that carries the launch's pool NFT, minted by the venue's factory
+  policy in the same transaction, with the whole raise and the LP reserve; the
+  LP escrow seals holding the pool's LQ token as its position, named in its
+  genesis datum; the curve datum names the factory policy. Three validator
+  hashes change (the Cardano Launch curve, the LP escrow and vesting) and ship
+  with the next validator release. The genesis builder takes the factory
+  policy id as a required input.
+- The LP escrow and vesting validators look the governance record's thread NFT
+  up under its role-tagged name, as the record carries it.
+- A launch cannot be minted with no token side for its pool. The LP reserve
+  percentage is now bounded where the vesting window, the creator allocation and
+  the LP lock duration are already bounded, and the derived token figure is
+  checked as well as the percentage — a valid percentage still floors to nothing
+  on a small enough supply, and the figure the genesis datum carries is the
+  derived one. Graduation compares the pool's token balance against that field,
+  so at zero the comparison is satisfied by absence.
+- The creator's post-graduation stream is called the pool royalty. It is charged
+  at the launch's NoctisSwap pool into a royalty slot in the pool's own datum,
+  keyed to the creator and paid to the key hash that slot produces, so the
+  destination is derived from the pool rather than declared by a claim. The
+  escrow's `HarvestFees` is the third-party-DEX path, for a position that has
+  migrated after the lock, and is documented as that.
+- The graduation CLI takes the creator's royalty public key from the launch
+  record rather than from whoever runs it. The record's copy is captured and
+  hash-checked when the launch is created, so a key that cannot be matched to the
+  launch's own creator is refused on the day it is offered.
 - The compiled-artifact guard records one fingerprint per compiled Compact contract, and each
   CLI is held to the artifacts of the contract it proves against. A build that carries no
   artifacts for a contract says so rather than proving against whatever it is pointed at.
@@ -84,8 +157,51 @@ Notable changes to the Noctis Zone, by release. Internal development history pre
   one" and reject the first cleanly. Both curves are smaller as a result and each fits
   in a single published reference script.
 
+### Security
+
+Guarantees the Cardano launch validators now make, each pinned by a test that
+fails when its check is removed:
+
+- A community-takeover result anchored on Cardano is bound to the payee and
+  the amount the ballot named. The anchored reference covers both fields, an
+  allocation must name a positive amount and a recipient, and the off-chain
+  derivation moved in step, held to a pinned cross-language vector.
+- Activating a curve and starting a vesting schedule are pure state
+  transitions: every asset stays exactly where it was. A fee claim from a
+  curve takes the fee and nothing else.
+- A trade batch settles each order exactly once, and only an order the
+  transaction itself spends.
+- A migrated liquidity position must come back as a token under a policy
+  other than the escrow's own thread token, and the escrow keeps its ada
+  across the move.
+- A staking pool is funded only by its launch's graduation; once its budget
+  is spent, only the creator or the governor may refill it. A stake that
+  compounds accrued rewards pays the same charge a claim does. Closing a pool
+  delivers its whole remaining value, dust included, to the creator.
+- The metadata validator recognises a launch's curve by the role its thread
+  token actually carries.
+- Every deadline is measured against the earliest moment the transaction can
+  be valid, so no deadline arm executes before the deadline has passed.
+- An order is filled only by a batch of its own launch's curve that names it.
+  A sell fill is measured net of the order's own deposit, and cancelling an
+  expired sell returns its ada as well as its tokens.
+- A challenge posts the platform's bond on chain and names a governor the
+  launch's own governance record confirms. A sybil challenge commits to the
+  challenged identity and reveals it only when the challenge is upheld.
+- An emergency freeze of a community wallet is honoured by every path that
+  pays or empowers that wallet.
+- The certificate anchor keeps its whole value, not only its ada, across
+  every key-holder action.
+- The venue factory refuses to open a pool with no liquidity-token supply.
 ### Fixed
 
+- A trading wallet no longer spends the output it set aside as collateral. A
+  script spend requires collateral and collateral must be pure ada, so the
+  smallest such output is the one set aside — and the same one ordinary coin
+  selection reached for first. Collateral survives a successful spend but an
+  input does not, so the trade went through and left the wallet without the
+  pure-ada output its next trade needed. Selection now holds that output back,
+  and a transaction that could only balance by consuming it is refused.
 - The DarkVeil claim-record fetch carries the wallet-control proof the server
   requires; the widget signs the challenge through the wallet it is given.
 - A launch that opted into a staking pool now graduates. The pool takes its own
@@ -109,6 +225,12 @@ Notable changes to the Noctis Zone, by release. Internal development history pre
   onto the root the pool actually carries, and the proofs built from them are
   accepted. Reading a pool still re-derives that root and refuses to go on when it
   disagrees.
+- A staking position is quoted at the instant a claim would settle it. Reading a
+  pool advances it to the same validity-range bound a claim uses, rather than to
+  the reader's own clock, so the amount shown is the amount a claim pays out. That
+  bound opens behind the clock so a claim is already valid against the chain tip,
+  and emission is whole units, so the two readings differed by a visible amount
+  rather than a rounding step.
 
 ---
 

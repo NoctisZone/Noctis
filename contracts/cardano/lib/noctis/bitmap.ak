@@ -40,12 +40,11 @@ pub fn set_bit(bits: ByteArray, ix: Int) -> ByteArray {
   let byte_ix = ix / 8
   let byte = bytearray.at(bits, byte_ix)
   let mask = math.pow2(7 - ix % 8)
-  let updated_byte =
-    if byte / mask % 2 == 1 {
-      byte
-    } else {
-      byte + mask
-    }
+  let updated_byte = if byte / mask % 2 == 1 {
+    byte
+  } else {
+    byte + mask
+  }
   bytearray.concat(
     bytearray.concat(
       bytearray.take(bits, byte_ix),

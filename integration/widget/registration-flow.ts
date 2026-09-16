@@ -103,7 +103,7 @@ export async function checkEligibility(
 
 /**
  * Proves control of the connected Cardano wallet to the DarkVeil server
- * (M-2/M-3 gate, np_dv_require_wallet_control): fetch a fresh nonce for the
+ * (np_dv_require_wallet_control): fetch a fresh nonce for the
  * wallet's stake address, sign it with the wallet's STAKE key, and return the
  * CIP-8 material. Reuses the platform's existing /auth/nonce challenge — the
  * server verifies with NP_CIP8::verify and then confirms the signed stake key

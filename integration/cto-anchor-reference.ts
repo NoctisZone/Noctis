@@ -79,6 +79,10 @@ export interface AnchoredBallot {
   startTimestamp: bigint;
   endTimestamp: bigint;
   targetDexCredential: TargetDexCredential;
+  /** What an execution pays: 0 for every type but FundAllocation. */
+  allocationAmount: bigint;
+  /** Whom it pays — the FundAllocation payee, or the SilenceLockTrigger community wallet; empty otherwise. */
+  allocationRecipientHashHex: string;
 }
 
 export interface AnchorReferenceInput {
@@ -180,6 +184,11 @@ export function deriveAnchorReference(input: AnchorReferenceInput): Uint8Array {
       intToBigEndian(ballot.startTimestamp, 8),
       intToBigEndian(ballot.endTimestamp, 8),
       targetDexBytes(ballot.targetDexCredential),
+      // The payee and amount an execution will write are part of what the
+      // ballot decided, so the reference commits to both — mirrored field for
+      // field from the validator's own derivation.
+      intToBigEndian(ballot.allocationAmount, 16),
+      blake2b256(hexToBytes(ballot.allocationRecipientHashHex)),
     ]),
   );
 }

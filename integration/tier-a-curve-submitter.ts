@@ -155,9 +155,9 @@ export interface LucidTierACurveSubmitterConfig {
   blockfrostProjectId: string;
   blockfrostUrl: string;
   network: LucidNetwork;
-  /** bonding_curve.ak's compiled PlutusV3 script CBOR — plutus.json's
-   *  validators[].compiledCode for bonding_curve.bonding_curve.spend. One
-   *  shared, unparameterized script address across every linear-curve launch. */
+  /** The curve validator's compiled PlutusV3 script CBOR — plutus.json's
+   *  validators[].compiledCode for the curve this submitter is driving. One
+   *  shared, unparameterized script address across every launch on it. */
   compiledScriptCbor: string;
   launchIdHex: string;
   /**

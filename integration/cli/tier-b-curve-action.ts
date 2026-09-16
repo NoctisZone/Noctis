@@ -95,7 +95,7 @@ interface Input {
   // the platform wallet custody scheme never persists a mnemonic).
   signerPrivateKeyExtendedHex?: string;
   signerAddress?: string;
-  platformClaimFeeLovelace?: string; // stringified bigint, optional (defaults to the on-chain floor)
+  platformClaimFeeLovelace?: string; // stringified bigint, optional (defaults to the charge the contract names)
 
   // claim-*-fees (all three)
   amount?: string; // stringified bigint

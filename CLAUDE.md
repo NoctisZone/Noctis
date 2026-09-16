@@ -85,7 +85,7 @@ There is **no platform token**. Revenue flows in ADA and NIGHT only.
 - **Indexer:** Blockfrost API (primary, real and live). Failover is **partial**, not absent (corrected 2026-08-02 — this line previously claimed "no fallback client exists yet," which was wrong): a real `koios-client.php` exists in the plugin and is used for chain-tip health, `account_assets`, and `account_info` (the Settings page surfaces it as "Not set — Koios fallback active", and there is a `np/v1/health/koios` route). What is genuinely still **open**: that fallback is PHP-side only and covers account reads only — the TypeScript `integration/` layer has no failover of any kind, and **Maestro is unimplemented**. A Blockfrost outage still breaks every TS submitter path.
 - **Transaction building:** Anvil API for standard transactions; **`@lucid-evolution/lucid`** (Anastasia Labs) for custom-redeemer Plutus script spends, which Anvil cannot do. ⚠️ **Supply-chain watch item (2026-08-02):** the original Lucid Evolution core developers have left to form No Witness Labs and are building a separate, ground-up successor — **Evolution SDK** (`@evolution-sdk/evolution`, IntersectMBO-incubated, pure TypeScript, no WASM/CML). Our package remains actively maintained by Anastasia Labs — 0.6.0 (2026-07-16), 0.6.1 (2026-08-09), 0.6.2 (2026-08-13), no deprecation notice — so **no migration now**. Both re-evaluation triggers were re-checked against the registry on 2026-08-21 and **neither has fired**: Evolution SDK is still 0.5.12, and three releases in four weeks is not a stalled cadence. Institutional momentum still sits with the successor, and migration would be a near-total call-site rewrite across **83 files** — 33 in `integration/`, 34 tests, 11 CLI entry points, 5 in the widget. Re-evaluate when Evolution SDK 2.0 ships or if Anastasia's release cadence stalls. **We run `^0.5.5`, resolving 0.5.6**: a caret on a `0.x` version cannot cross a minor, so 0.6.x is a deliberate step rather than something `npm update` will take. It is planned before the security audit — the audited code should be the shipped code — and gated on re-running the Cardano Preprod lifecycle, because 0.6.0 changed wallet UTxO-override semantics and moved slot configuration per-instance, which are the two things our submitters lean on hardest. **Do NOT install `@evolution-sdk/lucid`** — despite the high version number (2.0.1) it has only ever had two releases, both in July 2025, and a No Witness Labs fork README actively instructs people to install it.
 - **Price oracle:** Orcfax (ADA/USD only — no NIGHT feed on mainnet, see ORACLE STRATEGY), Minswap (NIGHT/ADA, TWAP computed client-side) — both real and live
-- **DEX integration:** CSwap (primary graduation DEX), Minswap, Splash, WingRiders and SundaeSwap are whitelisted by name in `lp_escrow.ak` — real DEX integration (swap execution, pool seeding, fee-harvest client) is still **open**: no real client exists for any of them yet. **Survey done 2026-08-02** — no general-purpose library solves this; it stays per-DEX work against each DEX's own contracts. Real starting points if/when this is built: `@minswap/sdk` (actively maintained, real swap/pool transaction building with a Blockfrost adapter), `SundaeSwap-finance/sundae-contracts` (Aiken source — a readable reference for how a production CPP-AMM models pools and staking rewards), and `@indigo-labs/dexter` (multi-DEX TS SDK — **reference only, do not adopt**: last published 2025-01, and its Lucid provider targets the *original* Lucid, not Lucid Evolution). **CSwap — our own primary graduation DEX — has no public SDK found by any search**, which makes it the hardest of the four and worth confirming directly with the CSwap team before committing to it as the default.
+- **DEX integration:** **Minswap is the default third-party DEX** (2026-09-09); Splash, WingRiders, SundaeSwap and CSwap are the other names `lp_escrow.ak`'s migration whitelist is written for. Minswap replaced CSwap as the default for one reason, and it is the finding recorded further down this bullet: `@minswap/sdk` is maintained and builds real pool and swap transactions, while no public CSwap SDK has been found by any search. A default nobody can build an integration against is a promise with nothing behind it. `tier-a-genesis-datums.ts` had already reached the same place — its `dex_whitelist: []` carries a 2026-07-17 note reading "add Minswap via real governance". Note that a launch does not graduate to any of these: it opens a **NoctisSwap** pool in its own graduation transaction, and the whitelist is where LP may MIGRATE once the 365-day lock expires. Real DEX integration (swap execution, pool seeding, fee-harvest client) is still **open**: no real client exists for any of them yet. **Survey done 2026-08-02** — no general-purpose library solves this; it stays per-DEX work against each DEX's own contracts. Real starting points if/when this is built: `@minswap/sdk` (actively maintained, real swap/pool transaction building with a Blockfrost adapter), `SundaeSwap-finance/sundae-contracts` (Aiken source — a readable reference for how a production CPP-AMM models pools and staking rewards), and `@indigo-labs/dexter` (multi-DEX TS SDK — **reference only, do not adopt**: last published 2025-01, and its Lucid provider targets the *original* Lucid, not Lucid Evolution). **CSwap — our own primary graduation DEX — has no public SDK found by any search**, which makes it the hardest of the four and worth confirming directly with the CSwap team before committing to it as the default.
 
 ### Midnight Network (PSM Contracts)
 - **Language:** Compact
@@ -132,12 +132,27 @@ STAKING_ALLOC_PCT = 25 // % of total supply, optional per-launch toggle (2026-07
 STAKING_DURATION_MIN_DAYS = 1095 // Minimum staking pool runway (3 years) — creator must actively select, no default
 STAKING_DURATION_MAX_DAYS = 1825 // Maximum staking pool runway (5 years)
 STAKING_BONDING_PERIOD_DAYS = 7 // A newly-staked position earns nothing until seasoned this long — anti-gaming, enforced off-chain via the governor's snapshot formula
-STAKING_CLAIM_FEE_USD = 1 // Flat USD fee to claim accrued rewards — ADA (Cardano) or NIGHT (Midnight) at oracle spot price
-// The whole claim fee goes to the single platform wallet. Every REVENUE
-// stream does: no launch fee, trade fee, forfeited DarkVeil bond or claim
-// fee is split (2026-08-06). Slashed CHALLENGE bonds are the exception and
-// are still split 60/40 to separate treasury/ops addresses — see the
-// Challenge Bond Slashing note under TEAM REVENUE SOURCES.
+STAKING_CHARGE_ADA = 5 // CARDANO. Flat charge for taking accrued rewards out of a staking pool,
+                       // by either route: a claim, or an exit that carries rewards out with the
+                       // stake. Both arms charge it, so the same tokens cost the same to take
+                       // whichever route takes them; an exit that accrued nothing pays nothing,
+                       // because the charge is on the rewards and not on withdrawing a stake.
+                       // Replaced STAKING_CLAIM_FEE_USD on Cardano (2026-09-09). Named in ADA
+                       // rather than in dollars because Aiken has no in-circuit oracle: an
+                       // amount priced off chain is an amount the chain never agreed to, and
+                       // naming it outright is what makes the charge enforceable on a redeemer
+                       // anyone may build. 5 ADA is what $1 bought when it was set, and it also
+                       // sits clear of the protocol's own minimum ADA for the output that
+                       // carries it, so the figure named is the figure that binds.
+STAKING_CLAIM_FEE_USD = 1 // MIDNIGHT LAUNCH ONLY, from 2026-09-09 — NIGHT at oracle spot price.
+                          // Compact enforces that payment natively via the PSM's own circuits.
+                          // Whether Midnight should follow Cardano onto a fixed denomination is
+                          // an open question, not a decision made here — its own build blockers
+                          // come first
+// The whole claim fee goes to the single platform wallet. So does every
+// other stream, revenue or not: no launch fee, trade fee, forfeited DarkVeil
+// bond, claim fee or slashed challenge bond is split anywhere (2026-08-06,
+// challenge bonds followed 2026-09-07). ONE address, everywhere.
 LP_LOCK_DAYS = 365 // LP escrow lock duration
 LP_MIGRATION_COOLDOWN= 90 // Days between LP migrations
 CTO_MIN_DAYS_POSTGRD = 90 // Minimum days post-graduation before CTO vote (raised from 30, anti-whale-takeover fix, 2026-07-28 — see CTO GOVERNANCE section)
@@ -184,7 +199,15 @@ The fee split percentage is the same across all tiers. The **denomination differ
 
 **Post-graduation (decided 2026-08-05, venue not built yet):** creator **1.0%**,
 platform **0.1%**, and **0.1%** compounded straight back into the pool, plus the batcher
-fee. Total **1.2% + batcher**. The creator's share DOUBLES at graduation while the
+fee. Total **1.2% + batcher**. **The venue's batcher fee is 1.5 ADA an order**
+(decided 2026-09-08, sized against a measured fill — see `contracts/cardano-dex/README.md`).
+It is a ceiling the order names, not a price: a fill charges what the transaction
+actually costs and returns the rest to the placer. The floor under it is structural
+rather than chosen — a fill has exactly two inputs and the executor supplies neither,
+so its payment has to be an output, and an output has a protocol minimum. The same
+1.5 ADA funds ONE fill; because the fee is drawn in proportion to what is filled, the
+least of an order anyone can fill is about 94% of it.
+The creator's share DOUBLES at graduation while the
 platform's drops tenfold. Trading continues on Noctis rather than being handed to a DEX,
 which is what makes the 0.1% pool share possible — snek.fun burns its LP, so their
 equivalent slice deepens a pool nobody can claim.
@@ -223,7 +246,7 @@ validator pass. It is not a launch option and is not listed as one below.
 | **Bonding curve** | Cardano L1 *(public phase; DarkVeil stays on Midnight)* | Midnight PSM |
 | **Curve type** | Quadratic | Quadratic |
 | **Trade currency** | ADA | NIGHT |
-| **LP graduates to** | CSwap / Cardano DEX | Midnight DEX (TBD) |
+| **LP graduates to** | A NoctisSwap pool, opened by the graduation transaction itself; migratable to a whitelisted Cardano DEX (default Minswap) after the lock | Midnight DEX (TBD) |
 | **Whale cap** | 5% per wallet key, cumulative across DarkVeil + public | 5% per wallet key, cumulative across DarkVeil + public |
 | **Cardano wallet required** | Yes | Yes (for DV eligibility proof) |
 | **Midnight wallet required** | Yes (DV phase only) | Yes (full launch) |
@@ -242,7 +265,7 @@ private phase is in scope for a non-Midnight chain at all.
 - **Public bonding curve runs on Cardano L1, not Midnight** (resolved 2026-07-09 — see `contracts/cardano/bonding_curve_tier_b.ak`). The public phase is public information by definition — nothing about price, amounts, or cap status needs Midnight's privacy once DarkVeil closes, and Cardano can already enforce real quadratic-curve payment natively. Only DarkVeil's private registration/buying phase stays on Midnight. Public-phase tokens mint directly to buyers as they buy, no separate distribution step.
 - Cap: 5% per wallet key — the cumulative cap carries across DarkVeil and the public phase, enforced by the Merkle accumulator in the Cardano curve datum (`lib/noctis/cap_accumulator.ak`): one 32-byte `cap_root` commits to every wallet's running total, and each trade carries its own total plus a proof of it. A DarkVeil claim and a public buy draw on the same 5%; nothing about a wallet is published unless and until it trades.
 - Includes DarkVeil private phase — a buyer's private Midnight purchase is settled for real (paid for in ADA, tokens delivered) via a dedicated Cardano claim after DarkVeil closes; see the DarkVeil claim settlement resolution below.
-- LP graduates to CSwap (or whitelisted Cardano DEX)
+- LP graduates to a NoctisSwap pool created in the graduation transaction; after the 365-day lock it may migrate to a whitelisted Cardano DEX, Minswap by default
 - All Midnight-side user gas (DarkVeil registration/buying only) paid by platform DUST — the public curve and the DarkVeil claim are both normal Cardano transactions, no DUST involved
 - **Resolved (2026-07-11):** ALL creator fees — both the DarkVeil claim and public buys — accrue in one place: the Cardano curve contract's own balance. The original "Stream A1 (Midnight) / Stream A2 (Cardano)" split described an aspirational Stream A1 that never mechanically existed (Compact could never enforce the ADA payment it would have required). See the CREATOR FEE ESCROW section.
 
@@ -262,7 +285,7 @@ private phase is in scope for a non-Midnight chain at all.
 ### The linear curve (`tier_a`, retired 2026-09-05)
 - Retired by decision on 2026-09-05, ahead of the next pooled validator pass so that pass carries neither its validator nor its browser widgets. No launch is created or shown on it; the site's three test records on it were removed the same day.
 - What it was: Cardano L1 only with no Midnight dependency (no DarkVeil phase); linear pricing (P = P₀ + k·x); the same 5% per-wallet-key cap accumulator as the quadratic curve, weaker in practice because nothing raised the cost of a second wallet.
-- Still in the tree until that pass: `bonding_curve.ak`, and `token_metadata.ak`'s decode of its datum (re-pointed at the quadratic curve in the same pass). The `tier-a-` prefix on several integration modules — the schemas, mint, genesis-datum and chain-state-reader code every Cardano launch uses — is historical naming, not linear-curve code: rename, do not delete.
+- Removed from the tree in the pooled validator pass of 2026-09-15: `bonding_curve.ak` is gone, and `token_metadata.ak` reads the quadratic curve's datum and thread NFT. The `tier-a-` prefix on several integration modules — the schemas, mint, genesis-datum and chain-state-reader code every Cardano launch uses — is historical naming, not linear-curve code: rename, do not delete.
 
 > ⚠️ **Midnight Launch is design-complete but build-blocked pending resolution of the Midnight Fungible Token Standard, Midnight Launch Graduation and DEX, Midnight Launch Trade Fee Currency and Conversion, and Midnight LP Escrow PSM Design open issues (see MIDNIGHT LAUNCH — OPEN ISSUES below).** Do not scaffold Midnight Launch contracts until those issues are resolved. both Cardano curves are unaffected.
 
@@ -292,7 +315,7 @@ DarkVeil is used by both Cardano Launch and Midnight Launch. The sequence and el
 4. Registrant stake key ≠ creator stake key
 5. No direct ADA flow from creator wallet in 90-day lookback
 
-> **Architecture correction (2026-07-12):** checks #1 and #2 were previously described as verified via "a ZK proof against UTxO history" generated client-side. This isn't achievable with real Midnight capabilities — Compact has no cross-contract call mechanism (see the Cross-PSM Atomicity open issue) and no bridge exists that lets a Midnight circuit read Cardano chain state (see the Midnight Launch Trade Fee Currency and Conversion open issue); a Midnight circuit cannot independently verify a claim about Cardano transaction history in zero-knowledge. Building check #1 for real confirmed this: it's implemented as an off-chain check (`integration/eligibility-checker.ts`'s `checkWalletAge`, querying Blockfrost directly), the same off-chain-computed-then-allowlist-gated pattern checks #1/#4/#5 all actually use. The real privacy mechanism is: the platform computes checks #1/#3/#4/#5 off-chain for every applicant (check #2 is the one remaining piece — see the DarkVeil Eligibility Checks off-chain enforcement open issue below), only eligible wallets get a leaf in a Merkle tree, and the governor publishes just the tree's root. `verifyAllowlist`'s ZK proof genuinely proves *membership* in that published tree without revealing which leaf — but it does not, and cannot, independently re-verify wallet age, stake key, or NIGHT balance itself. This is the same trust model already used for `cto_governance.compact`'s balance-snapshot tree (a governor-published root, ZK-proven membership) — trust the governor's off-chain computation, not a false claim of trustless cross-chain verification. `eligibility_gate.compact`'s own PRIVACY ANALYSIS section already described this correctly; only this section's language was wrong.
+> **Architecture correction (2026-07-12):** checks #1 and #2 were previously described as verified via "a ZK proof against UTxO history" generated client-side. This isn't achievable with real Midnight capabilities — Compact had no cross-contract call mechanism when this was written (calls exist as of toolchain 0.33.0 — see the 2026-09-13 correction under the Cross-PSM Atomicity blocker; **this conclusion is unaffected either way, because the binding constraint here is the second one, not the first**) and no bridge exists that lets a Midnight circuit read Cardano chain state (see the Midnight Launch Trade Fee Currency and Conversion open issue); a Midnight circuit cannot independently verify a claim about Cardano transaction history in zero-knowledge. Building check #1 for real confirmed this: it's implemented as an off-chain check (`integration/eligibility-checker.ts`'s `checkWalletAge`, querying Blockfrost directly), the same off-chain-computed-then-allowlist-gated pattern checks #1/#4/#5 all actually use. The real privacy mechanism is: the platform computes checks #1/#3/#4/#5 off-chain for every applicant (check #2 is the one remaining piece — see the DarkVeil Eligibility Checks off-chain enforcement open issue below), only eligible wallets get a leaf in a Merkle tree, and the governor publishes just the tree's root. `verifyAllowlist`'s ZK proof genuinely proves *membership* in that published tree without revealing which leaf — but it does not, and cannot, independently re-verify wallet age, stake key, or NIGHT balance itself. This is the same trust model already used for `cto_governance.compact`'s balance-snapshot tree (a governor-published root, ZK-proven membership) — trust the governor's off-chain computation, not a false claim of trustless cross-chain verification. `eligibility_gate.compact`'s own PRIVACY ANALYSIS section already described this correctly; only this section's language was wrong.
 
 > **Implementation status (2026-07-10):** check #3 is now implemented everywhere it applies — `eligibility_gate.compact`'s `registerForDarkVeil` (Cardano Launch), `darkveil.compact`'s `revealBuyCommit` (Cardano Launch), and `bonding_curve.compact`'s `registerForDarkVeil`/`revealBuyCommit`/`buyTokens` (Midnight Launch, merged contract). Each contract now takes a `creatorPubKey` at deploy time and rejects a caller whose derived identity matches it. The same fix also closed a related, previously-undiscovered gap in Cardano's public curve `buyTokens` (Cardano/Aiken) — full detail in `local/SECURITY_AUDIT.md` — fixed in the same pass.
 
@@ -335,7 +358,7 @@ Private forever:
 
 > **Bonding Curve PSM scope note (2026-07-09):** this PSM is **Midnight Launch only** now. Cardano Launch's public bonding curve moved to Cardano/Aiken (`contracts/cardano/bonding_curve_tier_b.ak`) — see the Cardano L1 table below and Cardano Launch's description above. Cardano Launch's DarkVeil phase (registration + private buying) still uses the other Midnight PSMs in this table exactly as before; only the public post-DarkVeil buying phase moved.
 >
-> **Eligibility Gate and DarkVeil PSMs have two shapes now (2026-07-10):** Compact has no working cross-contract call mechanism (verified against the real compiler — every call form tested fails with "contract types are not yet implemented"), so the 5% cumulative cap couldn't be enforced by having separate DarkVeil / Eligibility Gate / Bonding Curve PSMs call each other. For **Midnight Launch**, all three are now MERGED into one deployed contract (`contracts/midnight/bonding_curve.compact`, despite the filename) with one shared `cumulativePurchases` ledger — `buyTokens` (public phase) AND `revealBuyCommit` (DarkVeil phase) both check and update the cap atomically against the same map. This also closed a previously-undiscovered gap: `revealBuyCommit` had ZERO payment enforcement for the actual token purchase, now fixed for Midnight Launch via `receiveUnshielded` applied at reveal time (deliberately not submit time — see the contract's file header for the privacy reasoning). For **Cardano Launch**, Eligibility Gate and DarkVeil are merged into one standalone contract (`eligibility_gate.compact`, Phase 2 2026-07-11 — the old standalone `darkveil.compact` was deleted, superseded) — Cardano Launch has no Midnight-side bonding curve to merge with. Do not assume "Eligibility Gate PSM" or "DarkVeil PSM" always means the same deployed contract across tiers.
+> **Eligibility Gate and DarkVeil PSMs have two shapes now (2026-07-10):** Compact had no working cross-contract call mechanism when this was decided (verified against the compiler of the day — every call form tested failed with "contract types are not yet implemented"; **calls exist as of toolchain 0.33.0 — see the 2026-09-13 correction under the Cross-PSM Atomicity blocker, which leaves this decision standing**), so the 5% cumulative cap couldn't be enforced by having separate DarkVeil / Eligibility Gate / Bonding Curve PSMs call each other. For **Midnight Launch**, all three are now MERGED into one deployed contract (`contracts/midnight/bonding_curve.compact`, despite the filename) with one shared `cumulativePurchases` ledger — `buyTokens` (public phase) AND `revealBuyCommit` (DarkVeil phase) both check and update the cap atomically against the same map. This also closed a previously-undiscovered gap: `revealBuyCommit` had ZERO payment enforcement for the actual token purchase, now fixed for Midnight Launch via `receiveUnshielded` applied at reveal time (deliberately not submit time — see the contract's file header for the privacy reasoning). For **Cardano Launch**, Eligibility Gate and DarkVeil are merged into one standalone contract (`eligibility_gate.compact`, Phase 2 2026-07-11 — the old standalone `darkveil.compact` was deleted, superseded) — Cardano Launch has no Midnight-side bonding curve to merge with. Do not assume "Eligibility Gate PSM" or "DarkVeil PSM" always means the same deployed contract across tiers.
 >
 > **Resolution (2026-07-11):** Cardano Launch's DarkVeil buy settlement — payment AND token delivery — moved to Cardano entirely, via a new `ClaimDarkVeilTokens` redeemer on `contracts/cardano/bonding_curve_tier_b.ak`. Investigation while designing this fix found the gap was bigger than originally scoped: `revealBuyCommit`'s missing payment check was never going to be fixable in Compact (ADA isn't a Midnight-native token — no bridge exists to move it inside a PSM, confirmed via the Midnight Launch Trade Fee Currency and Conversion research), but more importantly, **no mechanism anywhere delivered tokens or charged ADA for a Cardano Launch DarkVeil purchase at all** — the original `identity_purchases` pre-seed only ever fed the 5% cap check, never a real settlement. Fixing this also surfaced and fixed a real privacy violation in the same mechanism: that pre-seed published every registrant's `(wallet, DV-amount)` pair in plaintext on Cardano, directly contradicting the Fair Launch Certificate's "Private forever: Individual wallet addresses, Individual buy amounts" promise. Both are fixed together — see `bonding_curve_tier_b.ak`'s file header for the full mechanism (Merkle-root allocation + private per-wallet claim, nobody's amount visible unless and until that wallet claims). `revealBuyCommit` itself needed no change — it was already correct as a private commit/reveal of intent; it was never going to be the place real ADA changes hands.
 
@@ -349,7 +372,7 @@ Private forever:
 | Treasury PSM | B + C | Fee routing, stablecoin accumulation, DUST delegation |
 | Midnight LP Escrow PSM | **C only** | 365-day LP lock on Midnight DEX; equivalent of Cardano LP Escrow but on Midnight — **TBD: depends on Midnight DEX availability, see the Midnight Launch Graduation and DEX open issue** |
 | Midnight Token PSM | **C only** | Manages Midnight-native fungible token issuance and transfers — **TBD: depends on Midnight token standard confirmation, see the Midnight Fungible Token Standard open issue** |
-| Staking Rewards Pool PSM | **C only** | Optional per-launch staking pool (confirmed 2026-07-14). `contracts/midnight/staking_pool.compact` — reward minting/claiming is real (`mintUnshieldedToken`, confirmed real and executable, 2026-07-14), but "staked amount" is governor-attested off-chain rather than custodied on-chain (Compact has no cross-contract calls to reach `bonding_curve.compact`'s own token ledger); see STAKING REWARDS section |
+| Staking Rewards Pool PSM | **C only** | Optional per-launch staking pool (confirmed 2026-07-14). `contracts/midnight/staking_pool.compact` — reward minting/claiming is real (`mintUnshieldedToken`, confirmed real and executable, 2026-07-14), but "staked amount" is governor-attested off-chain rather than custodied on-chain (Compact had no cross-contract calls to reach `bonding_curve.compact`'s own token ledger when this was built — see the 2026-09-13 correction under the Cross-PSM Atomicity blocker); see STAKING REWARDS section |
 
 ### Cardano L1 Contracts (Public Record)
 
@@ -435,20 +458,39 @@ User Wallet (Midnight primary; Cardano for DV eligibility only)
 - Payment: Monthly manual claim, ADA
 - Gas: ~0.17 ADA deducted from escrow balance automatically
 
-**Stream B — LP Trading Fees (post-graduation, ongoing)**
-- Accrues: the graduated pool's own trading fees — at the venue's own
-  post-graduation share (see FEE SPLIT), or a third-party DEX's LP schedule
-- Paid: to the active fee recipient through `lp_escrow.ak`'s `HarvestFees`
-  redeemer. **Not "directly, bypassing the escrow"** — the LP position is locked
-  at a script address, so a payout is always a transaction that spends the
-  escrow UTXO, whatever "directly" means at the DEX's own level
-- What `HarvestFees` guarantees: the locked position and the escrow's own value
-  are both left byte-for-byte unchanged, and the recipient really receives the
-  harvested amount — so the lovelace has to arrive from the DEX side of that
-  same transaction. Signed by the recipient, the only party a harvest is for
-- Continues: Indefinitely while pool has volume
-- Redirected to the community wallet if a CTO vote passes — `active_fee_recipient`
-  switches on the same `cto_triggered` flag `Migrate`'s authorisation reads
+**Stream B — Pool Royalty (post-graduation, ongoing)**
+
+Call it the **pool royalty**, not "LP trading fees" (renamed 2026-09-12). A
+launch graduates onto a **NoctisSwap** pool, and the creator's post-graduation
+1.0% is charged *at the pool* to a royalty slot in the pool's own datum. It is
+not a share of LP fees and it does not pass through `lp_escrow.ak`.
+- Accrues: 1.0% of every trade against the pool, into the pool datum's own
+  royalty counter — see FEE SPLIT for the whole post-graduation schedule
+- Paid: the creator signs a withdraw request; the venue's claim path pays the
+  key hash that `royalty_pub_key` produces, delegated by the creator or not at
+  all. The destination is derived from the pool, never declared by the claim, so
+  the rule binds every claim rather than one route through one
+- What a claim guarantees: it draws a non-negative amount from each side, so the
+  counter it settles against can only fall, and the locked LP position is not
+  touched
+- Continues: indefinitely while the pool has volume
+- Redirected by a passed CTO vote: the `redirect` script rewrites
+  `royalty_pub_key` to the community wallet and bumps the pool nonce, so a
+  replaced key's old signatures die with it
+
+**The 0.1% left in the pool is not a stream.** It stays in the reserves, so the
+position held in escrow grows with volume. Nobody claims it, and it must never
+be shown as claimable.
+
+**`lp_escrow.ak`'s `HarvestFees` is the third-party-DEX path, not this one.** It
+applies to a position that has migrated to another whitelisted DEX after the
+365-day lock. It guarantees the locked position and the escrow's own value are
+left byte-for-byte unchanged and that the recipient really receives the
+harvested amount, and it is signed by the recipient, the only party a harvest is
+for. Its recipient follows the same `cto_triggered` flag `Migrate`'s
+authorisation reads. Note what the 2026-09-05 venue research established: every
+whitelisted Cardano DEX accrues LP fees into reserves, realised on withdrawal,
+so on those venues this pays out at migration rather than continuously.
 
 These are **two entirely different income mechanisms**. Do not conflate them in the UI.
 
@@ -485,14 +527,21 @@ These are **two entirely different income mechanisms**. Do not conflate them in 
 > that the returned token is genuinely the target DEX's LP token for that pool
 > needs per-DEX knowledge, and arrives with the DEX integration work.
 
-> **Resolution (2026-07-10):** a new `HarvestFees` redeemer lets Stream B trading fees reach `fee_recipient` (the creator, or the community wallet once CTO is triggered — same redirect rule as everywhere else) WITHOUT touching the locked LP position, closing the gap between this file's "no `withdraw`, ever" invariant and Stream B's "paid directly to fee_recipient" description — the fee payout has to route through this contract since the LP itself lives here, a script address, not a wallet. **Deliberately DEX-agnostic and narrow:** the redeemer only verifies its OWN two invariants (the locked `lp_token_amount` is byte-for-byte unchanged; the correct recipient actually receives the harvested lovelace in the same transaction) and does not model or verify any specific DEX's real harvest call — that remains genuinely unconfirmed per-DEX (CSwap/Minswap/Splash/WingRiders/SundaeSwap), an open sub-question this always had. **Authorised by the recipient's signature.** It began permissionless, on the reasoning that nobody can gain by calling it since the LP position cannot move — true, and not the whole question. The continuing output is identical to the input, so a caller could rebuild the escrow UTXO at a new reference for the price of a transaction fee, invalidating whatever was being built against the old one; the CTO anchor reads this UTXO as a reference input, and that is the community's own rescue path. The recipient is the only party a harvest is for, so requiring their signature costs nobody anything.
+> **Resolution (2026-07-10; `HarvestFees` was scoped to the third-party-DEX path on 2026-09-12 — see Stream B above, which is now the pool royalty and does not route through this contract):** a new `HarvestFees` redeemer lets a migrated position's trading fees reach `fee_recipient` (the creator, or the community wallet once CTO is triggered — same redirect rule as everywhere else) WITHOUT touching the locked LP position, closing the gap between this file's "no `withdraw`, ever" invariant and Stream B's "paid directly to fee_recipient" description — the fee payout has to route through this contract since the LP itself lives here, a script address, not a wallet. **Deliberately DEX-agnostic and narrow:** the redeemer only verifies its OWN two invariants (the locked `lp_token_amount` is byte-for-byte unchanged; the correct recipient actually receives the harvested lovelace in the same transaction) and does not model or verify any specific DEX's real harvest call — that remains genuinely unconfirmed per-DEX (Minswap first, then Splash/WingRiders/SundaeSwap/CSwap), an open sub-question this always had. **Authorised by the recipient's signature.** It began permissionless, on the reasoning that nobody can gain by calling it since the LP position cannot move — true, and not the whole question. The continuing output is identical to the input, so a caller could rebuild the escrow UTXO at a new reference for the price of a transaction fee, invalidating whatever was being built against the old one; the CTO anchor reads this UTXO as a reference input, and that is the community's own rescue path. The recipient is the only party a harvest is for, so requiring their signature costs nobody anything.
 
 ### Migration Whitelist (updatable — team multisig + 72h public notice)
-- CSwap *(default graduation DEX)*
-- Minswap
+
+Where a graduated LP position may MOVE to once its 365-day lock expires — not
+where it graduates, which is a NoctisSwap pool the graduation transaction opens.
+The on-chain whitelist is a list of script credentials and **starts empty**; each
+name below is added through the real `ProposeDexChange`/`ExecuteDexChange`
+governance path below, so the list is a plan rather than a deployed state.
+
+- Minswap *(default — the only one of these with a maintained public SDK)*
 - Splash
 - WingRiders
 - SundaeSwap
+- CSwap *(no public SDK found. Shown greyed out and non-selectable in the Create Wizard since 2026-09-09; it can return once there is something to build an integration against)*
 
 > **Resolution (2026-07-10):** the whitelist was previously described as "hardcoded, immutable" while `lp_escrow.ak`'s own file header already claimed "Option B — multisig + 72h notice" — the header described the intended design, but the actual `AddDex`/`RemoveDex` redeemers only ever required one governor signature with immediate effect. Fixed for real: a new `ProposeDexChange` redeemer requires `multisig_threshold`-of-`multisig_signers` real signatures (the M/N split is a deployment-time choice, not hardcoded) and starts a 72-hour public notice clock; `ExecuteDexChange` applies the change once the notice period has elapsed — permissionless, since the proposal was already public for the full window (same "the deadline is the authorization" pattern as the curve's `ExpireCurve`); `CancelPendingDexChange` lets the multisig withdraw a proposal before it takes effect. This is Option B from internal tracking, matching the user's confirmed choice — not yet Option C (on-chain protocol governance vote), which stays the eventual target once platform governance ships (see the Platform Governance open issue).
 
@@ -554,17 +603,16 @@ The creator's own token allocation CAN vote in a CTO ballot — it is not exclud
 | NIGHT Holdings | Market appreciation as ops buys NIGHT for DUST | Sellable under exceptional circumstances only |
 | Stablecoin Reserve | USDM accumulated out of the platform wallet's income | Protocol liquidity reserve, not a salary account. A holding policy now, not a separate wallet |
 
-> **Challenge bond slashing is the one real exception to "one wallet, no splits" (verified in code 2026-08-31).**
+> **There is no fee split anywhere on the platform (re-verified in code 2026-09-07).**
 > Revenue is unsplit — launch fee, the platform's 1.0%, forfeited DarkVeil bonds and staking claim
-> fees all land in the single platform wallet. But a *slashed challenge bond* is not revenue, and
-> three shipped validators still divide one 60/40 between two distinct addresses:
-> `nhop_challenge.ak`, `cto_sybil_challenge.ak` and `cto_governance.ak` each declare
-> `treasury_bps = 60` / `ops_bps = 40` and carry a `treasury_pub_key_hash` / `ops_pub_key_hash` pair
-> in their datum, with tests asserting the payout. **Both addresses must therefore still be
-> provisioned and disclosed** — retiring the pair for revenue did not retire it here, and the
-> deployment checklist needs both. Whether these should also collapse to one address is a real open
-> question, not a documentation slip; it needs a contract change and a re-audit, so it is not assumed
-> either way here.
+> fees all land in the single platform wallet. A *slashed challenge bond* was the last thing that
+> divided one, and it no longer does: `nhop_challenge.ak`, `cto_sybil_challenge.ak` and
+> `cto_governance.ak` each carry a single `payout_pub_key_hash` and pay the whole bond to it. The
+> 60/40 ratio had borrowed its justification from a revenue split that no longer exists, so it was
+> dividing a penalty by a rule nothing else on the platform follows. **The deployment checklist needs
+> ONE address, not two.** Which address a forfeited bond goes to is still a deployment choice — a
+> bond is arguably not platform revenue — but that is what the datum is written with, not a contract
+> change.
 
 ### NIGHT Sell Policy (Team-held NIGHT only)
 - Protocol treasury NIGHT: **never sold, ever**
@@ -647,8 +695,9 @@ Twitter/X, Discord, LinkedIn, Telegram, Instagram, TikTok — displayed on launc
 > code. For the launch fee specifically the platform only *quotes* an amount; the creator signs the
 > transaction, so a wrong price is visible and refusable rather than silently extracted.
 >
-> **Verified end to end on Preprod:** a real mint paid **51.388782 ADA**, split 60/40 treasury/ops,
-> which was exactly $10 at the prevailing rate.
+> **Verified end to end on Preprod:** a real mint paid **51.388782 ADA**, which was exactly $10 at
+> the prevailing rate. (That run predates the retirement of the treasury/ops pair and paid two
+> addresses; the price check is what it evidences, not the destination.)
 >
 > A real bug was fixed on the way: `BlockfrostClient.getAddressUtxos` requested page 1 in ascending
 > order, so on any long-lived address it returned the oldest hundred UTXOs and never current state.
@@ -659,8 +708,9 @@ Twitter/X, Discord, LinkedIn, Telegram, Instagram, TikTok — displayed on launc
 
 ### Graduation
 - Requirement: 100% sell-through of bonding curve (no partial graduation)
-- Default graduation DEX: CSwap
-- Creator can override to any whitelisted DEX at launch configuration
+- Graduation opens a **NoctisSwap** pool in the same transaction that closes the curve — a launch does not hand its liquidity to a third party at graduation
+- **Default third-party DEX: Minswap**, which is the migration target once the LP lock expires, and the one DEX with a maintained SDK to build that against
+- The creator's DEX selection is a forced choice at launch configuration with **no pre-selected value** — see the wizard's own note; "default" above names the platform's reference DEX, not a pre-filled field
 
 ### LP Seeding (at graduation)
 - Tokens: 20% of total supply (200M for a 1B token launch)
@@ -704,7 +754,7 @@ This is a narrower, different thing from the platform-wide Community Yield Mecha
 2. **Fixed linear daily emission.** `daily_emission = pool_balance / duration_days`. The creator selects a duration between `STAKING_DURATION_MIN_DAYS` (1095, 3 years) and `STAKING_DURATION_MAX_DAYS` (1825, 5 years) at launch creation — no default, forced active selection, same pattern as vesting.
 3. **Pro-rata daily split.** Each day's emission splits among currently-staked holders in proportion to their staked balance.
 4. **Bonding period.** A newly-staked position earns nothing for `STAKING_BONDING_PERIOD_DAYS` (7 days) after staking — anti-gaming, prevents stake-right-before-snapshot-then-claim-then-unstake. Enforced entirely off-chain (see Reward Accounting below); no separate on-chain check exists for it.
-5. **Claiming.** Claimable from the holder's token profile on the Noctis platform. Costs a flat `STAKING_CLAIM_FEE_USD` ($1) fee, paid in ADA (Cardano) or NIGHT (Midnight Launch) at oracle spot price — same USD→ADA/NIGHT conversion machinery as the DarkVeil NIGHT bond (see ORACLE STRATEGY). Paid whole to the platform wallet — no split, matching every other fee on the platform.
+5. **Claiming, and exiting.** Claimable from the holder's token profile on the Noctis platform. On Cardano this costs a flat `STAKING_CHARGE_ADA` (5 ADA), enforced by `staking_pool.ak` itself rather than applied by the submitter — `ClaimRewards` takes no signature, so anyone may build that transaction and only the validator can make a charge stick. **The same charge applies to an exit**, because an exit takes every accrued reward out along with the stake: charging one arm and not the other would price the same tokens by which button was pressed. An exit from a position that accrued nothing pays nothing. Midnight Launch charges `STAKING_CLAIM_FEE_USD` ($1) in NIGHT at oracle spot price, through its own PSM. Paid whole to the platform wallet — no split, matching every other fee on the platform.
 6. **Top-ups.** A creator can add more tokens to an existing pool at any time. A top-up adds to `pool_balance` without changing the daily emission rate — it extends the runway further into the future rather than accelerating payouts. There is no stored duration or end-date on-chain at all (see Reward Accounting) — a top-up is just "add to the balance."
 
 ### Reward accounting — off-chain computed, on-chain verified (no in-circuit division anywhere)
@@ -719,8 +769,8 @@ Compact has no in-circuit division, and no reward-per-share/accumulator primitiv
 The staking reserve seeds at **graduation**, in the same transaction as LP seeding — extends the existing `Graduate` redeemer (Cardano) rather than an earlier activation point. This avoids the edge case of a pre-graduation cancelled curve having already funded a pool for tokens that were never actually distributed.
 
 ### Tier-specific notes
-- **Cardano (Aiken):** new `contracts/cardano/staking_pool.ak` — ONE pool-state UTXO per launch (`reward_root`, `claimed_so_far: List<(VerificationKeyHash, Int)>`, real token balance held directly in the UTXO's own value — no separate stored balance field) plus one position UTXO per stake ACTION (`staker_vkh`, `staked_amount`, `stake_timestamp`) — avoids single-UTXO contention for the stake/unstake action specifically. Staking itself needs no validator redeemer at all (creating a script UTXO needs no approval, only spending one does); `Unstake`/`ClaimRewards` are real, permissionless, value-movement-verified redeemers. `bonding_curve.ak`/`bonding_curve_tier_b.ak` gain `staking_enabled: Bool` + `staking_pool_credential: Credential` + `staking_reserve_tokens: Int` datum fields (0/empty if declined) and a `staking_seeding_output_ok` check on `Graduate`, mirroring the existing `lp_seeding_output_ok` check. 6 new tests (3 per curve file), 161/161 Cardano tests total.
-- **Midnight Launch (Midnight/Compact):** new `contracts/midnight/staking_pool.compact` — a DIFFERENT design from Cardano's real-custody position model, forced by a real architectural constraint discovered while building it (2026-07-14): `bonding_curve.compact` never mints the Midnight Launch launch token as a real Midnight coin — it tracks ownership purely as an internal ledger `balances: Map<Bytes<32>, Uint<128>>` — and Compact still has no cross-contract call mechanism (see the Cross-PSM Atomicity open issue and the Midnight Launch contract-merge notes above), so a separate `staking_pool.compact` has no way to debit that map. Two independent `midnight-verify` agents (source-investigation against `LFDT-Minokawa/compact@main`, and live compile+execution) confirmed `tokenType`/`mintUnshieldedToken` are real, tested, working stdlib primitives — but that only solves half the problem: minting a *new* coin is real, taking custody of the *existing* launch token balance is not, without merging into `bonding_curve.compact` itself (same fix pattern as the original three-way Midnight Launch contract merge). Presented to Jinx as a 3-way choice (merge into `bonding_curve.compact` / governor-attested stake / defer Midnight Launch staking); **confirmed 2026-07-14: governor-attested stake**, over merging into the already-audited 1801-line/46-test `bonding_curve.compact`. Resulting design: `stakeSnapshotRoot` is a governor-published Merkle root over `(stakerKey, stakedAmount)` leaves, attested off-chain from `bonding_curve.compact`'s real public ledger events (same trust model as every other governor-published root on this platform — allowlist membership, CTO voting weight); reward *claiming* is fully real — `claimRewards` mints the payout directly to the staker via `mintUnshieldedToken`, and collects the NIGHT claim fee via `receiveUnshielded`/`sendUnshielded`. Stated plainly: the minted reward is a SEPARATE Midnight-native coin color from `bonding_curve.compact`'s internal launch-token ledger, not literally the same fungible unit — because that contract never minted a real coin for stakers to deposit in the first place. This is building ahead of Midnight Launch's own token foundation, the same caveat noted in the Midnight Fungible Token Standard open issue that already applies to the rest of Midnight Launch's "design-complete but build-blocked" status. 21 new tests, 214/214 total.
+- **Cardano (Aiken):** `contracts/cardano/staking_pool.ak` — ONE pool UTXO per launch, carrying its thread NFT, the real token balance in its own value, a reward accumulator (`acc_reward_per_token`, `total_staked`, `unallocated`, `emission_per_day`, `last_update_ms`, `exhausted_at`) and a Merkle root of every position (`stake_root`; a position is `(amount, debt, since)`), so the datum stays one fixed size however many wallets stake. Redeemers: `Stake` (signed by the staker; restarts their lock), `Unstake`, `ClaimRewards`, `TopUpPool`, `ClosePool`. The pool is minted unfunded and is funded only by the graduation transaction — the one that spends the launch's curve under `Graduate` — after which top-ups are permissionless until the budget runs dry, and then the creator's or governor's to make. Taking a reward out pays `STAKING_CHARGE_ADA` whichever way it leaves: a claim, an exit that carries it, or a stake that compounds it. Closing pays the creator the pool's whole remaining value once nobody is staked and the budget is spent. `bonding_curve_tier_b.ak` carries `staking_enabled: Bool` + `staking_pool_credential: Credential` + `staking_reserve_tokens: Int` (0/empty if declined) and checks `staking_seeding_output_ok` on `Graduate`, mirroring `lp_seeding_output_ok`.
+- **Midnight Launch (Midnight/Compact):** new `contracts/midnight/staking_pool.compact` — a DIFFERENT design from Cardano's real-custody position model, forced by a real architectural constraint discovered while building it (2026-07-14): `bonding_curve.compact` never mints the Midnight Launch launch token as a real Midnight coin — it tracks ownership purely as an internal ledger `balances: Map<Bytes<32>, Uint<128>>` — and Compact had no cross-contract call mechanism at the time (see the Cross-PSM Atomicity blocker's 2026-09-13 correction, which leaves this design standing, and the Midnight Launch contract-merge notes above), so a separate `staking_pool.compact` has no way to debit that map. Two independent `midnight-verify` agents (source-investigation against `LFDT-Minokawa/compact@main`, and live compile+execution) confirmed `tokenType`/`mintUnshieldedToken` are real, tested, working stdlib primitives — but that only solves half the problem: minting a *new* coin is real, taking custody of the *existing* launch token balance is not, without merging into `bonding_curve.compact` itself (same fix pattern as the original three-way Midnight Launch contract merge). Presented to Jinx as a 3-way choice (merge into `bonding_curve.compact` / governor-attested stake / defer Midnight Launch staking); **confirmed 2026-07-14: governor-attested stake**, over merging into the already-audited 1801-line/46-test `bonding_curve.compact`. Resulting design: `stakeSnapshotRoot` is a governor-published Merkle root over `(stakerKey, stakedAmount)` leaves, attested off-chain from `bonding_curve.compact`'s real public ledger events (same trust model as every other governor-published root on this platform — allowlist membership, CTO voting weight); reward *claiming* is fully real — `claimRewards` mints the payout directly to the staker via `mintUnshieldedToken`, and collects the NIGHT claim fee via `receiveUnshielded`/`sendUnshielded`. Stated plainly: the minted reward is a SEPARATE Midnight-native coin color from `bonding_curve.compact`'s internal launch-token ledger, not literally the same fungible unit — because that contract never minted a real coin for stakers to deposit in the first place. This is building ahead of Midnight Launch's own token foundation, the same caveat noted in the Midnight Fungible Token Standard open issue that already applies to the rest of Midnight Launch's "design-complete but build-blocked" status. 21 new tests, 214/214 total.
 
 ---
 
@@ -734,6 +784,40 @@ DarkVeil PSM closes and Bonding Curve PSM opens in the same sequence. This assum
 - If not atomic: 10-minute settlement window is mandatory
 - **Default to 10-minute settlement window in all code until confirmed**
 - Question to ask: *"Does Midnight's PSM framework guarantee atomic state commitment across two separate PSM instances within the same transaction or block?"*
+
+> **Correction (2026-09-13) — cross-contract calls now EXIST in Compact, and every decision this
+> document built on their absence still stands, for two narrower reasons. Read this before quoting any
+> “Compact has no cross-contract call mechanism” line elsewhere in this file.**
+>
+> **What changed.** Cross-contract calls landed in Compact toolchain **0.33.0**, together with ledger
+> version 9. Measured rather than read: a `contract` type declaration compiles clean on 0.34.0 and fails
+> on 0.31.1, so the old wording (*“every call form tested fails with `contract types are not yet
+> implemented`”*) is falsifiable by anyone who runs a current compiler.
+>
+> **Why nothing here changes yet, and both limits matter more than the change:**
+>
+> 1. **Ledger 9 is deployed on no network.** Queried directly on 2026-09-13: `midnight_ledgerVersion`
+>    returns `=8.1.2` on **Preprod, Preview AND Mainnet**. The compatibility matrix lists Compact
+>    toolchain **0.31.1** for all three, and the 0.34.0 release note says outright that ledger 9 *“will
+>    be, but is not yet, deployed on Midnight Mainnet”* and to stay on 0.31.x for it. **Our 0.31.1 pin is
+>    therefore the vendor-specified version, not a stale one — do not “upgrade” it to look current.**
+> 2. **Phase 1 excludes witness-calling circuits.** The language reference, under *Current limitations on
+>    contract types*: *“The current Compact compiler imposes limitations on the circuits that can satisfy
+>    a contract type, disqualifying any circuits that call witnesses.”* Every Noctis PSM is witness-heavy
+>    — that is what makes them private — so even once ledger 9 ships, Phase 1 would not let ours call
+>    each other. A callee may still *declare* a witness; the rule is about *invoking* one.
+>
+> **So the merge decisions are unchanged and remain correct** — the Midnight Launch three-way PSM merge,
+> the governor-attested staking design, the 10-minute settlement window, and the Midnight LP Escrow shape.
+> Only their justification moves: from *“the language has no such mechanism”* to *“the mechanism exists,
+> requires a ledger version deployed on no network we use, and in its current phase excludes precisely the
+> witness-using circuits our PSMs are built from.”*
+>
+> **What would change the answer:** ledger 9 reaching Preprod, or Phase 2 of contract-to-contract (which
+> targets witnesses and private state across the call boundary) shipping. Check the first by querying
+> `midnight_ledgerVersion` on the RPC — the published compatibility matrix lagged the toolchain's own
+> release note by weeks. Full working notes, a proven call-tree harness and the callee-upgrade rules are
+> in the local trackers and `local/reference/ccc-cto/`.
 
 ### 🔴 BLOCKER — Midnight SDK Availability
 Midnight mainnet availability and Compact language tooling maturity needs verification before building PSM contracts. Some features (e.g., cross-PSM state sync) may not yet be available.
@@ -785,7 +869,7 @@ NIGHT_peak = (peak_hour_txs × 24 × cost_per_tx_DUST) ÷ 0.714
 - Below floor: Cardano Launch and Midnight Launch new launches pause pending treasury review
 - Note: Midnight Launch fees arrive in NIGHT and require conversion to stablecoin — conversion lag means the treasury floor calculation must account for NIGHT held but not yet converted (mark-to-market the NIGHT balance)
 
-> **Resolution (2026-07-10):** built for real, on top of a genuine bug found in the process — `treasury.compact`'s `treasuryBalance` previously summed ADA-denominated and NIGHT-denominated deposits into ONE combined number with no unit conversion (e.g. 1000 lovelace + 500 NIGHT atomic units became a meaningless "1500"), which made a floor check impossible to compute correctly. Split into `adaBalance`/`nightBalance` (and their lifetime-counter equivalents); `withdrawFees` now takes a `currency` argument for the same reason, and NIGHT withdrawals now actually pay out via `sendUnshielded` (previously ledger-only — the governor's decrement was never matched by a real payment). New read-only circuits `getAdaEquivalentBalance`/`isBelowFloor`/`isBelowWarning` take an already-converted `nightPriceLovelacePerAtomicUnit` (computed off-chain from the existing Oracle Strategy) and do only multiplication on-chain, never division (Compact can't divide in-circuit). **These are advisory, not an on-chain gate** — this PSM has no "launch creation" circuit to attach a block to (deployment happens off-chain via the SDK/ops flow), and Compact still has no working cross-contract call mechanism (see the Cross-PSM Atomicity open issue and the Midnight Launch contract-merge notes above) regardless. The off-chain launch-creation flow is expected to call `integration/midnight-client.ts`'s new `checkTreasuryHealth` helper before proceeding with a new both launch types launch — wiring that into the actual WordPress launch-creation UI is a separate follow-up, outside this session's tracked file scope.
+> **Resolution (2026-07-10):** built for real, on top of a genuine bug found in the process — `treasury.compact`'s `treasuryBalance` previously summed ADA-denominated and NIGHT-denominated deposits into ONE combined number with no unit conversion (e.g. 1000 lovelace + 500 NIGHT atomic units became a meaningless "1500"), which made a floor check impossible to compute correctly. Split into `adaBalance`/`nightBalance` (and their lifetime-counter equivalents); `withdrawFees` now takes a `currency` argument for the same reason, and NIGHT withdrawals now actually pay out via `sendUnshielded` (previously ledger-only — the governor's decrement was never matched by a real payment). New read-only circuits `getAdaEquivalentBalance`/`isBelowFloor`/`isBelowWarning` take an already-converted `nightPriceLovelacePerAtomicUnit` (computed off-chain from the existing Oracle Strategy) and do only multiplication on-chain, never division (Compact can't divide in-circuit). **These are advisory, not an on-chain gate** — this PSM has no "launch creation" circuit to attach a block to (deployment happens off-chain via the SDK/ops flow), and Compact had no working cross-contract call mechanism at the time (see the Cross-PSM Atomicity blocker's 2026-09-13 correction, which leaves this standing, and the Midnight Launch contract-merge notes above) regardless. The off-chain launch-creation flow is expected to call `integration/midnight-client.ts`'s new `checkTreasuryHealth` helper before proceeding with a new both launch types launch — wiring that into the actual WordPress launch-creation UI is a separate follow-up, outside this session's tracked file scope.
 
 ### ✅ RESOLVED — Domain and Social Handles
 - Domain: `noctis.zone` secured ✅ (2026-06-09)
@@ -855,7 +939,7 @@ On Cardano, native tokens are a first-class ledger primitive (multi-asset UTxO).
 ### 🔴 BLOCKER — Midnight Launch Graduation and DEX
 **Question:** Where does a Midnight-native token graduate to, and when will a Midnight DEX exist?
 
-Current Cardano Launch graduates to CSwap (Cardano DEX). Midnight Launch has no equivalent — there is no established Midnight DEX at time of writing.
+A Cardano Launch graduates onto a NoctisSwap pool opened by its own graduation transaction, and Minswap is the default third-party DEX it may later migrate to. Midnight Launch has no equivalent of either — there is no established Midnight DEX at time of writing.
 
 **Options:**
 - **Option A — Wait for Midnight DEX:** Midnight Launch launches are held in a pre-graduation state until a whitelisted Midnight DEX is live. Creator and platform agree on a graduation target DEX when one is available. High delay risk.
@@ -988,7 +1072,6 @@ noctis/
 │ │ ├── vesting.compact
 │ │ └── treasury.compact
 │ ├── cardano/ ← Aiken contracts
-│ │ ├── bonding_curve.ak ← retired linear path; leaves with the next pooled validator pass
 │ │ ├── bonding_curve_tier_b.ak ← Cardano Launch, quadratic (moved from Midnight to Cardano/Aiken, 2026-07-09)
 │ │ ├── lp_escrow.ak
 │ │ ├── cto_governance.ak
@@ -1087,10 +1170,17 @@ the 42,069 ADA graduation figure. First-party values:
   Their 200 ADA graduation bonus is a one-off; ours is a permanent 0.1% compounding into an LP the
   creator ultimately controls, where theirs is burned. The old "double competitors" line is retired:
   it was true at 1.0% during the curve and is not true at 0.5%.
-- **Their flat 0.5 ADA per curve trade is regressive** and bites small buyers hard. Noctis's batcher
-  fee has a **ceiling, not a floor** — the order names a maximum and the batcher takes actual cost or
-  less, typically ~0.25 ADA. On a 20 ADA trade their real cost is ~3.8% against our ~2.75%, and
-  post-graduation we are cheaper than them at every size.
+- **Their flat 0.5 ADA per curve trade is regressive** and bites small buyers hard. Noctis's CURVE
+  batcher fee has a **ceiling, not a floor** — the order names a maximum and the batcher takes actual
+  cost or less, typically ~0.25 ADA, because one transaction fills many orders. On a 20 ADA trade
+  their real cost is ~3.8% against our ~2.75%.
+- **Post-graduation the comparison reverses on small trades, and the old "cheaper at every size" line
+  was wrong** (corrected 2026-09-08, once a venue fill was measured). The venue fills ONE order per
+  transaction, so its execution fee is 1.5 ADA an order rather than a shared quarter-ADA. Against
+  their 1.3%, our 1.2% + 1.5 ADA is dearer below roughly 1,500 ADA a trade and cheaper above it. The
+  floor is structural and every batched Cardano venue carries one of the same shape, so the defensible
+  claim is about being the cheapest BATCHED venue — **confirm competitors' current per-order fees
+  first-hand before that goes in public copy**, the way snek.fun's own figures were.
 - **Graduation thresholds are now close** — 75,000 ADA against their 69,000, so a Noctis launch
   asks for slightly more buy-side than a snek.fun one rather than materially less.
 - **Zero team allocation is their strongest fairness claim.** Noctis answers it with vesting and the

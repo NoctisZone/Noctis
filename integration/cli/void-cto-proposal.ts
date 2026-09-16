@@ -1,7 +1,8 @@
 // ============================================================================
 // Noctis Zone — cto_governance.ak VoidPendingProposal CLI
 // Governor-only. Voids a pending anchor found to be fraudulent within the
-// 24h challenge window and slashes the relayer's bond 60/40 treasury/ops.
+// 24h challenge window and slashes the relayer's bond, whole, to the one
+// address the governance datum names.
 // See cardano-cto-void-proposal-submitter.ts's own header for the full
 // mechanism.
 // ============================================================================

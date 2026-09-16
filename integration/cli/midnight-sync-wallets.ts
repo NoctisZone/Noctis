@@ -122,6 +122,100 @@ interface WorkerInput extends Omit<Input, 'wallets'> {
   wallet: WalletInput;
 }
 
+// Each sub-wallet's progress, read the way the SDK's own gate reads it.
+//
+// `FacadeState.isSynced` is the conjunction of all three arms, each required to
+// be `isConnected` with a lag of exactly zero. A dust lag of zero printed beside
+// `synced=false` therefore says nothing about WHICH arm holds the gate down.
+//
+// All three do expose a readable `progress`, and each getter returns the very
+// object `isSynced` tests — they simply do not share a shape. Shielded and dust
+// count zswap indices; unshielded counts indexer transaction ids. Both compute
+// lag through `Math.abs`, so an arm whose `highest…` is still zero reports its
+// whole applied index as its lag.
+interface ArmReading {
+  readonly name: string;
+  readonly applied: bigint;
+  readonly lag: bigint;
+  readonly connected: boolean;
+  readonly complete: boolean;
+}
+
+function readArm(name: string, progress: unknown): ArmReading {
+  const p = progress as {
+    appliedIndex?: bigint;
+    highestRelevantWalletIndex?: bigint;
+    appliedId?: bigint;
+    highestTransactionId?: bigint;
+    isConnected: boolean;
+    isStrictlyComplete(): boolean;
+  };
+  const applied = p.appliedIndex ?? p.appliedId ?? 0n;
+  const highest = p.highestRelevantWalletIndex ?? p.highestTransactionId ?? 0n;
+  return {
+    name,
+    applied,
+    lag: highest > applied ? highest - applied : applied - highest,
+    connected: p.isConnected,
+    complete: p.isStrictlyComplete(),
+  };
+}
+
+function armsOf(state: FacadeState): readonly [ArmReading, ArmReading, ArmReading] {
+  return [
+    readArm('dust', state.dust.progress),
+    readArm('shielded', state.shielded.progress),
+    readArm('unshielded', state.unshielded.progress),
+  ];
+}
+
+/**
+ * How much of dust's replayed history an idle shielded arm must also have
+ * replayed before its (empty) coin list is trusted.
+ *
+ * Proportional rather than a fixed number of events, because the two drift
+ * apart by construction: dust keeps advancing at the head while a shielded arm
+ * with nothing to apply stays exactly where it was restored. A fixed gap would
+ * therefore pass early in a run and fail later for no reason that means
+ * anything. 99% still rejects the case this guards — a wallet that never
+ * replayed shielded at all, whose index would be near zero.
+ */
+const IDLE_SHIELDED_PERCENT = 99n;
+
+/**
+ * Whether the wallet can actually SPEND, and if not, which arm is stopping it.
+ *
+ * A visible DUST balance alone is not enough. A wallet that has replayed far
+ * enough to see its DUST can still be behind the chain, and a transaction it
+ * builds then references a Merkle root the node no longer keeps — rejected as
+ * `Zswap.Invalid.UnknownMerkleRoot` (241), whose documented fix is to resync
+ * against the current head and rebuild.
+ *
+ * Dust pays the fee and unshielded holds the NIGHT being spent, so both are
+ * required to be strictly at the head. That pair is what earns the guarantee
+ * above.
+ *
+ * Shielded is required only when there is something shielded to spend: a
+ * NIGHT-only payer builds no zswap spend, so a shielded arm that trails cannot
+ * produce that rejection. Requiring it regardless leaves the gate unreachable
+ * after a restore, because the SDK restores a shielded wallet with
+ * `highestRelevantWalletIndex: 0` and `isConnected: false` and repairs both only
+ * on a non-empty batch of events a quiet address may never receive. An empty
+ * `totalCoins` is trusted only while shielded has replayed as far as dust has,
+ * so "holds nothing" can never quietly mean "has not looked yet".
+ */
+function spendable(state: FacadeState): { ready: boolean; blocking: string } {
+  const [dust, shielded, unshielded] = armsOf(state);
+  const idleShielded =
+    state.shielded.totalCoins.length === 0 && shielded.applied * 100n >= dust.applied * IDLE_SHIELDED_PERCENT;
+  const held: string[] = [];
+  if (!dust.complete) held.push('dust');
+  if (!unshielded.complete) held.push('unshielded');
+  if (!(shielded.complete || idleShielded)) held.push('shielded');
+  if (state.dust.balance(new Date()) <= 0n) held.push('dust-balance');
+  return { ready: held.length === 0, blocking: held.join('+') };
+}
+
 async function runWorker(): Promise<never> {
   const input: WorkerInput = JSON.parse(await readStdin());
   const { role, seedHex } = input.wallet;
@@ -154,17 +248,20 @@ async function runWorker(): Promise<never> {
   // itself compares in `isCompleteWithin`. `highestIndex` is NOT that number and
   // is left at 0 for the dust wallet, so a gap computed from it means nothing.
   //
-  // Only the dust lag is printed. The other two sub-wallets type their `progress`
-  // differently in the SDK — shielded and dust expose the progress DATA, while
-  // unshielded exposes the ops object, which carries no indices — so there is no
-  // one expression that reads a lag from all three. Whether they are caught up is
-  // covered by `isSynced` below, which the SDK computes over all three itself.
+  // Every arm is printed, with its own lag and connection state, so a gate that
+  // will not open names the arm responsible instead of leaving it to be
+  // inferred. `synced=` is the SDK's own strict verdict and is kept beside
+  // `ready=`, which is this CLI's: the two differ exactly when a quiet shielded
+  // arm is the only thing outstanding.
   const describe = (state: FacadeState) => {
-    const { appliedIndex, highestRelevantWalletIndex } = state.dust.progress;
     const heapMb = (process.memoryUsage().heapUsed / 1024 / 1024).toFixed(0);
+    const arms = armsOf(state)
+      .map((a) => `${a.name} ${a.applied} (lag ${a.lag}${a.connected ? '' : ' DISCONNECTED'})`)
+      .join(', ');
+    const { ready, blocking } = spendable(state);
     return (
-      `${role}: dust ${appliedIndex} (lag ${highestRelevantWalletIndex - appliedIndex}), ` +
-      `synced=${state.isSynced}, heap ${heapMb}MB`
+      `${role}: ${arms}, synced=${state.isSynced}, ready=${ready}` +
+      `${ready ? '' : ` held-by=${blocking}`}, heap ${heapMb}MB`
     );
   };
   let last: FacadeState | undefined;
@@ -173,20 +270,13 @@ async function runWorker(): Promise<never> {
   }, 30_000);
   ticker.unref?.();
   try {
-    // Done when the wallet can actually SPEND, which takes both conditions.
-    //
-    // A visible DUST balance alone is not enough. A wallet that has replayed far
-    // enough to see its DUST can still be a long way behind the chain, and a
-    // transaction it builds then references a Merkle root the node no longer
-    // keeps — rejected as `Zswap.Invalid.UnknownMerkleRoot` (241), whose
-    // documented fix is to resync against the current head and rebuild. So this
-    // waits for the facade's own definition of synced, which requires all three
-    // sub-wallets to be strictly caught up, and only then checks the balance.
+    // Done when the wallet can actually SPEND — see `spendable` for which arms
+    // that requires and why the shielded one is conditional.
     const synced = await waitForWalletState(
       wallet.facade,
       (state) => {
         last = state;
-        return state.isSynced && state.dust.balance(new Date()) > 0n;
+        return spendable(state).ready;
       },
       attemptMs,
       'the wallet to catch up to the chain head with spendable DUST',
@@ -301,7 +391,15 @@ async function runSupervisor(input: Input): Promise<never> {
 
     for (let attempt = 1; attempt <= maxAttempts && !synced; attempt++) {
       log(`${wallet.role}: attempt ${attempt}/${maxAttempts} (heap ${heapMb}MB, budget ${attemptSeconds}s)`);
-      const outcome = await runAttempt({ ...input, wallet }, heapMb);
+      // `dustColdStart` discards the stored dust state before replaying. That is
+      // an instruction for the FIRST attempt, not a standing one: passed to
+      // every attempt it throws away each attempt's own replay and the run
+      // loops forever a few hundred thousand entries at a time, never
+      // converging, while every log line still looks like healthy progress.
+      const outcome = await runAttempt(
+        { ...input, wallet, dustColdStart: input.dustColdStart === true && attempt === 1 },
+        heapMb,
+      );
 
       if (outcome.died) {
         // Expected, and survivable: whatever the child banked before dying is

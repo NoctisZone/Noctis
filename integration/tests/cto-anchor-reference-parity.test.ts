@@ -35,6 +35,8 @@ const PINNED_BALLOT: AnchoredBallot = {
   startTimestamp: 1000n,
   endTimestamp: 1500n,
   targetDexCredential: null,
+  allocationAmount: 0n,
+  allocationRecipientHashHex: 'ff',
 };
 
 const PINNED_INPUT = {
@@ -45,7 +47,7 @@ const PINNED_INPUT = {
 };
 
 /** Pinned identically in contracts/cardano/validators/cto_governance.ak. */
-const PINNED_REFERENCE = '9bc1ff165578a191d2bf2f09c462235cd7bc134b9befceb3a4e434198ed5bbf6';
+const PINNED_REFERENCE = 'c04de299af23512ff11de1d4a0c5c2965f42635f4e34e5731c4fde5c63ad9277';
 
 describe('the CTO anchor bundle reference agrees across Aiken and TypeScript', () => {
   it('derives the value the validator pins', () => {

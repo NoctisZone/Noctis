@@ -183,11 +183,11 @@ Launch Wizard
 
 **Reading this diagram:** Creator Fee Escrow and Vesting are two distinct contracts, deliberately not shown as one box — CLAUDE.md flags conflating them as "a common source of confusion." Fee Escrow accrues the creator's 0.5% of bonding-curve trades and pays out monthly, subject to the silence lock; Vesting controls when and how fast the creator's *token allocation* (not fees) releases, on a 90–365 day schedule the creator must actively choose. On a Cardano Launch both live on Cardano: the fee accrues in the curve contract's own balance, and vesting runs on `vesting.ak`.
 
-LP Escrow fans out from the Bonding Curve because graduation (100% sell-through) is what triggers LP seeding — see the Graduation Flow diagram below. Once locked, LP Escrow also supports **HarvestFees**: a DEX-agnostic redeemer that lets post-graduation trading fees reach the creator, or the CTO community wallet, without ever touching the locked LP position. The real per-DEX harvest call (CSwap, Minswap, Splash, WingRiders and SundaeSwap each differ) arrives with the DEX integration work; what the contract enforces today are its own invariants — the LP position is byte-for-byte unchanged, and the correct recipient is really paid in the same transaction.
+LP Escrow fans out from the Bonding Curve because graduation (100% sell-through) is what triggers LP seeding — see the Graduation Flow diagram below. Once locked, LP Escrow also supports **HarvestFees**: a DEX-agnostic redeemer that lets post-graduation trading fees reach the creator, or the CTO community wallet, without ever touching the locked LP position. The real per-DEX harvest call (Minswap, Splash, WingRiders, SundaeSwap and CSwap each differ) arrives with the DEX integration work; what the contract enforces today are its own invariants — the LP position is byte-for-byte unchanged, and the correct recipient is really paid in the same transaction.
 
 **Forfeited DarkVeil bonds go whole to the platform wallet.** An earlier version of this diagram split them 60/40 between a treasury and an ops wallet; that pair was retired for *revenue* on 2026-08-06. One address now receives the launch fee, the platform's 1.0% of trade volume, forfeited DarkVeil bonds and staking claim fees alike.
 
-**The treasury/ops pair is not gone from the platform, though — only from revenue.** Three validators still pay a *slashed challenge bond* to two separate addresses, 60/40: `nhop_challenge.ak`, `cto_sybil_challenge.ak` and `cto_governance.ak` each carry `treasury_bps = 60` / `ops_bps = 40` and a `treasury_pub_key_hash` / `ops_pub_key_hash` pair in their datum, with tests pinning the split. That is a different kind of money — a forfeited bond from someone who challenged and lost, not platform income — but it means both addresses must still be provisioned, and any claim that the platform has no split anywhere is wrong.
+**The treasury/ops pair is gone from the platform entirely.** A *slashed challenge bond* was the last thing dividing one — `nhop_challenge.ak`, `cto_sybil_challenge.ak` and `cto_governance.ak` each now carry a single `payout_pub_key_hash` and pay the whole bond to it. The ratio had borrowed its justification from a revenue split that no longer exists, so it was dividing a penalty by a rule nothing else follows, and it left two addresses to provision, hold keys for and disclose for money that arrives only when a challenge is rejected. **One address receives every kind of money on the platform.** Which address a forfeited bond goes to is still a deployment choice — a bond is arguably not platform revenue — but that is what the datum is written with, not a contract change.
 
 ---
 
@@ -301,8 +301,12 @@ notes in `CLAUDE.md` for the same off-chain-computed, on-chain-verified shape.
 │ total_raised ADA (Option A, all net-of-fee principal)        │
 │ + lp_reserve_tokens (20% of TOTAL_SUPPLY, held in the        │
 │ curve's own UTXO since deploy, untouched by BuyTokens)       │
-│ → to the launch's own lp_escrow_credential (fixed at         │
-│ deploy, can't be redirected)                                 │
+│ → into the venue POOL output: the one carrying the launch's  │
+│ pool NFT, minted by the venue's factory policy (named in     │
+│ the curve datum as pool_nft_policy) in this same tx. The     │
+│ factory pins that output to the pool script at a bare        │
+│ address and checks the pool's opening datum; the curve       │
+│ checks the value and the NFT.                                │
 │                                                              │
 │ Curve is NOT fully consumed — creator/treasury/ops fee       │
 │ accumulators stay claimable after, same as always (Stream A) │
@@ -314,9 +318,12 @@ notes in `CLAUDE.md` for the same off-chain-computed, on-chain-verified shape.
 │ SealLock (reworked) — also PERMISSIONLESS now.               │
 │ Governor-signature requirement replaced with a real value    │
 │ check (lp_value_received): the continuing output must        │
-│ actually hold the seeded ADA + exactly lp_token_amount of    │
-│ the launch token, verified from the LP escrow's OWN side —   │
-│ neither redeemer has to trust the other's bookkeeping.       │
+│ actually hold exactly lp_token_amount of the LP token the    │
+│ datum names — for a Cardano Launch the pool's LQ token,      │
+│ minted by the factory in this same transaction — plus any    │
+│ seeded ADA (zero on the venue path: the raise went into the  │
+│ pool). Verified from the LP escrow's OWN side; neither       │
+│ redeemer has to trust the other's bookkeeping.               │
 │                                                              │
 │ lp_state: Cancelled → Locked, 365-day clock starts           │
 └──────────────────────────────────────────────────────────────┘
@@ -541,8 +548,8 @@ Community takeover (CTO) governance, shared infrastructure across every launch t
 │ 24H CHALLENGE WINDOW:         │                   
 │ governor VoidPendingProposal  │                   
 │ voids fraud within the window │                   
-│ (bond slashed 60/40 treasury/ │                   
-│ ops); elapses clean →         │                   
+│ (bond slashed, whole, to the  │                   
+│ payout address); clean →      │                   
 │ ExecuteProposal (permission-  │                   
 │ less)                         │                   
 │                               │                   
@@ -567,7 +574,7 @@ Community takeover (CTO) governance, shared infrastructure across every launch t
 
 **Reading this diagram:** the ballot itself (Midnight) and the anchor/enforcement (Cardano L1) are deliberately two different trust boundaries, not one contract wearing two hats — `castVote`'s weight check trusts a governor-published Merkle root the same way `eligibility_gate.compact`'s allowlist does (the Cardano staking pool no longer works this way — see the Staking Rewards Pool section), and `AnchorVoteResult` doesn't re-verify the ballot's cryptography, it verifies a real bond was paid and gives the community a real window to catch a lie. The anchor step is intentionally **permissionless** (open relay) rather than platform-only — a platform-only relay could suppress or delay a legitimate community takeover simply by not anchoring, which would reintroduce exactly the centralization risk CTO governance exists to prevent. `ExecuteProposal` is permissionless too, for the same reason; the 24-hour challenge window is what makes that safe rather than an invitation to forge results, since anyone with a fabricated anchor has to put a real bond at risk first. The "EXECUTED" effects listed inside the PASSED box are wired across every contract that holds a creator-facing revenue or token stream — before that fix, none of the three bonding curve contracts, Creator Fee Escrow, Vesting, or LP Escrow actually redirected anything when a vote passed, regardless of what the ballot tally said.
 
-**How enforcement authenticates a passed vote:** the four downstream Cardano validators that enforce a passed vote — `bonding_curve.ak`, `bonding_curve_tier_b.ak`, `lp_escrow.ak`, `vesting.ak` — do not re-run the ballot. They read the `cto_governance.ak` UTXO as a **reference input** and act on the outcome recorded in its datum. Because a Cardano reference input is never spent, that record is authenticated by a **per-launch governance thread NFT** rather than by address: the policy is a governor-signature native script, and the asset name is the `launch_id`, so a given launch's governance record is bound to that launch specifically. Every downstream check requires the referenced UTXO to carry exactly one of that NFT, and `cto_governance.ak` preserves the NFT in its continuing output on every spend — including its permissionless redeemers. Covered by dedicated regression tests. **Remaining build work:** the CTO deploy flow must mint that NFT into the genesis governance UTXO — part of the not-yet-built CTO deploy/submitter layer.
+**How enforcement authenticates a passed vote:** the four downstream Cardano validators that enforce a passed vote — `bonding_curve_tier_b.ak`, `lp_escrow.ak`, `vesting.ak`, `token_metadata.ak` — do not re-run the ballot. They read the `cto_governance.ak` UTXO as a **reference input** and act on the outcome recorded in its datum. Because a Cardano reference input is never spent, that record is authenticated by a **per-launch governance thread NFT** rather than by address: the policy is a governor-signature native script, and the asset name is the `launch_id`, so a given launch's governance record is bound to that launch specifically. Every downstream check requires the referenced UTXO to carry exactly one of that NFT, and `cto_governance.ak` preserves the NFT in its continuing output on every spend — including its permissionless redeemers. Covered by dedicated regression tests. **Remaining build work:** the CTO deploy flow must mint that NFT into the genesis governance UTXO — part of the not-yet-built CTO deploy/submitter layer.
 
 **Trust assumption — voting-weight snapshot:** `balanceSnapshotRoot` is published by the governor role, and is the basis on which `castVote` proves each voter's weight. Vote weights themselves cannot be fabricated by any voter — every ballot proves membership in the published root in-circuit. Publication of the snapshot is a governor responsibility, and hardening that role (key custody / multisig) is tracked internally as part of the governance roadmap. The snapshot is derived from public on-chain balances, so any published root is independently re-derivable and auditable by third parties.
 

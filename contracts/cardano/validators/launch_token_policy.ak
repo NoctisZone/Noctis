@@ -24,6 +24,13 @@
 //// platform's behaviour: a launch's token supply is fixed at its first and
 //// only mint, and is verifiable from the policy id alone.
 ////
+//// NO BURN, EVER
+//// The same pins that fix the mint rule out its reverse: a negative quantity
+//// under this policy id fails the exact-quantity checks, so the supply the
+//// genesis transaction fixed can never be reduced under this policy either.
+//// A holder may still send tokens to an address nobody can spend from, but
+//// that is a transfer the chain sees as a transfer, not a burn.
+////
 //// THE CIP-68 PAIR
 //// One transaction mints two assets: the fungible supply under CIP-67 label
 //// 333, and a single reference NFT under label 100 carrying the same base
@@ -60,8 +67,12 @@ validator launch_token_policy(seed: OutputReference, total_supply: Int) {
     // prefix always sorts before label 333 (they differ at byte 1, 0x06 <
     // 0x14), so the reference NFT is always first regardless of base name —
     // pinned by cip68.ak's reference_label_sorts_before_fungible_label.
-    expect [Pair(reference_name, reference_amount),
-      Pair(supply_name, supply_amount)] = dict.to_pairs(minted)
+    expect  
+        [
+          Pair(reference_name, reference_amount),
+          Pair(supply_name, supply_amount),
+        ]
+      = dict.to_pairs(minted)
     and {
       // The one-shot: this UTXO can never be spent a second time, so this
       // policy can never mint a second time.
@@ -78,6 +89,10 @@ validator launch_token_policy(seed: OutputReference, total_supply: Int) {
       // does not happen.
       supply_amount == total_supply,
     }
+  }
+
+  else(_) {
+    fail
   }
 }
 
@@ -117,7 +132,7 @@ fn pair_tx(
 ) -> Transaction {
   Transaction {
     ..transaction.placeholder,
-    inputs: inputs,
+    inputs,
     mint: assets.merge(
       assets.from_asset(policy, reference_name, reference_amount),
       assets.from_asset(policy, supply_name, supply_amount),
@@ -149,14 +164,10 @@ test mint_succeeds_with_the_cip68_pair() {
 /// genesis transaction has spent that UTXO, no later transaction can satisfy
 /// this, so no further supply can ever exist.
 test mint_rejects_when_seed_is_not_consumed() {
-  let other =
-    Input {
-      ..seed_input(),
-      output_reference: OutputReference {
-        transaction_id: #"bb",
-        output_index: 0,
-      },
-    }
+  let other = Input {
+    ..seed_input(),
+    output_reference: OutputReference { transaction_id: #"bb", output_index: 0 },
+  }
   !launch_token_policy.mint(seed_ref, supply, Void, policy, honest_tx([other]))
 }
 
@@ -239,7 +250,13 @@ test mint_rejects_unlabelled_supply_name() {
     supply,
     Void,
     policy,
-    pair_tx([seed_input()], cip68.reference_asset_name(ticker), 1, ticker, supply),
+    pair_tx(
+      [seed_input()],
+      cip68.reference_asset_name(ticker),
+      1,
+      ticker,
+      supply,
+    ),
   )
 }
 
@@ -249,32 +266,26 @@ test mint_rejects_unlabelled_supply_name() {
 /// are different in Aiken, and a negated assertion would error rather than
 /// pass.
 test mint_rejects_a_third_asset_name() fail {
-  let tx =
-    Transaction {
-      ..honest_tx([seed_input()]),
-      mint: assets.merge(
-        assets.merge(
-          assets.from_asset(policy, cip68.reference_asset_name(ticker), 1),
-          assets.from_asset(policy, cip68.fungible_asset_name(ticker), supply),
-        ),
-        assets.from_asset(policy, cip68.fungible_asset_name("EXTRA"), 1),
+  let tx = Transaction {
+    ..honest_tx([seed_input()]),
+    mint: assets.merge(
+      assets.merge(
+        assets.from_asset(policy, cip68.reference_asset_name(ticker), 1),
+        assets.from_asset(policy, cip68.fungible_asset_name(ticker), supply),
       ),
-    }
+      assets.from_asset(policy, cip68.fungible_asset_name("EXTRA"), 1),
+    ),
+  }
   launch_token_policy.mint(seed_ref, supply, Void, policy, tx)
 }
 
 /// The supply alone, with no reference NFT, is a token nothing can describe.
 /// Traps for the same reason as the case above.
 test mint_rejects_supply_without_a_reference_nft() fail {
-  let tx =
-    Transaction {
-      ..honest_tx([seed_input()]),
-      mint: assets.from_asset(
-        policy,
-        cip68.fungible_asset_name(ticker),
-        supply,
-      ),
-    }
+  let tx = Transaction {
+    ..honest_tx([seed_input()]),
+    mint: assets.from_asset(policy, cip68.fungible_asset_name(ticker), supply),
+  }
   launch_token_policy.mint(seed_ref, supply, Void, policy, tx)
 }
 
@@ -302,14 +313,13 @@ test mint_rejects_burn() {
 /// does not depend on how the transaction was assembled — the sort, not the
 /// caller, decides.
 test mint_is_independent_of_assembly_order() {
-  let reversed =
-    Transaction {
-      ..honest_tx([seed_input()]),
-      mint: assets.merge(
-        assets.from_asset(policy, cip68.fungible_asset_name(ticker), supply),
-        assets.from_asset(policy, cip68.reference_asset_name(ticker), 1),
-      ),
-    }
+  let reversed = Transaction {
+    ..honest_tx([seed_input()]),
+    mint: assets.merge(
+      assets.from_asset(policy, cip68.fungible_asset_name(ticker), supply),
+      assets.from_asset(policy, cip68.reference_asset_name(ticker), 1),
+    ),
+  }
   launch_token_policy.mint(seed_ref, supply, Void, policy, reversed)
 }
 

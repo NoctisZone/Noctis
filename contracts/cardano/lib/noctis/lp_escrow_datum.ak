@@ -10,9 +10,9 @@
 //// Nothing here is validator logic. The rules that maintain these fields
 //// stay in `lp_escrow.ak`; this is only the shape they are written in.
 
+use aiken/crypto.{VerificationKeyHash}
 use cardano/address.{Credential}
 use cardano/assets.{AssetName, PolicyId}
-use aiken/crypto.{VerificationKeyHash}
 
 /// LP escrow states — mirrors the Midnight PSM enum
 /// A sealed position is `Locked` and stays `Locked`. Migrating moves it to a

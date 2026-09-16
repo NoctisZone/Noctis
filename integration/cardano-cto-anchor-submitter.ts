@@ -405,6 +405,8 @@ export class CardanoCtoAnchorSubmitter {
         startTimestamp: params.startTimestamp,
         endTimestamp: params.endTimestamp,
         targetDexCredential: toReferenceCredential(params.targetDexCredential),
+        allocationAmount: params.allocationAmount,
+        allocationRecipientHashHex: params.allocationRecipientHash,
       },
     });
 

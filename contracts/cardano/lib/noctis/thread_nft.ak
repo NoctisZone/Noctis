@@ -25,6 +25,16 @@
 //// pair) means an NFT can still be traced back to its launch by eye on a
 //// block explorer.
 ////
+//// THE INVARIANT THIS RESTS ON. Two launch ids sharing their first 31 bytes
+//// would name the SAME thread NFT for every role, and the venue's pool NFT
+//// (which carries no launch id of its own beyond this name) would be the one
+//// place that cannot tell them apart. Every launch-package validator therefore
+//// also matches the datum's full 32-byte `launch_id` wherever it trusts a
+//// thread NFT, and the genesis builder MUST derive launch ids by hash — never
+//// assign them by hand or by counter — so that the prefix is unique by
+//// construction. The deploy checklist states this; `truncation_is_31_bytes`
+//// below pins the truncation itself.
+////
 //// Distinct tags for the two Cardano curves are deliberate: they are
 //// different scripts at different addresses and a launch is only ever one of
 //// the two, so a shared tag would buy nothing and would let a linear-curve token be
@@ -47,6 +57,15 @@ pub const role_staking_pool: ByteArray = #"05"
 
 pub const role_zk_anchor: ByteArray = #"06"
 
+/// Reserved for the venue package (`contracts/cardano-dex`), whose factory
+/// mints a launch's pool NFT and LQ token under its own policy with these
+/// tags. They are not thread NFTs and the genesis mint never creates them;
+/// they are listed here so no launch role can ever be given the same byte,
+/// and so the curve can name the pool output it seeds at graduation.
+pub const role_pool: ByteArray = #"10"
+
+pub const role_lq: ByteArray = #"11"
+
 /// The asset name this launch's thread NFT carries for a given role.
 ///
 /// Truncating to 31 bytes is what makes room for the role tag inside
@@ -59,14 +78,12 @@ pub fn thread_asset_name(role: ByteArray, launch_id: ByteArray) -> ByteArray {
 }
 
 test thread_asset_name_is_32_bytes() {
-  let launch_id =
-    #"0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20"
+  let launch_id = #"0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20"
   bytearray.length(thread_asset_name(role_bonding_curve, launch_id)) == 32
 }
 
 test thread_asset_name_differs_per_role() {
-  let launch_id =
-    #"0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20"
+  let launch_id = #"0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20"
   thread_asset_name(role_bonding_curve, launch_id) != thread_asset_name(
     role_lp_escrow,
     launch_id,
@@ -87,8 +104,7 @@ test thread_asset_name_differs_per_launch() {
 /// The two curve tags must never collide — a linear-curve token must not satisfy a
 /// Cardano Launch check for the same launch.
 test curve_roles_do_not_collide() {
-  let launch_id =
-    #"0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20"
+  let launch_id = #"0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20"
   thread_asset_name(role_bonding_curve, launch_id) != thread_asset_name(
     role_bonding_curve_tier_b,
     launch_id,
@@ -105,8 +121,7 @@ test curve_roles_do_not_collide() {
 /// builder, not written by hand — regenerate them the same way if the scheme
 /// changes, and never "fix" a failure here by editing only one side.
 test matches_typescript_implementation() {
-  let launch_id =
-    #"aebfbc87161850827e5620fa667e98c533a419298bbed1a8fff960f1b9e2fa14"
+  let launch_id = #"aebfbc87161850827e5620fa667e98c533a419298bbed1a8fff960f1b9e2fa14"
   and {
     thread_asset_name(role_cto_governance, launch_id) == #"00aebfbc87161850827e5620fa667e98c533a419298bbed1a8fff960f1b9e2fa",
     thread_asset_name(role_bonding_curve, launch_id) == #"01aebfbc87161850827e5620fa667e98c533a419298bbed1a8fff960f1b9e2fa",
@@ -115,6 +130,22 @@ test matches_typescript_implementation() {
     thread_asset_name(role_vesting, launch_id) == #"04aebfbc87161850827e5620fa667e98c533a419298bbed1a8fff960f1b9e2fa",
     thread_asset_name(role_staking_pool, launch_id) == #"05aebfbc87161850827e5620fa667e98c533a419298bbed1a8fff960f1b9e2fa",
     thread_asset_name(role_zk_anchor, launch_id) == #"06aebfbc87161850827e5620fa667e98c533a419298bbed1a8fff960f1b9e2fa",
+  }
+}
+
+/// The venue's tags sit outside the launch range, and the pool and LQ names
+/// differ from each other.
+test venue_roles_do_not_collide() {
+  let launch_id = #"0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20"
+  and {
+    thread_asset_name(role_pool, launch_id) != thread_asset_name(
+      role_zk_anchor,
+      launch_id,
+    ),
+    thread_asset_name(role_pool, launch_id) != thread_asset_name(
+      role_lq,
+      launch_id,
+    ),
   }
 }
 

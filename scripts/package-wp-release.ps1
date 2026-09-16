@@ -39,7 +39,7 @@
 #>
 
 param(
-    [string]$SourceRoot = "C:\Users\kruge\Local Sites\noctis\app\public\wp-content",
+    [string]$SourceRoot = (Join-Path $env:USERPROFILE "Local Sites\noctis\app\public\wp-content"),
     [string]$OutputDir  = (Join-Path $PSScriptRoot "..\releases"),
     [ValidateSet('noctis-platform', 'weldpress', 'noctis-theme')]
     [string[]]$Targets  = @('noctis-platform', 'weldpress', 'noctis-theme')

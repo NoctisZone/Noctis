@@ -177,7 +177,7 @@ async function unstake(params: { walletApi: WalletApi }): Promise<{ txHash: stri
  * Take what is owed and leave the position open.
  *
  * `platformClaimFeeLovelace` is the real dollar-equivalent of
- * STAKING_CLAIM_FEE_USD. The page supplies it because the price lookup is
+ * the contract's own flat charge. The page supplies it because the lookup is
  * server-side; the browser never prices anything itself. Accepted as a string
  * as well as a bigint, since a value rendered into a data attribute arrives
  * as one.

@@ -79,9 +79,7 @@ pub fn hash_node(left: ByteArray, right: ByteArray) -> ByteArray {
 /// the total is big-endian over a fixed 8 bytes, so no two totals can hash
 /// alike through length ambiguity.
 pub fn hash_leaf(key: ByteArray, total: Int) -> ByteArray {
-  blake2b_256(
-    bytearray.concat(key, bytearray.from_int_big_endian(total, 8)),
-  )
+  blake2b_256(bytearray.concat(key, bytearray.from_int_big_endian(total, 8)))
 }
 
 /// Canonical leaf for a total: zero is ALWAYS the empty leaf, never
@@ -125,15 +123,14 @@ pub fn recompute_root(leaf: ByteArray, proof: List<CapProofStep>) -> ByteArray {
 pub fn path_matches_key(key: ByteArray, proof: List<CapProofStep>) -> Bool {
   let slot = blake2b_256(key)
   let depth = list.length(proof)
-  let (_, matches) =
-    list.foldl(
-      proof,
-      (0, True),
-      fn(step, acc) {
-        let (j, ok) = acc
-        (j + 1, ok && step.goes_left == bytearray.test_bit(slot, depth - 1 - j))
-      },
-    )
+  let (_, matches) = list.foldl(
+    proof,
+    (0, True),
+    fn(step, acc) {
+      let (j, ok) = acc
+      (j + 1, ok && step.goes_left == bytearray.test_bit(slot, depth - 1 - j))
+    },
+  )
   matches
 }
 
@@ -161,10 +158,10 @@ pub fn transition(
     after < total_ceiling,
   } {
     let ok = and {
-        list.length(proof) == tree_depth,
-        path_matches_key(key, proof),
-        recompute_root(leaf_for(key, before), proof) == root,
-      }
+      list.length(proof) == tree_depth,
+      path_matches_key(key, proof),
+      recompute_root(leaf_for(key, before), proof) == root,
+    }
     (ok, recompute_root(leaf_for(key, after), proof))
   } else {
     (False, root)
@@ -229,7 +226,10 @@ pub fn generic_subtree_root(
       )
     _ -> {
       let bit_ix = tree_depth - h
-      let (ones, zeros) = list.partition(entries, fn(e) { slot_bit(e.1st, bit_ix) })
+      let (ones, zeros) = list.partition(
+        entries,
+        fn(e) { slot_bit(e.1st, bit_ix) },
+      )
       hash_node(
         generic_subtree_root(zeros, h - 1, leaf),
         generic_subtree_root(ones, h - 1, leaf),
@@ -263,17 +263,15 @@ fn proof_walk(
   } else {
     let goes_right = slot_bit(key, i)
     let (ones, zeros) = list.partition(entries, fn(e) { slot_bit(e.1st, i) })
-    let (mine, theirs) =
-      if goes_right {
-        (ones, zeros)
-      } else {
-        (zeros, ones)
-      }
-    let step =
-      CapProofStep {
-        sibling: generic_subtree_root(theirs, tree_depth - i - 1, leaf),
-        goes_left: goes_right,
-      }
+    let (mine, theirs) = if goes_right {
+      (ones, zeros)
+    } else {
+      (zeros, ones)
+    }
+    let step = CapProofStep {
+      sibling: generic_subtree_root(theirs, tree_depth - i - 1, leaf),
+      goes_left: goes_right,
+    }
     proof_walk(key, mine, i + 1, list.push(acc, step), leaf)
   }
 }
@@ -373,8 +371,13 @@ test the_empty_root_is_the_same_whichever_path_derives_it() {
 
 test transition_accepts_a_true_total_and_moves_the_root() {
   let entries = [(alice, 100)]
-  let (ok, next) =
-    transition(root_of(entries), alice, 100, 150, proof_in(alice, entries))
+  let (ok, next) = transition(
+    root_of(entries),
+    alice,
+    100,
+    150,
+    proof_in(alice, entries),
+  )
   and {
     ok,
     next == root_of([(alice, 150)]),
@@ -385,16 +388,26 @@ test transition_accepts_a_true_total_and_moves_the_root() {
 /// it holds would otherwise mint itself headroom it already spent.
 test transition_rejects_an_understated_total() {
   let entries = [(alice, 100)]
-  let (ok, _) =
-    transition(root_of(entries), alice, 40, 90, proof_in(alice, entries))
+  let (ok, _) = transition(
+    root_of(entries),
+    alice,
+    40,
+    90,
+    proof_in(alice, entries),
+  )
   !ok
 }
 
 test transition_rejects_another_wallets_proof() {
   let entries = [(alice, 100), (bob, 250)]
   // Bob's own path, presented as if it were Alice's slot.
-  let (ok, _) =
-    transition(root_of(entries), alice, 250, 300, proof_in(bob, entries))
+  let (ok, _) = transition(
+    root_of(entries),
+    alice,
+    250,
+    300,
+    proof_in(bob, entries),
+  )
   !ok
 }
 
@@ -405,8 +418,10 @@ test transition_rejects_a_flipped_direction_bit() {
   let entries = [(alice, 100)]
   let proof = proof_in(alice, entries)
   expect [first, ..rest] = proof
-  let flipped =
-    list.push(rest, CapProofStep { ..first, goes_left: !first.goes_left })
+  let flipped = list.push(
+    rest,
+    CapProofStep { ..first, goes_left: !first.goes_left },
+  )
   let (ok, _) = transition(root_of(entries), alice, 100, 150, flipped)
   !ok
 }
@@ -430,9 +445,20 @@ test transition_rejects_a_negative_total() {
 /// in, so the wallet can re-enter the launch.
 test a_wallet_that_sells_everything_back_frees_its_slot() {
   let start = root_of([])
-  let (open_ok, after_buy) = transition(start, alice, 0, 100, proof_in(alice, []))
-  let (close_ok, after_sell) =
-    transition(after_buy, alice, 100, 0, proof_in(alice, [(alice, 100)]))
+  let (open_ok, after_buy) = transition(
+    start,
+    alice,
+    0,
+    100,
+    proof_in(alice, []),
+  )
+  let (close_ok, after_sell) = transition(
+    after_buy,
+    alice,
+    100,
+    0,
+    proof_in(alice, [(alice, 100)]),
+  )
   and {
     open_ok,
     close_ok,
@@ -444,15 +470,32 @@ test a_wallet_that_sells_everything_back_frees_its_slot() {
 /// Two wallets share one root without sharing headroom — the property that
 /// makes a single 32-byte field stand in for a per-wallet list.
 test two_wallets_update_the_same_root_independently() {
-  let (a_ok, after_a) = transition(root_of([]), alice, 0, 100, proof_in(alice, []))
-  let (b_ok, after_b) =
-    transition(after_a, bob, 0, 250, proof_in(bob, [(alice, 100)]))
+  let (a_ok, after_a) = transition(
+    root_of([]),
+    alice,
+    0,
+    100,
+    proof_in(alice, []),
+  )
+  let (b_ok, after_b) = transition(
+    after_a,
+    bob,
+    0,
+    250,
+    proof_in(bob, [(alice, 100)]),
+  )
   and {
     a_ok,
     b_ok,
     after_b == root_of([(alice, 100), (bob, 250)]),
     // Alice's total survived Bob's update, so her next proof still works.
-    transition(after_b, alice, 100, 120, proof_in(alice, [(alice, 100), (bob, 250)])).1st,
+    transition(
+      after_b,
+      alice,
+      100,
+      120,
+      proof_in(alice, [(alice, 100), (bob, 250)]),
+    ).1st,
   }
 }
 

@@ -100,6 +100,13 @@ const CURVE_PARAMS = { base_price: BASE_PRICE, max_price: MAX_PRICE, curve_suppl
 const TOTAL_SUPPLY = 1_000_000_000n;
 const MAX_WALLET_PERCENT = 5n;
 const WALLET_CAP = (TOTAL_SUPPLY * MAX_WALLET_PERCENT) / 100n; // 50,000,000
+// The colour the DarkVeil bond is posted in. Deliberately NON-zero for the
+// whole suite: 32 zero bytes is nativeToken(), so a zero default would
+// exercise the old native-NIGHT path everywhere and leave the asset-agnostic
+// path — the one actually being shipped — covered by nothing. A dedicated
+// test below pins the zero case separately, so both are real.
+const BOND_COLOUR = fakeBytes32(144);
+
 const BOND_AMOUNT = 1000n;
 
 // DarkVeil-side constructor args
@@ -143,6 +150,7 @@ function deploy() {
     TOTAL_SUPPLY,
     MAX_WALLET_PERCENT,
     BOND_AMOUNT,
+    BOND_COLOUR, // bondTokenColour
     WALLET_CAP,
     BASE_PRICE,
     MAX_PRICE,
@@ -175,6 +183,7 @@ function deployWithPrices(basePrice: bigint, maxPrice: bigint, curveSupply: bigi
     TOTAL_SUPPLY,
     MAX_WALLET_PERCENT,
     BOND_AMOUNT,
+    BOND_COLOUR, // bondTokenColour
     WALLET_CAP,
     basePrice,
     maxPrice,
@@ -206,6 +215,7 @@ function deployWithRegistrationCloseTime(closeTime: bigint) {
     TOTAL_SUPPLY,
     MAX_WALLET_PERCENT,
     BOND_AMOUNT,
+    BOND_COLOUR, // bondTokenColour
     WALLET_CAP,
     BASE_PRICE,
     MAX_PRICE,
@@ -723,6 +733,7 @@ describe('bonding_curve.compact — quadratic pricing', () => {
       TOTAL_SUPPLY,
       MAX_WALLET_PERCENT,
       BOND_AMOUNT,
+      BOND_COLOUR, // bondTokenColour
       WALLET_CAP,
       BASE_PRICE,
       MAX_PRICE,
@@ -817,6 +828,7 @@ describe('bonding_curve.compact — merged eligibility gate', () => {
       TOTAL_SUPPLY,
       MAX_WALLET_PERCENT,
       BOND_AMOUNT,
+      BOND_COLOUR, // bondTokenColour
       tightCap,
       BASE_PRICE,
       MAX_PRICE,
@@ -961,6 +973,7 @@ describe('bonding_curve.compact — minimum DarkVeil participant floor', () => {
       TOTAL_SUPPLY,
       MAX_WALLET_PERCENT,
       BOND_AMOUNT,
+      BOND_COLOUR, // bondTokenColour
       WALLET_CAP,
       BASE_PRICE,
       MAX_PRICE,
@@ -1063,6 +1076,7 @@ describe('bonding_curve.compact — minimum DarkVeil participant floor', () => {
         TOTAL_SUPPLY,
         MAX_WALLET_PERCENT,
         BOND_AMOUNT,
+        BOND_COLOUR, // bondTokenColour
         WALLET_CAP,
         BASE_PRICE,
         MAX_PRICE,
@@ -1220,6 +1234,7 @@ describe('bonding_curve.compact — merged DarkVeil private buy (follow-up)', ()
       TOTAL_SUPPLY,
       MAX_WALLET_PERCENT,
       BOND_AMOUNT,
+      BOND_COLOUR, // bondTokenColour
       tightCap,
       BASE_PRICE,
       MAX_PRICE,
@@ -2520,5 +2535,52 @@ describe('bonding_curve.compact — threshold attestation on the allowlist root'
   it('refuses a caller who is not an attestor', () => {
     const d = deployAndActivate();
     expect(() => attest(d, d.ctx as never, 77, ROOT)).toThrow(/registered attestor/i);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Bond currency and trade currency are independent in this one contract
+// ---------------------------------------------------------------------------
+// This file is the only place on the platform where a bond and a trade are
+// settled by the SAME contract, which makes it the only place the two can be
+// confused. A Midnight Launch prices its curve in NIGHT and always will; the
+// DarkVeil bond is separately configurable. If a future edit ever swaps the
+// wrong call site, this is the test that says so.
+
+const CURVE_NATIVE_COLOUR_HEX = '00'.repeat(32);
+
+function inputColours(result: unknown): string[] {
+  const effects = (result as { context: { currentQueryContext: { effects: Record<string, unknown> } } }).context
+    .currentQueryContext.effects;
+  return [...(effects.unshieldedInputs as Map<{ raw: string }, bigint>).keys()].map((k) => k.raw);
+}
+
+describe('bonding_curve.compact — the bond and the trade are different currencies', () => {
+  it('takes the DarkVeil bond in the configured colour', () => {
+    const d = deploy();
+    const r1 = d.contract.circuits.advancePhase(d.ctx, LaunchPhase.DarkVeil);
+    const ctx1 = nextContext(d.contractAddress, r1.context);
+    const rStart = d.contract.circuits.startRegistration(ctx1);
+    const ctxStart = nextContext(d.contractAddress, rStart.context);
+
+    const reg = d.contract.circuits.registerForDarkVeil(ctxStart);
+
+    expect(inputColours(reg)).toEqual([Buffer.from(BOND_COLOUR).toString('hex')]);
+    expect(inputColours(reg)).not.toContain(CURVE_NATIVE_COLOUR_HEX);
+  });
+
+  it('still takes a curve trade in native NIGHT, not in the bond colour', () => {
+    const { contract, ctx } = deployAndActivate();
+
+    const tokenAmount = 10n;
+    const grossPayment = expectedGross(0n, tokenAmount);
+    const { creator, platform } = fees(grossPayment);
+
+    const buy = contract.circuits.buyTokens(ctx, tokenAmount, grossPayment, creator, platform, 1_000_000n);
+
+    // The whole point of the pair: a Midnight Launch's curve is NIGHT-priced,
+    // and making the bond asset-agnostic must not have moved the trade with it.
+    expect(inputColours(buy)).toEqual([CURVE_NATIVE_COLOUR_HEX]);
+    expect(inputColours(buy)).not.toContain(Buffer.from(BOND_COLOUR).toString('hex'));
   });
 });

@@ -19,8 +19,8 @@ vi.mock('../night-price-oracle.js', () => ({ usdToMinNightAtomic: vi.fn() }));
 
 import type { AddressInfo, AddressTransaction, BlockfrostClient, TxUtxos } from '../blockfrost-client.js';
 import {
+  checkBondAssetBalance,
   checkDarkVeilEligibility,
-  checkNightBalance,
   checkNoDirectAdaFlow,
   checkStakeKeyMatch,
   checkWalletAge,
@@ -285,7 +285,7 @@ describe('checkNoDirectAdaFlow (check #5)', () => {
   });
 });
 
-describe('checkNightBalance (check #2)', () => {
+describe('checkBondAssetBalance (check #2)', () => {
   const mockedBalance = vi.mocked(getUnshieldedNightBalance);
   const mockedThreshold = vi.mocked(usdToMinNightAtomic);
 
@@ -301,7 +301,7 @@ describe('checkNightBalance (check #2)', () => {
       ReturnType<typeof getUnshieldedNightBalance>
     >);
     priced(500n);
-    await expect(checkNightBalance('ws://indexer', REGISTRANT, 50)).resolves.toMatchObject({
+    await expect(checkBondAssetBalance('ws://indexer', REGISTRANT, 50)).resolves.toMatchObject({
       eligible: true,
       balanceAtomic: 500n,
       minRequiredAtomic: 500n,
@@ -313,7 +313,7 @@ describe('checkNightBalance (check #2)', () => {
       ReturnType<typeof getUnshieldedNightBalance>
     >);
     priced(500n);
-    await expect(checkNightBalance('ws://indexer', REGISTRANT, 50)).resolves.toMatchObject({
+    await expect(checkBondAssetBalance('ws://indexer', REGISTRANT, 50)).resolves.toMatchObject({
       eligible: false,
     });
   });
@@ -325,7 +325,7 @@ describe('checkNightBalance (check #2)', () => {
       ReturnType<typeof getUnshieldedNightBalance>
     >);
     priced(500n);
-    await expect(checkNightBalance('ws://indexer', REGISTRANT, 50)).resolves.toMatchObject({
+    await expect(checkBondAssetBalance('ws://indexer', REGISTRANT, 50)).resolves.toMatchObject({
       sources: ['coingecko', 'kraken'],
     });
   });
@@ -433,5 +433,52 @@ describe('checkDarkVeilEligibility', () => {
     const { client } = passing();
     mockedThreshold.mockRejectedValue(new Error('ADA/USD sources diverged beyond the permitted band'));
     await expect(checkDarkVeilEligibility(client, REGISTRANT, CREATOR, OPTIONS, NOW)).rejects.toThrow(/diverged/);
+  });
+});
+
+describe('checkBondAssetBalance — a USD-pegged bond asset consults no oracle', () => {
+  const mockedBalance = vi.mocked(getUnshieldedNightBalance);
+  const mockedThreshold = vi.mocked(usdToMinNightAtomic);
+
+  const USDM_COLOUR = 'ab'.repeat(32);
+  const USDM = { tokenTypeHex: USDM_COLOUR, decimals: 6, usdPegged: true };
+
+  it('turns $50 into 50 whole units by multiplication, with no price call', async () => {
+    mockedBalance.mockResolvedValue({ balance: 50_000_000n } as unknown as Awaited<
+      ReturnType<typeof getUnshieldedNightBalance>
+    >);
+    mockedThreshold.mockClear();
+
+    await expect(checkBondAssetBalance('ws://indexer', REGISTRANT, 50, USDM)).resolves.toMatchObject({
+      eligible: true,
+      balanceAtomic: 50_000_000n,
+      minRequiredAtomic: 50_000_000n,
+      sources: ['usd-pegged'],
+    });
+
+    // The assertion with teeth. On the NIGHT path this same call reaches a
+    // Minswap TWAP times a median-of-three ADA/USD; on a pegged asset it must
+    // not, or the fragility the denomination was chosen to remove is still
+    // sitting on the critical path.
+    expect(mockedThreshold).not.toHaveBeenCalled();
+  });
+
+  it('queries the indexer for the bond colour, not for NIGHT', async () => {
+    mockedBalance.mockResolvedValue({ balance: 0n } as unknown as Awaited<
+      ReturnType<typeof getUnshieldedNightBalance>
+    >);
+    await checkBondAssetBalance('ws://indexer', REGISTRANT, 50, USDM);
+    // Checking a NIGHT balance while the contract demands a stablecoin bond
+    // would admit registrants who cannot actually register.
+    expect(mockedBalance).toHaveBeenCalledWith('ws://indexer', REGISTRANT, USDM_COLOUR);
+  });
+
+  it('rejects a balance one atomic unit short', async () => {
+    mockedBalance.mockResolvedValue({ balance: 49_999_999n } as unknown as Awaited<
+      ReturnType<typeof getUnshieldedNightBalance>
+    >);
+    await expect(checkBondAssetBalance('ws://indexer', REGISTRANT, 50, USDM)).resolves.toMatchObject({
+      eligible: false,
+    });
   });
 });

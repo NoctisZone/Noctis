@@ -165,14 +165,10 @@ function makeSubmitter(tier: 'A' | 'B' = 'A') {
 }
 
 describe('the redeemer index, which fails silently when wrong', () => {
-  it('matches what each tier’s blueprint declares', () => {
-    const tierA = blueprint.definitions['bonding_curve/BondingCurveRedeemer']?.anyOf?.find(
-      (v) => v.title === 'BatchTrades',
-    );
+  it('matches what the quadratic curve’s blueprint declares', () => {
     const tierB = blueprint.definitions['bonding_curve_tier_b/BondingCurveTierBRedeemer']?.anyOf?.find(
       (v) => v.title === 'BatchTrades',
     );
-    expect(REDEEMER_BATCH_TRADES.A).toBe(tierA?.index);
     expect(REDEEMER_BATCH_TRADES.B).toBe(tierB?.index);
   });
 

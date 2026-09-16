@@ -80,7 +80,7 @@ import CompactStandardLibrary;
 //   2. The governor gets a fixed response window (72h, same as a normal
 //      ballot) to weigh in — a genuine, timestamped updateCreatorActivity
 //      call during or after that window that still shows no claimable
-//      balance counts as a real rebuttal and forfeits the bond (60/40
+//      balance counts as a real rebuttal and forfeits the bond (whole, to
 //      treasury/ops, matching every other forfeiture in this codebase).
 //   3. If the governor never touches updateCreatorActivity at all during
 //      the window (true unresponsiveness/censorship), the challenge
@@ -498,7 +498,7 @@ export ledger pendingCommunityWallet: Bytes<32>;
 export ledger pendingCommunityWalletAt: Uint<64>;
 
 // Fixed payout destinations for a forfeited (rebutted) break-glass bond —
-// same 60/40 treasury/ops split convention as every other forfeiture in
+// same one-address convention as every other forfeiture in
 // this codebase. This contract had no such fields before; added
 // specifically to support break-glass forfeiture payouts.
 // One platform wallet: the treasury/ops pair is gone platform-wide.

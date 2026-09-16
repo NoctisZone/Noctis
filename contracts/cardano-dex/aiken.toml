@@ -1,0 +1,18 @@
+name = "noctis/cardano-dex"
+version = "0.0.1"
+compiler = "v1.1.23"
+plutus = "v3"
+license = "Apache-2.0"
+description = "Noctis Zone — own trading venue for graduated launches (Aiken). Pool datum, royalty withdraw path and helper libs vendored from Splash splash-core validators_v3 (CC0-1.0 / Apache-2.0), see NOTICE."
+
+[repository]
+user = "NoctisZone"
+project = "Noctis"
+platform = "github"
+
+[[dependencies]]
+name = "aiken-lang/stdlib"
+version = "v3.1.0"
+source = "github"
+
+[config]

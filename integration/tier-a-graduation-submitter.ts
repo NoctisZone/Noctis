@@ -119,7 +119,15 @@ export interface TierAGraduationConfig {
   blockfrostProjectId: string;
   blockfrostUrl: string;
   network: LucidNetwork;
-  bondingCurveScriptCbor: string;
+  /**
+   * Optional, and only the paths that actually touch the curve need it:
+   * graduation itself, and reading curve state. `startVesting` does neither,
+   * so requiring it forced every vesting caller to name a curve validator it
+   * never uses.
+   *
+   * Derived lazily below, so omitting it costs nothing until something asks.
+   */
+  bondingCurveScriptCbor?: string;
   lpEscrowScriptCbor: string;
   vestingScriptCbor: string;
   stakingPoolScriptCbor: string;
@@ -162,20 +170,44 @@ export interface CreatorSigner {
 
 export class TierAGraduationSubmitter {
   private lucidPromise: Promise<LucidEvolution>;
-  private bondingCurveValidator: SpendingValidator;
+  private bondingCurveCache?: { validator: SpendingValidator; address: string };
   private lpEscrowValidator: SpendingValidator;
   private vestingValidator: SpendingValidator;
   private stakingPoolValidator: SpendingValidator;
-  private bondingCurveAddress: string;
+
   private lpEscrowAddress: string;
   private vestingAddress: string;
   private stakingPoolAddress: string;
 
+  /**
+   * The curve validator and its address, derived on first use. A caller that
+   * needs one and did not supply it is told which field is missing, rather
+   * than failing later against an address derived from nothing.
+   */
+  private get bondingCurve(): { validator: SpendingValidator; address: string } {
+    if (!this.bondingCurveCache) {
+      const script = this.config.bondingCurveScriptCbor;
+      if (!script) {
+        throw new Error(
+          'This operation needs the bonding curve, but no bondingCurveScriptCbor was given. ' +
+            'Supply the compiled curve validator for this launch.',
+        );
+      }
+      const validator: SpendingValidator = { type: 'PlutusV3', script };
+      this.bondingCurveCache = { validator, address: validatorToAddress(this.config.network, validator) };
+    }
+    return this.bondingCurveCache;
+  }
+
+  private get bondingCurveValidator(): SpendingValidator {
+    return this.bondingCurve.validator;
+  }
+
+  private get bondingCurveAddress(): string {
+    return this.bondingCurve.address;
+  }
+
   constructor(private config: TierAGraduationConfig) {
-    this.bondingCurveValidator = {
-      type: 'PlutusV3',
-      script: config.bondingCurveScriptCbor,
-    };
     this.lpEscrowValidator = {
       type: 'PlutusV3',
       script: config.lpEscrowScriptCbor,
@@ -188,7 +220,6 @@ export class TierAGraduationSubmitter {
       type: 'PlutusV3',
       script: config.stakingPoolScriptCbor,
     };
-    this.bondingCurveAddress = validatorToAddress(config.network, this.bondingCurveValidator);
     this.lpEscrowAddress = validatorToAddress(config.network, this.lpEscrowValidator);
     this.vestingAddress = validatorToAddress(config.network, this.vestingValidator);
     this.stakingPoolAddress = validatorToAddress(config.network, this.stakingPoolValidator);
@@ -514,7 +545,7 @@ export class TierAGraduationSubmitter {
     const provider = new BlockfrostProvider(this.config.blockfrostProjectId);
     const spender = new MeshCurveSpender({
       network,
-      compiledScriptCbor: this.config.bondingCurveScriptCbor,
+      compiledScriptCbor: this.bondingCurveValidator.script,
       referenceScript: bondingCurveRef,
       provider,
     });

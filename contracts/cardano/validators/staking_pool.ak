@@ -63,12 +63,16 @@
 // one spend without being able to redirect any of them.
 // ============================================================================
 
+use aiken/builtin
 use aiken/collection/list
+use aiken/collection/pairs
 use aiken/crypto.{VerificationKeyHash}
 use aiken/interval.{Interval, IntervalBoundType}
 use cardano/address.{Address, from_verification_key}
 use cardano/assets.{AssetName, PolicyId}
-use cardano/transaction.{Input, InlineDatum, Output, OutputReference, Transaction}
+use cardano/transaction.{
+  InlineDatum, Input, Output, OutputReference, Spend, Transaction,
+}
 use noctis/cap_accumulator.{CapProofStep}
 use noctis/settlement
 use noctis/stake_accumulator.{Position, no_position}
@@ -90,6 +94,9 @@ pub const acc_scale = 1_000_000_000_000
 pub const ms_per_day = 86_400_000
 
 /// STAKING_BONDING_PERIOD_DAYS, as a lock on LEAVING rather than on earning.
+/// This is the CEILING and the default; the value a given pool enforces is
+/// its own datum's `unstake_lock_ms`, set by the curve at genesis and never
+/// above this.
 ///
 /// Under a daily snapshot it had to be a gap in earning, because the thing to
 /// prevent was staking just before a snapshot and leaving just after. Accrual
@@ -97,21 +104,28 @@ pub const ms_per_day = 86_400_000
 /// snapshot to arrive just before, and that reason is gone. Kept as a real
 /// minimum commitment, which is what it now is: adding to a position restarts
 /// it, claiming does not touch it.
-pub const unstake_lock_ms = 604_800_000
+pub const unstake_lock_ms = staking_pool_datum.max_unstake_lock_ms
 
-/// STAKING_CLAIM_FEE_USD, as a floor rather than a peg.
+/// The platform's charge for taking rewards out of a pool: a flat 5 ada, paid
+/// to the governor the pool was opened with.
 ///
-/// Aiken has no in-circuit oracle, so a contract cannot know what a dollar is
-/// worth. This is the same deliberately conservative sanity floor both bonding
-/// curves already charge on a fee claim, at the same value: the real
-/// dollar-equivalent is computed off-chain from `integration/ada-usd-price.ts`
-/// and paid with margin above it in the normal case, while this refuses a
-/// claim that pays nothing at all.
+/// Named in ada rather than in dollars because Aiken has no in-circuit oracle,
+/// so a contract cannot know what a dollar is worth. Naming the amount outright
+/// is what makes the charge enforceable: a dollar converted off chain is a
+/// figure the submitter chooses, and a charge only the submitter applies is a
+/// charge anyone can decline by building their own transaction — `ClaimRewards`
+/// takes no signature at all. See `platform_fee_paid`.
 ///
-/// It has to live on chain rather than in the submitter, because `ClaimRewards`
-/// takes no signature — see `platform_fee_paid`. A charge only the submitter
-/// applies is a charge anyone can decline by building their own transaction.
-pub const min_platform_claim_fee_lovelace = 200_000
+/// The amount sits clear of the protocol's own minimum ada for the output that
+/// carries it, which a real claim measured at 1,055,950 lovelace, so the figure
+/// named here is the figure that binds.
+///
+/// Both arms that move rewards charge it. `ClaimRewards` takes the rewards and
+/// leaves the stake; `Unstake` takes the stake and every accrued reward with
+/// it. The same tokens therefore cost the same to take, whichever route takes
+/// them. An exit that accrued nothing pays nothing — the charge is on the
+/// rewards, not on withdrawing a stake.
+pub const platform_charge_lovelace = 5_000_000
 
 /// How long an exhausted pool waits for a top-up before it can be retired.
 pub const close_cooldown_ms = 7_776_000_000
@@ -224,12 +238,11 @@ pub fn advance(pool: StakingPoolDatum, now: Int) -> (Int, Int) {
     (pool.acc_reward_per_token, pool.unallocated)
   } else {
     let raw = pool.emission_per_day * elapsed / ms_per_day
-    let emitted =
-      if raw > pool.unallocated {
-        pool.unallocated
-      } else {
-        raw
-      }
+    let emitted = if raw > pool.unallocated {
+      pool.unallocated
+    } else {
+      raw
+    }
     (
       pool.acc_reward_per_token + emitted * acc_scale / pool.total_staked,
       pool.unallocated - emitted,
@@ -271,10 +284,15 @@ fn thread_nft_ok(
   own_outputs: List<Output>,
   pool: StakingPoolDatum,
 ) -> Bool {
-  let name =
-    thread_nft.thread_asset_name(thread_nft.role_staking_pool, pool.launch_id)
-  let held =
-    assets.quantity_of(own_input.output.value, pool.thread_nft_policy, name)
+  let name = thread_nft.thread_asset_name(
+    thread_nft.role_staking_pool,
+    pool.launch_id,
+  )
+  let held = assets.quantity_of(
+    own_input.output.value,
+    pool.thread_nft_policy,
+    name,
+  )
   when own_outputs is {
     [] -> held == 1
     [out] -> and {
@@ -328,7 +346,7 @@ fn platform_fee_paid(
         }
       },
     ),
-    settlement.net_lovelace_gain(self, credential) >= min_platform_claim_fee_lovelace,
+    settlement.net_lovelace_gain(self, credential) >= platform_charge_lovelace,
   }
 }
 
@@ -372,23 +390,23 @@ validator staking_pool {
     self: Transaction,
   ) {
     expect Some(pool) = datum_opt
-    expect Some(own_input) =
-      list.find(self.inputs, fn(input) { input.output_reference == own_ref })
+    expect Some(own_input) = list.find(
+      self.inputs,
+      fn(input) { input.output_reference == own_ref },
+    )
 
     // Compared by PAYMENT credential, never by the full Address: the staking
     // part is chosen freely by whoever builds an output, so two UTXOs at this
     // same script can carry different delegation keys while being equally ours.
     let own_payment = own_input.output.address.payment_credential
-    let own_inputs =
-      list.filter(
-        self.inputs,
-        fn(input) { input.output.address.payment_credential == own_payment },
-      )
-    let own_outputs =
-      list.filter(
-        self.outputs,
-        fn(output) { output.address.payment_credential == own_payment },
-      )
+    let own_inputs = list.filter(
+      self.inputs,
+      fn(input) { input.output.address.payment_credential == own_payment },
+    )
+    let own_outputs = list.filter(
+      self.outputs,
+      fn(output) { output.address.payment_credential == own_payment },
+    )
 
     when range_now(self.validity_range) is {
       None -> False
@@ -406,26 +424,27 @@ validator staking_pool {
               let (acc, unallocated) = advance(pool, now)
               let owed = owed_at(before, acc)
               let amount = before.amount + add_amount + owed
-              let after =
-                Position { amount, debt: debt_at(amount, acc), since: now }
-              let (proof_ok, stake_root) =
-                stake_accumulator.transition(
-                  pool.stake_root,
-                  staker_vkh,
-                  before,
-                  after,
-                  proof,
-                )
-              let expected =
-                StakingPoolDatum {
-                  ..pool,
-                  stake_root: stake_root,
-                  acc_reward_per_token: acc,
-                  total_staked: pool.total_staked + add_amount + owed,
-                  unallocated: unallocated,
-                  last_update_ms: now,
-                  exhausted_at: exhausted_after(pool, unallocated, now),
-                }
+              let after = Position {
+                amount,
+                debt: debt_at(amount, acc),
+                since: now,
+              }
+              let (proof_ok, stake_root) = stake_accumulator.transition(
+                pool.stake_root,
+                staker_vkh,
+                before,
+                after,
+                proof,
+              )
+              let expected = StakingPoolDatum {
+                ..pool,
+                stake_root,
+                acc_reward_per_token: acc,
+                total_staked: pool.total_staked + add_amount + owed,
+                unallocated,
+                last_update_ms: now,
+                exhausted_at: exhausted_after(pool, unallocated, now),
+              }
 
               when own_outputs is {
                 [own_output] -> and {
@@ -442,6 +461,18 @@ validator staking_pool {
                     // needs their consent: it restarts their lock.
                     list.has(self.extra_signatories, staker_vkh),
                     proof_ok,
+                    // Compounding folds the accrued reward into the stake, so
+                    // the reward is being TAKEN here as surely as by a claim;
+                    // the same charge applies, or the two routes would price
+                    // the same tokens by which button was pressed.
+                    or {
+                      owed == 0,
+                      platform_fee_paid(
+                        self,
+                        own_ref,
+                        pool.governor_pub_key_hash,
+                      ),
+                    },
                     // Only the stake arrives. Anything owed was already in
                     // this UTXO as budget and merely changes which side of
                     // `total_staked` it sits on, so no reward token moves.
@@ -460,36 +491,47 @@ validator staking_pool {
               let (acc, unallocated) = advance(pool, now)
               let owed = owed_at(before, acc)
               let payout = before.amount + owed
-              let (proof_ok, stake_root) =
-                stake_accumulator.transition(
-                  pool.stake_root,
-                  staker_vkh,
-                  before,
-                  no_position,
-                  proof,
-                )
-              let expected =
-                StakingPoolDatum {
-                  ..pool,
-                  stake_root: stake_root,
-                  acc_reward_per_token: acc,
-                  total_staked: pool.total_staked - before.amount,
-                  unallocated: unallocated,
-                  last_update_ms: now,
-                  exhausted_at: exhausted_after(pool, unallocated, now),
-                }
+              let (proof_ok, stake_root) = stake_accumulator.transition(
+                pool.stake_root,
+                staker_vkh,
+                before,
+                no_position,
+                proof,
+              )
+              let expected = StakingPoolDatum {
+                ..pool,
+                stake_root,
+                acc_reward_per_token: acc,
+                total_staked: pool.total_staked - before.amount,
+                unallocated,
+                last_update_ms: now,
+                exhausted_at: exhausted_after(pool, unallocated, now),
+              }
 
               when own_outputs is {
                 [own_output] -> and {
                     before.amount > 0,
                     list.has(self.extra_signatories, staker_vkh),
-                    now >= before.since + unstake_lock_ms,
+                    now >= before.since + pool.unstake_lock_ms,
                     proof_ok,
                     tokens_in(own_output.value, pool) == tokens_in(
                       own_input.output.value,
                       pool,
                     ) - payout,
                     staker_paid(self, own_ref, pool, staker_vkh, payout),
+                    // An exit carries out every accrued reward along with the
+                    // stake, so it carries the charge a claim would have paid
+                    // for those same rewards. A position that accrued nothing
+                    // has nothing to charge for: the charge is on the rewards,
+                    // not on taking a stake back.
+                    or {
+                      owed == 0,
+                      platform_fee_paid(
+                        self,
+                        own_ref,
+                        pool.governor_pub_key_hash,
+                      ),
+                    },
                     own_output.datum == InlineDatum(expected),
                     output_value_clean(own_output),
                   }
@@ -500,31 +542,28 @@ validator staking_pool {
             ClaimRewards { staker_vkh, before, proof } -> {
               let (acc, unallocated) = advance(pool, now)
               let owed = owed_at(before, acc)
-              let after =
-                Position {
-                  amount: before.amount,
-                  debt: debt_at(before.amount, acc),
-                  // Untouched: taking rewards is not a new commitment, so it
-                  // neither restarts the lock nor extends it.
-                  since: before.since,
-                }
-              let (proof_ok, stake_root) =
-                stake_accumulator.transition(
-                  pool.stake_root,
-                  staker_vkh,
-                  before,
-                  after,
-                  proof,
-                )
-              let expected =
-                StakingPoolDatum {
-                  ..pool,
-                  stake_root: stake_root,
-                  acc_reward_per_token: acc,
-                  unallocated: unallocated,
-                  last_update_ms: now,
-                  exhausted_at: exhausted_after(pool, unallocated, now),
-                }
+              let after = Position {
+                amount: before.amount,
+                debt: debt_at(before.amount, acc),
+                // Untouched: taking rewards is not a new commitment, so it
+                // neither restarts the lock nor extends it.
+                since: before.since,
+              }
+              let (proof_ok, stake_root) = stake_accumulator.transition(
+                pool.stake_root,
+                staker_vkh,
+                before,
+                after,
+                proof,
+              )
+              let expected = StakingPoolDatum {
+                ..pool,
+                stake_root,
+                acc_reward_per_token: acc,
+                unallocated,
+                last_update_ms: now,
+                exhausted_at: exhausted_after(pool, unallocated, now),
+              }
 
               when own_outputs is {
                 [own_output] -> and {
@@ -550,20 +589,45 @@ validator staking_pool {
               // Advanced FIRST, so arriving tokens are not retroactively
               // emitted across time that passed before they were here.
               let (acc, unallocated) = advance(pool, now)
-              let expected =
-                StakingPoolDatum {
-                  ..pool,
-                  acc_reward_per_token: acc,
-                  unallocated: unallocated + amount,
-                  last_update_ms: now,
-                  // Revived. If this budget is exhausted in turn, the cooldown
-                  // starts again from scratch.
-                  exhausted_at: None,
-                }
+              let expected = StakingPoolDatum {
+                ..pool,
+                acc_reward_per_token: acc,
+                unallocated: unallocated + amount,
+                last_update_ms: now,
+                // Revived. If this budget is exhausted in turn, the cooldown
+                // starts again from scratch.
+                exhausted_at: None,
+              }
 
               when own_outputs is {
                 [own_output] -> and {
                     amount > 0,
+                    // A pool that has never held a budget is funded only by
+                    // the graduation that seeds it: the launch's own curve
+                    // must be spent under `Graduate` in this transaction.
+                    // Anyone else topping it up first would let a stake land
+                    // before the seed and leave the pool unable to ever match
+                    // the genesis state graduation pins.
+                    or {
+                      !never_funded(pool),
+                      funded_by_graduation(self, pool),
+                    },
+                    // Once the budget has run dry, only the launch's own
+                    // parties may refill it, so the close cooldown restarts
+                    // only by the creator's or the governor's decision.
+                    when pool.exhausted_at is {
+                      Some(_) -> or {
+                          list.has(
+                            self.extra_signatories,
+                            pool.creator_pub_key_hash,
+                          ),
+                          list.has(
+                            self.extra_signatories,
+                            pool.governor_pub_key_hash,
+                          ),
+                        }
+                      None -> True
+                    },
                     tokens_in(own_output.value, pool) == tokens_in(
                       own_input.output.value,
                       pool,
@@ -576,13 +640,11 @@ validator staking_pool {
             }
 
             ClosePool -> {
-              let cooled_down =
-                when pool.exhausted_at is {
-                  Some(at) -> now >= at + close_cooldown_ms
-                  None -> False
-                }
-              let creator =
-                from_verification_key(pool.creator_pub_key_hash).payment_credential
+              let cooled_down = when pool.exhausted_at is {
+                Some(at) -> now >= at + close_cooldown_ms
+                None -> False
+              }
+              let creator = from_verification_key(pool.creator_pub_key_hash).payment_credential
 
               and {
                 cooled_down,
@@ -591,10 +653,11 @@ validator staking_pool {
                 // has not come back simply keeps the pool open, which costs
                 // nobody anything.
                 pool.total_staked == 0,
-                // No reward token left either: the budget is spent and every
-                // credited reward claimed. What remains is the min-ADA and the
-                // thread NFT.
-                tokens_in(own_input.output.value, pool) == 0,
+                // The budget is spent. Whatever tokens remain are the rounding
+                // dust the accumulator's floors leave behind — owed to no
+                // position, so they leave with the pool. A close that demanded
+                // an empty pool could never happen on a real one.
+                pool.unallocated == 0,
                 // The pool stops existing rather than continuing empty.
                 list.length(own_outputs) == 0,
                 list.any(
@@ -603,9 +666,9 @@ validator staking_pool {
                     and {
                       settlement.settles(output, own_ref),
                       output.address.payment_credential == creator,
-                      assets.without_lovelace(output.value) == assets.without_lovelace(
-                        own_input.output.value,
-                      ),
+                      // The WHOLE value, lovelace included: the residue is the
+                      // creator's, not the closer's.
+                      output.value == own_input.output.value,
                     }
                   },
                 ),
@@ -615,11 +678,59 @@ validator staking_pool {
         }
     }
   }
+
+  else(_) {
+    fail
+  }
 }
 
 // ============================================================================
 // TESTS
 // ============================================================================
+
+/// A pool that has never held a budget: minted `unfunded`, not yet seeded by
+/// its graduation, and never exhausted (an exhausted pool also reads zero
+/// unallocated, but carries the moment it ran dry).
+fn never_funded(pool: StakingPoolDatum) -> Bool {
+  pool.unallocated == 0 && pool.exhausted_at == None
+}
+
+/// The launch's own curve is an input of this transaction, spent under its
+/// `Graduate` arm — the only spend that seeds a pool. The curve is found by
+/// its thread NFT, and its redeemer by constructor index, the same reading the
+/// venue's factory makes (`graduate_redeemer_index`).
+fn funded_by_graduation(self: Transaction, pool: StakingPoolDatum) -> Bool {
+  let curve_nft_name = thread_nft.thread_asset_name(
+    thread_nft.role_bonding_curve_tier_b,
+    pool.launch_id,
+  )
+  when
+    list.find(
+      self.inputs,
+      fn(input) {
+        assets.quantity_of(
+          input.output.value,
+          pool.thread_nft_policy,
+          curve_nft_name,
+        ) == 1
+      },
+    )
+  is {
+    Some(curve_in) ->
+      when
+        pairs.get_first(self.redeemers, Spend(curve_in.output_reference))
+      is {
+        Some(curve_redeemer) ->
+          builtin.un_constr_data(curve_redeemer).1st == graduate_redeemer_index
+        None -> False
+      }
+    None -> False
+  }
+}
+
+/// `Graduate`'s constructor index in `bonding_curve_tier_b`'s redeemer enum;
+/// pinned there by `graduate_is_constructor_eight`, mirrored by the venue.
+const graduate_redeemer_index: Int = 8
 
 const staker: VerificationKeyHash = #"dd"
 
@@ -683,6 +794,7 @@ fn mock_pool() -> StakingPoolDatum {
     last_update_ms: opened_at,
     exhausted_at: None,
     governor_pub_key_hash: governor,
+    unstake_lock_ms,
   }
 }
 
@@ -747,8 +859,8 @@ fn tx(
 ) -> Transaction {
   Transaction {
     ..transaction.placeholder,
-    inputs: inputs,
-    outputs: outputs,
+    inputs,
+    outputs,
     extra_signatories: signers,
     validity_range: interval.between(now, now + 1_000),
   }
@@ -796,12 +908,11 @@ test advance_never_emits_more_than_the_budget_holds() {
 /// Doubling the budget doubles the runway at the SAME rate — a top-up buys
 /// days, it does not accelerate payouts.
 test the_budget_is_the_only_stopping_condition() {
-  let pool =
-    StakingPoolDatum {
-      ..mock_pool(),
-      total_staked: 1_000,
-      unallocated: 7_300_000,
-    }
+  let pool = StakingPoolDatum {
+    ..mock_pool(),
+    total_staked: 1_000,
+    unallocated: 7_300_000,
+  }
   let (acc_1000, un_1000) = advance(pool, opened_at + 1_000 * ms_per_day)
   let (_, un_2000) = advance(pool, opened_at + 2_000 * ms_per_day)
   and {
@@ -834,18 +945,22 @@ fn run_stake(
   let owed = owed_at(before, acc)
   let amount = before.amount + add + owed
   let after = Position { amount, debt: debt_at(amount, acc), since: now }
-  let (_, stake_root) =
-    stake_accumulator.transition(pool.stake_root, staker, before, after, proof)
-  let next =
-    StakingPoolDatum {
-      ..pool,
-      stake_root: stake_root,
-      acc_reward_per_token: acc,
-      total_staked: pool.total_staked + add + owed,
-      unallocated: unallocated,
-      last_update_ms: now,
-      exhausted_at: exhausted_after(pool, unallocated, now),
-    }
+  let (_, stake_root) = stake_accumulator.transition(
+    pool.stake_root,
+    staker,
+    before,
+    after,
+    proof,
+  )
+  let next = StakingPoolDatum {
+    ..pool,
+    stake_root,
+    acc_reward_per_token: acc,
+    total_staked: pool.total_staked + add + owed,
+    unallocated,
+    last_update_ms: now,
+    exhausted_at: exhausted_after(pool, unallocated, now),
+  }
   staking_pool.spend(
     Some(pool),
     Stake { staker_vkh: staker, before, proof, add_amount: add },
@@ -877,12 +992,11 @@ test stake_rejects_a_zero_amount() {
 /// makes the claimed `before` true rather than merely asserted.
 test stake_rejects_an_understated_debt() {
   let real = pos(1_000, 500, opened_at)
-  let pool =
-    StakingPoolDatum {
-      ..mock_pool(),
-      total_staked: 1_000,
-      stake_root: stake_accumulator.root_of([(staker, real)]),
-    }
+  let pool = StakingPoolDatum {
+    ..mock_pool(),
+    total_staked: 1_000,
+    stake_root: stake_accumulator.root_of([(staker, real)]),
+  }
   !run_stake(
     pool,
     3_650_000,
@@ -896,6 +1010,61 @@ test stake_rejects_an_understated_debt() {
 
 // -- Unstake ------------------------------------------------------------------
 
+fn run_unstake_paying(
+  pool: StakingPoolDatum,
+  pool_tokens: Int,
+  before: Position,
+  now: Int,
+  signers: List<VerificationKeyHash>,
+  payout_to: VerificationKeyHash,
+  fee: Int,
+) -> Bool {
+  let entries = [(staker, before)]
+  let proof = stake_accumulator.proof_in(staker, entries)
+  let (acc, unallocated) = advance(pool, now)
+  let owed = owed_at(before, acc)
+  let payout = before.amount + owed
+  let (_, stake_root) = stake_accumulator.transition(
+    pool.stake_root,
+    staker,
+    before,
+    no_position,
+    proof,
+  )
+  let next = StakingPoolDatum {
+    ..pool,
+    stake_root,
+    acc_reward_per_token: acc,
+    total_staked: pool.total_staked - before.amount,
+    unallocated,
+    last_update_ms: now,
+    exhausted_at: exhausted_after(pool, unallocated, now),
+  }
+  staking_pool.spend(
+    Some(pool),
+    Unstake { staker_vkh: staker, before, proof },
+    own_ref(),
+    tx(
+      [pool_input(pool, pool_tokens)],
+      list.concat(
+        [
+          pool_output(next, pool_tokens - payout),
+          payout_output(payout_to, payout),
+        ],
+        if fee == 0 {
+          []
+        } else {
+          [fee_output(fee)]
+        },
+      ),
+      signers,
+      now,
+    ),
+  )
+}
+
+/// An exit paying the charge in full, which is what an exit carrying rewards
+/// has to do.
 fn run_unstake(
   pool: StakingPoolDatum,
   pool_tokens: Int,
@@ -904,39 +1073,14 @@ fn run_unstake(
   signers: List<VerificationKeyHash>,
   payout_to: VerificationKeyHash,
 ) -> Bool {
-  let entries = [(staker, before)]
-  let proof = stake_accumulator.proof_in(staker, entries)
-  let (acc, unallocated) = advance(pool, now)
-  let owed = owed_at(before, acc)
-  let payout = before.amount + owed
-  let (_, stake_root) =
-    stake_accumulator.transition(
-      pool.stake_root,
-      staker,
-      before,
-      no_position,
-      proof,
-    )
-  let next =
-    StakingPoolDatum {
-      ..pool,
-      stake_root: stake_root,
-      acc_reward_per_token: acc,
-      total_staked: pool.total_staked - before.amount,
-      unallocated: unallocated,
-      last_update_ms: now,
-      exhausted_at: exhausted_after(pool, unallocated, now),
-    }
-  staking_pool.spend(
-    Some(pool),
-    Unstake { staker_vkh: staker, before, proof },
-    own_ref(),
-    tx(
-      [pool_input(pool, pool_tokens)],
-      [pool_output(next, pool_tokens - payout), payout_output(payout_to, payout)],
-      signers,
-      now,
-    ),
+  run_unstake_paying(
+    pool,
+    pool_tokens,
+    before,
+    now,
+    signers,
+    payout_to,
+    platform_charge_lovelace,
   )
 }
 
@@ -955,24 +1099,171 @@ fn staked_pool() -> (StakingPoolDatum, Position) {
 
 test unstake_returns_the_stake_and_everything_owed() {
   let (pool, before) = staked_pool()
-  run_unstake(pool, 3_651_000, before, opened_at + 8 * ms_per_day, [staker], staker)
+  run_unstake(
+    pool,
+    3_651_000,
+    before,
+    opened_at + 8 * ms_per_day,
+    [staker],
+    staker,
+  )
 }
 
 test unstake_is_refused_before_the_lock_elapses() {
   let (pool, before) = staked_pool()
-  !run_unstake(pool, 3_651_000, before, opened_at + 6 * ms_per_day, [staker], staker)
+  !run_unstake(
+    pool,
+    3_651_000,
+    before,
+    opened_at + 6 * ms_per_day,
+    [staker],
+    staker,
+  )
 }
 
 test unstake_requires_the_stakers_signature() {
   let (pool, before) = staked_pool()
-  !run_unstake(pool, 3_651_000, before, opened_at + 8 * ms_per_day, [other], staker)
+  !run_unstake(
+    pool,
+    3_651_000,
+    before,
+    opened_at + 8 * ms_per_day,
+    [other],
+    staker,
+  )
 }
 
 /// The payout may only reach the staker's own address, whoever built the
 /// transaction.
 test unstake_cannot_be_redirected() {
   let (pool, before) = staked_pool()
-  !run_unstake(pool, 3_651_000, before, opened_at + 8 * ms_per_day, [staker], other)
+  !run_unstake(
+    pool,
+    3_651_000,
+    before,
+    opened_at + 8 * ms_per_day,
+    [staker],
+    other,
+  )
+}
+
+/// An exit carrying rewards pays for them. Without this, the same tokens cost
+/// nothing by one route and the full charge by the other.
+test unstake_is_refused_without_the_platform_charge() {
+  let (pool, before) = staked_pool()
+  !run_unstake_paying(
+    pool,
+    3_651_000,
+    before,
+    opened_at + 8 * ms_per_day,
+    [staker],
+    staker,
+    0,
+  )
+}
+
+/// One lovelace short is short. The amount named in the contract is the amount
+/// that binds, which is the whole reason it is named in ada.
+test unstake_is_refused_below_the_platform_charge() {
+  let (pool, before) = staked_pool()
+  !run_unstake_paying(
+    pool,
+    3_651_000,
+    before,
+    opened_at + 8 * ms_per_day,
+    [staker],
+    staker,
+    platform_charge_lovelace - 1,
+  )
+}
+
+test unstake_accepts_the_charge_exactly_at_the_floor() {
+  let (pool, before) = staked_pool()
+  run_unstake_paying(
+    pool,
+    3_651_000,
+    before,
+    opened_at + 8 * ms_per_day,
+    [staker],
+    staker,
+    platform_charge_lovelace,
+  )
+}
+
+/// The change trick, aimed at the exit's charge: the governor's own lovelace,
+/// spent into the transaction and handed straight back tagged. Every balance is
+/// honest and the governor is no better off, which is what netting refuses and
+/// tagging alone would not.
+test unstake_refuses_a_charge_that_is_only_the_governors_own_change() {
+  let (pool, before) = staked_pool()
+  let entries = [(staker, before)]
+  let proof = stake_accumulator.proof_in(staker, entries)
+  let now = opened_at + 8 * ms_per_day
+  let (acc, unallocated) = advance(pool, now)
+  let owed = owed_at(before, acc)
+  let payout = before.amount + owed
+  let (_, stake_root) = stake_accumulator.transition(
+    pool.stake_root,
+    staker,
+    before,
+    no_position,
+    proof,
+  )
+  let next = StakingPoolDatum {
+    ..pool,
+    stake_root,
+    acc_reward_per_token: acc,
+    total_staked: pool.total_staked - before.amount,
+    unallocated,
+    last_update_ms: now,
+    exhausted_at: exhausted_after(pool, unallocated, now),
+  }
+  let governor_input = Input {
+    output_reference: OutputReference { transaction_id: #"88", output_index: 0 },
+    output: Output {
+      address: from_verification_key(governor),
+      value: assets.from_lovelace(platform_charge_lovelace),
+      datum: transaction.NoDatum,
+      reference_script: None,
+    },
+  }
+  !staking_pool.spend(
+    Some(pool),
+    Unstake { staker_vkh: staker, before, proof },
+    own_ref(),
+    tx(
+      [pool_input(pool, 3_651_000), governor_input],
+      [
+        pool_output(next, 3_651_000 - payout),
+        payout_output(staker, payout),
+        fee_output(platform_charge_lovelace),
+      ],
+      [staker],
+      now,
+    ),
+  )
+}
+
+/// An exit from a pool with nothing left to emit accrued nothing, so there is
+/// nothing to charge for and it costs nothing. The stake itself was never what
+/// the charge was on.
+test unstake_without_rewards_owes_no_charge() {
+  let before = pos(1_000, 0, opened_at)
+  let pool = StakingPoolDatum {
+    ..mock_pool(),
+    total_staked: 1_000,
+    unallocated: 0,
+    stake_root: stake_accumulator.root_of([(staker, before)]),
+  }
+  run_unstake_paying(
+    pool,
+    1_000,
+    before,
+    opened_at + 8 * ms_per_day,
+    [staker],
+    staker,
+    0,
+  )
 }
 
 // -- ClaimRewards -------------------------------------------------------------
@@ -992,7 +1283,7 @@ fn run_claim(
     before,
     now,
     payout_to,
-    min_platform_claim_fee_lovelace,
+    platform_charge_lovelace,
     extra_inputs,
     extra_outputs,
   )
@@ -1015,23 +1306,26 @@ fn run_claim_paying(
   let proof = stake_accumulator.proof_in(staker, entries)
   let (acc, unallocated) = advance(pool, now)
   let owed = owed_at(before, acc)
-  let after =
-    Position {
-      amount: before.amount,
-      debt: debt_at(before.amount, acc),
-      since: before.since,
-    }
-  let (_, stake_root) =
-    stake_accumulator.transition(pool.stake_root, staker, before, after, proof)
-  let next =
-    StakingPoolDatum {
-      ..pool,
-      stake_root: stake_root,
-      acc_reward_per_token: acc,
-      unallocated: unallocated,
-      last_update_ms: now,
-      exhausted_at: exhausted_after(pool, unallocated, now),
-    }
+  let after = Position {
+    amount: before.amount,
+    debt: debt_at(before.amount, acc),
+    since: before.since,
+  }
+  let (_, stake_root) = stake_accumulator.transition(
+    pool.stake_root,
+    staker,
+    before,
+    after,
+    proof,
+  )
+  let next = StakingPoolDatum {
+    ..pool,
+    stake_root,
+    acc_reward_per_token: acc,
+    unallocated,
+    last_update_ms: now,
+    exhausted_at: exhausted_after(pool, unallocated, now),
+  }
   staking_pool.spend(
     Some(pool),
     ClaimRewards { staker_vkh: staker, before, proof },
@@ -1040,7 +1334,10 @@ fn run_claim_paying(
       list.concat([pool_input(pool, pool_tokens)], extra_inputs),
       list.concat(
         list.concat(
-          [pool_output(next, pool_tokens - owed), payout_output(payout_to, owed)],
+          [
+            pool_output(next, pool_tokens - owed),
+            payout_output(payout_to, owed),
+          ],
           if fee == 0 {
             []
           } else {
@@ -1073,7 +1370,16 @@ test claim_cannot_be_redirected() {
 /// anyone can decline.
 test claim_refuses_a_transaction_that_pays_no_charge() {
   let (pool, before) = staked_pool()
-  !run_claim_paying(pool, 3_651_000, before, opened_at + ms_per_day, staker, 0, [], [])
+  !run_claim_paying(
+    pool,
+    3_651_000,
+    before,
+    opened_at + ms_per_day,
+    staker,
+    0,
+    [],
+    [],
+  )
 }
 
 test claim_refuses_a_charge_below_the_floor() {
@@ -1084,7 +1390,7 @@ test claim_refuses_a_charge_below_the_floor() {
     before,
     opened_at + ms_per_day,
     staker,
-    min_platform_claim_fee_lovelace - 1,
+    platform_charge_lovelace - 1,
     [],
     [],
   )
@@ -1101,7 +1407,7 @@ test claim_accepts_a_charge_exactly_at_the_floor() {
     before,
     opened_at + ms_per_day,
     staker,
-    min_platform_claim_fee_lovelace,
+    platform_charge_lovelace,
     [],
     [],
   )
@@ -1113,19 +1419,15 @@ test claim_accepts_a_charge_exactly_at_the_floor() {
 /// netting refuses and tagging alone would not.
 test claim_refuses_a_charge_that_is_only_the_governors_own_change() {
   let (pool, before) = staked_pool()
-  let governor_input =
-    Input {
-      output_reference: OutputReference {
-        transaction_id: #"88",
-        output_index: 0,
-      },
-      output: Output {
-        address: from_verification_key(governor),
-        value: assets.from_lovelace(min_platform_claim_fee_lovelace),
-        datum: transaction.NoDatum,
-        reference_script: None,
-      },
-    }
+  let governor_input = Input {
+    output_reference: OutputReference { transaction_id: #"88", output_index: 0 },
+    output: Output {
+      address: from_verification_key(governor),
+      value: assets.from_lovelace(platform_charge_lovelace),
+      datum: transaction.NoDatum,
+      reference_script: None,
+    },
+  }
   !run_claim(
     pool,
     3_651_000,
@@ -1146,35 +1448,22 @@ test claim_refuses_a_payout_that_is_only_the_stakers_own_change() {
   let now = opened_at + ms_per_day
   let (acc, _) = advance(pool, now)
   let owed = owed_at(before, acc)
-  let staker_input =
-    Input {
-      output_reference: OutputReference {
-        transaction_id: #"77",
-        output_index: 0,
-      },
-      output: Output {
-        address: from_verification_key(staker),
-        value: assets.from_asset(token_policy, token_name, owed),
-        datum: transaction.NoDatum,
-        reference_script: None,
-      },
-    }
-  let diverted =
-    Output {
-      address: from_verification_key(other),
+  let staker_input = Input {
+    output_reference: OutputReference { transaction_id: #"77", output_index: 0 },
+    output: Output {
+      address: from_verification_key(staker),
       value: assets.from_asset(token_policy, token_name, owed),
       datum: transaction.NoDatum,
       reference_script: None,
-    }
-  !run_claim(
-    pool,
-    3_651_000,
-    before,
-    now,
-    staker,
-    [staker_input],
-    [diverted],
-  )
+    },
+  }
+  let diverted = Output {
+    address: from_verification_key(other),
+    value: assets.from_asset(token_policy, token_name, owed),
+    datum: transaction.NoDatum,
+    reference_script: None,
+  }
+  !run_claim(pool, 3_651_000, before, now, staker, [staker_input], [diverted])
 }
 
 /// Claiming twice at the same instant owes nothing the second time, because
@@ -1195,18 +1484,22 @@ test a_second_claim_at_the_same_moment_is_owed_nothing() {
 test claim_leaves_the_unstake_lock_alone() {
   let (pool, before) = staked_pool()
   let (acc, _) = advance(pool, opened_at + 3 * ms_per_day)
-  let after =
-    Position {
-      amount: before.amount,
-      debt: debt_at(before.amount, acc),
-      since: before.since,
-    }
+  let after = Position {
+    amount: before.amount,
+    debt: debt_at(before.amount, acc),
+    since: before.since,
+  }
   after.since == opened_at
 }
 
 // -- TopUpPool ----------------------------------------------------------------
 
-fn run_top_up(pool: StakingPoolDatum, next: StakingPoolDatum, amount: Int, now: Int) -> Bool {
+fn run_top_up(
+  pool: StakingPoolDatum,
+  next: StakingPoolDatum,
+  amount: Int,
+  now: Int,
+) -> Bool {
   staking_pool.spend(
     Some(pool),
     TopUpPool { amount },
@@ -1242,8 +1535,10 @@ test top_up_is_permissionless_and_extends_the_budget() {
 test top_up_cannot_change_the_emission_rate() {
   let pool = StakingPoolDatum { ..mock_pool(), total_staked: 1_000 }
   let now = opened_at + ms_per_day
-  let next =
-    StakingPoolDatum { ..topped_up(pool, 500_000, now), emission_per_day: 36_500 }
+  let next = StakingPoolDatum {
+    ..topped_up(pool, 500_000, now),
+    emission_per_day: 36_500,
+  }
   !run_top_up(pool, next, 500_000, now)
 }
 
@@ -1294,10 +1589,12 @@ test close_is_refused_while_anyone_is_still_staked() {
   !run_close(pool, 1_000, opened_at + close_cooldown_ms)
 }
 
-/// And refused while any reward token remains, which is what an unclaimed
-/// reward looks like from outside.
-test close_is_refused_while_any_reward_is_unclaimed() {
-  !run_close(exhausted_pool(), 5_000, opened_at + close_cooldown_ms)
+/// With nobody staked, every position was closed and paid on its way out, so
+/// tokens still in an exhausted pool are the rounding dust the accumulator's
+/// floors leave behind — owed to no one. They leave with the pool, to the
+/// creator, rather than holding the pool open forever.
+test close_carries_the_dust_to_the_creator() {
+  run_close(exhausted_pool(), 5_000, opened_at + close_cooldown_ms)
 }
 
 test close_is_refused_on_a_pool_that_was_never_exhausted() {
@@ -1312,11 +1609,10 @@ test close_is_refused_on_a_pool_that_was_never_exhausted() {
 test a_pool_without_its_thread_nft_cannot_be_spent() {
   let pool = StakingPoolDatum { ..mock_pool(), total_staked: 1_000 }
   let now = opened_at + ms_per_day
-  let bare =
-    assets.merge(
-      assets.from_lovelace(2_000_000),
-      assets.from_asset(token_policy, token_name, 3_650_000),
-    )
+  let bare = assets.merge(
+    assets.from_lovelace(2_000_000),
+    assets.from_asset(token_policy, token_name, 3_650_000),
+  )
   !staking_pool.spend(
     Some(pool),
     TopUpPool { amount: 500_000 },
@@ -1380,10 +1676,7 @@ test a_wide_validity_range_is_refused() {
       ..transaction.placeholder,
       inputs: [pool_input(pool, 3_650_000)],
       outputs: [pool_output(topped_up(pool, 500_000, now), 4_150_000)],
-      validity_range: interval.between(
-        now,
-        now + max_validity_range_width + 1,
-      ),
+      validity_range: interval.between(now, now + max_validity_range_width + 1),
     },
   )
 }
@@ -1421,22 +1714,18 @@ test a_padded_pool_output_is_refused() {
 test two_pool_utxos_in_one_transaction_are_refused() {
   let pool = StakingPoolDatum { ..mock_pool(), total_staked: 1_000 }
   let now = opened_at + ms_per_day
-  let second =
-    Input {
-      output_reference: OutputReference {
-        transaction_id: #"99",
-        output_index: 0,
-      },
-      output: Output {
-        // A delegation key makes this UTXO's full Address differ from the
-        // pool's while the script is identical — the two must still count as
-        // one another's company.
-        address: script_address() |> address.with_delegation_key(#"de1e"),
-        value: pool_value(1_000),
-        datum: InlineDatum(pool),
-        reference_script: None,
-      },
-    }
+  let second = Input {
+    output_reference: OutputReference { transaction_id: #"99", output_index: 0 },
+    output: Output {
+      // A delegation key makes this UTXO's full Address differ from the
+      // pool's while the script is identical — the two must still count as
+      // one another's company.
+      address: script_address() |> address.with_delegation_key(#"de1e"),
+      value: pool_value(1_000),
+      datum: InlineDatum(pool),
+      reference_script: None,
+    },
+  }
   !staking_pool.spend(
     Some(pool),
     TopUpPool { amount: 500_000 },
@@ -1446,6 +1735,159 @@ test two_pool_utxos_in_one_transaction_are_refused() {
       [pool_output(topped_up(pool, 500_000, now), 4_150_000)],
       [],
       now,
+    ),
+  )
+}
+
+// ============================================================================
+// Funding, refilling, compounding and closing — the guarantees pinned 2026-09
+// ============================================================================
+
+/// A pool that has never held a budget is funded by its graduation alone: a
+/// top-up with no curve spent under `Graduate` in the transaction is refused,
+/// however honest the amount.
+test an_unfunded_pool_cannot_be_topped_up_outside_its_graduation() {
+  let pool = StakingPoolDatum { ..mock_pool(), unallocated: 0 }
+  let now = opened_at + ms_per_day
+  !run_top_up(pool, topped_up(pool, 500_000, now), 500_000, now)
+}
+
+/// This launch's curve as the graduation spends it: its thread NFT in the
+/// value, at whatever address the curve lives.
+fn graduating_curve_input() -> Input {
+  Input {
+    output_reference: OutputReference { transaction_id: #"c0", output_index: 0 },
+    output: Output {
+      address: from_verification_key(#"c0"),
+      value: assets.merge(
+        assets.from_lovelace(2_000_000),
+        assets.from_asset(
+          nft_policy,
+          thread_nft.thread_asset_name(
+            thread_nft.role_bonding_curve_tier_b,
+            launch,
+          ),
+          1,
+        ),
+      ),
+      datum: transaction.NoDatum,
+      reference_script: None,
+    },
+  }
+}
+
+/// The graduation transaction — the launch's curve spent under `Graduate`
+/// beside the pool — funds it, and needs nobody's signature to do so.
+test the_graduation_funds_an_unfunded_pool() {
+  let pool = StakingPoolDatum { ..mock_pool(), unallocated: 0 }
+  let now = opened_at + ms_per_day
+  let curve = graduating_curve_input()
+  let base = tx(
+    [pool_input(pool, 0), curve],
+    [pool_output(topped_up(pool, 3_650_000, now), 3_650_000)],
+    [],
+    now,
+  )
+  staking_pool.spend(
+    Some(pool),
+    TopUpPool { amount: 3_650_000 },
+    own_ref(),
+    Transaction {
+      ..base,
+      redeemers: [
+        Pair(
+          Spend(curve.output_reference),
+          builtin.constr_data(graduate_redeemer_index, []),
+        ),
+      ],
+    },
+  )
+}
+
+/// The same transaction with the curve spent under any OTHER arm funds
+/// nothing.
+test a_curve_spent_under_another_arm_does_not_fund_the_pool() {
+  let pool = StakingPoolDatum { ..mock_pool(), unallocated: 0 }
+  let now = opened_at + ms_per_day
+  let curve = graduating_curve_input()
+  let base = tx(
+    [pool_input(pool, 0), curve],
+    [pool_output(topped_up(pool, 3_650_000, now), 3_650_000)],
+    [],
+    now,
+  )
+  !staking_pool.spend(
+    Some(pool),
+    TopUpPool { amount: 3_650_000 },
+    own_ref(),
+    Transaction {
+      ..base,
+      redeemers: [
+        Pair(Spend(curve.output_reference), builtin.constr_data(0, [])),
+      ],
+    },
+  )
+}
+
+/// Once the budget has run dry, only the launch's own parties may refill it,
+/// so the close cooldown restarts only by the creator's or the governor's decision.
+test a_stranger_cannot_refill_an_exhausted_pool() {
+  let pool = exhausted_pool()
+  let now = opened_at + ms_per_day
+  !run_top_up(pool, topped_up(pool, 1, now), 1, now)
+}
+
+test the_creator_may_refill_an_exhausted_pool() {
+  let pool = exhausted_pool()
+  let now = opened_at + ms_per_day
+  staking_pool.spend(
+    Some(pool),
+    TopUpPool { amount: 1 },
+    own_ref(),
+    tx(
+      [pool_input(pool, 0)],
+      [pool_output(topped_up(pool, 1, now), 1)],
+      [creator],
+      now,
+    ),
+  )
+}
+
+/// Compounding a reward into the stake takes the reward out of the budget as
+/// surely as a claim does, so it pays the same charge; without it the stake is
+/// refused.
+test compounding_a_reward_without_the_charge_is_refused() {
+  let before = pos(3, 0, opened_at - 8 * ms_per_day)
+  let pool = StakingPoolDatum {
+    ..mock_pool(),
+    stake_root: stake_accumulator.root_of([(staker, before)]),
+    total_staked: 3,
+  }
+  let now = opened_at + ms_per_day
+  !run_stake(pool, 3, before, [(staker, before)], 1, now, [staker])
+}
+
+/// Closing pays the creator the WHOLE value, lovelace included; a closer who
+/// keeps the residue is refused.
+test a_closer_cannot_keep_the_residue_lovelace() {
+  let pool = exhausted_pool()
+  let due = opened_at + close_cooldown_ms
+  !staking_pool.spend(
+    Some(pool),
+    ClosePool,
+    own_ref(),
+    tx(
+      [pool_input(pool, 0)],
+      [
+        Output {
+          address: from_verification_key(creator),
+          value: assets.without_lovelace(pool_value(0)),
+          datum: InlineDatum(own_ref()),
+          reference_script: None,
+        },
+      ],
+      [],
+      due,
     ),
   )
 }

@@ -130,10 +130,10 @@ pub fn transition(
     is_canonical(after),
   } {
     let ok = and {
-        list.length(proof) == tree_depth,
-        path_matches_key(key, proof),
-        recompute_root(leaf_for(key, before), proof) == root,
-      }
+      list.length(proof) == tree_depth,
+      path_matches_key(key, proof),
+      recompute_root(leaf_for(key, before), proof) == root,
+    }
     (ok, recompute_root(leaf_for(key, after), proof))
   } else {
     (False, root)
@@ -257,14 +257,13 @@ test a_key_absent_from_the_tree_proves_an_empty_slot() {
 
 test transition_accepts_a_true_position_and_moves_the_root() {
   let entries = [(alice, pos(100, 5, 7))]
-  let (ok, next) =
-    transition(
-      root_of(entries),
-      alice,
-      pos(100, 5, 7),
-      pos(150, 9, 20),
-      proof_in(alice, entries),
-    )
+  let (ok, next) = transition(
+    root_of(entries),
+    alice,
+    pos(100, 5, 7),
+    pos(150, 9, 20),
+    proof_in(alice, entries),
+  )
   and {
     ok,
     next == root_of([(alice, pos(150, 9, 20))]),
@@ -275,27 +274,25 @@ test transition_accepts_a_true_position_and_moves_the_root() {
 /// staker understating it would mint themselves rewards they already drew.
 test transition_rejects_an_understated_debt() {
   let entries = [(alice, pos(100, 500, 7))]
-  let (ok, _) =
-    transition(
-      root_of(entries),
-      alice,
-      pos(100, 0, 7),
-      pos(100, 600, 7),
-      proof_in(alice, entries),
-    )
+  let (ok, _) = transition(
+    root_of(entries),
+    alice,
+    pos(100, 0, 7),
+    pos(100, 600, 7),
+    proof_in(alice, entries),
+  )
   !ok
 }
 
 test transition_rejects_another_stakers_proof() {
   let entries = [(alice, pos(100, 5, 7)), (bob, pos(250, 9, 11))]
-  let (ok, _) =
-    transition(
-      root_of(entries),
-      alice,
-      pos(250, 9, 11),
-      pos(300, 9, 11),
-      proof_in(bob, entries),
-    )
+  let (ok, _) = transition(
+    root_of(entries),
+    alice,
+    pos(250, 9, 11),
+    pos(300, 9, 11),
+    proof_in(bob, entries),
+  )
   !ok
 }
 
@@ -306,18 +303,30 @@ test transition_rejects_a_flipped_direction_bit() {
   let entries = [(alice, pos(100, 5, 7))]
   let proof = proof_in(alice, entries)
   expect [first, ..rest] = proof
-  let flipped =
-    list.push(rest, CapProofStep { ..first, goes_left: !first.goes_left })
-  let (ok, _) =
-    transition(root_of(entries), alice, pos(100, 5, 7), pos(150, 5, 7), flipped)
+  let flipped = list.push(
+    rest,
+    CapProofStep { ..first, goes_left: !first.goes_left },
+  )
+  let (ok, _) = transition(
+    root_of(entries),
+    alice,
+    pos(100, 5, 7),
+    pos(150, 5, 7),
+    flipped,
+  )
   !ok
 }
 
 test transition_rejects_a_proof_of_the_wrong_depth() {
   let entries = [(alice, pos(100, 5, 7))]
   let short = list.take(proof_in(alice, entries), tree_depth - 1)
-  let (ok, _) =
-    transition(root_of(entries), alice, pos(100, 5, 7), pos(150, 5, 7), short)
+  let (ok, _) = transition(
+    root_of(entries),
+    alice,
+    pos(100, 5, 7),
+    pos(150, 5, 7),
+    short,
+  )
   !ok
 }
 
@@ -326,16 +335,20 @@ test transition_rejects_a_proof_of_the_wrong_depth() {
 /// in, so the staker can re-enter later.
 test a_staker_who_exits_frees_their_slot() {
   let start = root_of([])
-  let (open_ok, after_stake) =
-    transition(start, alice, no_position, pos(100, 0, 7), proof_in(alice, []))
-  let (exit_ok, after_exit) =
-    transition(
-      after_stake,
-      alice,
-      pos(100, 0, 7),
-      no_position,
-      proof_in(alice, [(alice, pos(100, 0, 7))]),
-    )
+  let (open_ok, after_stake) = transition(
+    start,
+    alice,
+    no_position,
+    pos(100, 0, 7),
+    proof_in(alice, []),
+  )
+  let (exit_ok, after_exit) = transition(
+    after_stake,
+    alice,
+    pos(100, 0, 7),
+    no_position,
+    proof_in(alice, [(alice, pos(100, 0, 7))]),
+  )
   and {
     open_ok,
     exit_ok,
@@ -347,16 +360,20 @@ test a_staker_who_exits_frees_their_slot() {
 /// Two stakers share one root without sharing anything else — the property
 /// that makes a single 32-byte field stand in for a per-staker list.
 test two_stakers_update_the_same_root_independently() {
-  let (a_ok, after_a) =
-    transition(root_of([]), alice, no_position, pos(100, 0, 7), proof_in(alice, []))
-  let (b_ok, after_b) =
-    transition(
-      after_a,
-      bob,
-      no_position,
-      pos(250, 0, 9),
-      proof_in(bob, [(alice, pos(100, 0, 7))]),
-    )
+  let (a_ok, after_a) = transition(
+    root_of([]),
+    alice,
+    no_position,
+    pos(100, 0, 7),
+    proof_in(alice, []),
+  )
+  let (b_ok, after_b) = transition(
+    after_a,
+    bob,
+    no_position,
+    pos(250, 0, 9),
+    proof_in(bob, [(alice, pos(100, 0, 7))]),
+  )
   and {
     a_ok,
     b_ok,
@@ -368,9 +385,19 @@ test two_stakers_update_the_same_root_independently() {
 /// build each action's proof against the root the previous one left.
 test a_proof_against_a_stale_root_is_rejected() {
   let start = root_of([])
-  let (_, after_a) =
-    transition(start, alice, no_position, pos(100, 0, 7), proof_in(alice, []))
-  let (ok, _) =
-    transition(after_a, bob, no_position, pos(250, 0, 9), proof_in(bob, []))
+  let (_, after_a) = transition(
+    start,
+    alice,
+    no_position,
+    pos(100, 0, 7),
+    proof_in(alice, []),
+  )
+  let (ok, _) = transition(
+    after_a,
+    bob,
+    no_position,
+    pos(250, 0, 9),
+    proof_in(bob, []),
+  )
   !ok
 }

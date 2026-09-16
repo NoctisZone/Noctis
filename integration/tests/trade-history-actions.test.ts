@@ -39,10 +39,7 @@ describe('field lists name constructors that exist', () => {
   // A typo here costs nothing at compile time and decodes the action's fields
   // as `field0`, `field1` — losing exactly the names a consumer reads.
   it('every curve field list belongs to a real constructor on one tier or the other', () => {
-    const real = new Set([
-      ...titles('bonding_curve/BondingCurveRedeemer'),
-      ...titles('bonding_curve_tier_b/BondingCurveTierBRedeemer'),
-    ]);
+    const real = new Set([...titles('bonding_curve_tier_b/BondingCurveTierBRedeemer')]);
     for (const name of Object.keys(CURVE_FIELDS)) expect(real, `${name} is not a curve redeemer`).toContain(name);
   });
 
@@ -77,7 +74,12 @@ describe('the drift that actually happened', () => {
   });
 
   it('covers every constructor each validator declares', () => {
-    expect(Object.keys(BONDING_CURVE_ACTIONS)).toHaveLength(titles('bonding_curve/BondingCurveRedeemer').size);
+    // The linear table is kept for the shared modules that still carry it, but
+    // its validator has left the blueprint, so coverage is asserted for the
+    // curve that is still compiled.
+    expect(Object.keys(BONDING_CURVE_TIER_B_ACTIONS)).toHaveLength(
+      titles('bonding_curve_tier_b/BondingCurveTierBRedeemer').size,
+    );
     expect(Object.keys(VESTING_ACTIONS)).toHaveLength(titles('vesting/VestingRedeemer').size);
   });
 });

@@ -24,8 +24,9 @@
 use aiken/collection/list
 use cardano/address.{Credential, from_verification_key}
 use cardano/assets.{AssetName, PolicyId}
-use cardano/transaction.{Input, InlineDatum, NoDatum, Output, OutputReference,
-  Transaction, placeholder}
+use cardano/transaction.{
+  InlineDatum, Input, NoDatum, Output, OutputReference, Transaction, placeholder,
+}
 
 /// True when `output` is tagged as settling `own_ref`.
 ///
@@ -59,59 +60,55 @@ pub fn net_asset_gain(
   policy: PolicyId,
   name: AssetName,
 ) -> Int {
-  let received =
-    list.foldl(
-      self.outputs,
-      0,
-      fn(output, acc) {
-        if output.address.payment_credential == credential {
-          acc + assets.quantity_of(output.value, policy, name)
-        } else {
-          acc
-        }
-      },
-    )
-  let brought =
-    list.foldl(
-      self.inputs,
-      0,
-      fn(input, acc) {
-        if input.output.address.payment_credential == credential {
-          acc + assets.quantity_of(input.output.value, policy, name)
-        } else {
-          acc
-        }
-      },
-    )
+  let received = list.foldl(
+    self.outputs,
+    0,
+    fn(output, acc) {
+      if output.address.payment_credential == credential {
+        acc + assets.quantity_of(output.value, policy, name)
+      } else {
+        acc
+      }
+    },
+  )
+  let brought = list.foldl(
+    self.inputs,
+    0,
+    fn(input, acc) {
+      if input.output.address.payment_credential == credential {
+        acc + assets.quantity_of(input.output.value, policy, name)
+      } else {
+        acc
+      }
+    },
+  )
   received - brought
 }
 
 /// The same question for lovelace, which `assets.quantity_of` cannot ask.
 pub fn net_lovelace_gain(self: Transaction, credential: Credential) -> Int {
-  let received =
-    list.foldl(
-      self.outputs,
-      0,
-      fn(output, acc) {
-        if output.address.payment_credential == credential {
-          acc + assets.lovelace_of(output.value)
-        } else {
-          acc
-        }
-      },
-    )
-  let brought =
-    list.foldl(
-      self.inputs,
-      0,
-      fn(input, acc) {
-        if input.output.address.payment_credential == credential {
-          acc + assets.lovelace_of(input.output.value)
-        } else {
-          acc
-        }
-      },
-    )
+  let received = list.foldl(
+    self.outputs,
+    0,
+    fn(output, acc) {
+      if output.address.payment_credential == credential {
+        acc + assets.lovelace_of(output.value)
+      } else {
+        acc
+      }
+    },
+  )
+  let brought = list.foldl(
+    self.inputs,
+    0,
+    fn(input, acc) {
+      if input.output.address.payment_credential == credential {
+        acc + assets.lovelace_of(input.output.value)
+      } else {
+        acc
+      }
+    },
+  )
   received - brought
 }
 
@@ -147,13 +144,12 @@ test settles_rejects_a_different_transaction() {
 
 test settles_rejects_an_untagged_output() {
   let own_ref = OutputReference { transaction_id: #"aa", output_index: 0 }
-  let untagged =
-    Output {
-      address: from_verification_key(#"00"),
-      value: assets.from_lovelace(1),
-      datum: NoDatum,
-      reference_script: None,
-    }
+  let untagged = Output {
+    address: from_verification_key(#"00"),
+    value: assets.from_lovelace(1),
+    datum: NoDatum,
+    reference_script: None,
+  }
   !settles(untagged, own_ref)
 }
 
@@ -181,70 +177,67 @@ fn cred(cred_byte: ByteArray) -> Credential {
 }
 
 test net_asset_gain_counts_a_plain_payment() {
-  let self =
-    Transaction { ..placeholder, inputs: [], outputs: [at(#"dd", 2, 100)] }
+  let self = Transaction {
+    ..placeholder,
+    inputs: [],
+    outputs: [at(#"dd", 2, 100)],
+  }
   net_asset_gain(self, cred(#"dd"), #"33", "tok") == 100
 }
 
 test net_asset_gain_cancels_the_recipients_own_change() {
   // The shape this exists for: they put 100 in and took 100 back out, so
   // nothing arrived from anywhere else.
-  let self =
-    Transaction {
-      ..placeholder,
-      inputs: [spending(#"dd", 2, 100)],
-      outputs: [at(#"dd", 2, 100)],
-    }
+  let self = Transaction {
+    ..placeholder,
+    inputs: [spending(#"dd", 2, 100)],
+    outputs: [at(#"dd", 2, 100)],
+  }
   net_asset_gain(self, cred(#"dd"), #"33", "tok") == 0
 }
 
 test net_asset_gain_sees_through_change_to_the_real_payment() {
   // Their own 100 back, plus 40 that came from somewhere else.
-  let self =
-    Transaction {
-      ..placeholder,
-      inputs: [spending(#"dd", 2, 100)],
-      outputs: [at(#"dd", 2, 100), at(#"dd", 2, 40)],
-    }
+  let self = Transaction {
+    ..placeholder,
+    inputs: [spending(#"dd", 2, 100)],
+    outputs: [at(#"dd", 2, 100), at(#"dd", 2, 40)],
+  }
   net_asset_gain(self, cred(#"dd"), #"33", "tok") == 40
 }
 
 test net_asset_gain_ignores_everyone_else() {
-  let self =
-    Transaction {
-      ..placeholder,
-      inputs: [spending(#"ee", 2, 500)],
-      outputs: [at(#"ee", 2, 500), at(#"dd", 2, 25)],
-    }
+  let self = Transaction {
+    ..placeholder,
+    inputs: [spending(#"ee", 2, 500)],
+    outputs: [at(#"ee", 2, 500), at(#"dd", 2, 25)],
+  }
   net_asset_gain(self, cred(#"dd"), #"33", "tok") == 25
 }
 
 test net_asset_gain_goes_negative_when_they_are_the_ones_paying() {
-  let self =
-    Transaction {
-      ..placeholder,
-      inputs: [spending(#"dd", 2, 100)],
-      outputs: [],
-    }
+  let self = Transaction {
+    ..placeholder,
+    inputs: [spending(#"dd", 2, 100)],
+    outputs: [],
+  }
   net_asset_gain(self, cred(#"dd"), #"33", "tok") == -100
 }
 
 test net_lovelace_gain_cancels_the_recipients_own_change() {
-  let self =
-    Transaction {
-      ..placeholder,
-      inputs: [spending(#"dd", 5_000_000, 0)],
-      outputs: [at(#"dd", 5_000_000, 0)],
-    }
+  let self = Transaction {
+    ..placeholder,
+    inputs: [spending(#"dd", 5_000_000, 0)],
+    outputs: [at(#"dd", 5_000_000, 0)],
+  }
   net_lovelace_gain(self, cred(#"dd")) == 0
 }
 
 test net_lovelace_gain_counts_only_what_arrived() {
-  let self =
-    Transaction {
-      ..placeholder,
-      inputs: [spending(#"dd", 5_000_000, 0)],
-      outputs: [at(#"dd", 7_000_000, 0)],
-    }
+  let self = Transaction {
+    ..placeholder,
+    inputs: [spending(#"dd", 5_000_000, 0)],
+    outputs: [at(#"dd", 7_000_000, 0)],
+  }
   net_lovelace_gain(self, cred(#"dd")) == 2_000_000
 }

@@ -33,11 +33,12 @@
 //     transaction deposits exactly datum.lp_token_amount of
 //     (datum.lp_token_policy_id, datum.lp_token_name); SealLock's own
 //     equality check on new_datum never updates those 3 fields, meaning
-//     they must ALREADY be correct at GENESIS, not set later. Concretely:
-//     lp_token_policy_id/lp_token_name = the launch's own token identity,
-//     lp_token_amount = lp_reserve_tokens (same figure bonding_curve's own
-//     lp_reserve_tokens field holds) — confirmed by reading lp_value_received()
-//     directly, not assumed from the "15% of supply" prose alone.
+//     they must ALREADY be correct at GENESIS, not set later. Concretely,
+//     for a Cardano Launch the position is the venue pool's LQ token:
+//     lp_token_policy_id = the factory policy, lp_token_name = the LQ role
+//     tag + launch id, lp_token_amount = VENUE_INITIAL_LQ, all of which the
+//     factory checks at the pool mint. The retired linear path keeps the
+//     launch's own token identity with lp_reserve_tokens as the amount.
 //
 // launch_id scheme (fresh decision, 2026-07-17, restated explicitly here
 // since it wasn't preserved verbatim across a context compaction earlier
@@ -83,6 +84,7 @@ import { calculateMinLovelaceFromUTxO, PROTOCOL_PARAMETERS_DEFAULT } from '@luci
 import { blake2b } from '@noble/hashes/blake2.js';
 import { CAP_EMPTY_ROOT, bytesToHex as capBytesToHex } from './cap-accumulator-tree.js';
 import { CARDANO_NETWORK_MAP, loadPlutusBlueprint, type PlutusBlueprint, requireFieldsStrict } from './cli/cli-io.js';
+import { LP_RESERVE_PCT } from './launch-allocation.js';
 import {
   assertValidCip68BaseName,
   type BondingCurveDatumData,
@@ -103,8 +105,10 @@ import {
   type TokenMetadataDatumData,
   TokenMetadataDatumSchema,
   threadNftAssetNames,
+  VENUE_INITIAL_LQ,
   type VestingDatumData,
   VestingDatumSchema,
+  venueAssetName,
   type ZkAnchorDatumData,
   ZkAnchorDatumSchema,
 } from './tier-a-schemas.js';
@@ -114,6 +118,10 @@ declare const __dirname: string;
 // ============================================================================
 // Input
 // ============================================================================
+
+/** staking_pool.ak's `unstake_lock_ms`: the most a launch may lock a staked
+ *  position for, and the default when a launch names nothing shorter. */
+export const STAKING_UNSTAKE_LOCK_MAX_MS = 604_800_000;
 
 export interface BuildGenesisDatumsInput {
   network: 'preview' | 'preprod' | 'mainnet';
@@ -127,7 +135,7 @@ export interface BuildGenesisDatumsInput {
   // ClaimDarkVeilTokens — `dv_amount <= curve_supply - tokens_sold`), so there
   // is NO separate DarkVeil token carve-out at genesis. vesting/lp_escrow are
   // the shared validators, identical for both tiers.
-  tier?: 'A' | 'B';
+  tier?: 'B';
   /** DarkVeil allocation as a % of total supply — Cardano Launch only, 10-20,
    *  default DV_ALLOC_DEFAULT. Drawn from curve_supply rather than carved out
    *  of it; see dv_reserve_tokens below. */
@@ -192,6 +200,13 @@ export interface BuildGenesisDatumsInput {
    * later.
    */
   stakingDurationDays?: number;
+  /**
+   * How long a staked position must sit before it may leave, in ms. Defaults
+   * to the platform's seven days, which is also the most the validator will
+   * accept — so a value here can only shorten the lock, which is what lets a
+   * rehearsal run in a day while production keeps the full period.
+   */
+  stakingUnstakeLockMs?: number;
   /** Overrides the pool's opening timestamp. Real POSIX ms; defaults to now. */
   mintedAtMs?: number;
 
@@ -225,6 +240,14 @@ export interface BuildGenesisDatumsInput {
   // here — required, no more zero-byte placeholder, since this same value is
   // now also used below to build the real genesis cto_governance UTXO/datum.
   threadNftPolicyIdHex: string;
+
+  // The venue's factory policy id (PolicyId, 28-byte hex): the minting policy
+  // that creates this launch's pool NFT and LQ token at graduation. Written
+  // into the Cardano Launch curve datum (pool_nft_policy), and it decides the
+  // LP escrow's position (the LQ token under this policy). Required: a launch
+  // minted without it has no pool to graduate onto. Derive it from the venue
+  // blueprint with the deployed parameters, never type it in.
+  poolNftPolicyIdHex: string;
 
   // Phase G (2026-07-28): genesis inputs for the NEW 4th genesis output —
   // the initial cto_governance UTXO itself (previously only this validator's
@@ -320,15 +343,20 @@ export async function buildGenesisDatums(input: BuildGenesisDatumsInput) {
     'maxPrice',
     'vestDays',
     'threadNftPolicyIdHex',
+    'poolNftPolicyIdHex',
     'bondPayoutPubKeyHashHex',
   ]);
 
-  const tier = input.tier ?? 'A';
-  if (tier !== 'A' && tier !== 'B') {
-    throw new Error(`tier must be 'A' or 'B', got ${JSON.stringify(tier)}`);
+  // The linear path is retired: nothing defaults onto it, and a caller that
+  // names it is refused rather than handed a datum no validator decodes.
+  // Typed as string on purpose: the input arrives as JSON, so the field's
+  // declared type is a promise this check keeps rather than a fact it can rely on.
+  const tier: string = input.tier ?? 'B';
+  if (tier !== 'B') {
+    throw new Error(`tier must be "B" - the linear-curve path is retired (got "${String(input.tier)}")`);
   }
   const totalSupply = input.totalSupply ?? 1_000_000_000;
-  const lpReservePct = input.lpReservePct ?? 20;
+  const lpReservePct = input.lpReservePct ?? Number(LP_RESERVE_PCT);
   // Taking nothing is the default; a creator raises it deliberately or not at
   // all. `??` rather than `||` matters here — 0 is a real, chosen value.
   const creatorAllocPct = input.creatorAllocPct ?? 0;
@@ -374,6 +402,15 @@ export async function buildGenesisDatums(input: BuildGenesisDatumsInput) {
         'pins that rate on chain, so there is no correcting it afterwards.',
     );
   }
+  // The ceiling is staking_pool.ak's own constant. A longer lock is refused on
+  // chain, so it is refused here first, with a message that says why.
+  const stakingUnstakeLockMs = input.stakingUnstakeLockMs ?? STAKING_UNSTAKE_LOCK_MAX_MS;
+  if (stakingEnabled && (stakingUnstakeLockMs < 0 || stakingUnstakeLockMs > STAKING_UNSTAKE_LOCK_MAX_MS)) {
+    throw new Error(
+      `stakingUnstakeLockMs must be 0..${STAKING_UNSTAKE_LOCK_MAX_MS} (the platform's seven days is the ceiling); ` +
+        `got ${input.stakingUnstakeLockMs}. A launch may shorten the lock on leaving, never lengthen it.`,
+    );
+  }
   const lpLockDurationMs = input.lpLockDurationMs ?? 31_536_000_000;
 
   // Bounded here as well as on chain. The validator's cap is what actually
@@ -406,8 +443,35 @@ export async function buildGenesisDatums(input: BuildGenesisDatumsInput) {
       `lpLockDurationMs must be >= 31,536,000,000 (lp_escrow.ak's own min_lock_duration), got ${lpLockDurationMs}`,
     );
   }
+  // The pool's token side is decided here and nowhere else.
+  //
+  // `lp_reserve_tokens` is a datum field the curve only ever READS: graduation
+  // compares the pool output's token balance to it. Nothing on chain requires
+  // it to be positive, and at zero the equality is satisfied by ABSENCE — the
+  // raise moves into a pool with no token side, and whoever supplies the fourth
+  // asset can take the whole raise back out.
+  //
+  // That is not an attacker's path: a genesis record exists only because the
+  // governor signed its thread-NFT mint, so this datum is authored under
+  // platform control. Which is exactly why the bound belongs HERE, beside the
+  // three above it, rather than costing a validator edit — the author is the
+  // one that has to be held to it.
+  if (!Number.isInteger(lpReservePct) || lpReservePct <= 0 || lpReservePct > 100) {
+    throw new Error(
+      `lpReservePct must be a positive integer percentage (LP_RESERVE_PCT is ${LP_RESERVE_PCT}), got ${lpReservePct}`,
+    );
+  }
 
   const lpReserveTokens = Math.floor((totalSupply * lpReservePct) / 100);
+  // Checked on the DERIVED figure too, not just the percentage: this is the
+  // number the datum carries, and a small enough supply floors a legitimate
+  // percentage to zero without the percentage ever looking wrong.
+  if (lpReserveTokens <= 0) {
+    throw new Error(
+      `Supply split leaves lp_reserve_tokens <= 0 (total=${totalSupply}, lpReservePct=${lpReservePct}) — ` +
+        'the pool would open with no token side.',
+    );
+  }
   const creatorAllocTokens = Math.floor((totalSupply * creatorAllocPct) / 100);
   const stakingReserveTokens = stakingEnabled ? Math.floor((totalSupply * stakingAllocPct) / 100) : 0;
   const walletCap = Math.floor((totalSupply * walletCapPct) / 100);
@@ -437,10 +501,7 @@ export async function buildGenesisDatums(input: BuildGenesisDatumsInput) {
   // not the bundle supplies its own; see the input field's comment.
   const blueprint = input.blueprint ?? loadPlutusBlueprint(__dirname);
 
-  const bondingCurveValidator = loadValidator(
-    blueprint,
-    tier === 'B' ? 'bonding_curve_tier_b.bonding_curve_tier_b.spend' : 'bonding_curve.bonding_curve.spend',
-  );
+  const bondingCurveValidator = loadValidator(blueprint, 'bonding_curve_tier_b.bonding_curve_tier_b.spend');
   const vestingValidator = loadValidator(blueprint, 'vesting.vesting.spend');
   const lpEscrowValidator = loadValidator(blueprint, 'lp_escrow.lp_escrow.spend');
   const stakingPoolValidator = loadValidator(blueprint, 'staking_pool.staking_pool.spend');
@@ -526,6 +587,7 @@ export async function buildGenesisDatums(input: BuildGenesisDatumsInput) {
     staking_pool_credential: stakingPoolCredential,
     staking_reserve_tokens: BigInt(stakingReserveTokens),
     staking_duration_days: BigInt(stakingDurationDays),
+    staking_unstake_lock_ms: BigInt(stakingUnstakeLockMs),
     staking_seeded: false,
     cto_governance_credential: ctoGovernanceCredential,
     thread_nft_policy: threadNftPolicyId,
@@ -564,6 +626,7 @@ export async function buildGenesisDatums(input: BuildGenesisDatumsInput) {
           // has to be asked for rather than arrived at.
           dv_claim_window: BigInt(dvClaimWindowMs),
           dv_settlement_window: BigInt(dvSettlementWindowMs),
+          pool_nft_policy: input.poolNftPolicyIdHex,
         }
       : {
           ...sharedCurveFields,
@@ -602,9 +665,12 @@ export async function buildGenesisDatums(input: BuildGenesisDatumsInput) {
     multisig_signers: [input.governorPubKeyHashHex], // confirmed decision 2026-07-17: governor only, 1-of-1
     multisig_threshold: 1n,
     pending_dex_change: null,
-    lp_token_policy_id: input.tokenPolicyIdHex,
-    lp_token_name: tokenAssetNameHex,
-    lp_token_amount: BigInt(lpReserveTokens),
+    // The position the seal must find. Cardano Launch: the venue pool's LQ
+    // token, minted by the factory at graduation. Linear path: the launch's
+    // own token, seeded as raw reserves.
+    lp_token_policy_id: tier === 'B' ? input.poolNftPolicyIdHex : input.tokenPolicyIdHex,
+    lp_token_name: tier === 'B' ? venueAssetName('lq', launchIdHex) : tokenAssetNameHex,
+    lp_token_amount: tier === 'B' ? VENUE_INITIAL_LQ : BigInt(lpReserveTokens),
     cto_governance_credential: ctoGovernanceCredential,
     thread_nft_policy: threadNftPolicyId,
     last_migration_timestamp: 0n, // never migrated at genesis
@@ -677,6 +743,9 @@ export async function buildGenesisDatums(input: BuildGenesisDatumsInput) {
     // Who the flat claim charge is paid to. The same key the curve pays its
     // own platform fees to, so the pool can charge without consulting it.
     governor_pub_key_hash: input.governorPubKeyHashHex,
+    // The same term the curve carries, so the seeding check's genesis(...)
+    // reproduces this datum exactly.
+    unstake_lock_ms: BigInt(stakingUnstakeLockMs),
   };
 
   // 2026-08-03: the ZK anchor's own genesis datum — also never authored

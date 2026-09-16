@@ -1,9 +1,9 @@
 // ============================================================================
 // Noctis Zone — DarkVeil allocation anchor follow-up
-// AnchorDvAllocationRoot — governor-signed, single-phase (same pattern as
-// activate-tier-a-curve.ts's ActivateCurve; see that file's own header for
-// why single-phase build->sign->submit was chosen over a build(Lucid)/
-// sign(PHP)/submit(Lucid) split).
+// AnchorDvAllocationRoot — governor-signed, single-phase: the governor holds
+// the key and the transaction has one signer, so a build(Lucid)/sign(PHP)/
+// submit(Lucid) split would add two hand-offs and change nothing about who
+// can authorise it.
 // ============================================================================
 // Input: single JSON object on stdin, including the governor's PLAINTEXT
 // 64-byte extended private key hex (decrypted server-side by the PHP

@@ -15,7 +15,7 @@
 //
 // None of that is visible from the outside, so it is checked here instead.
 
-import { mkdtemp, readFile, rename, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rename, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
@@ -358,5 +358,55 @@ describe('identity helpers', () => {
     for (const name of ['facade@', 'shielded@', 'unshielded-wallet@', 'dust-wallet@']) {
       expect(version).toContain(name);
     }
+  });
+});
+
+describe('generations', () => {
+  // The live snapshot is rewritten every 30 seconds, so a fault that is only
+  // recognised later — a dust wallet wedged at the chain tip keeps banking
+  // happily — has already overwritten the last healthy state many times over.
+  // Generations are what make that recoverable, and the thing they protect is
+  // a replay measured in hours, so they are checked rather than assumed.
+  const existsAt = (path: string) =>
+    stat(path).then(
+      () => true,
+      () => false,
+    );
+
+  it('keeps the previous snapshot when the live one is replaced', async () => {
+    const store = new WalletStateStore(directory, PASSPHRASE);
+    const account = `generations-${Date.now()}`;
+    const live = join(directory, `${account}.json`);
+
+    await store.save(account, GUARDS, { dust: 'first' });
+    // Nothing existed before the first save, so there is no past to preserve.
+    expect(await existsAt(`${live}.gen1`)).toBe(false);
+
+    await store.save(account, GUARDS, { dust: 'second' });
+    expect(await existsAt(`${live}.gen1`)).toBe(true);
+
+    // The generation holds the DISPLACED state, not the current one — that is
+    // the whole point, and an off-by-one here would silently keep the broken
+    // snapshot twice instead of the good one.
+    const recovered = new WalletStateStore(directory, PASSPHRASE);
+    await rename(`${live}.gen1`, live);
+    expect(await recovered.load(account, GUARDS)).toEqual({ dust: 'first' });
+  });
+
+  it('does not rotate again while the newest generation is still fresh', async () => {
+    const store = new WalletStateStore(directory, PASSPHRASE);
+    const account = `generations-fresh-${Date.now()}`;
+    const live = join(directory, `${account}.json`);
+
+    await store.save(account, GUARDS, { dust: 'one' });
+    await store.save(account, GUARDS, { dust: 'two' });
+    const first = await readFile(`${live}.gen1`, 'utf8');
+
+    // Saves land seconds apart in a real run. If every one displaced a
+    // generation, six of them would cover three minutes and protect nothing.
+    await store.save(account, GUARDS, { dust: 'three' });
+    await store.save(account, GUARDS, { dust: 'four' });
+    expect(await readFile(`${live}.gen1`, 'utf8')).toBe(first);
+    expect(await existsAt(`${live}.gen2`)).toBe(false);
   });
 });

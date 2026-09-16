@@ -18,10 +18,10 @@
 // while its name, logo and description stay updatable for the life of the
 // launch — by the creator, and by the community once CTO has passed.
 //
-// Authorization mirrors bonding_curve.ak's TriggerCTO/DissolveCTO pattern
+// Authorization mirrors bonding_curve_tier_b.ak's TriggerCTO/DissolveCTO pattern
 // for the CTO-triggered half (same governance event — same
 // cto_governance_credential + thread_nft_policy values as the launch's own
-// bonding_curve.ak datum — one passed CTO vote flips both fee authority and
+// bonding_curve_tier_b.ak datum — one passed CTO vote flips both fee authority and
 // metadata authority together, not two independent mechanisms).
 //
 // Security-audit fix (this session, aiken-dex-security-audit pass): the
@@ -33,7 +33,7 @@
 // — sending value+datum to a script address never runs that script's
 // validator, only spending FROM it does. The fix: pre-CTO signer authority
 // is now ALWAYS re-derived LIVE from the real, unforgeable
-// bonding_curve.ak UTXO for that launch_id (read as a reference input,
+// bonding_curve_tier_b.ak UTXO for that launch_id (read as a reference input,
 // matched by address + launch_id) — never trusted as a self-declared field
 // on this contract's own datum. A forged UTXO can still be created (nothing
 // stops locking a first output with junk content), but it can never be
@@ -49,11 +49,12 @@
 use aiken/collection/list
 use aiken/crypto.{VerificationKeyHash}
 use aiken/interval
-use bonding_curve.{BondingCurveDatum}
+use bonding_curve_tier_b.{BondingCurveTierBDatum}
 use cardano/address.{Address, Credential, from_verification_key}
 use cardano/assets.{AssetName, PolicyId}
-use cardano/transaction
-use cardano/transaction.{Input, InlineDatum, Output, OutputReference, Transaction}
+use cardano/transaction.{
+  InlineDatum, Input, Output, OutputReference, Transaction,
+}
 use cto_governance.{
   CtoGovernanceDatum, DissolveCTOProposal, Executed, Passed, ProposalAnchor,
   ProposalType, SilenceLockTrigger,
@@ -73,7 +74,7 @@ use noctis/thread_nft
 /// never has to know about any of it.
 pub type NoctisMetadataExtra {
   launch_id: ByteArray,
-  // Fixed at genesis — this launch's own bonding_curve.ak credential (same
+  // Fixed at genesis — this launch's own bonding_curve_tier_b.ak credential (same
   // "no constructor params, one fixed address shared across every launch,
   // launch_id disambiguates" pattern already used for
   // cto_governance_credential). Paired with thread_nft_policy below:
@@ -82,7 +83,7 @@ pub type NoctisMetadataExtra {
   // full reasoning.
   bonding_curve_credential: Credential,
   // This launch's own native token identity, exactly as it appears in
-  // bonding_curve.ak's own datum. `token_asset_name` is the CIP-67 label-333
+  // bonding_curve_tier_b.ak's own datum. `token_asset_name` is the CIP-67 label-333
   // name the curve actually holds; the reference NFT guarding THIS UTXO is
   // the label-100 name over the same base, derived by own_reference_nft.
   token_policy_id: PolicyId,
@@ -119,7 +120,10 @@ pub type TokenMetadataDatum {
 }
 
 pub type TokenMetadataRedeemer {
-  UpdateMetadata { new_metadata: Pairs<ByteArray, Data>, current_timestamp: Int }
+  UpdateMetadata {
+    new_metadata: Pairs<ByteArray, Data>,
+    current_timestamp: Int,
+  }
   TriggerCTO { community_pub_key_hash: VerificationKeyHash }
   DissolveCTO
 }
@@ -130,23 +134,27 @@ pub type TokenMetadataRedeemer {
 
 /// Find this validator's own continuing output (same address as the input
 /// being spent) and decode its inline datum. Identical idiom to every other
-/// validator in this codebase (bonding_curve.ak, lp_escrow.ak,
+/// validator in this codebase (bonding_curve_tier_b.ak, lp_escrow.ak,
 /// cto_governance.ak, vesting.ak, staking_pool.ak, zk_anchor.ak).
 fn own_continuing_datum(
   self: Transaction,
   own_ref: OutputReference,
 ) -> TokenMetadataDatum {
-  expect Some(own_input) =
-    list.find(self.inputs, fn(input) { input.output_reference == own_ref })
+  expect Some(own_input) = list.find(
+    self.inputs,
+    fn(input) { input.output_reference == own_ref },
+  )
   let own_address = own_input.output.address
-  expect Some(own_output) =
-    list.find(self.outputs, fn(output) { output.address == own_address })
+  expect Some(own_output) = list.find(
+    self.outputs,
+    fn(output) { output.address == own_address },
+  )
   expect InlineDatum(raw_datum) = own_output.datum
   expect new_datum: TokenMetadataDatum = raw_datum
   new_datum
 }
 
-/// Closes the same double-satisfaction risk bonding_curve.ak's own fix
+/// Closes the same double-satisfaction risk bonding_curve_tier_b.ak's own fix
 /// closes — at most one of this validator's own UTXOs may be spent/created
 /// per transaction.
 fn single_own_utxo(self: Transaction, own_address: Address) -> Bool {
@@ -171,7 +179,7 @@ fn single_own_utxo(self: Transaction, own_address: Address) -> Bool {
 }
 
 /// The real, unforgeable creator identity for `datum.launch_id`, read LIVE
-/// from the genuine bonding_curve.ak reference input every time — never
+/// from the genuine bonding_curve_tier_b.ak reference input every time — never
 /// trusted as a value stored on this contract's own datum, which anyone can
 /// write when they first lock a UTXO here.
 ///
@@ -183,15 +191,14 @@ fn live_curve_creator(
   self: Transaction,
   datum: TokenMetadataDatum,
 ) -> VerificationKeyHash {
-  expect Some(curve_ref_input) =
-    list.find(
-      self.reference_inputs,
-      fn(input) {
-        input.output.address.payment_credential == datum.extra.bonding_curve_credential
-      },
-    )
+  expect Some(curve_ref_input) = list.find(
+    self.reference_inputs,
+    fn(input) {
+      input.output.address.payment_credential == datum.extra.bonding_curve_credential
+    },
+  )
   expect InlineDatum(curve_raw_datum) = curve_ref_input.output.datum
-  expect curve_datum: BondingCurveDatum = curve_raw_datum
+  expect curve_datum: BondingCurveTierBDatum = curve_raw_datum
   expect curve_datum.launch_id == datum.extra.launch_id
   // The curve's THREAD NFT, not a quantity of the launch token.
   //
@@ -216,7 +223,7 @@ fn live_curve_creator(
       curve_ref_input.output.value,
       datum.extra.thread_nft_policy,
       thread_nft.thread_asset_name(
-        thread_nft.role_bonding_curve,
+        thread_nft.role_bonding_curve_tier_b,
         datum.extra.launch_id,
       ),
     ) == 1
@@ -257,15 +264,17 @@ fn carries_own_reference_nft(
 
 /// The continuing output at this validator's own address.
 fn own_continuing_output(self: Transaction, own_address: Address) -> Output {
-  expect Some(own_output) =
-    list.find(self.outputs, fn(output) { output.address == own_address })
+  expect Some(own_output) = list.find(
+    self.outputs,
+    fn(output) { output.address == own_address },
+  )
   own_output
 }
 
 /// Tamper-proof "did CTO really pass" check — literal reuse of
-/// bonding_curve.ak's cto_vote_verified (same reference-input +
+/// bonding_curve_tier_b.ak's cto_vote_verified (same reference-input +
 /// governance-thread-NFT authentication; see that function's own doc
-/// comment in bonding_curve.ak for the full reasoning on why address
+/// comment in bonding_curve_tier_b.ak for the full reasoning on why address
 /// matching alone is not sufficient).
 fn cto_vote_verified(
   self: Transaction,
@@ -273,19 +282,24 @@ fn cto_vote_verified(
   proposal_type: ProposalType,
   expected_recipient: Option<VerificationKeyHash>,
 ) -> Bool {
-  expect Some(cto_ref_input) =
-    list.find(
-      self.reference_inputs,
-      fn(input) {
-        input.output.address.payment_credential == datum.extra.cto_governance_credential
-      },
-    )
+  expect Some(cto_ref_input) = list.find(
+    self.reference_inputs,
+    fn(input) {
+      input.output.address.payment_credential == datum.extra.cto_governance_credential
+    },
+  )
   expect InlineDatum(cto_raw_datum) = cto_ref_input.output.datum
   expect cto_datum: CtoGovernanceDatum = cto_raw_datum
   expect Some(executed) = cto_datum.last_executed_proposal
 
   let recipient_ok = when expected_recipient is {
-    Some(recipient) -> executed.allocation_recipient_hash == recipient
+    Some(recipient) -> and {
+        executed.allocation_recipient_hash == recipient,
+        // The record's LIVE community wallet must still name this recipient:
+        // an emergency freeze clears it, and a cleared wallet installs nowhere.
+        cto_datum.cto_state == cto_governance.CTOTriggered,
+        cto_datum.community_wallet_hash == recipient,
+      }
     None -> True
   }
 
@@ -337,8 +351,10 @@ validator token_metadata {
     self: Transaction,
   ) {
     expect Some(datum) = datum_opt
-    expect Some(own_input) =
-      list.find(self.inputs, fn(input) { input.output_reference == own_ref })
+    expect Some(own_input) = list.find(
+      self.inputs,
+      fn(input) { input.output_reference == own_ref },
+    )
     let new_output = own_continuing_output(self, own_input.output.address)
 
     and {
@@ -371,7 +387,7 @@ validator token_metadata {
             cip68.has_required_fungible_fields(new_metadata),
             // Security-audit fix: current_timestamp was previously entirely
             // self-declared with no correspondence-to-reality check, unlike
-            // bonding_curve.ak's ActivateCurve (see that file's own fix
+            // bonding_curve_tier_b.ak's ActivateCurve (see that file's own fix
             // note on why self-declared timestamps without a validity-range
             // check are a real gap class in this codebase).
             interval.contains(self.validity_range, current_timestamp),
@@ -406,7 +422,7 @@ validator token_metadata {
               extra: NoctisMetadataExtra {
                 ..datum.extra,
                 cto_triggered: True,
-                community_pub_key_hash: community_pub_key_hash,
+                community_pub_key_hash,
               },
             },
           }
@@ -429,6 +445,10 @@ validator token_metadata {
         }
       },
     }
+  }
+
+  else(_) {
+    fail
   }
 }
 
@@ -455,15 +475,18 @@ fn mock_metadata() -> Pairs<ByteArray, Data> {
   [Pair("name", name), Pair("ticker", ticker)]
 }
 
-fn mock_curve_datum(launch_id: ByteArray, creator_pub_key_hash: VerificationKeyHash) -> BondingCurveDatum {
-  BondingCurveDatum {
-    launch_id: launch_id,
-    creator_pub_key_hash: creator_pub_key_hash,
+fn mock_curve_datum(
+  launch_id: ByteArray,
+  creator_pub_key_hash: VerificationKeyHash,
+) -> BondingCurveTierBDatum {
+  BondingCurveTierBDatum {
+    launch_id,
+    creator_pub_key_hash,
     governor_pub_key_hash: #"22",
     base_price: 100,
     max_price: 1000,
     curve_supply: 1000,
-    curve_state: bonding_curve.Active,
+    curve_state: bonding_curve_tier_b.Active,
     phase_started_at: 0,
     tokens_sold: 0,
     total_raised: 0,
@@ -488,6 +511,17 @@ fn mock_curve_datum(launch_id: ByteArray, creator_pub_key_hash: VerificationKeyH
     // nothing here ever batches.
     cap_root: cap_accumulator.root_of([]),
     batcher_allowlist: [],
+    // DarkVeil settlement and venue fields, at the curve's own fixture values.
+    // This fixture is only ever read for its launch_id and creator key.
+    dv_allocation_root: #"00",
+    dv_reserve_tokens: 150,
+    dv_claim_opened_at: 0,
+    claimed_bits: #"00",
+    dv_settled: False,
+    dv_claim_window: 86_400_000,
+    dv_settlement_window: 1_800_000,
+    pool_nft_policy: #"0f",
+    staking_unstake_lock_ms: 604_800_000,
   }
 }
 
@@ -501,7 +535,10 @@ fn mock_reference_nft() -> assets.Value {
   )
 }
 
-fn mock_curve_ref_input(curve_address: Address, curve_datum: BondingCurveDatum) -> Input {
+fn mock_curve_ref_input(
+  curve_address: Address,
+  curve_datum: BondingCurveTierBDatum,
+) -> Input {
   Input {
     output_reference: OutputReference { transaction_id: #"ab", output_index: 0 },
     output: Output {
@@ -513,7 +550,10 @@ fn mock_curve_ref_input(curve_address: Address, curve_datum: BondingCurveDatum) 
         assets.from_lovelace(2_000_000),
         assets.from_asset(
           #"c0ffee",
-          thread_nft.thread_asset_name(thread_nft.role_bonding_curve, #"01"),
+          thread_nft.thread_asset_name(
+            thread_nft.role_bonding_curve_tier_b,
+            #"01",
+          ),
           1,
         ),
       ),
@@ -542,23 +582,27 @@ fn mock_datum(curve_credential: Credential) -> TokenMetadataDatum {
   }
 }
 
-fn mock_own_input(datum: TokenMetadataDatum) -> (Input, OutputReference, Address) {
+fn mock_own_input(
+  datum: TokenMetadataDatum,
+) -> (Input, OutputReference, Address) {
   let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
   let own_address = from_verification_key(#"cc")
-  let own_input =
-    Input {
-      output_reference: own_ref,
-      output: Output {
-        address: own_address,
-        value: mock_reference_nft(),
-        datum: InlineDatum(datum),
-        reference_script: None,
-      },
-    }
+  let own_input = Input {
+    output_reference: own_ref,
+    output: Output {
+      address: own_address,
+      value: mock_reference_nft(),
+      datum: InlineDatum(datum),
+      reference_script: None,
+    },
+  }
   (own_input, own_ref, own_address)
 }
 
-fn mock_continuing_output(own_address: Address, datum: TokenMetadataDatum) -> Output {
+fn mock_continuing_output(
+  own_address: Address,
+  datum: TokenMetadataDatum,
+) -> Output {
   Output {
     address: own_address,
     value: mock_reference_nft(),
@@ -574,7 +618,7 @@ fn mock_proposal_anchor(
   allocation_recipient_hash: ByteArray,
 ) -> ProposalAnchor {
   ProposalAnchor {
-    proposal_type: proposal_type,
+    proposal_type,
     description_hash: #"aa",
     proof_bundle_hash: #"bb",
     yes_votes: 60_000,
@@ -582,15 +626,49 @@ fn mock_proposal_anchor(
     voter_count: 15,
     creator_yes_votes: 0,
     creator_no_votes: 0,
-    outcome: outcome,
+    outcome,
     start_timestamp: 0,
     end_timestamp: 1000,
     anchor_timestamp: 500,
-    execution_status: execution_status,
+    execution_status,
     target_dex_credential: None,
     allocation_amount: 0,
-    allocation_recipient_hash: allocation_recipient_hash,
+    allocation_recipient_hash,
     relayer_credential_hash: #"33",
+  }
+}
+
+/// The state `ExecuteProposal` commits beside the proposal it records: a
+/// SilenceLockTrigger (or a FundAllocation on a launch under CTO) leaves the
+/// launch CTOTriggered with its recipient as the community wallet, a dissolve
+/// clears both, anything else leaves the genesis state.
+fn mock_cto_state(
+  executed: Option<ProposalAnchor>,
+) -> cto_governance.CtoAnchorState {
+  when executed is {
+    Some(p) ->
+      if p.proposal_type == cto_governance.DissolveCTOProposal {
+        cto_governance.CTODissolved
+      } else if p.proposal_type == cto_governance.SilenceLockTrigger || p.proposal_type == cto_governance.FundAllocation {
+        cto_governance.CTOTriggered
+      } else {
+        cto_governance.PreCTO
+      }
+    None -> cto_governance.PreCTO
+  }
+}
+
+fn mock_community_wallet(
+  executed: Option<ProposalAnchor>,
+) -> VerificationKeyHash {
+  when executed is {
+    Some(p) ->
+      if p.proposal_type == cto_governance.SilenceLockTrigger || p.proposal_type == cto_governance.FundAllocation {
+        p.allocation_recipient_hash
+      } else {
+        #""
+      }
+    None -> #""
   }
 }
 
@@ -599,9 +677,9 @@ fn mock_cto_governance_datum(
   last_executed_proposal: Option<ProposalAnchor>,
 ) -> CtoGovernanceDatum {
   CtoGovernanceDatum {
-    launch_id: launch_id,
-    cto_state: cto_governance.PreCTO,
-    community_wallet_hash: #"",
+    launch_id,
+    cto_state: mock_cto_state(last_executed_proposal),
+    community_wallet_hash: mock_community_wallet(last_executed_proposal),
     governor_credential_hash: #"22",
     total_supply: 1_000_000,
     quorum_bps: 500,
@@ -609,7 +687,7 @@ fn mock_cto_governance_datum(
     min_voter_count: 15,
     active_proposal: None,
     proposal_count: 1,
-    last_executed_proposal: last_executed_proposal,
+    last_executed_proposal,
     pending_relayer_bond: 0,
     pending_relayer_key_hash: #"",
     payout_pub_key_hash: #"55",
@@ -624,8 +702,11 @@ fn mock_cto_governance_datum(
 
 /// A reference input at the given address holding the given
 /// CtoGovernanceDatum, carrying the genuine governance thread NFT — mirrors
-/// bonding_curve.ak's own mock_cto_ref_input exactly.
-fn mock_cto_ref_input(cto_address: Address, cto_datum: CtoGovernanceDatum) -> Input {
+/// bonding_curve_tier_b.ak's own mock_cto_ref_input exactly.
+fn mock_cto_ref_input(
+  cto_address: Address,
+  cto_datum: CtoGovernanceDatum,
+) -> Input {
   Input {
     output_reference: OutputReference { transaction_id: #"cd", output_index: 0 },
     output: Output {
@@ -644,10 +725,13 @@ fn mock_cto_ref_input(cto_address: Address, cto_datum: CtoGovernanceDatum) -> In
   }
 }
 
-/// Same forgery shape as bonding_curve.ak's regression test — a UTXO at
+/// Same forgery shape as bonding_curve_tier_b.ak's regression test — a UTXO at
 /// cto_governance_credential with a fully forged "Passed / Executed" datum
 /// but WITHOUT the real governance thread NFT in its value.
-fn mock_forged_cto_ref_input(cto_address: Address, cto_datum: CtoGovernanceDatum) -> Input {
+fn mock_forged_cto_ref_input(
+  cto_address: Address,
+  cto_datum: CtoGovernanceDatum,
+) -> Input {
   Input {
     output_reference: OutputReference { transaction_id: #"ce", output_index: 0 },
     output: Output {
@@ -689,24 +773,22 @@ test update_metadata_succeeds_by_real_creator_pre_cto() {
   let (curve_credential, _curve_address, curve_ref_input) = mock_curve_setup()
   let datum = mock_datum(curve_credential)
   let (own_input, own_ref, own_address) = mock_own_input(datum)
-  let new_datum =
-    TokenMetadataDatum {
-      ..datum,
-      metadata: updated_metadata(),
-      extra: NoctisMetadataExtra {
-        ..datum.extra,
-        metadata_revision: 2,
-        last_updated_ts: 2000,
-      },
-    }
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      reference_inputs: [curve_ref_input],
-      outputs: [mock_continuing_output(own_address, new_datum)],
-      extra_signatories: [real_creator_key],
-    }
+  let new_datum = TokenMetadataDatum {
+    ..datum,
+    metadata: updated_metadata(),
+    extra: NoctisMetadataExtra {
+      ..datum.extra,
+      metadata_revision: 2,
+      last_updated_ts: 2000,
+    },
+  }
+  let self = Transaction {
+    ..transaction.placeholder,
+    inputs: [own_input],
+    reference_inputs: [curve_ref_input],
+    outputs: [mock_continuing_output(own_address, new_datum)],
+    extra_signatories: [real_creator_key],
+  }
   token_metadata.spend(
     Some(datum),
     UpdateMetadata { new_metadata: updated_metadata(), current_timestamp: 2000 },
@@ -718,27 +800,29 @@ test update_metadata_succeeds_by_real_creator_pre_cto() {
 test update_metadata_fails_by_forged_creator_key_pre_cto() {
   // The exact same-style forgery this fix closes: a UTXO whose datum claims
   // launch_id #"01", but the caller signs with a key that is NOT the real
-  // bonding_curve.ak creator for that launch (real key is real_creator_key,
+  // bonding_curve_tier_b.ak creator for that launch (real key is real_creator_key,
   // #"11" — the attacker signs with their own #"99" instead). Even though
   // the transaction cites the real curve reference input (publicly
   // readable by anyone), the signer check must still fail.
   let (curve_credential, _curve_address, curve_ref_input) = mock_curve_setup()
   let datum = mock_datum(curve_credential)
   let (own_input, own_ref, own_address) = mock_own_input(datum)
-  let new_datum =
-    TokenMetadataDatum {
-      ..datum,
-      metadata: updated_metadata(),
-      extra: NoctisMetadataExtra { ..datum.extra, metadata_revision: 2, last_updated_ts: 2000 },
-    }
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      reference_inputs: [curve_ref_input],
-      outputs: [mock_continuing_output(own_address, new_datum)],
-      extra_signatories: [#"99"],
-    }
+  let new_datum = TokenMetadataDatum {
+    ..datum,
+    metadata: updated_metadata(),
+    extra: NoctisMetadataExtra {
+      ..datum.extra,
+      metadata_revision: 2,
+      last_updated_ts: 2000,
+    },
+  }
+  let self = Transaction {
+    ..transaction.placeholder,
+    inputs: [own_input],
+    reference_inputs: [curve_ref_input],
+    outputs: [mock_continuing_output(own_address, new_datum)],
+    extra_signatories: [#"99"],
+  }
   !token_metadata.spend(
     Some(datum),
     UpdateMetadata { new_metadata: updated_metadata(), current_timestamp: 2000 },
@@ -757,32 +841,33 @@ test update_metadata_fails_by_forged_reference_input_without_the_thread_nft() fa
   let curve_credential = curve_address.payment_credential
   let attacker_key = #"99"
   let forged_curve_datum = mock_curve_datum(#"01", attacker_key)
-  let forged_curve_ref_input =
-    Input {
-      output_reference: OutputReference { transaction_id: #"ff", output_index: 0 },
-      output: Output {
-        address: curve_address,
-        value: assets.from_lovelace(2_000_000),
-        datum: InlineDatum(forged_curve_datum),
-        reference_script: None,
-      },
-    }
+  let forged_curve_ref_input = Input {
+    output_reference: OutputReference { transaction_id: #"ff", output_index: 0 },
+    output: Output {
+      address: curve_address,
+      value: assets.from_lovelace(2_000_000),
+      datum: InlineDatum(forged_curve_datum),
+      reference_script: None,
+    },
+  }
   let datum = mock_datum(curve_credential)
   let (own_input, own_ref, own_address) = mock_own_input(datum)
-  let new_datum =
-    TokenMetadataDatum {
-      ..datum,
-      metadata: updated_metadata(),
-      extra: NoctisMetadataExtra { ..datum.extra, metadata_revision: 2, last_updated_ts: 2000 },
-    }
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      reference_inputs: [forged_curve_ref_input],
-      outputs: [mock_continuing_output(own_address, new_datum)],
-      extra_signatories: [attacker_key],
-    }
+  let new_datum = TokenMetadataDatum {
+    ..datum,
+    metadata: updated_metadata(),
+    extra: NoctisMetadataExtra {
+      ..datum.extra,
+      metadata_revision: 2,
+      last_updated_ts: 2000,
+    },
+  }
+  let self = Transaction {
+    ..transaction.placeholder,
+    inputs: [own_input],
+    reference_inputs: [forged_curve_ref_input],
+    outputs: [mock_continuing_output(own_address, new_datum)],
+    extra_signatories: [attacker_key],
+  }
   token_metadata.spend(
     Some(datum),
     UpdateMetadata { new_metadata: updated_metadata(), current_timestamp: 2000 },
@@ -795,27 +880,29 @@ test update_metadata_fails_by_forged_reference_input_without_the_thread_nft() fa
 // clean False) when no matching reference input exists — a trap rejects
 // the transaction exactly the same as a clean False would, but the test
 // itself must be marked `fail` to assert on that, per this codebase's own
-// convention (bonding_curve.ak's trigger_cto_rejects_without_reference_input).
+// convention (bonding_curve_tier_b.ak's trigger_cto_rejects_without_reference_input).
 test update_metadata_fails_without_a_real_curve_reference_input() fail {
   // No bonding_curve reference input at all — even a valid-looking
   // creator signature must not be enough on its own.
   let (curve_credential, _curve_address, _curve_ref_input) = mock_curve_setup()
   let datum = mock_datum(curve_credential)
   let (own_input, own_ref, own_address) = mock_own_input(datum)
-  let new_datum =
-    TokenMetadataDatum {
-      ..datum,
-      metadata: updated_metadata(),
-      extra: NoctisMetadataExtra { ..datum.extra, metadata_revision: 2, last_updated_ts: 2000 },
-    }
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      reference_inputs: [],
-      outputs: [mock_continuing_output(own_address, new_datum)],
-      extra_signatories: [real_creator_key],
-    }
+  let new_datum = TokenMetadataDatum {
+    ..datum,
+    metadata: updated_metadata(),
+    extra: NoctisMetadataExtra {
+      ..datum.extra,
+      metadata_revision: 2,
+      last_updated_ts: 2000,
+    },
+  }
+  let self = Transaction {
+    ..transaction.placeholder,
+    inputs: [own_input],
+    reference_inputs: [],
+    outputs: [mock_continuing_output(own_address, new_datum)],
+    extra_signatories: [real_creator_key],
+  }
   token_metadata.spend(
     Some(datum),
     UpdateMetadata { new_metadata: updated_metadata(), current_timestamp: 2000 },
@@ -828,20 +915,22 @@ test update_metadata_fails_by_community_wallet_pre_cto() {
   let (curve_credential, _curve_address, curve_ref_input) = mock_curve_setup()
   let datum = mock_datum(curve_credential)
   let (own_input, own_ref, own_address) = mock_own_input(datum)
-  let new_datum =
-    TokenMetadataDatum {
-      ..datum,
-      metadata: updated_metadata(),
-      extra: NoctisMetadataExtra { ..datum.extra, metadata_revision: 2, last_updated_ts: 2000 },
-    }
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      reference_inputs: [curve_ref_input],
-      outputs: [mock_continuing_output(own_address, new_datum)],
-      extra_signatories: [#"ee"],
-    }
+  let new_datum = TokenMetadataDatum {
+    ..datum,
+    metadata: updated_metadata(),
+    extra: NoctisMetadataExtra {
+      ..datum.extra,
+      metadata_revision: 2,
+      last_updated_ts: 2000,
+    },
+  }
+  let self = Transaction {
+    ..transaction.placeholder,
+    inputs: [own_input],
+    reference_inputs: [curve_ref_input],
+    outputs: [mock_continuing_output(own_address, new_datum)],
+    extra_signatories: [#"ee"],
+  }
   !token_metadata.spend(
     Some(datum),
     UpdateMetadata { new_metadata: updated_metadata(), current_timestamp: 2000 },
@@ -853,28 +942,30 @@ test update_metadata_fails_by_community_wallet_pre_cto() {
 test update_metadata_fails_by_creator_post_cto() {
   let (curve_credential, _curve_address, curve_ref_input) = mock_curve_setup()
   let datum = TokenMetadataDatum {
-      ..mock_datum(curve_credential),
-      extra: NoctisMetadataExtra {
-        ..mock_datum(curve_credential).extra,
-        cto_triggered: True,
-        community_pub_key_hash: #"ee",
-      },
-    }
+    ..mock_datum(curve_credential),
+    extra: NoctisMetadataExtra {
+      ..mock_datum(curve_credential).extra,
+      cto_triggered: True,
+      community_pub_key_hash: #"ee",
+    },
+  }
   let (own_input, own_ref, own_address) = mock_own_input(datum)
-  let new_datum =
-    TokenMetadataDatum {
-      ..datum,
-      metadata: updated_metadata(),
-      extra: NoctisMetadataExtra { ..datum.extra, metadata_revision: 2, last_updated_ts: 2000 },
-    }
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      reference_inputs: [curve_ref_input],
-      outputs: [mock_continuing_output(own_address, new_datum)],
-      extra_signatories: [real_creator_key],
-    }
+  let new_datum = TokenMetadataDatum {
+    ..datum,
+    metadata: updated_metadata(),
+    extra: NoctisMetadataExtra {
+      ..datum.extra,
+      metadata_revision: 2,
+      last_updated_ts: 2000,
+    },
+  }
+  let self = Transaction {
+    ..transaction.placeholder,
+    inputs: [own_input],
+    reference_inputs: [curve_ref_input],
+    outputs: [mock_continuing_output(own_address, new_datum)],
+    extra_signatories: [real_creator_key],
+  }
   !token_metadata.spend(
     Some(datum),
     UpdateMetadata { new_metadata: updated_metadata(), current_timestamp: 2000 },
@@ -886,28 +977,30 @@ test update_metadata_fails_by_creator_post_cto() {
 test update_metadata_succeeds_by_community_wallet_post_cto() {
   let (curve_credential, _curve_address, curve_ref_input) = mock_curve_setup()
   let datum = TokenMetadataDatum {
-      ..mock_datum(curve_credential),
-      extra: NoctisMetadataExtra {
-        ..mock_datum(curve_credential).extra,
-        cto_triggered: True,
-        community_pub_key_hash: #"ee",
-      },
-    }
+    ..mock_datum(curve_credential),
+    extra: NoctisMetadataExtra {
+      ..mock_datum(curve_credential).extra,
+      cto_triggered: True,
+      community_pub_key_hash: #"ee",
+    },
+  }
   let (own_input, own_ref, own_address) = mock_own_input(datum)
-  let new_datum =
-    TokenMetadataDatum {
-      ..datum,
-      metadata: updated_metadata(),
-      extra: NoctisMetadataExtra { ..datum.extra, metadata_revision: 2, last_updated_ts: 2000 },
-    }
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      reference_inputs: [curve_ref_input],
-      outputs: [mock_continuing_output(own_address, new_datum)],
-      extra_signatories: [#"ee"],
-    }
+  let new_datum = TokenMetadataDatum {
+    ..datum,
+    metadata: updated_metadata(),
+    extra: NoctisMetadataExtra {
+      ..datum.extra,
+      metadata_revision: 2,
+      last_updated_ts: 2000,
+    },
+  }
+  let self = Transaction {
+    ..transaction.placeholder,
+    inputs: [own_input],
+    reference_inputs: [curve_ref_input],
+    outputs: [mock_continuing_output(own_address, new_datum)],
+    extra_signatories: [#"ee"],
+  }
   token_metadata.spend(
     Some(datum),
     UpdateMetadata { new_metadata: updated_metadata(), current_timestamp: 2000 },
@@ -922,25 +1015,23 @@ test update_metadata_fails_when_continuing_datum_mutates_disallowed_field() {
   let (own_input, own_ref, own_address) = mock_own_input(datum)
   // Attempts to also change bonding_curve_credential — not one of the 3
   // fields UpdateMetadata is allowed to touch.
-  let new_datum =
-    TokenMetadataDatum {
-      ..datum,
-      metadata: updated_metadata(),
-      extra: NoctisMetadataExtra {
-        ..datum.extra,
-        metadata_revision: 2,
-        last_updated_ts: 2000,
-        bonding_curve_credential: from_verification_key(#"ff").payment_credential,
-      },
-    }
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      reference_inputs: [curve_ref_input],
-      outputs: [mock_continuing_output(own_address, new_datum)],
-      extra_signatories: [real_creator_key],
-    }
+  let new_datum = TokenMetadataDatum {
+    ..datum,
+    metadata: updated_metadata(),
+    extra: NoctisMetadataExtra {
+      ..datum.extra,
+      metadata_revision: 2,
+      last_updated_ts: 2000,
+      bonding_curve_credential: from_verification_key(#"ff").payment_credential,
+    },
+  }
+  let self = Transaction {
+    ..transaction.placeholder,
+    inputs: [own_input],
+    reference_inputs: [curve_ref_input],
+    outputs: [mock_continuing_output(own_address, new_datum)],
+    extra_signatories: [real_creator_key],
+  }
   !token_metadata.spend(
     Some(datum),
     UpdateMetadata { new_metadata: updated_metadata(), current_timestamp: 2000 },
@@ -955,20 +1046,22 @@ test update_metadata_fails_when_new_metadata_is_empty() {
   let (curve_credential, _curve_address, curve_ref_input) = mock_curve_setup()
   let datum = mock_datum(curve_credential)
   let (own_input, own_ref, own_address) = mock_own_input(datum)
-  let new_datum =
-    TokenMetadataDatum {
-      ..datum,
-      metadata: [],
-      extra: NoctisMetadataExtra { ..datum.extra, metadata_revision: 2, last_updated_ts: 2000 },
-    }
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      reference_inputs: [curve_ref_input],
-      outputs: [mock_continuing_output(own_address, new_datum)],
-      extra_signatories: [real_creator_key],
-    }
+  let new_datum = TokenMetadataDatum {
+    ..datum,
+    metadata: [],
+    extra: NoctisMetadataExtra {
+      ..datum.extra,
+      metadata_revision: 2,
+      last_updated_ts: 2000,
+    },
+  }
+  let self = Transaction {
+    ..transaction.placeholder,
+    inputs: [own_input],
+    reference_inputs: [curve_ref_input],
+    outputs: [mock_continuing_output(own_address, new_datum)],
+    extra_signatories: [real_creator_key],
+  }
   !token_metadata.spend(
     Some(datum),
     UpdateMetadata { new_metadata: [], current_timestamp: 2000 },
@@ -981,27 +1074,32 @@ test update_metadata_fails_when_current_timestamp_outside_validity_range() {
   let (curve_credential, _curve_address, curve_ref_input) = mock_curve_setup()
   let datum = mock_datum(curve_credential)
   let (own_input, own_ref, own_address) = mock_own_input(datum)
-  let new_datum =
-    TokenMetadataDatum {
-      ..datum,
-      metadata: updated_metadata(),
-      extra: NoctisMetadataExtra { ..datum.extra, metadata_revision: 2, last_updated_ts: 999_999 },
-    }
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      reference_inputs: [curve_ref_input],
-      outputs: [mock_continuing_output(own_address, new_datum)],
-      extra_signatories: [real_creator_key],
-      // Real declared validity range is 400-600, but the redeemer claims
-      // current_timestamp = 999_999 — a fabricated timestamp with no
-      // correspondence to the transaction's own real validity range.
-      validity_range: interval.between(400, 600),
-    }
+  let new_datum = TokenMetadataDatum {
+    ..datum,
+    metadata: updated_metadata(),
+    extra: NoctisMetadataExtra {
+      ..datum.extra,
+      metadata_revision: 2,
+      last_updated_ts: 999_999,
+    },
+  }
+  let self = Transaction {
+    ..transaction.placeholder,
+    inputs: [own_input],
+    reference_inputs: [curve_ref_input],
+    outputs: [mock_continuing_output(own_address, new_datum)],
+    extra_signatories: [real_creator_key],
+    // Real declared validity range is 400-600, but the redeemer claims
+    // current_timestamp = 999_999 — a fabricated timestamp with no
+    // correspondence to the transaction's own real validity range.
+    validity_range: interval.between(400, 600),
+  }
   !token_metadata.spend(
     Some(datum),
-    UpdateMetadata { new_metadata: updated_metadata(), current_timestamp: 999_999 },
+    UpdateMetadata {
+      new_metadata: updated_metadata(),
+      current_timestamp: 999_999,
+    },
     own_ref,
     self,
   )
@@ -1012,32 +1110,44 @@ test trigger_cto_succeeds_with_real_anchored_vote() {
   let cto_address = from_verification_key(#"aa")
   let cto_credential = cto_address.payment_credential
   let datum = TokenMetadataDatum {
-      ..mock_datum(curve_credential),
-      extra: NoctisMetadataExtra {
-        ..mock_datum(curve_credential).extra,
-        cto_governance_credential: cto_credential,
-      },
-    }
+    ..mock_datum(curve_credential),
+    extra: NoctisMetadataExtra {
+      ..mock_datum(curve_credential).extra,
+      cto_governance_credential: cto_credential,
+    },
+  }
   let (own_input, own_ref, own_address) = mock_own_input(datum)
   let new_datum = TokenMetadataDatum {
-      ..datum,
-      extra: NoctisMetadataExtra {
-        ..datum.extra,
-        cto_triggered: True,
-        community_pub_key_hash: #"ee",
-      },
-    }
-  let executed_proposal = mock_proposal_anchor(SilenceLockTrigger, Passed, Executed, #"ee")
-  let cto_datum = mock_cto_governance_datum(datum.extra.launch_id, Some(executed_proposal))
+    ..datum,
+    extra: NoctisMetadataExtra {
+      ..datum.extra,
+      cto_triggered: True,
+      community_pub_key_hash: #"ee",
+    },
+  }
+  let executed_proposal = mock_proposal_anchor(
+    SilenceLockTrigger,
+    Passed,
+    Executed,
+    #"ee",
+  )
+  let cto_datum = mock_cto_governance_datum(
+    datum.extra.launch_id,
+    Some(executed_proposal),
+  )
   let cto_ref_input = mock_cto_ref_input(cto_address, cto_datum)
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      reference_inputs: [curve_ref_input, cto_ref_input],
-      outputs: [mock_continuing_output(own_address, new_datum)],
-    }
-  token_metadata.spend(Some(datum), TriggerCTO { community_pub_key_hash: #"ee" }, own_ref, self)
+  let self = Transaction {
+    ..transaction.placeholder,
+    inputs: [own_input],
+    reference_inputs: [curve_ref_input, cto_ref_input],
+    outputs: [mock_continuing_output(own_address, new_datum)],
+  }
+  token_metadata.spend(
+    Some(datum),
+    TriggerCTO { community_pub_key_hash: #"ee" },
+    own_ref,
+    self,
+  )
 }
 
 test trigger_cto_fails_without_genuine_governance_thread_nft() {
@@ -1045,99 +1155,128 @@ test trigger_cto_fails_without_genuine_governance_thread_nft() {
   let cto_address = from_verification_key(#"aa")
   let cto_credential = cto_address.payment_credential
   let datum = TokenMetadataDatum {
-      ..mock_datum(curve_credential),
-      extra: NoctisMetadataExtra {
-        ..mock_datum(curve_credential).extra,
-        cto_governance_credential: cto_credential,
-      },
-    }
+    ..mock_datum(curve_credential),
+    extra: NoctisMetadataExtra {
+      ..mock_datum(curve_credential).extra,
+      cto_governance_credential: cto_credential,
+    },
+  }
   let (own_input, own_ref, own_address) = mock_own_input(datum)
   let new_datum = TokenMetadataDatum {
-      ..datum,
-      extra: NoctisMetadataExtra {
-        ..datum.extra,
-        cto_triggered: True,
-        community_pub_key_hash: #"ee",
-      },
-    }
-  let executed_proposal = mock_proposal_anchor(SilenceLockTrigger, Passed, Executed, #"ee")
-  let cto_datum = mock_cto_governance_datum(datum.extra.launch_id, Some(executed_proposal))
+    ..datum,
+    extra: NoctisMetadataExtra {
+      ..datum.extra,
+      cto_triggered: True,
+      community_pub_key_hash: #"ee",
+    },
+  }
+  let executed_proposal = mock_proposal_anchor(
+    SilenceLockTrigger,
+    Passed,
+    Executed,
+    #"ee",
+  )
+  let cto_datum = mock_cto_governance_datum(
+    datum.extra.launch_id,
+    Some(executed_proposal),
+  )
   let forged_ref_input = mock_forged_cto_ref_input(cto_address, cto_datum)
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      reference_inputs: [curve_ref_input, forged_ref_input],
-      outputs: [mock_continuing_output(own_address, new_datum)],
-    }
-  !token_metadata.spend(Some(datum), TriggerCTO { community_pub_key_hash: #"ee" }, own_ref, self)
+  let self = Transaction {
+    ..transaction.placeholder,
+    inputs: [own_input],
+    reference_inputs: [curve_ref_input, forged_ref_input],
+    outputs: [mock_continuing_output(own_address, new_datum)],
+  }
+  !token_metadata.spend(
+    Some(datum),
+    TriggerCTO { community_pub_key_hash: #"ee" },
+    own_ref,
+    self,
+  )
 }
 
 test trigger_cto_fails_when_already_triggered() {
   let (curve_credential, _curve_address, curve_ref_input) = mock_curve_setup()
   let cto_address = from_verification_key(#"aa")
   let cto_credential = cto_address.payment_credential
-  let datum =
-    TokenMetadataDatum {
-      ..mock_datum(curve_credential),
-      extra: NoctisMetadataExtra {
-        ..mock_datum(curve_credential).extra,
-        cto_governance_credential: cto_credential,
-        cto_triggered: True,
-        community_pub_key_hash: #"ee",
-      },
-    }
+  let datum = TokenMetadataDatum {
+    ..mock_datum(curve_credential),
+    extra: NoctisMetadataExtra {
+      ..mock_datum(curve_credential).extra,
+      cto_governance_credential: cto_credential,
+      cto_triggered: True,
+      community_pub_key_hash: #"ee",
+    },
+  }
   let (own_input, own_ref, own_address) = mock_own_input(datum)
   let new_datum = TokenMetadataDatum {
-      ..datum,
-      extra: NoctisMetadataExtra { ..datum.extra, community_pub_key_hash: #"ff" },
-    }
-  let executed_proposal = mock_proposal_anchor(SilenceLockTrigger, Passed, Executed, #"ff")
-  let cto_datum = mock_cto_governance_datum(datum.extra.launch_id, Some(executed_proposal))
+    ..datum,
+    extra: NoctisMetadataExtra { ..datum.extra, community_pub_key_hash: #"ff" },
+  }
+  let executed_proposal = mock_proposal_anchor(
+    SilenceLockTrigger,
+    Passed,
+    Executed,
+    #"ff",
+  )
+  let cto_datum = mock_cto_governance_datum(
+    datum.extra.launch_id,
+    Some(executed_proposal),
+  )
   let cto_ref_input = mock_cto_ref_input(cto_address, cto_datum)
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      reference_inputs: [curve_ref_input, cto_ref_input],
-      outputs: [mock_continuing_output(own_address, new_datum)],
-    }
-  !token_metadata.spend(Some(datum), TriggerCTO { community_pub_key_hash: #"ff" }, own_ref, self)
+  let self = Transaction {
+    ..transaction.placeholder,
+    inputs: [own_input],
+    reference_inputs: [curve_ref_input, cto_ref_input],
+    outputs: [mock_continuing_output(own_address, new_datum)],
+  }
+  !token_metadata.spend(
+    Some(datum),
+    TriggerCTO { community_pub_key_hash: #"ff" },
+    own_ref,
+    self,
+  )
 }
 
 test dissolve_cto_succeeds_and_resets_state() {
   let (curve_credential, _curve_address, curve_ref_input) = mock_curve_setup()
   let cto_address = from_verification_key(#"aa")
   let cto_credential = cto_address.payment_credential
-  let datum =
-    TokenMetadataDatum {
-      ..mock_datum(curve_credential),
-      extra: NoctisMetadataExtra {
-        ..mock_datum(curve_credential).extra,
-        cto_governance_credential: cto_credential,
-        cto_triggered: True,
-        community_pub_key_hash: #"ee",
-      },
-    }
+  let datum = TokenMetadataDatum {
+    ..mock_datum(curve_credential),
+    extra: NoctisMetadataExtra {
+      ..mock_datum(curve_credential).extra,
+      cto_governance_credential: cto_credential,
+      cto_triggered: True,
+      community_pub_key_hash: #"ee",
+    },
+  }
   let (own_input, own_ref, own_address) = mock_own_input(datum)
   let new_datum = TokenMetadataDatum {
-      ..datum,
-      extra: NoctisMetadataExtra {
-        ..datum.extra,
-        cto_triggered: False,
-        community_pub_key_hash: #"",
-      },
-    }
-  let executed_proposal = mock_proposal_anchor(DissolveCTOProposal, Passed, Executed, #"")
-  let cto_datum = mock_cto_governance_datum(datum.extra.launch_id, Some(executed_proposal))
+    ..datum,
+    extra: NoctisMetadataExtra {
+      ..datum.extra,
+      cto_triggered: False,
+      community_pub_key_hash: #"",
+    },
+  }
+  let executed_proposal = mock_proposal_anchor(
+    DissolveCTOProposal,
+    Passed,
+    Executed,
+    #"",
+  )
+  let cto_datum = mock_cto_governance_datum(
+    datum.extra.launch_id,
+    Some(executed_proposal),
+  )
   let cto_ref_input = mock_cto_ref_input(cto_address, cto_datum)
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      reference_inputs: [curve_ref_input, cto_ref_input],
-      outputs: [mock_continuing_output(own_address, new_datum)],
-    }
+  let self = Transaction {
+    ..transaction.placeholder,
+    inputs: [own_input],
+    reference_inputs: [curve_ref_input, cto_ref_input],
+    outputs: [mock_continuing_output(own_address, new_datum)],
+  }
   token_metadata.spend(Some(datum), DissolveCTO, own_ref, self)
 }
 
@@ -1146,26 +1285,32 @@ test dissolve_cto_fails_when_not_triggered() {
   let cto_address = from_verification_key(#"aa")
   let cto_credential = cto_address.payment_credential
   let datum = TokenMetadataDatum {
-      ..mock_datum(curve_credential),
-      extra: NoctisMetadataExtra {
-        ..mock_datum(curve_credential).extra,
-        cto_governance_credential: cto_credential,
-      },
-    }
+    ..mock_datum(curve_credential),
+    extra: NoctisMetadataExtra {
+      ..mock_datum(curve_credential).extra,
+      cto_governance_credential: cto_credential,
+    },
+  }
   let (own_input, own_ref, own_address) = mock_own_input(datum)
-  let executed_proposal = mock_proposal_anchor(DissolveCTOProposal, Passed, Executed, #"")
-  let cto_datum = mock_cto_governance_datum(datum.extra.launch_id, Some(executed_proposal))
+  let executed_proposal = mock_proposal_anchor(
+    DissolveCTOProposal,
+    Passed,
+    Executed,
+    #"",
+  )
+  let cto_datum = mock_cto_governance_datum(
+    datum.extra.launch_id,
+    Some(executed_proposal),
+  )
   let cto_ref_input = mock_cto_ref_input(cto_address, cto_datum)
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      reference_inputs: [curve_ref_input, cto_ref_input],
-      outputs: [mock_continuing_output(own_address, datum)],
-    }
+  let self = Transaction {
+    ..transaction.placeholder,
+    inputs: [own_input],
+    reference_inputs: [curve_ref_input, cto_ref_input],
+    outputs: [mock_continuing_output(own_address, datum)],
+  }
   !token_metadata.spend(Some(datum), DissolveCTO, own_ref, self)
 }
-
 
 /// The whole point of moving off a token-holding requirement.
 ///
@@ -1179,43 +1324,43 @@ test update_metadata_succeeds_after_graduation_when_the_curve_holds_no_tokens() 
   let curve_credential = curve_address.payment_credential
   let graduated_curve_datum = mock_curve_datum(#"01", real_creator_key)
   // Real, and empty of its own token — the state graduation leaves behind.
-  let graduated_curve_ref_input =
-    Input {
-      output_reference: OutputReference { transaction_id: #"ab", output_index: 0 },
-      output: Output {
-        address: curve_address,
-        value: assets.merge(
-          assets.from_lovelace(2_000_000),
-          assets.from_asset(
-            #"c0ffee",
-            thread_nft.thread_asset_name(thread_nft.role_bonding_curve, #"01"),
-            1,
+  let graduated_curve_ref_input = Input {
+    output_reference: OutputReference { transaction_id: #"ab", output_index: 0 },
+    output: Output {
+      address: curve_address,
+      value: assets.merge(
+        assets.from_lovelace(2_000_000),
+        assets.from_asset(
+          #"c0ffee",
+          thread_nft.thread_asset_name(
+            thread_nft.role_bonding_curve_tier_b,
+            #"01",
           ),
+          1,
         ),
-        datum: InlineDatum(graduated_curve_datum),
-        reference_script: None,
-      },
-    }
+      ),
+      datum: InlineDatum(graduated_curve_datum),
+      reference_script: None,
+    },
+  }
   let datum = mock_datum(curve_credential)
   let (own_input, own_ref, own_address) = mock_own_input(datum)
-  let new_datum =
-    TokenMetadataDatum {
-      ..datum,
-      metadata: updated_metadata(),
-      extra: NoctisMetadataExtra {
-        ..datum.extra,
-        metadata_revision: 2,
-        last_updated_ts: 2000,
-      },
-    }
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      reference_inputs: [graduated_curve_ref_input],
-      outputs: [mock_continuing_output(own_address, new_datum)],
-      extra_signatories: [real_creator_key],
-    }
+  let new_datum = TokenMetadataDatum {
+    ..datum,
+    metadata: updated_metadata(),
+    extra: NoctisMetadataExtra {
+      ..datum.extra,
+      metadata_revision: 2,
+      last_updated_ts: 2000,
+    },
+  }
+  let self = Transaction {
+    ..transaction.placeholder,
+    inputs: [own_input],
+    reference_inputs: [graduated_curve_ref_input],
+    outputs: [mock_continuing_output(own_address, new_datum)],
+    extra_signatories: [real_creator_key],
+  }
   token_metadata.spend(
     Some(datum),
     UpdateMetadata { new_metadata: updated_metadata(), current_timestamp: 2000 },
@@ -1232,43 +1377,43 @@ test update_metadata_fails_with_another_launchs_thread_nft() fail {
   let curve_address = from_verification_key(curve_address_key)
   let curve_credential = curve_address.payment_credential
   let curve_datum = mock_curve_datum(#"01", real_creator_key)
-  let wrong_nft_ref_input =
-    Input {
-      output_reference: OutputReference { transaction_id: #"ab", output_index: 0 },
-      output: Output {
-        address: curve_address,
-        value: assets.merge(
-          assets.from_lovelace(2_000_000),
-          assets.from_asset(
-            #"c0ffee",
-            thread_nft.thread_asset_name(thread_nft.role_bonding_curve, #"02"),
-            1,
+  let wrong_nft_ref_input = Input {
+    output_reference: OutputReference { transaction_id: #"ab", output_index: 0 },
+    output: Output {
+      address: curve_address,
+      value: assets.merge(
+        assets.from_lovelace(2_000_000),
+        assets.from_asset(
+          #"c0ffee",
+          thread_nft.thread_asset_name(
+            thread_nft.role_bonding_curve_tier_b,
+            #"02",
           ),
+          1,
         ),
-        datum: InlineDatum(curve_datum),
-        reference_script: None,
-      },
-    }
+      ),
+      datum: InlineDatum(curve_datum),
+      reference_script: None,
+    },
+  }
   let datum = mock_datum(curve_credential)
   let (own_input, own_ref, own_address) = mock_own_input(datum)
-  let new_datum =
-    TokenMetadataDatum {
-      ..datum,
-      metadata: updated_metadata(),
-      extra: NoctisMetadataExtra {
-        ..datum.extra,
-        metadata_revision: 2,
-        last_updated_ts: 2000,
-      },
-    }
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      reference_inputs: [wrong_nft_ref_input],
-      outputs: [mock_continuing_output(own_address, new_datum)],
-      extra_signatories: [real_creator_key],
-    }
+  let new_datum = TokenMetadataDatum {
+    ..datum,
+    metadata: updated_metadata(),
+    extra: NoctisMetadataExtra {
+      ..datum.extra,
+      metadata_revision: 2,
+      last_updated_ts: 2000,
+    },
+  }
+  let self = Transaction {
+    ..transaction.placeholder,
+    inputs: [own_input],
+    reference_inputs: [wrong_nft_ref_input],
+    outputs: [mock_continuing_output(own_address, new_datum)],
+    extra_signatories: [real_creator_key],
+  }
   token_metadata.spend(
     Some(datum),
     UpdateMetadata { new_metadata: updated_metadata(), current_timestamp: 2000 },
@@ -1285,30 +1430,115 @@ test update_metadata_fails_when_a_revision_drops_a_required_field() {
   let (curve_credential, _curve_address, curve_ref_input) = mock_curve_setup()
   let datum = mock_datum(curve_credential)
   let (own_input, own_ref, own_address) = mock_own_input(datum)
-  let new_datum =
-    TokenMetadataDatum {
-      ..datum,
-      metadata: non_conformant_metadata(),
-      extra: NoctisMetadataExtra {
-        ..datum.extra,
-        metadata_revision: 2,
-        last_updated_ts: 2000,
-      },
-    }
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      reference_inputs: [curve_ref_input],
-      outputs: [mock_continuing_output(own_address, new_datum)],
-      extra_signatories: [real_creator_key],
-    }
+  let new_datum = TokenMetadataDatum {
+    ..datum,
+    metadata: non_conformant_metadata(),
+    extra: NoctisMetadataExtra {
+      ..datum.extra,
+      metadata_revision: 2,
+      last_updated_ts: 2000,
+    },
+  }
+  let self = Transaction {
+    ..transaction.placeholder,
+    inputs: [own_input],
+    reference_inputs: [curve_ref_input],
+    outputs: [mock_continuing_output(own_address, new_datum)],
+    extra_signatories: [real_creator_key],
+  }
   !token_metadata.spend(
     Some(datum),
     UpdateMetadata {
       new_metadata: non_conformant_metadata(),
       current_timestamp: 2000,
     },
+    own_ref,
+    self,
+  )
+}
+
+// ============================================================================
+// The reference NFT stays, and the community wallet is read live — pinned
+// 2026-09
+// ============================================================================
+
+/// The continuing output must keep this launch's own CIP-68 reference NFT: an
+/// update that lets it go is refused.
+test update_metadata_rejects_dropping_the_reference_nft() {
+  let (curve_credential, _curve_address, curve_ref_input) = mock_curve_setup()
+  let datum = mock_datum(curve_credential)
+  let (own_input, own_ref, own_address) = mock_own_input(datum)
+  let new_datum = TokenMetadataDatum {
+    ..datum,
+    metadata: updated_metadata(),
+    extra: NoctisMetadataExtra {
+      ..datum.extra,
+      metadata_revision: 2,
+      last_updated_ts: 2000,
+    },
+  }
+  let bare = Output {
+    ..mock_continuing_output(own_address, new_datum),
+    value: assets.from_lovelace(2_000_000),
+  }
+  let self = Transaction {
+    ..transaction.placeholder,
+    inputs: [own_input],
+    reference_inputs: [curve_ref_input],
+    outputs: [bare],
+    extra_signatories: [real_creator_key],
+  }
+  !token_metadata.spend(
+    Some(datum),
+    UpdateMetadata { new_metadata: updated_metadata(), current_timestamp: 2000 },
+    own_ref,
+    self,
+  )
+}
+
+/// A wallet the governor has frozen installs nowhere.
+test trigger_cto_rejects_a_frozen_community_wallet() {
+  let (curve_credential, _curve_address, curve_ref_input) = mock_curve_setup()
+  let cto_address = from_verification_key(#"aa")
+  let cto_credential = cto_address.payment_credential
+  let datum = TokenMetadataDatum {
+    ..mock_datum(curve_credential),
+    extra: NoctisMetadataExtra {
+      ..mock_datum(curve_credential).extra,
+      cto_governance_credential: cto_credential,
+    },
+  }
+  let (own_input, own_ref, own_address) = mock_own_input(datum)
+  let new_datum = TokenMetadataDatum {
+    ..datum,
+    extra: NoctisMetadataExtra {
+      ..datum.extra,
+      cto_triggered: True,
+      community_pub_key_hash: #"ee",
+    },
+  }
+  let executed_proposal = mock_proposal_anchor(
+    SilenceLockTrigger,
+    Passed,
+    Executed,
+    #"ee",
+  )
+  let frozen_record = CtoGovernanceDatum {
+    ..mock_cto_governance_datum(datum.extra.launch_id, Some(executed_proposal)),
+    community_wallet_hash: #"",
+  }
+  let self = Transaction {
+    ..transaction.placeholder,
+    inputs: [own_input],
+    reference_inputs: [
+      curve_ref_input,
+      mock_cto_ref_input(cto_address, frozen_record),
+    ],
+    outputs: [mock_continuing_output(own_address, new_datum)],
+  }
+  !token_metadata.spend(
+    Some(datum),
+    TriggerCTO { community_pub_key_hash: #"ee" },
     own_ref,
     self,
   )

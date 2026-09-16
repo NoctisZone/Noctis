@@ -154,18 +154,87 @@ export const NHOP_CHALLENGE_REDEEMER = { ResolveChallenge: 0 } as const;
 export const NHOP_MINT_REDEEMER = { OpenChallenge: 0, CloseChallenge: 1 } as const;
 
 /**
+ * `contracts/cardano-dex/validators/royalty_pool/pool_mint.ak` — NoctisSwap's
+ * pool factory, as a MINTING policy.
+ *
+ * `Create` is the only redeemer a graduation ever sends, and its two integer
+ * fields are indices into the transaction's own output list. That makes this
+ * table load-bearing twice over: the constructor index says which arm runs,
+ * and getting it wrong sends `Burn` — which passes only for a transaction
+ * that mints nothing positive, so a graduation carrying it fails with no
+ * mention of either.
+ */
+export const POOL_MINT_REDEEMER = { Create: 0, Burn: 1 } as const;
+
+/**
+ * `noctisswap/orders/SwapAction` — a swap request being filled, or taken back.
+ *
+ * `Fill` carries three positions: two into the transaction's INPUTS and one
+ * into its outputs. Inputs are sorted by the builder, so those two are not the
+ * order a plan lists them in — see `venue-fill-submitter.ts`, which predicts
+ * the sort and then checks the finished transaction against the prediction.
+ */
+export const SWAP_ORDER_REDEEMER = { Fill: 0, Cancel: 1 } as const;
+
+/**
+ * `noctisswap/orders/OrderAction` — the deposit, redeem and withdraw requests.
+ *
+ * `Apply` is what an executor sends and `Refund` is what the placer sends. The
+ * validators recognise a request being APPLIED by this constructor index
+ * reaching them as plain data, so it is load-bearing across files rather than
+ * only inside one.
+ */
+export const VENUE_ORDER_REDEEMER = { Apply: 0, Refund: 1 } as const;
+
+/** `royalty_pool/redirect/RedirectAction` — the community-takeover arm. */
+export const VENUE_REDIRECT_REDEEMER = { Takeover: 0, Dissolve: 1 } as const;
+
+/** `royalty_pool/treasury/TreasuryAction` — the platform's own two moves. */
+export const VENUE_TREASURY_REDEEMER = { Withdraw: 0, SetTreasuryFee: 1 } as const;
+
+/**
+ * `royalty_pool/pool/PoolRedeemer` — one constructor carrying two fields.
+ *
+ * There is nothing to shift here today, which is the point of recording it:
+ * a variant added to this type turns a record into a sum, every existing
+ * redeemer keeps encoding to constructor 0, and nothing else would notice.
+ * The pool's ARM is chosen by the `action` field rather than by a constructor
+ * — those integers are in `venue-swap.ts`, pinned against the validator's own
+ * constants, because a field value is not something a blueprint records.
+ */
+export const VENUE_POOL_REDEEMER = { PoolRedeemer: 0 } as const;
+
+/** `splash/orders/royalty_withdraw/RoyaltyWithdrawRedeemer` — same shape, same reason. */
+export const VENUE_ROYALTY_WITHDRAW_REDEEMER = { RoyaltyWithdrawRedeemer: 0 } as const;
+
+/**
  * Every table above, against the blueprint definition it must agree with.
  *
  * The test walks this in BOTH directions — every entry against the blueprint,
  * and every `*Redeemer` definition in the blueprint against this list — so a
  * validator whose redeemers are recorded nowhere fails a test rather than
  * sitting unchecked. `zk_anchor` did exactly that until it was noticed.
+ *
+ * `package` names which blueprint the definition lives in: the launch package
+ * (`contracts/cardano`) or the venue (`contracts/cardano-dex`). They are
+ * separately compiled, so one file cannot answer for both.
  */
 export const REDEEMER_TABLES: ReadonlyArray<{
   definition: string;
   indices: Readonly<Record<string, number>>;
+  package?: 'launch' | 'venue';
 }> = [
-  { definition: 'bonding_curve/BondingCurveRedeemer', indices: BONDING_CURVE_REDEEMER },
+  { definition: 'royalty_pool/pool_mint/MintAction', indices: POOL_MINT_REDEEMER, package: 'venue' },
+  { definition: 'noctisswap/orders/SwapAction', indices: SWAP_ORDER_REDEEMER, package: 'venue' },
+  { definition: 'noctisswap/orders/OrderAction', indices: VENUE_ORDER_REDEEMER, package: 'venue' },
+  { definition: 'royalty_pool/redirect/RedirectAction', indices: VENUE_REDIRECT_REDEEMER, package: 'venue' },
+  { definition: 'royalty_pool/treasury/TreasuryAction', indices: VENUE_TREASURY_REDEEMER, package: 'venue' },
+  { definition: 'royalty_pool/pool/PoolRedeemer', indices: VENUE_POOL_REDEEMER, package: 'venue' },
+  {
+    definition: 'splash/orders/royalty_withdraw/RoyaltyWithdrawRedeemer',
+    indices: VENUE_ROYALTY_WITHDRAW_REDEEMER,
+    package: 'venue',
+  },
   { definition: 'bonding_curve_tier_b/BondingCurveTierBRedeemer', indices: BONDING_CURVE_TIER_B_REDEEMER },
   { definition: 'curve_order/OrderRedeemer', indices: CURVE_ORDER_REDEEMER },
   { definition: 'cto_governance/CtoGovernanceRedeemer', indices: CTO_GOVERNANCE_REDEEMER },

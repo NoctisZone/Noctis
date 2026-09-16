@@ -17,11 +17,10 @@
 // lesson). Re-run `aiken build` before trusting this script if any of the 3
 // .ak files have changed since the last build.
 //
-// Script hashes as of 2026-07-16 (post an earlier fix — bonding_curve.ak and
-// lp_escrow.ak's bytecode changed that day; vesting.ak did not):
-//   bonding_curve.bonding_curve.spend -> e7a7fbbc8ec4b39e5e4d6d9555979114ab9895bafe67363733228db6
-//   lp_escrow.lp_escrow.spend         -> 868f16110286a39c7bd5ab5178a876802e37312c039bdde44777710e
-//   vesting.vesting.spend             -> ba28cd17f164026b1749fa412e110aba92637aeab12a5212f3c286cc
+// No script hash is written down here. Hashes move with every validator
+// edit, so a recorded one is a claim that goes stale silently — this file
+// carried three from 2026-07-16 and two of them had moved since. The
+// blueprint is the only current answer.
 // Not hardcoded as constants below — derived fresh from plutus.json's own
 // compiledCode via validatorToAddress() every run, so this file can never
 // silently drift from what's actually deployed.
@@ -39,7 +38,6 @@
 
 import { Blockfrost, Data, Lucid, validatorToAddress } from '@lucid-evolution/lucid';
 import {
-  BondingCurveDatumSchema,
   BondingCurveTierBDatumSchema,
   LpEscrowDatumSchema,
   loadValidator,
@@ -84,7 +82,7 @@ interface ReadLaunchStateInput {
    * Same field and same values as read-tier-a-trade-history.ts, which has been
    * tier-aware all along — this reader is the one that was left behind.
    */
-  tier?: 'A' | 'B';
+  tier?: 'B';
 }
 
 async function main() {
@@ -98,18 +96,15 @@ async function main() {
   // extra '..' to compensate for that (found via a real run, not assumed).
   const blueprint = loadPlutusBlueprint(__dirname);
 
-  const tier = input.tier ?? 'A';
-  if (tier !== 'A' && tier !== 'B') {
-    throw new Error(`tier must be "A" or "B", got ${JSON.stringify(input.tier)}`);
+  const tier = input.tier ?? 'B';
+  if (tier !== 'B') {
+    throw new Error(`tier must be "B" - the linear-curve path is retired, got ${JSON.stringify(input.tier)}`);
   }
   // The datum has to travel with the address: decoding a Cardano Launch curve against
   // The linear curve's schema fails the Data.from and is skipped as "not our UTxO",
   // producing the same silent null the wrong address does.
-  const bondingCurveValidator = loadValidator(
-    blueprint,
-    tier === 'B' ? 'bonding_curve_tier_b.bonding_curve_tier_b.spend' : 'bonding_curve.bonding_curve.spend',
-  );
-  const bondingCurveSchema = tier === 'B' ? BondingCurveTierBDatumSchema : BondingCurveDatumSchema;
+  const bondingCurveValidator = loadValidator(blueprint, 'bonding_curve_tier_b.bonding_curve_tier_b.spend');
+  const bondingCurveSchema = BondingCurveTierBDatumSchema;
   const vestingValidator = loadValidator(blueprint, 'vesting.vesting.spend');
   const lpEscrowValidator = loadValidator(blueprint, 'lp_escrow.lp_escrow.spend');
 

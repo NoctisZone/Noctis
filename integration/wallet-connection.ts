@@ -71,10 +71,10 @@ export interface CardanoWalletConnection {
   chain: 'cardano';
   walletId: string;
   walletName: string;
-  address: string; // base address (bech32) — decoded from the CIP-30 hex address (F-1)
+  address: string; // base address (bech32) — decoded from the CIP-30 hex address
   paymentKeyHash: string; // Blake2b-224 of payment key
   stakingKeyHash: string; // Blake2b-224 of staking key
-  rewardAddressHex: string; // CIP-30 reward (stake) address, hex — used to sign the DarkVeil auth nonce with the stake key (M-2)
+  rewardAddressHex: string; // CIP-30 reward (stake) address, hex — used to sign the DarkVeil auth nonce with the stake key
   stakeAddress: string; // reward address in bech32 (stake1.../stake_test1...) — '' for enterprise addresses
   networkId: CardanoNetworkId;
   network: CardanoNetwork;
@@ -186,10 +186,9 @@ export async function connectCardanoWallet(walletId: string): Promise<CardanoWal
   // Get addresses. CIP-30 getChangeAddress()/getUsedAddresses() return
   // HEX-CBOR addresses — NOT bech32 — so the raw value cannot be sent to the
   // Noctis backend (every endpoint validates bech32 `addr1…`) or used for
-  // eligibility checks as-is. (F-1, 2026-07-22 security audit: before this,
-  // `address` was stored raw-hex with empty key hashes and a "use a proper
-  // bech32 decoder in production" TODO — DarkVeil registration could never
-  // have passed the server's bech32 format check with a real wallet.)
+  // eligibility checks as-is. Decoding happens here, once, so every caller
+  // downstream is handed a real bech32 address and real key hashes rather
+  // than a raw-hex string it would have to recognise and convert itself.
   const changeAddress = await api.getChangeAddress();
   const usedAddresses = await api.getUsedAddresses();
   const rawAddress = changeAddress || (usedAddresses[0] ?? '');
@@ -209,7 +208,7 @@ export async function connectCardanoWallet(walletId: string): Promise<CardanoWal
   const stakingKeyHash = details.stakeCredential?.hash ?? '';
 
   // Reward (stake) address — the DarkVeil endpoints prove wallet control by
-  // having the user sign a server nonce with their STAKE key (M-2/M-3 gate).
+  // having the user sign a server nonce with their STAKE key.
   // getRewardAddresses() returns hex; keep both the hex (to pass to
   // signData) and the bech32 form (to send to /auth/nonce + the endpoints).
   // Enterprise addresses have no reward address — left empty; such wallets

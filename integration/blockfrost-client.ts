@@ -93,15 +93,37 @@ export interface AddressTransaction {
 }
 
 // Real Blockfrost `/txs/{hash}/utxos` response shape (fields we use only).
+/** A transaction's place in the chain: its block, and its index within it. */
+export interface TxPosition {
+  block_height: number;
+  index: number;
+}
+
 export interface TxUtxos {
   hash: string;
   inputs: Array<{
     address: string;
     amount: Array<{ unit: string; quantity: string }>;
+    /** The output this input spends — how a UTXO chain is walked backward. */
+    tx_hash?: string;
+    output_index?: number;
+    /** The datum of the UTXO being SPENT: the state as it stood before. */
+    inline_datum?: string | null;
+    /**
+     * Blockfrost returns reference and collateral entries in this same array,
+     * flagged. A reference input is never spent, so anything walking inputs as
+     * evidence of what a transaction consumed has to drop both.
+     */
+    reference?: boolean;
+    collateral?: boolean;
   }>;
   outputs: Array<{
     address: string;
     amount: Array<{ unit: string; quantity: string }>;
+    output_index?: number;
+    inline_datum?: string | null;
+    /** True for a collateral return output, which a successful spend has none of. */
+    collateral?: boolean;
   }>;
 }
 
@@ -270,6 +292,21 @@ export class BlockfrostClient {
 
   async getTxUtxos(txHash: string): Promise<TxUtxos> {
     return this.request<TxUtxos>(`/txs/${txHash}/utxos`);
+  }
+
+  /**
+   * Where a transaction sits in the chain's own record of what happened first:
+   * its block, and its position within that block.
+   *
+   * Typed narrowly rather than reusing `getTxInfo`, because this pair is what
+   * the venue's published fill order rests on. That order is a property anyone
+   * can re-derive from the chain, so the figures behind it have to be read
+   * from the transaction rather than inferred from the order a provider
+   * happened to return its results in.
+   */
+  async getTxPosition(txHash: string): Promise<TxPosition> {
+    const info = await this.request<TxPosition>(`/txs/${txHash}`);
+    return { block_height: info.block_height, index: info.index };
   }
 
   // --- Address info (eligibility check #4 — stake key match) ---

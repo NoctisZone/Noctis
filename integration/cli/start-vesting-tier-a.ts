@@ -1,9 +1,9 @@
 // ============================================================================
 // Noctis Zone — Cardano Preprod milestone, Phase 5
 // StartVesting (vesting.ak) — standalone, independently retriable.
-// (2026-07-17): split out of graduate-tier-a-launch.ts's single tx once
-// embedding all 3 validators in one transaction exceeded Cardano's real
-// 16384-byte tx size cap. Verified independent of Graduate/SealLock (no
+// (2026-07-17): split out of the graduation transaction once embedding all
+// 3 validators in one transaction exceeded Cardano's real 16384-byte tx
+// size cap. Verified independent of Graduate/SealLock (no
 // cross-contract check in either direction) — see
 // tier-a-graduation-submitter.ts's own header for the full trail. Exists as
 // its own CLI both for the normal graduate() flow's TX2 and for recovery:
@@ -60,11 +60,10 @@ async function main() {
     blockfrostProjectId: input.blockfrostProjectId,
     blockfrostUrl: input.blockfrostUrl,
     network: CARDANO_NETWORK_MAP[input.network],
-    // Graduate/SealLock scripts aren't needed for this call, but the
-    // submitter's constructor derives every validator address up front —
-    // pass the real compiled code for all of them regardless. The two
-    // reference pointers stay unset: startVesting never builds TX1.
-    bondingCurveScriptCbor: loadValidatorCbor(blueprint, 'bonding_curve.bonding_curve.spend'),
+    // Graduate/SealLock scripts aren't needed for this call. The curve is now
+    // derived on demand rather than in the constructor, so this no longer
+    // names one at all — startVesting never reads curve state and never builds
+    // TX1, and vesting is shared across launch types while a curve is not.
     lpEscrowScriptCbor: loadValidatorCbor(blueprint, 'lp_escrow.lp_escrow.spend'),
     vestingScriptCbor: loadValidatorCbor(blueprint, 'vesting.vesting.spend'),
     stakingPoolScriptCbor: loadValidatorCbor(blueprint, 'staking_pool.staking_pool.spend'),

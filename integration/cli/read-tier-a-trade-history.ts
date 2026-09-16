@@ -39,7 +39,7 @@ interface ReadTradeHistoryInput {
   /** Cardano Launch launches resolve to bonding_curve_tier_b.ak's own fixed script
    *  address instead of the linear curve's bonding_curve.ak — everything else about
    *  the walk is identical (Step 8 of the trade-history plan). */
-  tier: 'A' | 'B';
+  tier: 'B';
   /** Incremental-cache boundary — omit to walk all the way to genesis. */
   stopAtTxHash?: string;
 }
@@ -54,8 +54,7 @@ async function main() {
   // from (cli/dist/), same '..'-count as read-tier-a-launch-state.ts.
   const blueprint = loadPlutusBlueprint(__dirname);
 
-  const validatorTitle =
-    input.tier === 'B' ? 'bonding_curve_tier_b.bonding_curve_tier_b.spend' : 'bonding_curve.bonding_curve.spend';
+  const validatorTitle = 'bonding_curve_tier_b.bonding_curve_tier_b.spend';
   const bondingCurveValidator = loadValidator(blueprint, validatorTitle);
 
   const network = CARDANO_NETWORK_MAP[input.network];

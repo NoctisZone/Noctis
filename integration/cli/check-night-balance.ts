@@ -1,5 +1,5 @@
 // ============================================================================
-// Noctis Zone — one-shot CLI wrapper around checkNightBalance
+// Noctis Zone — one-shot CLI wrapper around checkBondAssetBalance
 // ============================================================================
 // DarkVeil eligibility check #2 (NIGHT balance >= $50 USD) is the one check
 // PHP genuinely cannot perform itself: Blockfrost's Midnight Indexer only
@@ -17,7 +17,7 @@
 // Minswap's TWAP averaging) a second time in PHP, this script is a thin CLI
 // wrapper that PHP invokes per-request via proc_open (see
 // noctis-platform's darkveil-eligibility.php) — no persistent Node service,
-// just the existing checkNightBalance call reused as-is.
+// just the existing checkBondAssetBalance call reused as-is.
 //
 // Input: a single JSON object on stdin (never argv — avoids any shell
 // command-injection surface for untrusted wallet addresses; PHP writes
@@ -37,7 +37,7 @@
 // end-to-end" note in this codebase this session.
 // ============================================================================
 
-import { checkNightBalance } from '../eligibility-checker.js';
+import { checkBondAssetBalance } from '../eligibility-checker.js';
 import { parseJsonStdin, readStdin, requireFieldsStrict } from './cli-io.js';
 
 interface CheckNightBalanceInput {
@@ -71,7 +71,7 @@ async function main() {
     ? `${input.midnightIndexerWsUrl}?project_id=${encodeURIComponent(input.midnightBlockfrostProjectId)}`
     : input.midnightIndexerWsUrl;
 
-  const result = await checkNightBalance(indexerWsUrl, input.registrantAddress, input.minUsd);
+  const result = await checkBondAssetBalance(indexerWsUrl, input.registrantAddress, input.minUsd);
 
   process.stdout.write(
     JSON.stringify({
@@ -87,7 +87,7 @@ main().catch((err) => {
   process.stdout.write(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }));
   // Not process.exit(1): a forced immediate exit can race the WS
   // subscription's own libuv handle teardown (getUnshieldedNightBalance's
-  // Effect.scoped cleanup) when the OTHER half of checkNightBalance's
+  // Effect.scoped cleanup) when the OTHER half of checkBondAssetBalance's
   // Promise.all rejects first — found the hard way, a real crash
   // ("Assertion failed: !(handle->flags & UV_HANDLE_CLOSING)") after the
   // correct error JSON had already been written. Setting exitCode and

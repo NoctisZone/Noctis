@@ -23,7 +23,7 @@ import { describe, expect, it } from 'vitest';
 import { MAX_PUBLISHABLE_SCRIPT_BYTES, MAX_TX_BYTES } from '../reference-script.js';
 
 interface Blueprint {
-  validators: Array<{ title: string; compiledCode: string }>;
+  validators: Array<{ title: string; compiledCode: string; hash?: string }>;
 }
 
 const blueprint: Blueprint = JSON.parse(
@@ -32,13 +32,59 @@ const blueprint: Blueprint = JSON.parse(
 
 /** Compiled size in bytes, keyed by validator module. */
 const sizes = new Map<string, number>();
+/** Compiled script hash, keyed by validator module. */
+const hashes = new Map<string, string>();
 for (const v of blueprint.validators) {
   const module = v.title.split('.')[0];
-  if (module) sizes.set(module, v.compiledCode.length / 2);
+  if (!module) continue;
+  sizes.set(module, v.compiledCode.length / 2);
+  if (v.hash) hashes.set(module, v.hash);
 }
 
 /**
  * Measured 2026-08-08. Update in the same commit that moves one. Newest first.
+ *
+ * Last moved by the adversarial pass over the launch package, 2026-09-16 —
+ * ten validators at once; launch_token_policy alone is byte for byte what it
+ * was. Each figure is a guarantee the validator now makes:
+ *
+ *  - bonding_curve_tier_b +691: activating a curve keeps its value exactly;
+ *    a fee claim takes the fee and leaves the token reserve; a batch settles
+ *    each order once and only an order it spends; every deadline arm is
+ *    measured against the validity range's lower bound; a payee is the
+ *    community wallet only when the governance record is triggered and names
+ *    it. 15,816 against the 16,052 B publish limit leaves 236 B — the
+ *    validator to watch, and the reason the next field added to its datum
+ *    has to be costed before it is written.
+ *  - curve_order +2,769: an order is filled only by a batch of its own
+ *    launch's curve that names it — it now decodes the curve's datum and the
+ *    curve's redeemer — a sell fill is measured net of the order's own
+ *    deposit, and cancelling an expired sell returns its lovelace too.
+ *  - cto_sybil_challenge +1,260 and nhop_challenge +1,192: both take the
+ *    thread-NFT policy as a parameter and require, at open, a governance
+ *    record that names the governor; the bond floor is on chain; a sybil
+ *    challenge commits to the challenged identity and reveals it only when
+ *    upheld. Parameterised, so the DEPLOYED hash is the applied one, not the
+ *    blueprint's recorded here.
+ *  - lp_escrow +503: a migration's replacement position is under a policy
+ *    other than the escrow's own thread NFT and the escrow keeps its ada; a
+ *    harvest or migration by the community wallet re-reads the governance
+ *    record and needs a wallet that is live.
+ *  - staking_pool +305: a never-funded pool is funded only by its launch's
+ *    graduation (read through the curve's own redeemer); an exhausted pool is
+ *    refilled only by the creator or the governor; a stake that compounds a
+ *    reward pays the charge; closing delivers the whole value to the creator.
+ *  - cto_governance +195: the anchored bundle reference binds the allocation
+ *    amount and recipient; an allocation names a positive amount and a payee;
+ *    the window arms compare against the validity range's lower bound.
+ *  - vesting +81 and token_metadata +46: starting a schedule keeps the
+ *    allocation exactly; the community claim needs a live wallet; the metadata
+ *    validator reads the curve under the role its thread NFT actually carries.
+ *  - zk_anchor −21: `value_unchanged` compares the whole value, a shorter
+ *    equality than the lovelace read it replaces.
+ *
+ * Every one of the ten hashes moved, so every one of their reference scripts
+ * has to be re-derived before the next deploy.
  *
  * Last moved by bonding_curve_tier_b +271: the DarkVeil claim and settlement
  * windows became datum fields instead of compiled constants, so a launch
@@ -85,7 +131,17 @@ for (const v of blueprint.validators) {
  * also changes the validator's HASH, which moves the script address — any
  * published reference script for it has to be re-derived rather than reused.
  *
- * Last moved by token_metadata +113: authenticating the curve reference
+ * Last moved by the lock on leaving a staking position becoming a per-launch
+ * term: bonding_curve_tier_b +166 carries and bounds it, staking_pool +29
+ * reads its own datum's copy instead of a constant, and token_metadata +10
+ * decodes one more field of the curve datum it reads. Everything else is
+ * byte for byte what it was.
+ *
+ * Previously moved by token_metadata +172: it decodes the curve it reads as a
+ * reference input, and that is the quadratic curve now — the linear one left
+ * the build, and its two rows left this register with it.
+ *
+ * Previously moved by token_metadata +113: authenticating the curve reference
  * input by its thread NFT rather than by a large token holding, which a
  * graduated curve no longer has, and requiring a metadata revision to keep
  * the two keys CIP-68's fungible sub-standard mandates.
@@ -229,21 +285,97 @@ for (const v of blueprint.validators) {
  * rewrites at the indices they already had. The rule is the same in both — put
  * the new field where the update sites are not — and it reads as opposite only
  * because the two records are laid out opposite ways.
+ *
+ * staking_pool +54, charging the exit. The exit arm reuses the netting helper
+ * and the constant the claim already had, so what it costs is the call and the
+ * short-circuit around it — a fraction of the +294 the charge cost when it was
+ * built, which is the ordinary shape of adding a second caller to a helper that
+ * already exists.
+ *
+ * bonding_curve_tier_b +5, and this one is not a source change at all. The
+ * committed blueprint had been built from a source state slightly earlier than
+ * the source committed beside it, so it recorded 14,953 and hash 04d70f3e while
+ * the tracked source builds to 14,958 and 19a184ae. Rebuilding on the same
+ * toolchain (aiken v1.1.23, stdlib v3.1.0) reproduced ten of the twelve
+ * validators byte-for-byte, which is what makes the two that moved readable as
+ * causes rather than noise. Whatever a blueprint records is only as good as the
+ * source it was built from, and only a local rebuild says which.
+ *
+ * bonding_curve +1 and bonding_curve_tier_b +1, naming the platform charge on a
+ * creator-fee claim in ada. The figure moved from 200,000 to 5,000,000 so that
+ * it clears the protocol's own minimum ada for the output carrying it (a real
+ * claim measured 1,055,950) — below that, min-ada is what binds and the number
+ * written in the contract never applies. One byte is the whole cost: it is the
+ * same constant in the same position, one CBOR width wider. The ten validators
+ * that did not change are byte-for-byte identical, which is what makes these
+ * two readable as the cause.
  */
 const RECORDED: Record<string, number> = {
-  bonding_curve: 12_899,
-  bonding_curve_tier_b: 14_978,
-  cto_governance: 7_962,
-  cto_sybil_challenge: 2_123,
-  curve_order: 1_775,
+  bonding_curve_tier_b: 15_816,
+  cto_governance: 8_157,
+  cto_sybil_challenge: 3_383,
+  curve_order: 4_544,
   launch_token_policy: 419,
-  lp_escrow: 7_638,
-  nhop_challenge: 2_093,
-  staking_pool: 5_447,
-  token_metadata: 4_621,
-  vesting: 5_762,
-  zk_anchor: 2_634,
+  lp_escrow: 8_178,
+  nhop_challenge: 3_285,
+  staking_pool: 5_835,
+  token_metadata: 4_849,
+  vesting: 5_867,
+  zk_anchor: 2_613,
 };
+
+/**
+ * The compiled hash of each validator, which is what decides its address.
+ *
+ * Pinned for a reason the size register above cannot cover on its own: size is
+ * a proxy for change, and a poor one at the margin. Swapping a constant for
+ * another of the same width moves the hash and every address derived from it
+ * while leaving the length untouched, and nothing here would have said so.
+ *
+ * It also pins the blueprint to its own source. A committed blueprint is only
+ * as good as the source state it was built from, and the two can part company
+ * without anything failing — a drift of exactly that kind sat in this file
+ * unnoticed from 2026-09-07 until a rebuild on 2026-09-09 measured it. With
+ * these recorded, a blueprint rebuilt from different source says so here
+ * instead of waiting to be noticed.
+ *
+ * Same rule as the sizes: when a change moves one, update it in the same
+ * commit. A moved hash is a moved address, so anything already living at the
+ * old one has to be considered before the change ships.
+ */
+const RECORDED_HASHES: Record<string, string> = {
+  bonding_curve_tier_b: 'cacf42199fa107916db59de6b635da51258b5bf499f0c6e479b8cc86',
+  cto_governance: '2acc12d791956e7da4c72c2cf1c4a8ceee74b9d7e33973cc973fa022',
+  cto_sybil_challenge: 'f08befe8c02028948af4d01dfc27121bfdd7dd6582e582fd5a216441',
+  curve_order: 'bc9e33b3e17caa01d36c16a776f3c7527236de13911519abf19d5740',
+  launch_token_policy: 'd77d785500b7bb5a80bdf8104651b13e59d546d222ce7ab22bb60965',
+  lp_escrow: '0c93febe5966945efac06debcc4b6acab376c3c3cda6836cf12db687',
+  nhop_challenge: '0d70cb4bcea572833ea9367f569e71042ada1e34f218c1677ad245fb',
+  staking_pool: '1f4afea6652972deb367192ff26207c0a599b5f1ed0683a45cd41cdd',
+  token_metadata: '874b93fe79f6725dbf94d1bcd6e31ab7935f343c9e885d7edbb27d67',
+  vesting: 'd6d1ce3fff91223a4533429c110a72c1359c89fc79dc29831496c63d',
+  zk_anchor: '95750d0fe26787711f9937916194681047e15d8652f13a0b65b382e4',
+};
+
+describe('compiled validator hashes', () => {
+  it('has a recorded hash for every validator in the blueprint', () => {
+    expect([...hashes.keys()].sort()).toEqual(Object.keys(RECORDED_HASHES).sort());
+  });
+
+  for (const [module, recorded] of Object.entries(RECORDED_HASHES)) {
+    it(`${module} hashes to ${recorded.slice(0, 12)}…`, () => {
+      expect(hashes.get(module)).toBe(recorded);
+    });
+  }
+
+  // A blake2b-224 script hash is 28 bytes. Anything else is not one, and an
+  // address derived from it would not be the address anyone meant.
+  for (const [module, recorded] of Object.entries(RECORDED_HASHES)) {
+    it(`${module}'s hash is 28 bytes of hex`, () => {
+      expect(recorded).toMatch(/^[0-9a-f]{56}$/);
+    });
+  }
+});
 
 describe('compiled validator sizes', () => {
   it('has a recorded size for every validator in the blueprint', () => {
@@ -285,7 +417,6 @@ describe('compiled validator sizes', () => {
   // one script a graduation DOES carry must leave room for everything else.
   // The full built transaction is measured in mesh-curve-spend.test.ts.
   describe('the graduation transaction', () => {
-    const curveA = RECORDED.bonding_curve ?? 0;
     const curveB = RECORDED.bonding_curve_tier_b ?? 0;
     const lp = RECORDED.lp_escrow ?? 0;
     const pool = RECORDED.staking_pool ?? 0;
@@ -294,8 +425,7 @@ describe('compiled validator sizes', () => {
     // a real build at ~2.5 KB; doubled for margin.
     const GRADUATION_OVERHEAD = 5_000;
 
-    it('cannot carry both of its big validators, either tier — they must be referenced', () => {
-      expect(curveA + lp).toBeGreaterThan(MAX_TX_BYTES);
+    it('cannot carry both of its big validators — they must be referenced', () => {
       expect(curveB + lp).toBeGreaterThan(MAX_TX_BYTES);
     });
 

@@ -1,0 +1,1121 @@
+//// NoctisSwap: the pool factory, as the LQ minting policy.
+////
+//// A pool comes into being in a launch's graduation transaction and nowhere
+//// else. This policy mints both the pool NFT and the pool's LQ token, named
+//// with the pool and LQ role tags and the launch id, and its authority is the
+//// launch's own LP escrow: the escrow's thread NFT is minted once at genesis,
+//// and the escrow can be spent from its unsealed state only once. So the
+//// graduation stays permissionless, as the curve's own Graduate is, and no
+//// platform signature can withhold a pool.
+////
+////   Create — the launch's curve is spent in the same transaction under its
+////     own `Graduate` redeemer, so the curve's rule for a pool output runs
+////     beside this one; exactly one pool NFT and `max_lq_cap` LQ of the
+////     launch's names
+////     are minted and nothing else under this policy; one output at the pool
+////     script's bare address (no stake part: whoever submits the graduation
+////     must not delegate the pool's ADA for the pool's whole life) carries
+////     the NFT, keeps `max_lq_cap - initial_lq` LQ, holds ADA
+////     and one launch token and nothing else, and its datum is the platform
+////     schedule exactly: the two fees and the pool fee, empty counters, the
+////     treasury script and the governance redirect script as the two DAO
+////     entries, the platform's treasury address, a nonce of
+////     zero, and a royalty key that hashes to the creator's fee recipient as
+////     the launch's LP escrow records it. The escrow is spent in the same
+////     transaction from its unsealed state and comes back holding `initial_lq`
+////     LQ, with its datum naming that position. That is the whole of the LP
+////     lock: the escrow holds the position from the first block of the pool.
+////   Burn — only burning.
+////
+//// Splash mints its LQ under policies served from its own infrastructure; this
+//// is the Noctis replacement.
+
+use aiken/builtin
+use aiken/collection/dict
+use aiken/collection/list
+use aiken/collection/pairs
+use aiken/crypto.{ScriptHash, blake2b_224}
+use cardano/address.{Address, Credential, Inline, Script, VerificationKey}
+use cardano/assets.{PolicyId, Value, ada_asset_name, ada_policy_id}
+use cardano/transaction.{
+  InlineDatum, Input, Output, OutputReference, Spend, Transaction,
+}
+use noctisswap/launch_records.{
+  Locked, LpEscrowDatum, graduate_redeemer_index, role_bonding_curve_tier_b,
+  role_lp_escrow, role_lq, role_pool, thread_asset_name,
+}
+use noctisswap/pool_state.{fee_den, is_ada, max_lq_cap}
+use splash/plutus.{Asset}
+use splash/royalty_pool/single_royalty_pool.{SingleRoyaltyPoolConfig}
+use splash/value_ext.{asset_quantity_of, v_len}
+
+pub type MintAction {
+  Create { launch_id: ByteArray, pool_out_ix: Int, escrow_out_ix: Int }
+  Burn
+}
+
+const ada: Asset = Asset { policy: ada_policy_id, name: ada_asset_name }
+
+/// `thread_nft_policy`: the platform's thread NFT policy, under which the
+/// escrow's NFT was minted at genesis. `pool_vh`: the pool validator.
+/// `redirect_vh`: the governance redirect script, written into every pool's
+/// datum as the second DAO entry so that the pool itself is not parameterised
+/// by it. `treasury_vh`, `treasury_address`: the platform's treasury script
+/// and wallet. Both are script hashes rather than credentials: the pool's
+/// delegating arms are authorised by a withdrawal at these, and only a script
+/// runs when one is withdrawn from, so the factory can write no other kind.
+/// They must also differ from each other: the pool reads its treasury
+/// authority from the first `dao_policy` entry and its governance authority
+/// from the second, so one script standing in both slots would let either
+/// action be authorised by the other's script. The three fee numerators are
+/// the platform schedule, and are checked against `fee_den` here: the pool
+/// prices every swap and credits every counter as a fraction over that
+/// denominator, so a numerator at or above it is not a fee. They are fixed in
+/// this factory's hash and in the datum of every pool it mints, and no arm
+/// anywhere can raise `fee_num` or lower it afterwards, so this is the only
+/// place the schedule can be held to being one.
+/// `initial_lq`: the size of the escrowed position every pool opens with.
+validator pool_mint(
+  thread_nft_policy: PolicyId,
+  pool_vh: ScriptHash,
+  redirect_vh: ScriptHash,
+  treasury_vh: ScriptHash,
+  treasury_address: ByteArray,
+  fee_num: Int,
+  treasury_fee: Int,
+  royalty_fee: Int,
+  initial_lq: Int,
+) {
+  mint(redeemer: MintAction, own_policy: PolicyId, self: Transaction) {
+    let own_minted = assets.tokens(self.mint, own_policy) |> dict.to_pairs
+    when redeemer is {
+      Burn -> list.all(own_minted, fn(p) { p.2nd < 0 })
+      Create { launch_id, pool_out_ix, escrow_out_ix } -> {
+        let nft_name = thread_asset_name(role_pool, launch_id)
+        let lq_name = thread_asset_name(role_lq, launch_id)
+        let nft = Asset { policy: own_policy, name: nft_name }
+        let lq = Asset { policy: own_policy, name: lq_name }
+        let escrow_nft_name = thread_asset_name(role_lp_escrow, launch_id)
+
+        expect Some(pool_out) = list.at(self.outputs, pool_out_ix)
+        expect InlineDatum(pool_raw) = pool_out.datum
+        expect cfg: SingleRoyaltyPoolConfig = pool_raw
+
+        expect Some(escrow_out) = list.at(self.outputs, escrow_out_ix)
+        expect InlineDatum(escrow_raw) = escrow_out.datum
+        expect escrow: LpEscrowDatum = escrow_raw
+        expect Some(escrow_in) = list.find(
+          self.inputs,
+          fn(i) {
+            assets.quantity_of(
+              i.output.value,
+              thread_nft_policy,
+              escrow_nft_name,
+            ) == 1
+          },
+        )
+        expect InlineDatum(escrow_in_raw) = escrow_in.output.datum
+        expect escrow_before: LpEscrowDatum = escrow_in_raw
+
+        // A pool opens only in the launch's own GRADUATION, and the redeemer
+        // is what says so. Spending the curve makes its validator run, but a
+        // validator runs under one redeemer at a time, and it is `Graduate`
+        // that holds a pool output to the whole raise, the exact token reserve
+        // and four assets. Every other way of spending the curve leaves that
+        // rule unrun while still putting the curve's record in the inputs, so
+        // the record alone is not evidence of a graduation — the redeemer is.
+        //
+        // The curve's rule is also what puts the launch token in the pool at
+        // its exact reserve. It does not read this datum, so what makes
+        // `pool_y` NAME that token rather than one of the other three assets
+        // present is the datum rule below: `pool_y` is not ADA, and is neither
+        // the pool's own LQ nor its NFT. With ADA, the LQ and the NFT all
+        // excluded and the value capped at four assets, the launch token is
+        // the only asset left for it to name.
+        //
+        // Without this the escrow's seal would authorise itself, since the
+        // position it seals is minted here.
+        let curve_graduates = when
+          list.find(
+            self.inputs,
+            fn(i) {
+              assets.quantity_of(
+                i.output.value,
+                thread_nft_policy,
+                thread_asset_name(role_bonding_curve_tier_b, launch_id),
+              ) == 1
+            },
+          )
+        is {
+          Some(curve_in) ->
+            when
+              pairs.get_first(self.redeemers, Spend(curve_in.output_reference))
+            is {
+              Some(curve_redeemer) ->
+                builtin.un_constr_data(curve_redeemer).1st == graduate_redeemer_index
+              None -> False
+            }
+          None -> False
+        }
+
+        let expected = SingleRoyaltyPoolConfig {
+          pool_nft: nft,
+          pool_x: ada,
+          pool_y: cfg.pool_y,
+          pool_lq: lq,
+          fee_num,
+          treasury_fee,
+          royalty_fee,
+          treasury_x: 0,
+          treasury_y: 0,
+          royalty_x: 0,
+          royalty_y: 0,
+          dao_policy: [Inline(Script(treasury_vh)), Inline(Script(redirect_vh))],
+          treasury_address,
+          royalty_pub_key: cfg.royalty_pub_key,
+          nonce: 0,
+        }
+
+        and {
+          own_minted == [Pair(nft_name, 1), Pair(lq_name, max_lq_cap)],
+          treasury_vh != redirect_vh,
+          curve_graduates,
+          pool_out.address == Address {
+            payment_credential: Script(pool_vh),
+            stake_credential: None,
+          },
+          // The escrow comes back to the address it was spent from, so this
+          // policy does not lean on the launch package's seal to keep the
+          // position where it belongs.
+          escrow_out.address == escrow_in.output.address,
+          cfg == expected,
+          !is_ada(cfg.pool_y),
+          cfg.pool_y != cfg.pool_lq,
+          cfg.pool_y != cfg.pool_nft,
+          treasury_fee >= 0,
+          royalty_fee >= 0,
+          treasury_fee + royalty_fee < fee_num,
+          fee_num <= fee_den,
+          // Read from the record that was spent, not from the datum written
+          // in this transaction, so the creator's key comes from the launch's
+          // own escrow rather than from whoever submits the graduation.
+          blake2b_224(cfg.royalty_pub_key) == escrow_before.fee_recipient_pub_key_hash,
+          asset_quantity_of(pool_out.value, nft) == 1,
+          asset_quantity_of(pool_out.value, lq) == max_lq_cap - initial_lq,
+          assets.lovelace_of(pool_out.value) > 0,
+          asset_quantity_of(pool_out.value, cfg.pool_y) > 0,
+          v_len(pool_out.value) == 4,
+          assets.quantity_of(
+            escrow_out.value,
+            thread_nft_policy,
+            escrow_nft_name,
+          ) == 1,
+          escrow.launch_id == launch_id,
+          escrow_before.lock_timestamp == 0,
+          escrow.lock_timestamp > 0,
+          escrow.lp_token_policy_id == own_policy,
+          escrow.lp_token_name == lq_name,
+          // A factory deployed with no opening position would give the escrow
+          // nothing to seal and brick every graduation; one above the cap
+          // could not be represented in the pool. Both are refused here rather
+          // than discovered at the first graduation.
+          initial_lq > 0,
+          initial_lq <= max_lq_cap,
+          escrow.lp_token_amount == initial_lq,
+          asset_quantity_of(escrow_out.value, lq) == initial_lq,
+        }
+      }
+    }
+  }
+
+  else(_) {
+    fail
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Tests: a graduation-shaped transaction. 20,000 ADA and 200M launch tokens go
+// into the pool; the escrow comes back sealed with the whole initial position.
+// ---------------------------------------------------------------------------
+
+const thread_policy: PolicyId = #"7e"
+
+const lq_policy: PolicyId = #"7c"
+
+const pool_hash: ScriptHash = #"0a"
+
+const launch: ByteArray =
+  #"0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20"
+
+const other_launch: ByteArray =
+  #"ff02030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20"
+
+const creator_key: ByteArray =
+  #"c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1"
+
+const token: Asset = Asset { policy: #"bb", name: #"746f6b656e" }
+
+const initial: Int = 1_000_000_000
+
+fn treasury_vh() -> ScriptHash {
+  #"0c"
+}
+
+fn treasury() -> Credential {
+  Script(treasury_vh())
+}
+
+fn redirect_vh() -> ScriptHash {
+  #"0e"
+}
+
+fn redirect() -> Credential {
+  Script(redirect_vh())
+}
+
+fn nft_name() -> ByteArray {
+  thread_asset_name(role_pool, launch)
+}
+
+fn name() -> ByteArray {
+  thread_asset_name(role_lq, launch)
+}
+
+fn nft() -> Asset {
+  Asset { policy: lq_policy, name: nft_name() }
+}
+
+fn lq() -> Asset {
+  Asset { policy: lq_policy, name: name() }
+}
+
+/// The schedule this factory is deployed with, over `fee_den`: the creator
+/// takes 1.00%, the platform 0.10%, and 0.10% stays in the pool's own
+/// reserves, for a total take of 1.20% plus the batcher fee.
+///
+/// These are deployment parameters, so nothing compiles them in from here —
+/// they are written when the factory is applied. What this records is the
+/// decision, beside the rules it has to satisfy, and the test below is what
+/// holds those rules to accepting it. A bound tightened later in a way that
+/// excluded the schedule the platform actually deploys would otherwise be a
+/// green suite and an unmintable factory.
+const deployed_fee_num: Int = 99_900
+
+const deployed_treasury_fee: Int = 100
+
+const deployed_royalty_fee: Int = 1_000
+
+fn pool_cfg() -> SingleRoyaltyPoolConfig {
+  SingleRoyaltyPoolConfig {
+    pool_nft: nft(),
+    pool_x: ada,
+    pool_y: token,
+    pool_lq: lq(),
+    fee_num: deployed_fee_num,
+    treasury_fee: deployed_treasury_fee,
+    royalty_fee: deployed_royalty_fee,
+    treasury_x: 0,
+    treasury_y: 0,
+    royalty_x: 0,
+    royalty_y: 0,
+    dao_policy: [Inline(treasury()), Inline(redirect())],
+    treasury_address: #"ee",
+    royalty_pub_key: creator_key,
+    nonce: 0,
+  }
+}
+
+fn pool_value() -> Value {
+  assets.from_lovelace(20_000_000_000)
+    |> assets.add(token.policy, token.name, 200_000_000)
+    |> assets.add(lq_policy, name(), max_lq_cap - initial)
+    |> assets.add(lq_policy, nft_name(), 1)
+}
+
+fn pool_out(
+  cfg: SingleRoyaltyPoolConfig,
+  value: Value,
+  at: Credential,
+) -> Output {
+  Output {
+    address: Address { payment_credential: at, stake_credential: None },
+    value,
+    datum: InlineDatum(cfg),
+    reference_script: None,
+  }
+}
+
+fn escrow_datum(lock_timestamp: Int) -> LpEscrowDatum {
+  LpEscrowDatum {
+    launch_id: launch,
+    lock_timestamp,
+    lock_duration: 31_536_000_000,
+    lp_state: Locked,
+    governor_pub_key_hash: #"90",
+    community_wallet_hash: #"",
+    cto_triggered: False,
+    fee_recipient_pub_key_hash: blake2b_224(creator_key),
+    dex_whitelist: [],
+    multisig_signers: [],
+    multisig_threshold: 0,
+    pending_dex_change: None,
+    lp_token_policy_id: lq_policy,
+    lp_token_name: name(),
+    lp_token_amount: initial,
+    cto_governance_credential: Script(#"60"),
+    thread_nft_policy: thread_policy,
+    last_migration_timestamp: 0,
+  }
+}
+
+fn escrow_value(lq_amount: Int) -> Value {
+  assets.from_lovelace(2_000_000)
+    |> assets.add(thread_policy, thread_asset_name(role_lp_escrow, launch), 1)
+    |> assets.add(lq_policy, name(), lq_amount)
+}
+
+fn escrow_address() -> Address {
+  Address { payment_credential: Script(#"0b"), stake_credential: None }
+}
+
+fn escrow_in(datum: LpEscrowDatum) -> Input {
+  Input {
+    output_reference: OutputReference { transaction_id: #"e5", output_index: 0 },
+    output: Output {
+      address: escrow_address(),
+      value: assets.from_lovelace(2_000_000)
+        |> assets.add(
+            thread_policy,
+            thread_asset_name(role_lp_escrow, launch),
+            1,
+          ),
+      datum: InlineDatum(datum),
+      reference_script: None,
+    },
+  }
+}
+
+fn escrow_out(datum: LpEscrowDatum, value: Value) -> Output {
+  Output {
+    address: escrow_address(),
+    value,
+    datum: InlineDatum(datum),
+    reference_script: None,
+  }
+}
+
+fn mint_value() -> Value {
+  assets.from_asset(lq_policy, name(), max_lq_cap)
+    |> assets.add(lq_policy, nft_name(), 1)
+}
+
+fn curve_ref() -> OutputReference {
+  OutputReference { transaction_id: #"c0", output_index: 0 }
+}
+
+/// The curve's own `Graduate` redeemer, as it reaches this policy: plain data
+/// carrying constructor index 8 and no fields.
+fn graduate() -> Data {
+  builtin.constr_data(graduate_redeemer_index, [])
+}
+
+/// The launch's bonding curve, spent in the same transaction under `Graduate`.
+/// Its own validator holds the pool output to the raise and the reserve; here
+/// it is the redeemer that proves the graduation is real.
+fn curve_in() -> Input {
+  Input {
+    output_reference: curve_ref(),
+    output: Output {
+      address: Address {
+        payment_credential: Script(#"0c"),
+        stake_credential: None,
+      },
+      value: assets.from_lovelace(20_000_000_000)
+        |> assets.add(
+            thread_policy,
+            thread_asset_name(role_bonding_curve_tier_b, launch),
+            1,
+          ),
+      datum: transaction.NoDatum,
+      reference_script: None,
+    },
+  }
+}
+
+fn tx(
+  pool: Output,
+  escrow: Output,
+  escrow_before: Input,
+  mint: Value,
+) -> Transaction {
+  Transaction {
+    ..transaction.placeholder,
+    inputs: [escrow_before, curve_in()],
+    outputs: [pool, escrow],
+    mint,
+    redeemers: [Pair(Spend(curve_ref()), graduate())],
+  }
+}
+
+fn create() -> MintAction {
+  Create { launch_id: launch, pool_out_ix: 0, escrow_out_ix: 1 }
+}
+
+fn run(redeemer: MintAction, t: Transaction) -> Bool {
+  run_with_authorities(redirect_vh(), treasury_vh(), redeemer, t)
+}
+
+fn run_with_schedule(
+  fee_num: Int,
+  treasury_fee: Int,
+  royalty_fee: Int,
+  redeemer: MintAction,
+  t: Transaction,
+) -> Bool {
+  pool_mint.mint(
+    thread_policy,
+    pool_hash,
+    redirect_vh(),
+    treasury_vh(),
+    #"ee",
+    fee_num,
+    treasury_fee,
+    royalty_fee,
+    initial,
+    redeemer,
+    lq_policy,
+    t,
+  )
+}
+
+/// The graduation the suite already accepts, reached through the schedule
+/// shaper, so each rejection below differs from it by the schedule alone.
+fn graduation_on(fee_num: Int, treasury_fee: Int, royalty_fee: Int) -> Bool {
+  let cfg = SingleRoyaltyPoolConfig {
+    ..pool_cfg(),
+    fee_num,
+    treasury_fee,
+    royalty_fee,
+  }
+  run_with_schedule(
+    fee_num,
+    treasury_fee,
+    royalty_fee,
+    create(),
+    Transaction {
+      ..good(),
+      outputs: [
+        pool_out(cfg, pool_value(), Script(pool_hash)),
+        escrow_out(escrow_datum(1_000), escrow_value(initial)),
+      ],
+    },
+  )
+}
+
+/// The shaper every schedule rejection below differs from by one field, run
+/// on the schedule the factory is really deployed with — so those rejections
+/// are stated against the live schedule rather than beside it.
+test the_deployed_schedule_is_one_this_factory_will_mint() {
+  graduation_on(deployed_fee_num, deployed_treasury_fee, deployed_royalty_fee)
+}
+
+test factory_with_a_numerator_above_the_denominator_fails() fail {
+  graduation_on(20_000_000, 19_000_000, 0)
+}
+
+/// A negative slice raises `net` above `fee_num`, so a swap would price
+/// better than the schedule reads. The pool's own arithmetic refuses such a
+/// swap; refusing the pool at creation is what stops it being minted at all.
+test factory_with_a_negative_slice_fails() fail {
+  graduation_on(deployed_fee_num, -1_000, deployed_royalty_fee)
+}
+
+/// A schedule that leaves nothing after both slices. `swap_ok`'s `net > 0`
+/// refuses every swap on such a pool, so it would open unusable.
+test factory_whose_slices_exhaust_the_fee_fails() fail {
+  graduation_on(1_100, 100, 1_000)
+}
+
+fn run_with_authorities(
+  redirect: ScriptHash,
+  treasury: ScriptHash,
+  redeemer: MintAction,
+  t: Transaction,
+) -> Bool {
+  pool_mint.mint(
+    thread_policy,
+    pool_hash,
+    redirect,
+    treasury,
+    #"ee",
+    deployed_fee_num,
+    deployed_treasury_fee,
+    deployed_royalty_fee,
+    initial,
+    redeemer,
+    lq_policy,
+    t,
+  )
+}
+
+fn good() -> Transaction {
+  tx(
+    pool_out(pool_cfg(), pool_value(), Script(pool_hash)),
+    escrow_out(escrow_datum(1_000), escrow_value(initial)),
+    escrow_in(escrow_datum(0)),
+    mint_value(),
+  )
+}
+
+test graduation_mints_the_pool() {
+  run(create(), good())
+}
+
+test minting_without_the_pool_nft_fails() fail {
+  run(
+    create(),
+    Transaction {
+      ..good(),
+      mint: assets.from_asset(lq_policy, name(), max_lq_cap),
+    },
+  )
+}
+
+test minting_a_second_name_fails() fail {
+  let mint = mint_value()
+    |> assets.add(
+        lq_policy,
+        thread_asset_name(role_pool, other_launch),
+        max_lq_cap,
+      )
+  run(create(), Transaction { ..good(), mint })
+}
+
+test minting_less_than_the_cap_fails() fail {
+  let mint = assets.from_asset(lq_policy, name(), max_lq_cap - 1)
+    |> assets.add(lq_policy, nft_name(), 1)
+  let pool = pool_out(
+    pool_cfg(),
+    pool_value() |> assets.add(lq_policy, name(), -1),
+    Script(pool_hash),
+  )
+  run(
+    create(),
+    Transaction {
+      ..good(),
+      mint,
+      outputs: [pool, escrow_out(escrow_datum(1_000), escrow_value(initial))],
+    },
+  )
+}
+
+test pool_at_another_script_fails() fail {
+  let pool = pool_out(pool_cfg(), pool_value(), Script(#"0f"))
+  run(
+    create(),
+    Transaction {
+      ..good(),
+      outputs: [pool, escrow_out(escrow_datum(1_000), escrow_value(initial))],
+    },
+  )
+}
+
+/// The pool validator preserves its address on every spend, so a stake part
+/// attached here would delegate the reserves to the submitter for good.
+test pool_at_a_staked_address_fails() fail {
+  let staked = Output {
+    ..pool_out(pool_cfg(), pool_value(), Script(pool_hash)),
+    address: Address {
+      payment_credential: Script(pool_hash),
+      stake_credential: Some(Inline(Script(#"5a"))),
+    },
+  }
+  run(
+    create(),
+    Transaction {
+      ..good(),
+      outputs: [staked, escrow_out(escrow_datum(1_000), escrow_value(initial))],
+    },
+  )
+}
+
+test pool_off_the_fee_schedule_fails() fail {
+  let pool = pool_out(
+    SingleRoyaltyPoolConfig { ..pool_cfg(), royalty_fee: 999 },
+    pool_value(),
+    Script(pool_hash),
+  )
+  run(
+    create(),
+    Transaction {
+      ..good(),
+      outputs: [pool, escrow_out(escrow_datum(1_000), escrow_value(initial))],
+    },
+  )
+}
+
+test pool_with_a_counter_already_set_fails() fail {
+  let pool = pool_out(
+    SingleRoyaltyPoolConfig { ..pool_cfg(), royalty_x: 1 },
+    pool_value(),
+    Script(pool_hash),
+  )
+  run(
+    create(),
+    Transaction {
+      ..good(),
+      outputs: [pool, escrow_out(escrow_datum(1_000), escrow_value(initial))],
+    },
+  )
+}
+
+test pool_with_another_dao_fails() fail {
+  let pool = pool_out(
+    SingleRoyaltyPoolConfig {
+      ..pool_cfg(),
+      dao_policy: [Inline(Script(#"0d"))],
+    },
+    pool_value(),
+    Script(pool_hash),
+  )
+  run(
+    create(),
+    Transaction {
+      ..good(),
+      outputs: [pool, escrow_out(escrow_datum(1_000), escrow_value(initial))],
+    },
+  )
+}
+
+test pool_with_another_governance_entry_fails() fail {
+  let pool = pool_out(
+    SingleRoyaltyPoolConfig {
+      ..pool_cfg(),
+      dao_policy: [Inline(treasury()), Inline(Script(#"0d"))],
+    },
+    pool_value(),
+    Script(pool_hash),
+  )
+  run(
+    create(),
+    Transaction {
+      ..good(),
+      outputs: [pool, escrow_out(escrow_datum(1_000), escrow_value(initial))],
+    },
+  )
+}
+
+test pool_without_a_governance_entry_fails() fail {
+  let pool = pool_out(
+    SingleRoyaltyPoolConfig { ..pool_cfg(), dao_policy: [Inline(treasury())] },
+    pool_value(),
+    Script(pool_hash),
+  )
+  run(
+    create(),
+    Transaction {
+      ..good(),
+      outputs: [pool, escrow_out(escrow_datum(1_000), escrow_value(initial))],
+    },
+  )
+}
+
+test pool_with_ada_on_both_sides_fails() fail {
+  let cfg = SingleRoyaltyPoolConfig { ..pool_cfg(), pool_y: ada }
+  let value = assets.from_lovelace(20_000_000_000)
+    |> assets.add(token.policy, token.name, 200_000_000)
+    |> assets.add(lq_policy, name(), max_lq_cap - initial)
+    |> assets.add(lq_policy, nft_name(), 1)
+  run(
+    create(),
+    Transaction {
+      ..good(),
+      outputs: [
+        pool_out(cfg, value, Script(pool_hash)),
+        escrow_out(escrow_datum(1_000), escrow_value(initial)),
+      ],
+    },
+  )
+}
+
+test royalty_key_that_is_not_the_creators_fails() fail {
+  let stranger = #"c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3"
+  let pool = pool_out(
+    SingleRoyaltyPoolConfig { ..pool_cfg(), royalty_pub_key: stranger },
+    pool_value(),
+    Script(pool_hash),
+  )
+  run(
+    create(),
+    Transaction {
+      ..good(),
+      outputs: [pool, escrow_out(escrow_datum(1_000), escrow_value(initial))],
+    },
+  )
+}
+
+/// The mint and the escrow both still add up; only the pool's LQ balance
+/// rule rejects the extra unit.
+test pool_keeping_part_of_the_position_fails() fail {
+  let pool = pool_out(
+    pool_cfg(),
+    pool_value() |> assets.add(lq_policy, name(), 1),
+    Script(pool_hash),
+  )
+  run(
+    create(),
+    Transaction {
+      ..good(),
+      outputs: [pool, escrow_out(escrow_datum(1_000), escrow_value(initial))],
+    },
+  )
+}
+
+/// Junk in the place of the pool NFT keeps the asset count at four, so only
+/// the NFT rule rejects.
+test pool_without_the_nft_fails() fail {
+  let value = assets.from_lovelace(20_000_000_000)
+    |> assets.add(token.policy, token.name, 200_000_000)
+    |> assets.add(lq_policy, name(), max_lq_cap - initial)
+    |> assets.add(#"dd", #"6a756e6b", 1)
+  run(
+    create(),
+    Transaction {
+      ..good(),
+      outputs: [
+        pool_out(pool_cfg(), value, Script(pool_hash)),
+        escrow_out(escrow_datum(1_000), escrow_value(initial)),
+      ],
+    },
+  )
+}
+
+test pool_with_an_extra_asset_fails() fail {
+  let pool = pool_out(
+    pool_cfg(),
+    pool_value() |> assets.add(#"dd", #"6a756e6b", 1),
+    Script(pool_hash),
+  )
+  run(
+    create(),
+    Transaction {
+      ..good(),
+      outputs: [pool, escrow_out(escrow_datum(1_000), escrow_value(initial))],
+    },
+  )
+}
+
+test escrow_without_its_thread_nft_fails() fail {
+  let bare = assets.from_lovelace(2_000_000)
+    |> assets.add(lq_policy, name(), initial)
+  run(
+    create(),
+    Transaction {
+      ..good(),
+      outputs: [
+        pool_out(pool_cfg(), pool_value(), Script(pool_hash)),
+        escrow_out(escrow_datum(1_000), bare),
+      ],
+    },
+  )
+}
+
+/// Carries our launch's escrow NFT with another launch's datum, so only the
+/// launch id comparison rejects.
+test escrow_of_another_launch_fails() fail {
+  let other = LpEscrowDatum { ..escrow_datum(1_000), launch_id: other_launch }
+  run(
+    create(),
+    Transaction {
+      ..good(),
+      outputs: [
+        pool_out(pool_cfg(), pool_value(), Script(pool_hash)),
+        escrow_out(other, escrow_value(initial)),
+      ],
+    },
+  )
+}
+
+test escrow_recording_another_position_fails() fail {
+  let wrong = LpEscrowDatum {
+    ..escrow_datum(1_000),
+    lp_token_amount: initial - 1,
+  }
+  run(
+    create(),
+    Transaction {
+      ..good(),
+      outputs: [
+        pool_out(pool_cfg(), pool_value(), Script(pool_hash)),
+        escrow_out(wrong, escrow_value(initial)),
+      ],
+    },
+  )
+}
+
+test escrow_recording_another_token_fails() fail {
+  let wrong = LpEscrowDatum { ..escrow_datum(1_000), lp_token_policy_id: #"7d" }
+  run(
+    create(),
+    Transaction {
+      ..good(),
+      outputs: [
+        pool_out(pool_cfg(), pool_value(), Script(pool_hash)),
+        escrow_out(wrong, escrow_value(initial)),
+      ],
+    },
+  )
+}
+
+/// The mint and the pool both still add up; only the escrow's LQ balance
+/// rule rejects (the missing unit is nowhere).
+test escrow_holding_less_lq_fails() fail {
+  run(
+    create(),
+    Transaction {
+      ..good(),
+      outputs: [
+        pool_out(pool_cfg(), pool_value(), Script(pool_hash)),
+        escrow_out(escrow_datum(1_000), escrow_value(initial - 1)),
+      ],
+    },
+  )
+}
+
+test escrow_left_unsealed_fails() fail {
+  run(
+    create(),
+    Transaction {
+      ..good(),
+      outputs: [
+        pool_out(pool_cfg(), pool_value(), Script(pool_hash)),
+        escrow_out(escrow_datum(0), escrow_value(initial)),
+      ],
+    },
+  )
+}
+
+test escrow_that_was_already_sealed_fails() fail {
+  run(
+    create(),
+    Transaction { ..good(), inputs: [escrow_in(escrow_datum(500)), curve_in()] },
+  )
+}
+
+/// A pool opens only alongside the launch's own graduation. Without the
+/// curve's record among the inputs the escrow's seal would be authorising
+/// itself, since the position it seals is minted in this same transaction.
+test graduation_without_the_curve_fails() fail {
+  run(create(), Transaction { ..good(), inputs: [escrow_in(escrow_datum(0))] })
+}
+
+/// The curve of another launch does not stand in for this one's.
+test graduation_with_another_launchs_curve_fails() fail {
+  let other_curve = Input {
+    ..curve_in(),
+    output: Output {
+      ..curve_in().output,
+      value: assets.from_lovelace(20_000_000_000)
+        |> assets.add(
+            thread_policy,
+            thread_asset_name(role_bonding_curve_tier_b, other_launch),
+            1,
+          ),
+    },
+  }
+  run(
+    create(),
+    Transaction { ..good(), inputs: [escrow_in(escrow_datum(0)), other_curve] },
+  )
+}
+
+/// The sealed position must come back to the escrow it was spent from.
+/// The curve is spent, and its record is right there in the inputs — but under
+/// a redeemer that is not `Graduate`, so the curve's rule for a pool output
+/// never runs. Only the constructor index differs from the passing graduation.
+test graduation_under_another_curve_redeemer_fails() fail {
+  let buy: Data = builtin.constr_data(1, [])
+  run(
+    create(),
+    Transaction { ..good(), redeemers: [Pair(Spend(curve_ref()), buy)] },
+  )
+}
+
+/// The curve's record is among the inputs with no redeemer entry of its own,
+/// which is how it would appear if it were sitting at a wallet address rather
+/// than being spent from the curve script.
+test graduation_with_no_redeemer_for_the_curve_fails() fail {
+  run(create(), Transaction { ..good(), redeemers: [] })
+}
+
+test escrow_returning_to_another_address_fails() fail {
+  let elsewhere = Output {
+    ..escrow_out(escrow_datum(1_000), escrow_value(initial)),
+    address: Address {
+      payment_credential: VerificationKey(#"a7"),
+      stake_credential: None,
+    },
+  }
+  run(
+    create(),
+    tx(
+      pool_out(pool_cfg(), pool_value(), Script(pool_hash)),
+      elsewhere,
+      escrow_in(escrow_datum(0)),
+      mint_value(),
+    ),
+  )
+}
+
+/// The creator's key is read from the record that was spent, so rewriting the
+/// fee recipient in the datum this transaction authors changes nothing.
+test royalty_key_taken_from_the_written_datum_fails() fail {
+  let stranger_key = #"a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7"
+  let hijacked = SingleRoyaltyPoolConfig {
+    ..pool_cfg(),
+    royalty_pub_key: stranger_key,
+  }
+  let rewritten = LpEscrowDatum {
+    ..escrow_datum(1_000),
+    fee_recipient_pub_key_hash: blake2b_224(stranger_key),
+  }
+  run(
+    create(),
+    tx(
+      pool_out(hijacked, pool_value(), Script(pool_hash)),
+      escrow_out(rewritten, escrow_value(initial)),
+      escrow_in(escrow_datum(0)),
+      mint_value(),
+    ),
+  )
+}
+
+/// Junk in the place of ADA keeps the asset count at four, so only the
+/// lovelace rule rejects.
+test pool_without_ada_fails() fail {
+  let value = assets.from_asset(token.policy, token.name, 200_000_000)
+    |> assets.add(#"dd", #"6a756e6b", 1)
+    |> assets.add(lq_policy, name(), max_lq_cap - initial)
+    |> assets.add(lq_policy, nft_name(), 1)
+  run(
+    create(),
+    Transaction {
+      ..good(),
+      outputs: [
+        pool_out(pool_cfg(), value, Script(pool_hash)),
+        escrow_out(escrow_datum(1_000), escrow_value(initial)),
+      ],
+    },
+  )
+}
+
+/// Junk in the place of the launch token, same reasoning.
+test pool_without_the_token_fails() fail {
+  let value = assets.from_lovelace(20_000_000_000)
+    |> assets.add(#"dd", #"6a756e6b", 1)
+    |> assets.add(lq_policy, name(), max_lq_cap - initial)
+    |> assets.add(lq_policy, nft_name(), 1)
+  run(
+    create(),
+    Transaction {
+      ..good(),
+      outputs: [
+        pool_out(pool_cfg(), value, Script(pool_hash)),
+        escrow_out(escrow_datum(1_000), escrow_value(initial)),
+      ],
+    },
+  )
+}
+
+test escrow_recording_another_name_fails() fail {
+  let wrong = LpEscrowDatum {
+    ..escrow_datum(1_000),
+    lp_token_name: thread_asset_name(role_pool, other_launch),
+  }
+  run(
+    create(),
+    Transaction {
+      ..good(),
+      outputs: [
+        pool_out(pool_cfg(), pool_value(), Script(pool_hash)),
+        escrow_out(wrong, escrow_value(initial)),
+      ],
+    },
+  )
+}
+
+test burn_passes() {
+  run(
+    Burn,
+    Transaction {
+      ..transaction.placeholder,
+      mint: assets.from_asset(lq_policy, name(), -5),
+    },
+  )
+}
+
+test burn_that_mints_fails() fail {
+  run(
+    Burn,
+    Transaction {
+      ..transaction.placeholder,
+      mint: assets.from_asset(lq_policy, name(), 5),
+    },
+  )
+}
+
+/// The pool tells its treasury authority from its governance authority by
+/// position alone, so one script in both slots would let each action be
+/// authorised by the other's script. The datum in this fixture names that
+/// same script twice, so the transition is the one such a factory would
+/// really produce and the only thing left to refuse it is the rule above.
+test factory_naming_one_script_for_both_authorities_fails() fail {
+  let doubled = SingleRoyaltyPoolConfig {
+    ..pool_cfg(),
+    dao_policy: [Inline(treasury()), Inline(treasury())],
+  }
+  run_with_authorities(
+    treasury_vh(),
+    treasury_vh(),
+    create(),
+    tx(
+      pool_out(doubled, pool_value(), Script(pool_hash)),
+      escrow_out(escrow_datum(1_000), escrow_value(initial)),
+      escrow_in(escrow_datum(0)),
+      mint_value(),
+    ),
+  )
+}
+
+/// `pool_y` is the one datum field the factory copies from whoever submits
+/// the graduation rather than deriving. Graduation is permissionless, so it
+/// is named by a stranger, and the pool prices its reserves by what this
+/// names — it must therefore be the launch token and nothing else the pool
+/// already holds.
+test pool_naming_its_own_lq_as_the_second_asset_fails() fail {
+  let aliased = SingleRoyaltyPoolConfig { ..pool_cfg(), pool_y: lq() }
+  run(
+    create(),
+    Transaction {
+      ..good(),
+      outputs: [
+        pool_out(aliased, pool_value(), Script(pool_hash)),
+        escrow_out(escrow_datum(1_000), escrow_value(initial)),
+      ],
+    },
+  )
+}
+
+test pool_naming_its_own_nft_as_the_second_asset_fails() fail {
+  let aliased = SingleRoyaltyPoolConfig { ..pool_cfg(), pool_y: nft() }
+  run(
+    create(),
+    Transaction {
+      ..good(),
+      outputs: [
+        pool_out(aliased, pool_value(), Script(pool_hash)),
+        escrow_out(escrow_datum(1_000), escrow_value(initial)),
+      ],
+    },
+  )
+}

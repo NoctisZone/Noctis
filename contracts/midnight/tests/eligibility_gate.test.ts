@@ -110,7 +110,14 @@ const CREATOR_KEY = deriveUserPublicKey(CREATOR_SECRET_BYTES, LAUNCH_ID);
 // a single destination and no share arithmetic left to test.
 const PLATFORM_ADDR = fakeBytes32(60);
 
-function deploy(walletCap: bigint = CORRECT_WALLET_CAP) {
+// The colour the DarkVeil bond is posted in. Deliberately NON-zero for the
+// whole suite: 32 zero bytes is nativeToken(), so a zero default would
+// exercise the old native-NIGHT path everywhere and leave the asset-agnostic
+// path — the one actually being shipped — covered by nothing. A dedicated
+// test below pins the zero case separately, so both are real.
+const BOND_COLOUR = fakeBytes32(144);
+
+function deploy(walletCap: bigint = CORRECT_WALLET_CAP, bondColour: Uint8Array = BOND_COLOUR) {
   const contract = new Contract<PrivateState>(witnesses);
   const { init, contractAddress, ctx } = deployForTest(
     contract,
@@ -120,6 +127,7 @@ function deploy(walletCap: bigint = CORRECT_WALLET_CAP) {
     TOTAL_SUPPLY,
     MAX_WALLET_PERCENT,
     1000n, // bondAmount
+    bondColour, // bondTokenColour
     walletCap,
     DV_ALLOCATION,
     DV_PRICE,
@@ -147,6 +155,7 @@ function deployWithRegistrationCloseTime(closeTime: bigint) {
     TOTAL_SUPPLY,
     MAX_WALLET_PERCENT,
     1000n,
+    BOND_COLOUR, // bondTokenColour
     CORRECT_WALLET_CAP,
     DV_ALLOCATION,
     DV_PRICE,
@@ -166,8 +175,8 @@ function deployWithRegistrationCloseTime(closeTime: bigint) {
 // dvState == Registration (not just phase == DarkVeil), so this helper
 // also calls startRegistration() — every caller of this helper registers
 // afterward.
-function deployAndStartDarkVeil() {
-  const d = deploy();
+function deployAndStartDarkVeil(bondColour: Uint8Array = BOND_COLOUR) {
+  const d = deploy(CORRECT_WALLET_CAP, bondColour);
   const r0 = d.contract.circuits.advancePhase(d.ctx, LaunchPhase.DarkVeil);
   const ctx0 = nextContext(d.contractAddress, r0.context);
   const r1 = d.contract.circuits.startRegistration(ctx0);
@@ -265,6 +274,7 @@ describe('eligibility_gate.compact — wallet cap enforcement via revealBuyCommi
       TOTAL_SUPPLY,
       MAX_WALLET_PERCENT,
       1000n,
+      BOND_COLOUR, // bondTokenColour
       CORRECT_WALLET_CAP,
       BIG_DV_ALLOCATION,
       DV_PRICE,
@@ -436,6 +446,7 @@ describe('eligibility_gate.compact — registration nullifier (disclose() placem
       TOTAL_SUPPLY,
       MAX_WALLET_PERCENT,
       1000n,
+      BOND_COLOUR, // bondTokenColour
       CORRECT_WALLET_CAP,
       DV_ALLOCATION,
       DV_PRICE,
@@ -631,6 +642,7 @@ describe('eligibility_gate.compact — minimum DarkVeil participant floor', () =
       TOTAL_SUPPLY,
       MAX_WALLET_PERCENT,
       1000n,
+      BOND_COLOUR, // bondTokenColour
       CORRECT_WALLET_CAP,
       DV_ALLOCATION,
       DV_PRICE,
@@ -735,6 +747,7 @@ describe('eligibility_gate.compact — minimum DarkVeil participant floor', () =
         TOTAL_SUPPLY,
         MAX_WALLET_PERCENT,
         1000n,
+        BOND_COLOUR, // bondTokenColour
         CORRECT_WALLET_CAP,
         DV_ALLOCATION,
         DV_PRICE,
@@ -765,6 +778,7 @@ describe('eligibility_gate.compact — minimum DarkVeil participant floor', () =
         TOTAL_SUPPLY,
         MAX_WALLET_PERCENT,
         17592186044416n, // bondAmount — one above 2^44 - 1
+        BOND_COLOUR, // bondTokenColour
         CORRECT_WALLET_CAP,
         DV_ALLOCATION,
         DV_PRICE,
@@ -1094,6 +1108,7 @@ describe('eligibility_gate.compact — merged DarkVeil private buy (Phase 2)', (
       TOTAL_SUPPLY,
       MAX_WALLET_PERCENT,
       1000n,
+      BOND_COLOUR, // bondTokenColour
       CORRECT_WALLET_CAP,
       DV_ALLOCATION,
       DV_PRICE,
@@ -1552,6 +1567,7 @@ describe('eligibility_gate.compact — registrant exclusion dispute', () => {
       TOTAL_SUPPLY,
       MAX_WALLET_PERCENT,
       1000n,
+      BOND_COLOUR, // bondTokenColour
       CORRECT_WALLET_CAP,
       DV_ALLOCATION,
       DV_PRICE,
@@ -1834,6 +1850,7 @@ describe('eligibility_gate.compact — registrant exclusion dispute', () => {
       TOTAL_SUPPLY,
       MAX_WALLET_PERCENT,
       1000n,
+      BOND_COLOUR, // bondTokenColour
       CORRECT_WALLET_CAP,
       DV_ALLOCATION,
       DV_PRICE,
@@ -2103,5 +2120,89 @@ describe('eligibility_gate.compact — threshold attestation on the allowlist ro
   it('refuses a caller who is not an attestor', () => {
     const d = deployAndStartDarkVeil();
     expect(() => attest(d, d.ctx as never, 77, ROOT)).toThrow(/registered attestor/i);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The DarkVeil bond is denominated in a configured colour, not hardwired NIGHT
+// ---------------------------------------------------------------------------
+// These read the circuit's real unshielded EFFECTS rather than ledger counters.
+// That distinction is the point: lockedBonds would look identical whatever
+// colour moved, so a test that only checked lockedBonds would pass just as
+// happily if the contract still took NIGHT. The effect is the only place the
+// colour is observable from here.
+//
+// The simulator still does not model cross-transaction UTXO matching — that is
+// real-node enforcement — so these prove which colour the contract DEMANDS,
+// which is exactly the property that changed.
+
+const NATIVE_COLOUR_HEX = '00'.repeat(32);
+
+/** The colours a circuit call demands as unshielded input, as hex. */
+function unshieldedInputColours(result: unknown): string[] {
+  const effects = (result as { context: { currentQueryContext: { effects: Record<string, unknown> } } }).context
+    .currentQueryContext.effects;
+  const map = effects.unshieldedInputs as Map<{ raw: string }, bigint>;
+  return [...map.keys()].map((k) => k.raw);
+}
+
+/** The colours a circuit call emits as unshielded output, as hex. */
+function unshieldedOutputColours(result: unknown): string[] {
+  const effects = (result as { context: { currentQueryContext: { effects: Record<string, unknown> } } }).context
+    .currentQueryContext.effects;
+  const map = effects.unshieldedOutputs as Map<{ raw: string }, bigint>;
+  return [...map.keys()].map((k) => k.raw);
+}
+
+describe('eligibility_gate.compact — the bond colour is configured, not hardwired', () => {
+  it('takes the bond in the deployed colour rather than in native NIGHT', () => {
+    const { contract, ctx } = deployAndStartDarkVeil();
+    const result = contract.circuits.registerForDarkVeil(ctx);
+
+    const colours = unshieldedInputColours(result);
+    expect(colours).toEqual([Buffer.from(BOND_COLOUR).toString('hex')]);
+    // The assertion with teeth: an implementation that hardwired the native
+    // token would report all zeroes here, and the check above alone would not
+    // tell the two apart on a launch whose bond colour happened to be native.
+    expect(colours).not.toContain(NATIVE_COLOUR_HEX);
+  });
+
+  it('refunds a cancelled launch in the same colour it was bonded in', () => {
+    const { contract, contractAddress, ctx } = deployAndStartDarkVeil();
+    const r1 = contract.circuits.registerForDarkVeil(ctx);
+    const ctx2 = nextContext(contractAddress, r1.context);
+    const r2 = contract.circuits.cancelDarkVeil(ctx2);
+    const ctx3 = nextContext(contractAddress, r2.context);
+    const r3 = contract.circuits.claimBondRefund(ctx3, fakeBytes32(55));
+
+    // A refund paid in a different colour from the one taken would strand the
+    // bond and mint value out of the contract's other holdings.
+    expect(unshieldedOutputColours(r3)).toEqual([Buffer.from(BOND_COLOUR).toString('hex')]);
+  });
+
+  it('reproduces the original native-NIGHT behaviour when deployed with 32 zero bytes', () => {
+    // Backward compatibility is a real requirement, not a courtesy: an already
+    // deployed launch is sealed to whatever it was given, and 32 zero bytes IS
+    // nativeToken(). This pins that the old behaviour is still reachable.
+    const { contract, ctx } = deployAndStartDarkVeil(new Uint8Array(32));
+    const result = contract.circuits.registerForDarkVeil(ctx);
+    expect(unshieldedInputColours(result)).toEqual([NATIVE_COLOUR_HEX]);
+  });
+
+  it('seals the colour at deploy so no caller can name a worthless token', () => {
+    // bondTokenColour is `sealed` without `export`, so it is on-chain but
+    // deliberately absent from the generated ledger view — the same treatment
+    // bondAmount gets. So sealing is proven by behaviour, not by reading it:
+    // the two tests above deploy DIFFERENT colours and each demands exactly
+    // the colour it was deployed with, which is only possible if the value is
+    // fixed at construction. What remains is that no caller can override it —
+    // registerForDarkVeil accepts no arguments at all.
+    // The runtime validates circuit arity (it is what caught every call site
+    // when this parameter was added), so this is a real rejection, not JS
+    // quietly dropping a surplus argument.
+    const { contract, ctx } = deployAndStartDarkVeil();
+    expect(() =>
+      (contract.circuits.registerForDarkVeil as unknown as (c: unknown, x: unknown) => unknown)(ctx, fakeBytes32(1)),
+    ).toThrow(/argument/i);
   });
 });

@@ -65,8 +65,8 @@
 // this contract, whatever "directly" means at the DEX's own level. Added a
 // new `HarvestFees` redeemer and `fee_recipient_pub_key_hash` field
 // (CTO-redirectable, same pattern as Migrate's authorization). Deliberately
-// DEX-AGNOSTIC and narrow in scope: each whitelisted DEX (CSwap, Minswap,
-// Splash, WingRiders, SundaeSwap) has its own real harvest interface, none of which is
+// DEX-AGNOSTIC and narrow in scope: each whitelisted DEX (Minswap, Splash,
+// WingRiders, SundaeSwap, CSwap) has its own real harvest interface, none of which is
 // confirmed yet (still an open sub-question — "confirm fee harvesting
 // capability per DEX before finalising whitelist"), so this script cannot
 // verify the DEX-side call at all. What it CAN and DOES verify, regardless
@@ -79,22 +79,25 @@
 
 use aiken/collection/list
 use aiken/crypto.{VerificationKeyHash}
-use aiken/interval
 use aiken/interval.{Interval, IntervalBoundType}
-use cardano/address.{Address, Credential, from_script, from_verification_key,
-  with_delegation_key}
+use cardano/address.{
+  Address, Credential, from_script, from_verification_key, with_delegation_key,
+}
 use cardano/assets.{AssetName, PolicyId}
-use cardano/transaction.{Input, InlineDatum, Output, OutputReference, Transaction}
+use cardano/transaction.{
+  InlineDatum, Input, Output, OutputReference, Transaction,
+}
+use cto_governance.{
+  CtoGovernanceDatum, DissolveCTOProposal, Executed, Passed, ProposalAnchor,
+  ProposalType, SilenceLockTrigger,
+}
+use noctis/clock
 use noctis/lp_escrow_datum.{
-  DexAction, LpEscrowDatum, LpState, PendingDexChange, ProposeAdd, ProposeRemove,
-  Cancelled, Locked,
+  Cancelled, DexAction, Locked, LpEscrowDatum, LpState, PendingDexChange,
+  ProposeAdd, ProposeRemove,
 }
 use noctis/settlement
 use noctis/thread_nft
-use cto_governance.{
-  CtoGovernanceDatum, DissolveCTOProposal, Executed, Passed, PreCTO,
-  ProposalAnchor, ProposalType, SilenceLockTrigger,
-}
 
 /// Same finding/fix as the linear curve's bonding_curve.ak — see that file's
 /// own comment on `validity_range_is_narrow` for the full explanation.
@@ -117,7 +120,6 @@ const max_validity_range_width = 600_000
 // TYPES
 // ============================================================================
 
-
 /// Redeemer actions — what the contract can be spent with
 pub type LpEscrowRedeemer {
   /// Seals the lock (sets lock_timestamp), paired with the bonding
@@ -129,7 +131,11 @@ pub type LpEscrowRedeemer {
   /// Propose adding/removing a DEX from the whitelist. Requires
   /// `multisig_threshold`-of-`multisig_signers` real signatures. Starts
   /// the 72h public notice clock — does NOT change the whitelist yet.
-  ProposeDexChange { dex_credential: Credential, action: DexAction, timestamp: Int }
+  ProposeDexChange {
+    dex_credential: Credential,
+    action: DexAction,
+    timestamp: Int,
+  }
   /// Apply a pending whitelist change once its 72h notice period has
   /// elapsed. Permissionless — the proposal was already public for the
   /// full window, same "deadline is the authorization" idiom as
@@ -222,10 +228,9 @@ fn multisig_satisfied(
   threshold: Int,
   self: Transaction,
 ) -> Bool {
-  let signed_count =
-    list.length(
-      list.filter(signers, fn(vkh) { list.has(self.extra_signatories, vkh) }),
-    )
+  let signed_count = list.length(
+    list.filter(signers, fn(vkh) { list.has(self.extra_signatories, vkh) }),
+  )
   signed_count >= threshold
 }
 
@@ -245,19 +250,24 @@ fn cto_vote_verified(
   proposal_type: ProposalType,
   expected_recipient: Option<VerificationKeyHash>,
 ) -> Bool {
-  expect Some(cto_ref_input) =
-    list.find(
-      self.reference_inputs,
-      fn(input) {
-        input.output.address.payment_credential == datum.cto_governance_credential
-      },
-    )
+  expect Some(cto_ref_input) = list.find(
+    self.reference_inputs,
+    fn(input) {
+      input.output.address.payment_credential == datum.cto_governance_credential
+    },
+  )
   expect InlineDatum(cto_raw_datum) = cto_ref_input.output.datum
   expect cto_datum: CtoGovernanceDatum = cto_raw_datum
   expect Some(executed) = cto_datum.last_executed_proposal
 
   let recipient_ok = when expected_recipient is {
-    Some(recipient) -> executed.allocation_recipient_hash == recipient
+    Some(recipient) -> and {
+        executed.allocation_recipient_hash == recipient,
+        // The record's LIVE community wallet must still name this recipient:
+        // an emergency freeze clears it, and a cleared wallet installs nowhere.
+        cto_datum.cto_state == cto_governance.CTOTriggered,
+        cto_datum.community_wallet_hash == recipient,
+      }
     None -> True
   }
 
@@ -274,7 +284,16 @@ fn cto_vote_verified(
     // policy (no attacker can mint it) and preserved in cto_governance.ak's
     // continuing output on every spend, so only the real governance UTXO
     // can ever carry it.
-    assets.quantity_of(cto_ref_input.output.value, datum.thread_nft_policy, datum.launch_id) == 1,
+    // Named with the governance role tag, exactly as cto_governance.ak
+    // preserves it and the genesis mint creates it.
+    assets.quantity_of(
+      cto_ref_input.output.value,
+      datum.thread_nft_policy,
+      thread_nft.thread_asset_name(
+        thread_nft.role_cto_governance,
+        datum.launch_id,
+      ),
+    ) == 1,
     cto_datum.launch_id == datum.launch_id,
     executed.proposal_type == proposal_type,
     executed.outcome == Passed,
@@ -285,12 +304,10 @@ fn cto_vote_verified(
 
 /// Governor, or (if CTO has been triggered) the community wallet
 fn is_authorized(datum: LpEscrowDatum, self: Transaction) -> Bool {
-  list.has(self.extra_signatories, datum.governor_pub_key_hash) || (
-    datum.cto_triggered && list.has(
-      self.extra_signatories,
-      datum.community_wallet_hash,
-    )
-  )
+  list.has(self.extra_signatories, datum.governor_pub_key_hash) || datum.cto_triggered && list.has(
+    self.extra_signatories,
+    datum.community_wallet_hash,
+  ) && community_wallet_live(self, datum)
 }
 
 /// Find this validator's own continuing output (same address as the input
@@ -299,11 +316,15 @@ fn own_continuing_datum(
   self: Transaction,
   own_ref: OutputReference,
 ) -> LpEscrowDatum {
-  expect Some(own_input) =
-    list.find(self.inputs, fn(input) { input.output_reference == own_ref })
+  expect Some(own_input) = list.find(
+    self.inputs,
+    fn(input) { input.output_reference == own_ref },
+  )
   let own_address = own_input.output.address
-  expect Some(own_output) =
-    list.find(self.outputs, fn(output) { output.address == own_address })
+  expect Some(own_output) = list.find(
+    self.outputs,
+    fn(output) { output.address == own_address },
+  )
   expect InlineDatum(raw_datum) = own_output.datum
   expect new_datum: LpEscrowDatum = raw_datum
   new_datum
@@ -320,19 +341,23 @@ fn lp_value_received(
   datum: LpEscrowDatum,
   seeded_ada: Int,
 ) -> Bool {
-  expect Some(own_input) =
-    list.find(self.inputs, fn(input) { input.output_reference == own_ref })
+  expect Some(own_input) = list.find(
+    self.inputs,
+    fn(input) { input.output_reference == own_ref },
+  )
   let own_address = own_input.output.address
-  expect Some(own_output) =
-    list.find(self.outputs, fn(output) { output.address == own_address })
-  let lovelace_ok =
-    assets.lovelace_of(own_output.value) == assets.lovelace_of(own_input.output.value) + seeded_ada
-  let tokens_ok =
-    assets.quantity_of(
-      own_output.value,
-      datum.lp_token_policy_id,
-      datum.lp_token_name,
-    ) == datum.lp_token_amount
+  expect Some(own_output) = list.find(
+    self.outputs,
+    fn(output) { output.address == own_address },
+  )
+  let lovelace_ok = assets.lovelace_of(own_output.value) == assets.lovelace_of(
+    own_input.output.value,
+  ) + seeded_ada
+  let tokens_ok = assets.quantity_of(
+    own_output.value,
+    datum.lp_token_policy_id,
+    datum.lp_token_name,
+  ) == datum.lp_token_amount
   lovelace_ok && tokens_ok
 }
 
@@ -347,11 +372,15 @@ fn output_value_clean(output: Output, max_assets: Int) -> Bool {
 }
 
 fn lp_own_output_clean(self: Transaction, own_ref: OutputReference) -> Bool {
-  expect Some(own_input) =
-    list.find(self.inputs, fn(input) { input.output_reference == own_ref })
+  expect Some(own_input) = list.find(
+    self.inputs,
+    fn(input) { input.output_reference == own_ref },
+  )
   let own_address = own_input.output.address
-  expect Some(own_output) =
-    list.find(self.outputs, fn(output) { output.address == own_address })
+  expect Some(own_output) = list.find(
+    self.outputs,
+    fn(output) { output.address == own_address },
+  )
   // 3, not 2, since the thread NFT was added: lovelace + the launch token + this launch's own
   // thread NFT.
   output_value_clean(own_output, 3)
@@ -417,22 +446,36 @@ fn replacement_position_returned(
   new_lp_name: AssetName,
   new_lp_amount: Int,
 ) -> Bool {
-  expect Some(own_input) =
-    list.find(self.inputs, fn(input) { input.output_reference == own_ref })
+  expect Some(own_input) = list.find(
+    self.inputs,
+    fn(input) { input.output_reference == own_ref },
+  )
   let own_address = own_input.output.address
-  when list.find(self.outputs, fn(output) { output.address == own_address }) is {
+  when
+    list.find(self.outputs, fn(output) { output.address == own_address })
+  is {
     None -> False
-    Some(own_output) ->
-      assets.quantity_of(own_output.value, new_lp_policy_id, new_lp_name) == new_lp_amount
+    Some(own_output) -> and {
+        assets.quantity_of(own_output.value, new_lp_policy_id, new_lp_name) == new_lp_amount,
+        // The escrow's own ADA stays with the escrow; a migration moves the
+        // position, not the UTxO's lovelace.
+        assets.lovelace_of(own_output.value) >= assets.lovelace_of(
+          own_input.output.value,
+        ),
+      }
   }
 }
 
 fn lp_value_unchanged(self: Transaction, own_ref: OutputReference) -> Bool {
-  expect Some(own_input) =
-    list.find(self.inputs, fn(input) { input.output_reference == own_ref })
+  expect Some(own_input) = list.find(
+    self.inputs,
+    fn(input) { input.output_reference == own_ref },
+  )
   let own_address = own_input.output.address
-  expect Some(own_output) =
-    list.find(self.outputs, fn(output) { output.address == own_address })
+  expect Some(own_output) = list.find(
+    self.outputs,
+    fn(output) { output.address == own_address },
+  )
   own_output.value == own_input.output.value
 }
 
@@ -440,6 +483,33 @@ fn lp_value_unchanged(self: Transaction, own_ref: OutputReference) -> Bool {
 /// own wallet, or (once CTO has been triggered) the community wallet.
 /// Mirrors `is_authorized`'s exact same governor-vs-community switch, just
 /// for a payment destination instead of a signature check.
+/// The governance record — found by credential, proven by its thread NFT and
+/// launch id — still names this escrow's community wallet. The governor's
+/// emergency freeze clears that field, and a cleared wallet is paid nothing
+/// and authorises nothing.
+fn community_wallet_live(self: Transaction, datum: LpEscrowDatum) -> Bool {
+  expect Some(cto_ref_input) = list.find(
+    self.reference_inputs,
+    fn(input) {
+      input.output.address.payment_credential == datum.cto_governance_credential
+    },
+  )
+  expect InlineDatum(cto_raw_datum) = cto_ref_input.output.datum
+  expect cto_datum: CtoGovernanceDatum = cto_raw_datum
+  and {
+    assets.quantity_of(
+      cto_ref_input.output.value,
+      datum.thread_nft_policy,
+      thread_nft.thread_asset_name(
+        thread_nft.role_cto_governance,
+        datum.launch_id,
+      ),
+    ) == 1,
+    cto_datum.launch_id == datum.launch_id,
+    cto_datum.community_wallet_hash == datum.community_wallet_hash,
+  }
+}
+
 fn active_fee_recipient(datum: LpEscrowDatum) -> VerificationKeyHash {
   if datum.cto_triggered {
     datum.community_wallet_hash
@@ -458,11 +528,15 @@ fn lp_position_untouched(
   own_ref: OutputReference,
   datum: LpEscrowDatum,
 ) -> Bool {
-  expect Some(own_input) =
-    list.find(self.inputs, fn(input) { input.output_reference == own_ref })
+  expect Some(own_input) = list.find(
+    self.inputs,
+    fn(input) { input.output_reference == own_ref },
+  )
   let own_address = own_input.output.address
-  expect Some(own_output) =
-    list.find(self.outputs, fn(output) { output.address == own_address })
+  expect Some(own_output) = list.find(
+    self.outputs,
+    fn(output) { output.address == own_address },
+  )
   assets.quantity_of(
     own_output.value,
     datum.lp_token_policy_id,
@@ -489,8 +563,7 @@ fn fee_recipient_paid(
   // The creator's LP trading fees are paid through here, so the effect was
   // that a normal wallet could not receive them at all. Same fix already
   // applied to the curve and staking payouts.
-  let recipient_credential =
-    from_verification_key(active_fee_recipient(datum)).payment_credential
+  let recipient_credential = from_verification_key(active_fee_recipient(datum)).payment_credential
   list.any(
     self.outputs,
     fn(output) {
@@ -547,7 +620,6 @@ fn migration_output_ok(
   )
 }
 
-
 /// State authentication (2026-08-03 audit) — the launch's own thread NFT must be present on the UTXO being
 /// spent AND on the continuing output. See noctis/thread_nft, and the linear curve's
 /// bonding_curve.ak thread_nft_intact, for the full reasoning: every
@@ -558,15 +630,25 @@ fn thread_nft_intact(
   own_ref: OutputReference,
   datum: LpEscrowDatum,
 ) -> Bool {
-  expect Some(own_input) =
-    list.find(self.inputs, fn(input) { input.output_reference == own_ref })
+  expect Some(own_input) = list.find(
+    self.inputs,
+    fn(input) { input.output_reference == own_ref },
+  )
   let own_address = own_input.output.address
-  let name =
-    thread_nft.thread_asset_name(thread_nft.role_lp_escrow, datum.launch_id)
-  when list.find(self.outputs, fn(output) { output.address == own_address }) is {
+  let name = thread_nft.thread_asset_name(
+    thread_nft.role_lp_escrow,
+    datum.launch_id,
+  )
+  when
+    list.find(self.outputs, fn(output) { output.address == own_address })
+  is {
     None -> False
     Some(own_output) -> and {
-        assets.quantity_of(own_input.output.value, datum.thread_nft_policy, name) == 1,
+        assets.quantity_of(
+          own_input.output.value,
+          datum.thread_nft_policy,
+          name,
+        ) == 1,
         assets.quantity_of(own_output.value, datum.thread_nft_policy, name) == 1,
       }
   }
@@ -584,8 +666,10 @@ validator lp_escrow {
     self: Transaction,
   ) {
     expect Some(datum) = datum_opt
-    expect Some(own_input) =
-      list.find(self.inputs, fn(input) { input.output_reference == own_ref })
+    expect Some(own_input) = list.find(
+      self.inputs,
+      fn(input) { input.output_reference == own_ref },
+    )
 
     and {
       // See single_own_utxo's own doc comment — closes the
@@ -596,285 +680,339 @@ validator lp_escrow {
       thread_nft_intact(self, own_ref, datum),
       when redeemer is {
         SealLock { timestamp, seeded_ada } -> {
-        let new_datum = own_continuing_datum(self, own_ref)
-        and {
-          datum.lock_duration >= min_lock_duration,
-          datum.lock_timestamp == 0,
-          interval.contains(self.validity_range, timestamp),
-          // The sealed `timestamp` is the origin the whole 365-day lock is
-          // measured from (`is_lock_expired` adds `lock_duration` to it), and
-          // sealing is permissionless — it rides the graduation transaction,
-          // authorised by the LP value really arriving rather than by a
-          // signature. So the two checks have to work together: containment
-          // alone lets the caller declare a range wide enough to hold both
-          // real chain time and a `timestamp` far from it, and the width
-          // bound is what pins the declared value to now. Any redeemer that
-          // accepts a caller-declared timestamp needs both halves.
-          validity_range_is_narrow(self.validity_range, max_validity_range_width),
-          seeded_ada > 0,
-          lp_value_received(self, own_ref, datum, seeded_ada),
-          // The sealed LP position can't be padded with junk assets.
-          lp_own_output_clean(self, own_ref),
-          new_datum == LpEscrowDatum {
-            ..datum,
-            lock_timestamp: timestamp,
-            lp_state: Locked,
-          },
-        }
-      }
-
-      ProposeDexChange { dex_credential, action, timestamp } -> {
-        let new_datum = own_continuing_datum(self, own_ref)
-        let action_makes_sense = when action is {
-          ProposeAdd -> !is_whitelisted(datum.dex_whitelist, dex_credential)
-          ProposeRemove -> is_whitelisted(datum.dex_whitelist, dex_credential)
-        }
-        and {
-          multisig_satisfied(datum.multisig_signers, datum.multisig_threshold, self),
-          datum.pending_dex_change == None,
-          action_makes_sense,
-          interval.contains(self.validity_range, timestamp),
-          validity_range_is_narrow(self.validity_range, max_validity_range_width),
-          new_datum == LpEscrowDatum {
-            ..datum,
-            pending_dex_change: Some(
-              PendingDexChange {
-                dex_credential: dex_credential,
-                action: action,
-                proposed_at: timestamp,
-              },
+          let new_datum = own_continuing_datum(self, own_ref)
+          and {
+            datum.lock_duration >= min_lock_duration,
+            datum.lock_timestamp == 0,
+            interval.contains(self.validity_range, timestamp),
+            // The sealed `timestamp` is the origin the whole 365-day lock is
+            // measured from (`is_lock_expired` adds `lock_duration` to it), and
+            // sealing is permissionless — it rides the graduation transaction,
+            // authorised by the LP value really arriving rather than by a
+            // signature. So the two checks have to work together: containment
+            // alone lets the caller declare a range wide enough to hold both
+            // real chain time and a `timestamp` far from it, and the width
+            // bound is what pins the declared value to now. Any redeemer that
+            // accepts a caller-declared timestamp needs both halves.
+            validity_range_is_narrow(
+              self.validity_range,
+              max_validity_range_width,
             ),
-          },
-          // This redeemer only ever proposes a future whitelist
-          // change — it must never move the locked position's real value.
-          lp_value_unchanged(self, own_ref),
+            // The position is the LP token named in the datum, and there must
+            // be some. ADA may or may not arrive with it: a venue pool takes
+            // the whole raise and the escrow holds only the pool's LQ token,
+            // so `seeded_ada` is zero on that path and positive when the escrow
+            // holds raw reserves.
+            seeded_ada >= 0,
+            datum.lp_token_amount > 0,
+            lp_value_received(self, own_ref, datum, seeded_ada),
+            // The sealed LP position can't be padded with junk assets.
+            lp_own_output_clean(self, own_ref),
+            new_datum == LpEscrowDatum {
+              ..datum,
+              lock_timestamp: timestamp,
+              lp_state: Locked,
+            },
+          }
         }
-      }
 
-      ExecuteDexChange { current_timestamp } -> {
-        expect Some(pending) = datum.pending_dex_change
-        let new_whitelist = when pending.action is {
-          ProposeAdd -> [pending.dex_credential, ..datum.dex_whitelist]
-          ProposeRemove ->
-            list.filter(
-              datum.dex_whitelist,
-              fn(c) { c != pending.dex_credential },
-            )
+        ProposeDexChange { dex_credential, action, timestamp } -> {
+          let new_datum = own_continuing_datum(self, own_ref)
+          let action_makes_sense = when action is {
+            ProposeAdd -> !is_whitelisted(datum.dex_whitelist, dex_credential)
+            ProposeRemove -> is_whitelisted(datum.dex_whitelist, dex_credential)
+          }
+          and {
+            multisig_satisfied(
+              datum.multisig_signers,
+              datum.multisig_threshold,
+              self,
+            ),
+            datum.pending_dex_change == None,
+            action_makes_sense,
+            interval.contains(self.validity_range, timestamp),
+            validity_range_is_narrow(
+              self.validity_range,
+              max_validity_range_width,
+            ),
+            new_datum == LpEscrowDatum {
+              ..datum,
+              pending_dex_change: Some(
+                PendingDexChange {
+                  dex_credential,
+                  action,
+                  proposed_at: timestamp,
+                },
+              ),
+            },
+            // This redeemer only ever proposes a future whitelist
+            // change — it must never move the locked position's real value.
+            lp_value_unchanged(self, own_ref),
+          }
         }
-        let new_datum = own_continuing_datum(self, own_ref)
-        and {
-          interval.contains(self.validity_range, current_timestamp),
-          // Bound the declared validity range's own width — without
-          // this, ANYONE (this redeemer is permissionless by design) could
-          // claim a far-future current_timestamp and bypass the real
-          // 72-hour public notice period entirely.
-          validity_range_is_narrow(self.validity_range, max_validity_range_width),
-          current_timestamp >= pending.proposed_at + dex_change_notice_period,
-          new_datum == LpEscrowDatum {
-            ..datum,
-            dex_whitelist: new_whitelist,
-            pending_dex_change: None,
-          },
-          // This redeemer is fully permissionless, so it must enforce full value
-          // conservation on-chain: the locked ADA + LP tokens must be
-          // preserved, not merely the datum. A correct-looking datum alone
-          // must never authorize moving the locked value away
-          // elsewhere in the same transaction). Only the whitelist and
-          // pending-change fields should ever change here.
-          lp_value_unchanged(self, own_ref),
-        }
-      }
 
-      CancelPendingDexChange -> {
-        let new_datum = own_continuing_datum(self, own_ref)
-        and {
-          multisig_satisfied(datum.multisig_signers, datum.multisig_threshold, self),
-          datum.pending_dex_change != None,
-          new_datum == LpEscrowDatum { ..datum, pending_dex_change: None },
-          // This redeemer only ever clears a pending proposal — it
-          // must never move the locked position's real value.
-          lp_value_unchanged(self, own_ref),
+        ExecuteDexChange { current_timestamp } -> {
+          expect Some(pending) = datum.pending_dex_change
+          let new_whitelist = when pending.action is {
+            ProposeAdd -> [pending.dex_credential, ..datum.dex_whitelist]
+            ProposeRemove ->
+              list.filter(
+                datum.dex_whitelist,
+                fn(c) { c != pending.dex_credential },
+              )
+          }
+          let new_datum = own_continuing_datum(self, own_ref)
+          and {
+            interval.contains(self.validity_range, current_timestamp),
+            // Bound the declared validity range's own width — without
+            // this, ANYONE (this redeemer is permissionless by design) could
+            // claim a far-future current_timestamp and bypass the real
+            // 72-hour public notice period entirely.
+            validity_range_is_narrow(
+              self.validity_range,
+              max_validity_range_width,
+            ),
+            current_timestamp >= pending.proposed_at + dex_change_notice_period,
+            clock.past(
+              self.validity_range,
+              pending.proposed_at + dex_change_notice_period,
+            ),
+            new_datum == LpEscrowDatum {
+              ..datum,
+              dex_whitelist: new_whitelist,
+              pending_dex_change: None,
+            },
+            // This redeemer is fully permissionless, so it must enforce full value
+            // conservation on-chain: the locked ADA + LP tokens must be
+            // preserved, not merely the datum. A correct-looking datum alone
+            // must never authorize moving the locked value away
+            // elsewhere in the same transaction). Only the whitelist and
+            // pending-change fields should ever change here.
+            lp_value_unchanged(self, own_ref),
+          }
         }
-      }
 
-      Migrate {
-        target_dex_credential,
-        current_timestamp,
-        new_lp_policy_id,
-        new_lp_name,
-        new_lp_amount,
-      } -> {
-        // The position moves to a new DEX and stays escrowed: the LP tokens
-        // and the escrow's lovelace go to the target, while this script keeps
-        // a continuing output carrying the thread NFT and a datum recording
-        // the move. `thread_nft_intact` above requires that output on every
-        // spend, so there is always one to constrain.
-        let new_datum = own_continuing_datum(self, own_ref)
-        and {
-          datum.lp_state == Locked,
-          // A position that was never sealed has no lock to expire —
-          // lock_timestamp is 0 until SealLock runs, which would otherwise
-          // make `is_lock_expired` trivially true from genesis.
-          datum.lock_timestamp != 0,
-          is_lock_expired(datum, current_timestamp),
-          // LP_MIGRATION_COOLDOWN: at least 90 days since the last move.
-          // Zero means the position has never migrated, so the only gate is
-          // the 365-day lock above.
-          or {
-            datum.last_migration_timestamp == 0,
-            current_timestamp >= datum.last_migration_timestamp + migration_cooldown,
-          },
-          interval.contains(self.validity_range, current_timestamp),
-          validity_range_is_narrow(self.validity_range, max_validity_range_width),
-          is_whitelisted(datum.dex_whitelist, target_dex_credential),
-          is_authorized(datum, self),
-          // Fix: migration_output_ok now also requires the target
-          // output receive at least the escrow's own real locked lovelace
-          // (read from own_input, not a self-reported/datum figure — see
-          // that function's own doc comment for why no datum field can
-          // serve this purpose).
-          migration_output_ok(
-            self,
-            datum,
-            target_dex_credential,
-            assets.lovelace_of(own_input.output.value),
-          ),
-          // A position must come back. The escrow's continuing output has to
-          // really hold the replacement the redeemer declared, and a zero
-          // amount is not a position — without that bound, declaring zero
-          // would satisfy the check while nothing returned.
-          new_lp_amount > 0,
-          replacement_position_returned(
-            self,
-            own_ref,
-            new_lp_policy_id,
-            new_lp_name,
-            new_lp_amount,
-          ),
-          // Everything about the position is carried forward except the
-          // record of when it moved and the identity of what is now held.
-          // Without this the continuing datum is unconstrained: it could keep
-          // a stale migration timestamp and migrate again immediately, or
-          // rewrite the whitelist, the fee recipient or the governor on the
-          // way past — and it would go on naming the position just sent away.
-          new_datum == LpEscrowDatum {
-            ..datum,
-            lp_token_policy_id: new_lp_policy_id,
-            lp_token_name: new_lp_name,
-            lp_token_amount: new_lp_amount,
-            last_migration_timestamp: current_timestamp,
-          },
+        CancelPendingDexChange -> {
+          let new_datum = own_continuing_datum(self, own_ref)
+          and {
+            multisig_satisfied(
+              datum.multisig_signers,
+              datum.multisig_threshold,
+              self,
+            ),
+            datum.pending_dex_change != None,
+            new_datum == LpEscrowDatum { ..datum, pending_dex_change: None },
+            // This redeemer only ever clears a pending proposal — it
+            // must never move the locked position's real value.
+            lp_value_unchanged(self, own_ref),
+          }
         }
-      }
 
-      TriggerCTO { community_wallet_hash } -> {
-        let new_datum = own_continuing_datum(self, own_ref)
-        and {
-          // Enforcement: permissionless, gated on real anchored vote
-          // evidence instead of a bare governor signature.
-          cto_vote_verified(
-            self,
-            datum,
-            SilenceLockTrigger,
-            Some(community_wallet_hash),
-          ),
-          !datum.cto_triggered,
-          community_wallet_hash != #"",
-          new_datum == LpEscrowDatum {
-            ..datum,
-            cto_triggered: True,
-            community_wallet_hash: community_wallet_hash,
-          },
-          // CRITICAL fix: this redeemer is permissionless given real
-          // vote evidence — was previously a drain path for the same
-          // reason as ExecuteDexChange above. Only cto_triggered/
-          // community_wallet_hash should ever change here.
-          lp_value_unchanged(self, own_ref),
+        Migrate {
+          target_dex_credential,
+          current_timestamp,
+          new_lp_policy_id,
+          new_lp_name,
+          new_lp_amount,
+        } -> {
+          // The position moves to a new DEX and stays escrowed: the LP tokens
+          // and the escrow's lovelace go to the target, while this script keeps
+          // a continuing output carrying the thread NFT and a datum recording
+          // the move. `thread_nft_intact` above requires that output on every
+          // spend, so there is always one to constrain.
+          let new_datum = own_continuing_datum(self, own_ref)
+          and {
+            datum.lp_state == Locked,
+            // A position that was never sealed has no lock to expire —
+            // lock_timestamp is 0 until SealLock runs, which would otherwise
+            // make `is_lock_expired` trivially true from genesis.
+            datum.lock_timestamp != 0,
+            is_lock_expired(datum, current_timestamp),
+            // Expired for every moment this transaction is valid in, not only
+            // for the moment the builder named inside the range.
+            clock.past(
+              self.validity_range,
+              datum.lock_timestamp + datum.lock_duration,
+            ),
+            // LP_MIGRATION_COOLDOWN: at least 90 days since the last move.
+            // Zero means the position has never migrated, so the only gate is
+            // the 365-day lock above.
+            or {
+              datum.last_migration_timestamp == 0,
+              clock.past(
+                self.validity_range,
+                datum.last_migration_timestamp + migration_cooldown,
+              ),
+            },
+            interval.contains(self.validity_range, current_timestamp),
+            validity_range_is_narrow(
+              self.validity_range,
+              max_validity_range_width,
+            ),
+            is_whitelisted(datum.dex_whitelist, target_dex_credential),
+            is_authorized(datum, self),
+            // Fix: migration_output_ok now also requires the target
+            // output receive at least the escrow's own real locked lovelace
+            // (read from own_input, not a self-reported/datum figure — see
+            // that function's own doc comment for why no datum field can
+            // serve this purpose).
+            migration_output_ok(
+              self,
+              datum,
+              target_dex_credential,
+              assets.lovelace_of(own_input.output.value),
+            ),
+            // A position must come back. The escrow's continuing output has to
+            // really hold the replacement the redeemer declared, and a zero
+            // amount is not a position — without that bound, declaring zero
+            // would satisfy the check while nothing returned.
+            new_lp_amount > 0,
+            // The replacement is a DEX position, never one of the platform's own
+            // state tokens: this escrow's thread NFT, already in the UTxO, would
+            // otherwise satisfy "the new position came back" while the whole
+            // real position left.
+            new_lp_policy_id != datum.thread_nft_policy,
+            replacement_position_returned(
+              self,
+              own_ref,
+              new_lp_policy_id,
+              new_lp_name,
+              new_lp_amount,
+            ),
+            // Everything about the position is carried forward except the
+            // record of when it moved and the identity of what is now held.
+            // Without this the continuing datum is unconstrained: it could keep
+            // a stale migration timestamp and migrate again immediately, or
+            // rewrite the whitelist, the fee recipient or the governor on the
+            // way past — and it would go on naming the position just sent away.
+            new_datum == LpEscrowDatum {
+              ..datum,
+              lp_token_policy_id: new_lp_policy_id,
+              lp_token_name: new_lp_name,
+              lp_token_amount: new_lp_amount,
+              last_migration_timestamp: current_timestamp,
+            },
+          }
         }
-      }
 
-      DissolveCTO -> {
-        let new_datum = own_continuing_datum(self, own_ref)
-        and {
-          // Enforcement: same reasoning, gated on a real anchored
-          // DissolveCTOProposal instead of a bare governor signature.
-          cto_vote_verified(self, datum, DissolveCTOProposal, None),
-          datum.cto_triggered,
-          new_datum == LpEscrowDatum {
-            ..datum,
-            cto_triggered: False,
-            community_wallet_hash: #"",
-          },
-          // Same reasoning as TriggerCTO above.
-          lp_value_unchanged(self, own_ref),
+        TriggerCTO { community_wallet_hash } -> {
+          let new_datum = own_continuing_datum(self, own_ref)
+          and {
+            // Enforcement: permissionless, gated on real anchored vote
+            // evidence instead of a bare governor signature.
+            cto_vote_verified(
+              self,
+              datum,
+              SilenceLockTrigger,
+              Some(community_wallet_hash),
+            ),
+            !datum.cto_triggered,
+            community_wallet_hash != #"",
+            new_datum == LpEscrowDatum {
+              ..datum,
+              cto_triggered: True,
+              community_wallet_hash,
+            },
+            // CRITICAL fix: this redeemer is permissionless given real
+            // vote evidence — was previously a drain path for the same
+            // reason as ExecuteDexChange above. Only cto_triggered/
+            // community_wallet_hash should ever change here.
+            lp_value_unchanged(self, own_ref),
+          }
         }
-      }
 
-      CancelLaunch -> {
-        let new_datum = own_continuing_datum(self, own_ref)
-        and {
-          list.has(self.extra_signatories, datum.governor_pub_key_hash),
-          datum.lp_state == Locked,
-          // Only a genesis/never-sealed position (no real value locked
-          // yet) can be cancelled — the same lock_timestamp == 0
-          // discriminator SealLock itself uses. A real, sealed position
-          // must go through Migrate after real lock expiry instead.
-          datum.lock_timestamp == 0,
-          new_datum == LpEscrowDatum { ..datum, lp_state: Cancelled },
-          // A governor signature alone should never be able to also
-          // divert the locked position's real value while flipping this
-          // flag — only the state transition should be observable here.
-          lp_value_unchanged(self, own_ref),
+        DissolveCTO -> {
+          let new_datum = own_continuing_datum(self, own_ref)
+          and {
+            // Enforcement: same reasoning, gated on a real anchored
+            // DissolveCTOProposal instead of a bare governor signature.
+            cto_vote_verified(self, datum, DissolveCTOProposal, None),
+            datum.cto_triggered,
+            new_datum == LpEscrowDatum {
+              ..datum,
+              cto_triggered: False,
+              community_wallet_hash: #"",
+            },
+            // Same reasoning as TriggerCTO above.
+            lp_value_unchanged(self, own_ref),
+          }
         }
-      }
 
-      HarvestFees { harvested_amount } -> {
-        let new_datum = own_continuing_datum(self, own_ref)
-        and {
-          datum.lp_state == Locked,
-          harvested_amount > 0,
-          new_datum == datum,
-          // CRITICAL fix: lp_position_untouched only ever checked the
-          // LP TOKEN quantity, never lovelace — this
-          // redeemer could previously be called with a trivial
-          // harvested_amount (e.g. 1) while the entire real locked ADA
-          // balance was diverted as unaccounted-for "change" in the same
-          // transaction. The real harvested fee must come from OUTSIDE
-          // this escrow (a genuine external DEX fee-collection mechanism,
-          // not this contract's own locked balance) — so the escrow's own
-          // value must stay completely unchanged, same requirement as
-          // every other non-SealLock/Migrate redeemer in this file.
-          lp_value_unchanged(self, own_ref),
-          lp_position_untouched(self, own_ref, datum),
-          // Signed by whoever the fees are for.
-          //
-          // This was permissionless on the reasoning that nobody can gain by
-          // calling it, since the LP position cannot move — true, and not the
-          // whole question. Nobody could gain, but anyone could CHURN: the
-          // continuing output is identical to the input, so this redeemer
-          // rebuilds the escrow UTXO at a new reference for the price of a
-          // fee. That invalidates whatever was being built against the old
-          // one, and this UTXO is read as a REFERENCE INPUT by the CTO
-          // anchor, which is the community's own rescue path.
-          //
-          // The recipient is the only party a harvest is for, so requiring
-          // their signature costs nobody anything and removes the churn.
-          list.has(self.extra_signatories, active_fee_recipient(datum)),
-          fee_recipient_paid(self, own_ref, datum, harvested_amount),
-          // The LP position's own continuing output can't be padded
-          // with junk assets either.
-          lp_own_output_clean(self, own_ref),
+        CancelLaunch -> {
+          let new_datum = own_continuing_datum(self, own_ref)
+          and {
+            list.has(self.extra_signatories, datum.governor_pub_key_hash),
+            datum.lp_state == Locked,
+            // Only a genesis/never-sealed position (no real value locked
+            // yet) can be cancelled — the same lock_timestamp == 0
+            // discriminator SealLock itself uses. A real, sealed position
+            // must go through Migrate after real lock expiry instead.
+            datum.lock_timestamp == 0,
+            new_datum == LpEscrowDatum { ..datum, lp_state: Cancelled },
+            // A governor signature alone should never be able to also
+            // divert the locked position's real value while flipping this
+            // flag — only the state transition should be observable here.
+            lp_value_unchanged(self, own_ref),
+          }
         }
-      }
 
-      // CRITICAL fix (2026-07-19, full-suite security audit) — same
-      // fix as bonding_curve.ak: was an unconditional `True` (zero checks),
-      // an unconditional authorization over the locked LP position. See
-      // that file's own comment on this exact line for the full
-      // explanation.
-      QueryState -> False
+        HarvestFees { harvested_amount } -> {
+          let new_datum = own_continuing_datum(self, own_ref)
+          and {
+            datum.lp_state == Locked,
+            harvested_amount > 0,
+            new_datum == datum,
+            // CRITICAL fix: lp_position_untouched only ever checked the
+            // LP TOKEN quantity, never lovelace — this
+            // redeemer could previously be called with a trivial
+            // harvested_amount (e.g. 1) while the entire real locked ADA
+            // balance was diverted as unaccounted-for "change" in the same
+            // transaction. The real harvested fee must come from OUTSIDE
+            // this escrow (a genuine external DEX fee-collection mechanism,
+            // not this contract's own locked balance) — so the escrow's own
+            // value must stay completely unchanged, same requirement as
+            // every other non-SealLock/Migrate redeemer in this file.
+            lp_value_unchanged(self, own_ref),
+            lp_position_untouched(self, own_ref, datum),
+            // Signed by whoever the fees are for.
+            //
+            // This was permissionless on the reasoning that nobody can gain by
+            // calling it, since the LP position cannot move — true, and not the
+            // whole question. Nobody could gain, but anyone could CHURN: the
+            // continuing output is identical to the input, so this redeemer
+            // rebuilds the escrow UTXO at a new reference for the price of a
+            // fee. That invalidates whatever was being built against the old
+            // one, and this UTXO is read as a REFERENCE INPUT by the CTO
+            // anchor, which is the community's own rescue path.
+            //
+            // The recipient is the only party a harvest is for, so requiring
+            // their signature costs nobody anything and removes the churn.
+            list.has(self.extra_signatories, active_fee_recipient(datum)),
+            // Once redirected to the community, the payee must still be the
+            // wallet the governance record names now; a freeze clears it.
+            or {
+              !datum.cto_triggered,
+              community_wallet_live(self, datum),
+            },
+            fee_recipient_paid(self, own_ref, datum, harvested_amount),
+            // The LP position's own continuing output can't be padded
+            // with junk assets either.
+            lp_own_output_clean(self, own_ref),
+          }
+        }
+
+        // CRITICAL fix (2026-07-19, full-suite security audit) — same
+        // fix as bonding_curve.ak: was an unconditional `True` (zero checks),
+        // an unconditional authorization over the locked LP position. See
+        // that file's own comment on this exact line for the full
+        // explanation.
+        QueryState -> False
       },
     }
+  }
+
+  else(_) {
+    fail
   }
 }
 
@@ -914,13 +1052,12 @@ fn mock_thread_nft() -> assets.Value {
   )
 }
 
-
 fn mock_datum(lp_state: LpState, lock_timestamp: Int) -> LpEscrowDatum {
   LpEscrowDatum {
     launch_id: #"01",
-    lock_timestamp: lock_timestamp,
+    lock_timestamp,
     lock_duration: min_lock_duration,
-    lp_state: lp_state,
+    lp_state,
     governor_pub_key_hash: #"22",
     community_wallet_hash: #"",
     cto_triggered: False,
@@ -945,7 +1082,7 @@ fn mock_proposal_anchor(
   allocation_recipient_hash: ByteArray,
 ) -> ProposalAnchor {
   ProposalAnchor {
-    proposal_type: proposal_type,
+    proposal_type,
     description_hash: #"aa",
     proof_bundle_hash: #"bb",
     yes_votes: 60_000,
@@ -953,15 +1090,49 @@ fn mock_proposal_anchor(
     voter_count: 5,
     creator_yes_votes: 0,
     creator_no_votes: 0,
-    outcome: outcome,
+    outcome,
     start_timestamp: 0,
     end_timestamp: 1000,
     anchor_timestamp: 500,
-    execution_status: execution_status,
+    execution_status,
     target_dex_credential: None,
     allocation_amount: 0,
-    allocation_recipient_hash: allocation_recipient_hash,
+    allocation_recipient_hash,
     relayer_credential_hash: #"33",
+  }
+}
+
+/// The state `ExecuteProposal` commits beside the proposal it records: a
+/// SilenceLockTrigger (or a FundAllocation on a launch under CTO) leaves the
+/// launch CTOTriggered with its recipient as the community wallet, a dissolve
+/// clears both, anything else leaves the genesis state.
+fn mock_cto_state(
+  executed: Option<ProposalAnchor>,
+) -> cto_governance.CtoAnchorState {
+  when executed is {
+    Some(p) ->
+      if p.proposal_type == cto_governance.DissolveCTOProposal {
+        cto_governance.CTODissolved
+      } else if p.proposal_type == cto_governance.SilenceLockTrigger || p.proposal_type == cto_governance.FundAllocation {
+        cto_governance.CTOTriggered
+      } else {
+        cto_governance.PreCTO
+      }
+    None -> cto_governance.PreCTO
+  }
+}
+
+fn mock_community_wallet(
+  executed: Option<ProposalAnchor>,
+) -> VerificationKeyHash {
+  when executed is {
+    Some(p) ->
+      if p.proposal_type == cto_governance.SilenceLockTrigger || p.proposal_type == cto_governance.FundAllocation {
+        p.allocation_recipient_hash
+      } else {
+        #""
+      }
+    None -> #""
   }
 }
 
@@ -970,9 +1141,9 @@ fn mock_cto_governance_datum(
   last_executed_proposal: Option<ProposalAnchor>,
 ) -> CtoGovernanceDatum {
   CtoGovernanceDatum {
-    launch_id: launch_id,
-    cto_state: PreCTO,
-    community_wallet_hash: #"",
+    launch_id,
+    cto_state: mock_cto_state(last_executed_proposal),
+    community_wallet_hash: mock_community_wallet(last_executed_proposal),
     governor_credential_hash: #"22",
     total_supply: 1_000_000,
     quorum_bps: 500,
@@ -982,7 +1153,7 @@ fn mock_cto_governance_datum(
     min_voter_count: 15,
     active_proposal: None,
     proposal_count: 1,
-    last_executed_proposal: last_executed_proposal,
+    last_executed_proposal,
     pending_relayer_bond: 0,
     pending_relayer_key_hash: #"",
     payout_pub_key_hash: #"55",
@@ -1008,10 +1179,17 @@ fn mock_cto_ref_input(
     output_reference: OutputReference { transaction_id: #"cd", output_index: 0 },
     output: Output {
       address: cto_address,
-      // Fix: genuine governance UTXO carries its per-launch thread NFT
-      // (policy = the escrow datum's thread_nft_policy `#"c0ffee"`,
-      // asset_name = launch_id); cto_vote_verified now requires it.
-      value: assets.from_asset(#"c0ffee", cto_datum.launch_id, 1),
+      // The genuine governance UTXO carries its per-launch thread NFT
+      // (policy = the escrow datum's thread_nft_policy `#"c0ffee"`, named
+      // with the governance role tag); cto_vote_verified requires it.
+      value: assets.from_asset(
+        #"c0ffee",
+        thread_nft.thread_asset_name(
+          thread_nft.role_cto_governance,
+          cto_datum.launch_id,
+        ),
+        1,
+      ),
       datum: InlineDatum(cto_datum),
       reference_script: None,
     },
@@ -1046,38 +1224,41 @@ test seal_lock_succeeds_with_real_value_received() {
   let datum = mock_datum(Cancelled, 0)
   let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
   let own_address = from_verification_key(#"cc")
-  let own_input =
-    Input {
-      output_reference: own_ref,
-      output: Output {
-        address: own_address,
-        value: assets.merge(mock_thread_nft(), assets.from_lovelace(2_000_000)),
-        datum: InlineDatum(datum),
-        reference_script: None,
-      },
-    }
-  let new_datum =
-    LpEscrowDatum { ..datum, lock_timestamp: 500, lp_state: Locked }
-  let continuing_output =
-    Output {
+  let own_input = Input {
+    output_reference: own_ref,
+    output: Output {
       address: own_address,
-      value: assets.merge(mock_thread_nft(), assets.merge(
+      value: assets.merge(mock_thread_nft(), assets.from_lovelace(2_000_000)),
+      datum: InlineDatum(datum),
+      reference_script: None,
+    },
+  }
+  let new_datum = LpEscrowDatum {
+    ..datum,
+    lock_timestamp: 500,
+    lp_state: Locked,
+  }
+  let continuing_output = Output {
+    address: own_address,
+    value: assets.merge(
+      mock_thread_nft(),
+      assets.merge(
         assets.from_lovelace(2_000_000 + 98_000),
         assets.from_asset(#"33", "lp", 1000),
-      )),
-      datum: InlineDatum(new_datum),
-      reference_script: None,
-    }
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      outputs: [continuing_output],
-      // A real, narrow range around the declared seal time. The placeholder's
-      // own range is unbounded, which satisfies containment without saying
-      // anything about when this transaction actually happened.
-      validity_range: interval.between(400, 600),
-    }
+      ),
+    ),
+    datum: InlineDatum(new_datum),
+    reference_script: None,
+  }
+  let self = Transaction {
+    ..transaction.placeholder,
+    inputs: [own_input],
+    outputs: [continuing_output],
+    // A real, narrow range around the declared seal time. The placeholder's
+    // own range is unbounded, which satisfies containment without saying
+    // anything about when this transaction actually happened.
+    validity_range: interval.between(400, 600),
+  }
 
   lp_escrow.spend(
     Some(datum),
@@ -1095,38 +1276,41 @@ test seal_lock_rejects_padded_output() {
   let datum = mock_datum(Cancelled, 0)
   let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
   let own_address = from_verification_key(#"cc")
-  let own_input =
-    Input {
-      output_reference: own_ref,
-      output: Output {
-        address: own_address,
-        value: assets.merge(mock_thread_nft(), assets.from_lovelace(2_000_000)),
-        datum: InlineDatum(datum),
-        reference_script: None,
-      },
-    }
-  let new_datum =
-    LpEscrowDatum { ..datum, lock_timestamp: 500, lp_state: Locked }
-  let continuing_output =
-    Output {
+  let own_input = Input {
+    output_reference: own_ref,
+    output: Output {
       address: own_address,
-      value: assets.merge(mock_thread_nft(), assets.merge(
+      value: assets.merge(mock_thread_nft(), assets.from_lovelace(2_000_000)),
+      datum: InlineDatum(datum),
+      reference_script: None,
+    },
+  }
+  let new_datum = LpEscrowDatum {
+    ..datum,
+    lock_timestamp: 500,
+    lp_state: Locked,
+  }
+  let continuing_output = Output {
+    address: own_address,
+    value: assets.merge(
+      mock_thread_nft(),
+      assets.merge(
         assets.merge(
           assets.from_lovelace(2_000_000 + 98_000),
           assets.from_asset(#"33", "lp", 1000),
         ),
         // Junk asset from an unrelated policy — the padding attack.
         assets.from_asset(#"deadbeef", "spam", 1),
-      )),
-      datum: InlineDatum(new_datum),
-      reference_script: None,
-    }
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      outputs: [continuing_output],
-    }
+      ),
+    ),
+    datum: InlineDatum(new_datum),
+    reference_script: None,
+  }
+  let self = Transaction {
+    ..transaction.placeholder,
+    inputs: [own_input],
+    outputs: [continuing_output],
+  }
 
   !lp_escrow.spend(
     Some(datum),
@@ -1140,37 +1324,40 @@ test seal_lock_rejects_timestamp_outside_validity_range() {
   let datum = mock_datum(Cancelled, 0)
   let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
   let own_address = from_verification_key(#"cc")
-  let own_input =
-    Input {
-      output_reference: own_ref,
-      output: Output {
-        address: own_address,
-        value: assets.merge(mock_thread_nft(), assets.from_lovelace(2_000_000)),
-        datum: InlineDatum(datum),
-        reference_script: None,
-      },
-    }
-  let new_datum =
-    LpEscrowDatum { ..datum, lock_timestamp: 500, lp_state: Locked }
-  let continuing_output =
-    Output {
+  let own_input = Input {
+    output_reference: own_ref,
+    output: Output {
       address: own_address,
-      value: assets.merge(mock_thread_nft(), assets.merge(
+      value: assets.merge(mock_thread_nft(), assets.from_lovelace(2_000_000)),
+      datum: InlineDatum(datum),
+      reference_script: None,
+    },
+  }
+  let new_datum = LpEscrowDatum {
+    ..datum,
+    lock_timestamp: 500,
+    lp_state: Locked,
+  }
+  let continuing_output = Output {
+    address: own_address,
+    value: assets.merge(
+      mock_thread_nft(),
+      assets.merge(
         assets.from_lovelace(2_000_000 + 98_000),
         assets.from_asset(#"33", "lp", 1000),
-      )),
-      datum: InlineDatum(new_datum),
-      reference_script: None,
-    }
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      outputs: [continuing_output],
-      // The declared timestamp (500) claims to seal the lock long
-      // before this transaction's own real validity range began.
-      validity_range: interval.between(10_000, 10_100),
-    }
+      ),
+    ),
+    datum: InlineDatum(new_datum),
+    reference_script: None,
+  }
+  let self = Transaction {
+    ..transaction.placeholder,
+    inputs: [own_input],
+    outputs: [continuing_output],
+    // The declared timestamp (500) claims to seal the lock long
+    // before this transaction's own real validity range began.
+    validity_range: interval.between(10_000, 10_100),
+  }
 
   !lp_escrow.spend(
     Some(datum),
@@ -1193,35 +1380,38 @@ test seal_lock_rejects_a_seal_time_far_from_real_chain_time() {
   let datum = mock_datum(Cancelled, 0)
   let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
   let own_address = from_verification_key(#"cc")
-  let own_input =
-    Input {
-      output_reference: own_ref,
-      output: Output {
-        address: own_address,
-        value: assets.merge(mock_thread_nft(), assets.from_lovelace(2_000_000)),
-        datum: InlineDatum(datum),
-        reference_script: None,
-      },
-    }
-  let new_datum =
-    LpEscrowDatum { ..datum, lock_timestamp: back, lp_state: Locked }
-  let continuing_output =
-    Output {
+  let own_input = Input {
+    output_reference: own_ref,
+    output: Output {
       address: own_address,
-      value: assets.merge(mock_thread_nft(), assets.merge(
+      value: assets.merge(mock_thread_nft(), assets.from_lovelace(2_000_000)),
+      datum: InlineDatum(datum),
+      reference_script: None,
+    },
+  }
+  let new_datum = LpEscrowDatum {
+    ..datum,
+    lock_timestamp: back,
+    lp_state: Locked,
+  }
+  let continuing_output = Output {
+    address: own_address,
+    value: assets.merge(
+      mock_thread_nft(),
+      assets.merge(
         assets.from_lovelace(2_000_000 + 98_000),
         assets.from_asset(#"33", "lp", 1000),
-      )),
-      datum: InlineDatum(new_datum),
-      reference_script: None,
-    }
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      outputs: [continuing_output],
-      validity_range: interval.between(back - 1000, now + 1000),
-    }
+      ),
+    ),
+    datum: InlineDatum(new_datum),
+    reference_script: None,
+  }
+  let self = Transaction {
+    ..transaction.placeholder,
+    inputs: [own_input],
+    outputs: [continuing_output],
+    validity_range: interval.between(back - 1000, now + 1000),
+  }
 
   and {
     !lp_escrow.spend(
@@ -1241,34 +1431,37 @@ test seal_lock_fails_if_already_sealed() {
   let datum = mock_datum(Locked, 100)
   let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
   let own_address = from_verification_key(#"cc")
-  let own_input =
-    Input {
-      output_reference: own_ref,
-      output: Output {
-        address: own_address,
-        value: assets.merge(mock_thread_nft(), assets.from_lovelace(2_000_000)),
-        datum: InlineDatum(datum),
-        reference_script: None,
-      },
-    }
-  let new_datum =
-    LpEscrowDatum { ..datum, lock_timestamp: 500, lp_state: Locked }
-  let continuing_output =
-    Output {
+  let own_input = Input {
+    output_reference: own_ref,
+    output: Output {
       address: own_address,
-      value: assets.merge(mock_thread_nft(), assets.merge(
+      value: assets.merge(mock_thread_nft(), assets.from_lovelace(2_000_000)),
+      datum: InlineDatum(datum),
+      reference_script: None,
+    },
+  }
+  let new_datum = LpEscrowDatum {
+    ..datum,
+    lock_timestamp: 500,
+    lp_state: Locked,
+  }
+  let continuing_output = Output {
+    address: own_address,
+    value: assets.merge(
+      mock_thread_nft(),
+      assets.merge(
         assets.from_lovelace(2_000_000 + 98_000),
         assets.from_asset(#"33", "lp", 1000),
-      )),
-      datum: InlineDatum(new_datum),
-      reference_script: None,
-    }
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      outputs: [continuing_output],
-    }
+      ),
+    ),
+    datum: InlineDatum(new_datum),
+    reference_script: None,
+  }
+  let self = Transaction {
+    ..transaction.placeholder,
+    inputs: [own_input],
+    outputs: [continuing_output],
+  }
 
   !lp_escrow.spend(
     Some(datum),
@@ -1278,38 +1471,85 @@ test seal_lock_fails_if_already_sealed() {
   )
 }
 
-test seal_lock_rejects_zero_seeded_ada() {
+/// A venue graduation seals the escrow with the pool's LQ token alone: the
+/// raise went into the pool, so no ADA arrives and `seeded_ada` is zero.
+test seal_lock_accepts_an_lq_only_position() {
   let datum = mock_datum(Cancelled, 0)
   let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
   let own_address = from_verification_key(#"cc")
-  let own_input =
-    Input {
-      output_reference: own_ref,
-      output: Output {
-        address: own_address,
-        value: assets.merge(mock_thread_nft(), assets.from_lovelace(2_000_000)),
-        datum: InlineDatum(datum),
-        reference_script: None,
-      },
-    }
-  let new_datum =
-    LpEscrowDatum { ..datum, lock_timestamp: 500, lp_state: Locked }
-  let continuing_output =
-    Output {
+  let own_input = Input {
+    output_reference: own_ref,
+    output: Output {
       address: own_address,
-      value: assets.merge(mock_thread_nft(), assets.merge(
+      value: assets.merge(mock_thread_nft(), assets.from_lovelace(2_000_000)),
+      datum: InlineDatum(datum),
+      reference_script: None,
+    },
+  }
+  let new_datum = LpEscrowDatum {
+    ..datum,
+    lock_timestamp: 500,
+    lp_state: Locked,
+  }
+  let continuing_output = Output {
+    address: own_address,
+    value: assets.merge(
+      mock_thread_nft(),
+      assets.merge(
         assets.from_lovelace(2_000_000),
         assets.from_asset(#"33", "lp", 1000),
-      )),
-      datum: InlineDatum(new_datum),
+      ),
+    ),
+    datum: InlineDatum(new_datum),
+    reference_script: None,
+  }
+  let self = Transaction {
+    ..transaction.placeholder,
+    inputs: [own_input],
+    outputs: [continuing_output],
+    validity_range: interval.between(400, 600),
+  }
+
+  lp_escrow.spend(
+    Some(datum),
+    SealLock { timestamp: 500, seeded_ada: 0 },
+    own_ref,
+    self,
+  )
+}
+
+/// Identical, except the datum names an empty position and none arrives:
+/// a seal must lock something.
+test seal_lock_rejects_an_empty_position() {
+  let datum = LpEscrowDatum { ..mock_datum(Cancelled, 0), lp_token_amount: 0 }
+  let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
+  let own_address = from_verification_key(#"cc")
+  let own_input = Input {
+    output_reference: own_ref,
+    output: Output {
+      address: own_address,
+      value: assets.merge(mock_thread_nft(), assets.from_lovelace(2_000_000)),
+      datum: InlineDatum(datum),
       reference_script: None,
-    }
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      outputs: [continuing_output],
-    }
+    },
+  }
+  let new_datum = LpEscrowDatum {
+    ..datum,
+    lock_timestamp: 500,
+    lp_state: Locked,
+  }
+  let continuing_output = Output {
+    address: own_address,
+    value: assets.merge(mock_thread_nft(), assets.from_lovelace(2_000_000)),
+    datum: InlineDatum(new_datum),
+    reference_script: None,
+  }
+  let self = Transaction {
+    ..transaction.placeholder,
+    inputs: [own_input],
+    outputs: [continuing_output],
+    validity_range: interval.between(400, 600),
+  }
 
   !lp_escrow.spend(
     Some(datum),
@@ -1325,34 +1565,37 @@ test seal_lock_rejects_wrong_token_amount() {
   let datum = mock_datum(Cancelled, 0)
   let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
   let own_address = from_verification_key(#"cc")
-  let own_input =
-    Input {
-      output_reference: own_ref,
-      output: Output {
-        address: own_address,
-        value: assets.merge(mock_thread_nft(), assets.from_lovelace(2_000_000)),
-        datum: InlineDatum(datum),
-        reference_script: None,
-      },
-    }
-  let new_datum =
-    LpEscrowDatum { ..datum, lock_timestamp: 500, lp_state: Locked }
-  let continuing_output =
-    Output {
+  let own_input = Input {
+    output_reference: own_ref,
+    output: Output {
       address: own_address,
-      value: assets.merge(mock_thread_nft(), assets.merge(
+      value: assets.merge(mock_thread_nft(), assets.from_lovelace(2_000_000)),
+      datum: InlineDatum(datum),
+      reference_script: None,
+    },
+  }
+  let new_datum = LpEscrowDatum {
+    ..datum,
+    lock_timestamp: 500,
+    lp_state: Locked,
+  }
+  let continuing_output = Output {
+    address: own_address,
+    value: assets.merge(
+      mock_thread_nft(),
+      assets.merge(
         assets.from_lovelace(2_000_000 + 98_000),
         assets.from_asset(#"33", "lp", 900),
-      )),
-      datum: InlineDatum(new_datum),
-      reference_script: None,
-    }
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      outputs: [continuing_output],
-    }
+      ),
+    ),
+    datum: InlineDatum(new_datum),
+    reference_script: None,
+  }
+  let self = Transaction {
+    ..transaction.placeholder,
+    inputs: [own_input],
+    outputs: [continuing_output],
+  }
 
   !lp_escrow.spend(
     Some(datum),
@@ -1364,62 +1607,59 @@ test seal_lock_rejects_wrong_token_amount() {
 
 test migrate_succeeds_after_expiry_to_whitelisted_dex() {
   let target_dex = from_script(#"aa")
-  let datum =
-    LpEscrowDatum {
-      ..mock_datum(Locked, 1000),
-      dex_whitelist: [target_dex.payment_credential],
-    }
+  let datum = LpEscrowDatum {
+    ..mock_datum(Locked, 1000),
+    dex_whitelist: [target_dex.payment_credential],
+  }
   let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
   let own_address = from_verification_key(#"cc")
-  let own_input =
-    Input {
-      output_reference: own_ref,
-      output: Output {
-        address: own_address,
-        value: mock_thread_nft(),
-        datum: InlineDatum(datum),
-        reference_script: None,
-      },
-    }
-  let migration_output =
-    Output {
-      address: target_dex,
-      value: assets.from_asset(#"33", "lp", 1000),
-      datum: transaction.NoDatum,
+  let own_input = Input {
+    output_reference: own_ref,
+    output: Output {
+      address: own_address,
+      value: mock_thread_nft(),
+      datum: InlineDatum(datum),
       reference_script: None,
-    }
+    },
+  }
+  let migration_output = Output {
+    address: target_dex,
+    value: assets.from_asset(#"33", "lp", 1000),
+    datum: transaction.NoDatum,
+    reference_script: None,
+  }
   // The escrow keeps a continuing output, and its datum has to record when
   // the position moved — that record is what the cooldown is measured from.
-  let migrated_datum =
-    LpEscrowDatum {
-      ..datum,
-      lp_token_policy_id: mock_new_lp_policy,
-      lp_token_name: mock_new_lp_name,
-      lp_token_amount: mock_new_lp_amount,
-      last_migration_timestamp: 1000 + min_lock_duration }
-  let thread_continuing_output =
-    Output {
-      address: own_address,
-      value: mock_thread_nft_with_new_lp(),
-      datum: InlineDatum(migrated_datum),
-      reference_script: None,
-    }
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      outputs: [migration_output, thread_continuing_output],
-      extra_signatories: [#"22"],
-      validity_range: interval.between(1000 + min_lock_duration, 1000 + min_lock_duration + 100),
-    }
-  let redeemer =
-    Migrate {
-      new_lp_policy_id: mock_new_lp_policy,
-      new_lp_name: mock_new_lp_name,
-      new_lp_amount: mock_new_lp_amount,
-      target_dex_credential: target_dex.payment_credential,
-      current_timestamp: 1000 + min_lock_duration,
-    }
+  let migrated_datum = LpEscrowDatum {
+    ..datum,
+    lp_token_policy_id: mock_new_lp_policy,
+    lp_token_name: mock_new_lp_name,
+    lp_token_amount: mock_new_lp_amount,
+    last_migration_timestamp: 1000 + min_lock_duration,
+  }
+  let thread_continuing_output = Output {
+    address: own_address,
+    value: mock_thread_nft_with_new_lp(),
+    datum: InlineDatum(migrated_datum),
+    reference_script: None,
+  }
+  let self = Transaction {
+    ..transaction.placeholder,
+    inputs: [own_input],
+    outputs: [migration_output, thread_continuing_output],
+    extra_signatories: [#"22"],
+    validity_range: interval.between(
+      1000 + min_lock_duration,
+      1000 + min_lock_duration + 100,
+    ),
+  }
+  let redeemer = Migrate {
+    new_lp_policy_id: mock_new_lp_policy,
+    new_lp_name: mock_new_lp_name,
+    new_lp_amount: mock_new_lp_amount,
+    target_dex_credential: target_dex.payment_credential,
+    current_timestamp: 1000 + min_lock_duration,
+  }
 
   lp_escrow.spend(Some(datum), redeemer, own_ref, self)
 }
@@ -1434,60 +1674,61 @@ fn migrate_fixture(
   declared_amount: Int,
 ) -> Bool {
   let target_dex = from_script(#"aa")
-  let datum =
-    LpEscrowDatum {
-      ..mock_datum(Locked, 1000),
-      dex_whitelist: [target_dex.payment_credential],
-    }
+  let datum = LpEscrowDatum {
+    ..mock_datum(Locked, 1000),
+    dex_whitelist: [target_dex.payment_credential],
+  }
   let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
   let own_address = from_verification_key(#"cc")
-  let own_input =
-    Input {
-      output_reference: own_ref,
-      output: Output {
-        address: own_address,
-        value: mock_thread_nft(),
-        datum: InlineDatum(datum),
-        reference_script: None,
-      },
-    }
-  let migration_output =
-    Output {
-      address: target_dex,
-      value: assets.from_asset(#"33", "lp", 1000),
-      datum: transaction.NoDatum,
-      reference_script: None,
-    }
-  let thread_continuing_output =
-    Output {
+  let own_input = Input {
+    output_reference: own_ref,
+    output: Output {
       address: own_address,
-      value: continuing_value,
-      datum: InlineDatum(continuing_datum),
+      value: mock_thread_nft(),
+      datum: InlineDatum(datum),
       reference_script: None,
-    }
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      outputs: [migration_output, thread_continuing_output],
-      extra_signatories: [#"22"],
-      validity_range: interval.between(1000 + min_lock_duration, 1000 + min_lock_duration + 100),
-    }
-  let redeemer =
-    Migrate {
-      new_lp_policy_id: mock_new_lp_policy,
-      new_lp_name: mock_new_lp_name,
-      new_lp_amount: declared_amount,
-      target_dex_credential: target_dex.payment_credential,
-      current_timestamp: 1000 + min_lock_duration,
-    }
+    },
+  }
+  let migration_output = Output {
+    address: target_dex,
+    value: assets.from_asset(#"33", "lp", 1000),
+    datum: transaction.NoDatum,
+    reference_script: None,
+  }
+  let thread_continuing_output = Output {
+    address: own_address,
+    value: continuing_value,
+    datum: InlineDatum(continuing_datum),
+    reference_script: None,
+  }
+  let self = Transaction {
+    ..transaction.placeholder,
+    inputs: [own_input],
+    outputs: [migration_output, thread_continuing_output],
+    extra_signatories: [#"22"],
+    validity_range: interval.between(
+      1000 + min_lock_duration,
+      1000 + min_lock_duration + 100,
+    ),
+  }
+  let redeemer = Migrate {
+    new_lp_policy_id: mock_new_lp_policy,
+    new_lp_name: mock_new_lp_name,
+    new_lp_amount: declared_amount,
+    target_dex_credential: target_dex.payment_credential,
+    current_timestamp: 1000 + min_lock_duration,
+  }
 
   lp_escrow.spend(Some(datum), redeemer, own_ref, self)
 }
 
 /// The datum a correct migration leaves behind: it names the position now
 /// held, not the one just sent away.
-fn migrated_datum_naming(policy: ByteArray, name: ByteArray, amount: Int) -> LpEscrowDatum {
+fn migrated_datum_naming(
+  policy: ByteArray,
+  name: ByteArray,
+  amount: Int,
+) -> LpEscrowDatum {
   let target_dex = from_script(#"aa")
   LpEscrowDatum {
     ..mock_datum(Locked, 1000),
@@ -1504,7 +1745,11 @@ test migrate_fixture_is_accepted_as_written() {
   // failing for some unrelated reason in the fixture itself.
   migrate_fixture(
     mock_thread_nft_with_new_lp(),
-    migrated_datum_naming(mock_new_lp_policy, mock_new_lp_name, mock_new_lp_amount),
+    migrated_datum_naming(
+      mock_new_lp_policy,
+      mock_new_lp_name,
+      mock_new_lp_amount,
+    ),
     mock_new_lp_amount,
   )
 }
@@ -1514,7 +1759,11 @@ test migrate_rejects_when_no_position_comes_back() {
   // that sends the position out and returns nothing would produce.
   !migrate_fixture(
     mock_thread_nft(),
-    migrated_datum_naming(mock_new_lp_policy, mock_new_lp_name, mock_new_lp_amount),
+    migrated_datum_naming(
+      mock_new_lp_policy,
+      mock_new_lp_name,
+      mock_new_lp_amount,
+    ),
     mock_new_lp_amount,
   )
 }
@@ -1533,9 +1782,17 @@ test migrate_rejects_holding_less_than_was_declared() {
   !migrate_fixture(
     assets.merge(
       mock_thread_nft(),
-      assets.from_asset(mock_new_lp_policy, mock_new_lp_name, mock_new_lp_amount - 1),
+      assets.from_asset(
+        mock_new_lp_policy,
+        mock_new_lp_name,
+        mock_new_lp_amount - 1,
+      ),
     ),
-    migrated_datum_naming(mock_new_lp_policy, mock_new_lp_name, mock_new_lp_amount),
+    migrated_datum_naming(
+      mock_new_lp_policy,
+      mock_new_lp_name,
+      mock_new_lp_amount,
+    ),
     mock_new_lp_amount,
   )
 }
@@ -1546,7 +1803,11 @@ test migrate_rejects_a_datum_still_naming_the_old_position() {
   !migrate_fixture(
     mock_thread_nft_with_new_lp(),
     LpEscrowDatum {
-      ..migrated_datum_naming(mock_new_lp_policy, mock_new_lp_name, mock_new_lp_amount),
+      ..migrated_datum_naming(
+        mock_new_lp_policy,
+        mock_new_lp_name,
+        mock_new_lp_amount,
+      ),
       lp_token_policy_id: #"33",
       lp_token_name: "lp",
       lp_token_amount: 1000,
@@ -1557,93 +1818,83 @@ test migrate_rejects_a_datum_still_naming_the_old_position() {
 
 test migrate_rejects_current_timestamp_outside_validity_range() {
   let target_dex = from_script(#"aa")
-  let datum =
-    LpEscrowDatum {
-      ..mock_datum(Locked, 0),
-      dex_whitelist: [target_dex.payment_credential],
-    }
+  let datum = LpEscrowDatum {
+    ..mock_datum(Locked, 0),
+    dex_whitelist: [target_dex.payment_credential],
+  }
   let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
   let own_address = from_verification_key(#"cc")
-  let own_input =
-    Input {
-      output_reference: own_ref,
-      output: Output {
-        address: own_address,
-        value: mock_thread_nft(),
-        datum: InlineDatum(datum),
-        reference_script: None,
-      },
-    }
-  let migration_output =
-    Output {
-      address: target_dex,
-      value: assets.from_asset(#"33", "lp", 1000),
-      datum: transaction.NoDatum,
+  let own_input = Input {
+    output_reference: own_ref,
+    output: Output {
+      address: own_address,
+      value: mock_thread_nft(),
+      datum: InlineDatum(datum),
       reference_script: None,
-    }
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      outputs: [migration_output],
-      extra_signatories: [#"22"],
-      // The transaction's own real validity range is nowhere near
-      // lock expiry — only the redeemer's claimed current_timestamp is.
-      validity_range: interval.between(0, 100),
-    }
-  let redeemer =
-    Migrate {
-      new_lp_policy_id: mock_new_lp_policy,
-      new_lp_name: mock_new_lp_name,
-      new_lp_amount: mock_new_lp_amount,
-      target_dex_credential: target_dex.payment_credential,
-      current_timestamp: min_lock_duration,
-    }
+    },
+  }
+  let migration_output = Output {
+    address: target_dex,
+    value: assets.from_asset(#"33", "lp", 1000),
+    datum: transaction.NoDatum,
+    reference_script: None,
+  }
+  let self = Transaction {
+    ..transaction.placeholder,
+    inputs: [own_input],
+    outputs: [migration_output],
+    extra_signatories: [#"22"],
+    // The transaction's own real validity range is nowhere near
+    // lock expiry — only the redeemer's claimed current_timestamp is.
+    validity_range: interval.between(0, 100),
+  }
+  let redeemer = Migrate {
+    new_lp_policy_id: mock_new_lp_policy,
+    new_lp_name: mock_new_lp_name,
+    new_lp_amount: mock_new_lp_amount,
+    target_dex_credential: target_dex.payment_credential,
+    current_timestamp: min_lock_duration,
+  }
 
   !lp_escrow.spend(Some(datum), redeemer, own_ref, self)
 }
 
 test migrate_fails_before_lock_expiry() {
   let target_dex = from_script(#"aa")
-  let datum =
-    LpEscrowDatum {
-      ..mock_datum(Locked, 0),
-      dex_whitelist: [target_dex.payment_credential],
-    }
+  let datum = LpEscrowDatum {
+    ..mock_datum(Locked, 0),
+    dex_whitelist: [target_dex.payment_credential],
+  }
   let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
   let own_address = from_verification_key(#"cc")
-  let own_input =
-    Input {
-      output_reference: own_ref,
-      output: Output {
-        address: own_address,
-        value: mock_thread_nft(),
-        datum: InlineDatum(datum),
-        reference_script: None,
-      },
-    }
-  let migration_output =
-    Output {
-      address: target_dex,
-      value: assets.from_asset(#"33", "lp", 1000),
-      datum: transaction.NoDatum,
+  let own_input = Input {
+    output_reference: own_ref,
+    output: Output {
+      address: own_address,
+      value: mock_thread_nft(),
+      datum: InlineDatum(datum),
       reference_script: None,
-    }
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      outputs: [migration_output],
-      extra_signatories: [#"22"],
-    }
-  let redeemer =
-    Migrate {
-      new_lp_policy_id: mock_new_lp_policy,
-      new_lp_name: mock_new_lp_name,
-      new_lp_amount: mock_new_lp_amount,
-      target_dex_credential: target_dex.payment_credential,
-      current_timestamp: min_lock_duration - 1,
-    }
+    },
+  }
+  let migration_output = Output {
+    address: target_dex,
+    value: assets.from_asset(#"33", "lp", 1000),
+    datum: transaction.NoDatum,
+    reference_script: None,
+  }
+  let self = Transaction {
+    ..transaction.placeholder,
+    inputs: [own_input],
+    outputs: [migration_output],
+    extra_signatories: [#"22"],
+  }
+  let redeemer = Migrate {
+    new_lp_policy_id: mock_new_lp_policy,
+    new_lp_name: mock_new_lp_name,
+    new_lp_amount: mock_new_lp_amount,
+    target_dex_credential: target_dex.payment_credential,
+    current_timestamp: min_lock_duration - 1,
+  }
 
   !lp_escrow.spend(Some(datum), redeemer, own_ref, self)
 }
@@ -1654,38 +1905,34 @@ test migrate_fails_to_non_whitelisted_dex() {
   let datum = mock_datum(Locked, 0)
   let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
   let own_address = from_verification_key(#"cc")
-  let own_input =
-    Input {
-      output_reference: own_ref,
-      output: Output {
-        address: own_address,
-        value: mock_thread_nft(),
-        datum: InlineDatum(datum),
-        reference_script: None,
-      },
-    }
-  let migration_output =
-    Output {
-      address: target_dex,
-      value: assets.from_asset(#"33", "lp", 1000),
-      datum: transaction.NoDatum,
+  let own_input = Input {
+    output_reference: own_ref,
+    output: Output {
+      address: own_address,
+      value: mock_thread_nft(),
+      datum: InlineDatum(datum),
       reference_script: None,
-    }
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      outputs: [migration_output],
-      extra_signatories: [#"22"],
-    }
-  let redeemer =
-    Migrate {
-      new_lp_policy_id: mock_new_lp_policy,
-      new_lp_name: mock_new_lp_name,
-      new_lp_amount: mock_new_lp_amount,
-      target_dex_credential: target_dex.payment_credential,
-      current_timestamp: min_lock_duration,
-    }
+    },
+  }
+  let migration_output = Output {
+    address: target_dex,
+    value: assets.from_asset(#"33", "lp", 1000),
+    datum: transaction.NoDatum,
+    reference_script: None,
+  }
+  let self = Transaction {
+    ..transaction.placeholder,
+    inputs: [own_input],
+    outputs: [migration_output],
+    extra_signatories: [#"22"],
+  }
+  let redeemer = Migrate {
+    new_lp_policy_id: mock_new_lp_policy,
+    new_lp_name: mock_new_lp_name,
+    new_lp_amount: mock_new_lp_amount,
+    target_dex_credential: target_dex.payment_credential,
+    current_timestamp: min_lock_duration,
+  }
 
   !lp_escrow.spend(Some(datum), redeemer, own_ref, self)
 }
@@ -1695,41 +1942,43 @@ test trigger_cto_succeeds_with_real_anchored_vote() {
   let cto_address = from_verification_key(#"aa")
   let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
   let own_address = from_verification_key(#"cc")
-  let own_input =
-    Input {
-      output_reference: own_ref,
-      output: Output {
-        address: own_address,
-        value: mock_thread_nft(),
-        datum: InlineDatum(datum),
-        reference_script: None,
-      },
-    }
-  let new_datum =
-    LpEscrowDatum {
-      ..datum,
-      cto_triggered: True,
-      community_wallet_hash: #"ee",
-    }
-  let continuing_output =
-    Output {
+  let own_input = Input {
+    output_reference: own_ref,
+    output: Output {
       address: own_address,
       value: mock_thread_nft(),
-      datum: InlineDatum(new_datum),
+      datum: InlineDatum(datum),
       reference_script: None,
-    }
-  let executed_proposal =
-    mock_proposal_anchor(SilenceLockTrigger, Passed, Executed, #"ee")
-  let cto_datum =
-    mock_cto_governance_datum(datum.launch_id, Some(executed_proposal))
+    },
+  }
+  let new_datum = LpEscrowDatum {
+    ..datum,
+    cto_triggered: True,
+    community_wallet_hash: #"ee",
+  }
+  let continuing_output = Output {
+    address: own_address,
+    value: mock_thread_nft(),
+    datum: InlineDatum(new_datum),
+    reference_script: None,
+  }
+  let executed_proposal = mock_proposal_anchor(
+    SilenceLockTrigger,
+    Passed,
+    Executed,
+    #"ee",
+  )
+  let cto_datum = mock_cto_governance_datum(
+    datum.launch_id,
+    Some(executed_proposal),
+  )
   let cto_ref_input = mock_cto_ref_input(cto_address, cto_datum)
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      reference_inputs: [cto_ref_input],
-      outputs: [continuing_output],
-    }
+  let self = Transaction {
+    ..transaction.placeholder,
+    inputs: [own_input],
+    reference_inputs: [cto_ref_input],
+    outputs: [continuing_output],
+  }
 
   lp_escrow.spend(
     Some(datum),
@@ -1749,51 +1998,52 @@ test trigger_cto_rejects_forged_governance_utxo_without_nft() {
   let cto_address = from_verification_key(#"aa")
   let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
   let own_address = from_verification_key(#"cc")
-  let own_input =
-    Input {
-      output_reference: own_ref,
-      output: Output {
-        address: own_address,
-        value: mock_thread_nft(),
-        datum: InlineDatum(datum),
-        reference_script: None,
-      },
-    }
-  let new_datum =
-    LpEscrowDatum {
-      ..datum,
-      cto_triggered: True,
-      community_wallet_hash: #"ee",
-    }
-  let continuing_output =
-    Output {
+  let own_input = Input {
+    output_reference: own_ref,
+    output: Output {
       address: own_address,
       value: mock_thread_nft(),
-      datum: InlineDatum(new_datum),
+      datum: InlineDatum(datum),
       reference_script: None,
-    }
-  let executed_proposal =
-    mock_proposal_anchor(SilenceLockTrigger, Passed, Executed, #"ee")
-  let cto_datum =
-    mock_cto_governance_datum(datum.launch_id, Some(executed_proposal))
+    },
+  }
+  let new_datum = LpEscrowDatum {
+    ..datum,
+    cto_triggered: True,
+    community_wallet_hash: #"ee",
+  }
+  let continuing_output = Output {
+    address: own_address,
+    value: mock_thread_nft(),
+    datum: InlineDatum(new_datum),
+    reference_script: None,
+  }
+  let executed_proposal = mock_proposal_anchor(
+    SilenceLockTrigger,
+    Passed,
+    Executed,
+    #"ee",
+  )
+  let cto_datum = mock_cto_governance_datum(
+    datum.launch_id,
+    Some(executed_proposal),
+  )
   // FORGED: right governance address, fully "passed" datum, but no NFT.
-  let forged_ref_input =
-    Input {
-      output_reference: OutputReference { transaction_id: #"cd", output_index: 0 },
-      output: Output {
-        address: cto_address,
-        value: assets.zero,
-        datum: InlineDatum(cto_datum),
-        reference_script: None,
-      },
-    }
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      reference_inputs: [forged_ref_input],
-      outputs: [continuing_output],
-    }
+  let forged_ref_input = Input {
+    output_reference: OutputReference { transaction_id: #"cd", output_index: 0 },
+    output: Output {
+      address: cto_address,
+      value: assets.zero,
+      datum: InlineDatum(cto_datum),
+      reference_script: None,
+    },
+  }
+  let self = Transaction {
+    ..transaction.placeholder,
+    inputs: [own_input],
+    reference_inputs: [forged_ref_input],
+    outputs: [continuing_output],
+  }
 
   !lp_escrow.spend(
     Some(datum),
@@ -1811,36 +2061,32 @@ test trigger_cto_rejects_without_reference_input() fail {
   let datum = mock_datum(Locked, 0)
   let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
   let own_address = from_verification_key(#"cc")
-  let own_input =
-    Input {
-      output_reference: own_ref,
-      output: Output {
-        address: own_address,
-        value: mock_thread_nft(),
-        datum: InlineDatum(datum),
-        reference_script: None,
-      },
-    }
-  let new_datum =
-    LpEscrowDatum {
-      ..datum,
-      cto_triggered: True,
-      community_wallet_hash: #"ee",
-    }
-  let continuing_output =
-    Output {
+  let own_input = Input {
+    output_reference: own_ref,
+    output: Output {
       address: own_address,
       value: mock_thread_nft(),
-      datum: InlineDatum(new_datum),
+      datum: InlineDatum(datum),
       reference_script: None,
-    }
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      outputs: [continuing_output],
-      extra_signatories: [#"22"],
-    }
+    },
+  }
+  let new_datum = LpEscrowDatum {
+    ..datum,
+    cto_triggered: True,
+    community_wallet_hash: #"ee",
+  }
+  let continuing_output = Output {
+    address: own_address,
+    value: mock_thread_nft(),
+    datum: InlineDatum(new_datum),
+    reference_script: None,
+  }
+  let self = Transaction {
+    ..transaction.placeholder,
+    inputs: [own_input],
+    outputs: [continuing_output],
+    extra_signatories: [#"22"],
+  }
 
   lp_escrow.spend(
     Some(datum),
@@ -1851,46 +2097,51 @@ test trigger_cto_rejects_without_reference_input() fail {
 }
 
 test dissolve_cto_succeeds_with_real_anchored_vote() {
-  let datum =
-    LpEscrowDatum { ..mock_datum(Locked, 0), cto_triggered: True, community_wallet_hash: #"ee" }
+  let datum = LpEscrowDatum {
+    ..mock_datum(Locked, 0),
+    cto_triggered: True,
+    community_wallet_hash: #"ee",
+  }
   let cto_address = from_verification_key(#"aa")
   let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
   let own_address = from_verification_key(#"cc")
-  let own_input =
-    Input {
-      output_reference: own_ref,
-      output: Output {
-        address: own_address,
-        value: mock_thread_nft(),
-        datum: InlineDatum(datum),
-        reference_script: None,
-      },
-    }
-  let new_datum =
-    LpEscrowDatum {
-      ..datum,
-      cto_triggered: False,
-      community_wallet_hash: #"",
-    }
-  let continuing_output =
-    Output {
+  let own_input = Input {
+    output_reference: own_ref,
+    output: Output {
       address: own_address,
       value: mock_thread_nft(),
-      datum: InlineDatum(new_datum),
+      datum: InlineDatum(datum),
       reference_script: None,
-    }
-  let executed_proposal =
-    mock_proposal_anchor(DissolveCTOProposal, Passed, Executed, #"")
-  let cto_datum =
-    mock_cto_governance_datum(datum.launch_id, Some(executed_proposal))
+    },
+  }
+  let new_datum = LpEscrowDatum {
+    ..datum,
+    cto_triggered: False,
+    community_wallet_hash: #"",
+  }
+  let continuing_output = Output {
+    address: own_address,
+    value: mock_thread_nft(),
+    datum: InlineDatum(new_datum),
+    reference_script: None,
+  }
+  let executed_proposal = mock_proposal_anchor(
+    DissolveCTOProposal,
+    Passed,
+    Executed,
+    #"",
+  )
+  let cto_datum = mock_cto_governance_datum(
+    datum.launch_id,
+    Some(executed_proposal),
+  )
   let cto_ref_input = mock_cto_ref_input(cto_address, cto_datum)
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      reference_inputs: [cto_ref_input],
-      outputs: [continuing_output],
-    }
+  let self = Transaction {
+    ..transaction.placeholder,
+    inputs: [own_input],
+    reference_inputs: [cto_ref_input],
+    outputs: [continuing_output],
+  }
 
   lp_escrow.spend(Some(datum), DissolveCTO, own_ref, self)
 }
@@ -1900,105 +2151,119 @@ test dissolve_cto_rejects_if_not_triggered() fail {
   let cto_address = from_verification_key(#"aa")
   let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
   let own_address = from_verification_key(#"cc")
-  let own_input =
-    Input {
-      output_reference: own_ref,
-      output: Output {
-        address: own_address,
-        value: mock_thread_nft(),
-        datum: InlineDatum(datum),
-        reference_script: None,
-      },
-    }
-  let new_datum =
-    LpEscrowDatum {
-      ..datum,
-      cto_triggered: False,
-      community_wallet_hash: #"",
-    }
-  let continuing_output =
-    Output {
+  let own_input = Input {
+    output_reference: own_ref,
+    output: Output {
       address: own_address,
       value: mock_thread_nft(),
-      datum: InlineDatum(new_datum),
+      datum: InlineDatum(datum),
       reference_script: None,
-    }
-  // No CTO was ever triggered on this launch, so no real DissolveCTOProposal
-  // could legitimately exist for it — omitting the reference input entirely
-  // (rather than fabricating one) is the honest way to model that; the
-  // `expect` panic is what should reject this, same as the
-  // rejects_without_reference_input case above.
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      outputs: [continuing_output],
-    }
+    },
+  }
+  let new_datum = LpEscrowDatum {
+    ..datum,
+    cto_triggered: False,
+    community_wallet_hash: #"",
+  }
+  let continuing_output = Output {
+    address: own_address,
+    value: mock_thread_nft(),
+    datum: InlineDatum(new_datum),
+    reference_script: None,
+  }
+  // A genuine executed DissolveCTOProposal is referenced, so the ONE thing
+  // this transaction lacks is a triggered CTO to dissolve: that is the clause
+  // that refuses it, not a missing reference input (which
+  // rejects_without_reference_input covers separately).
+  let self = Transaction {
+    ..transaction.placeholder,
+    inputs: [own_input],
+    reference_inputs: [
+      mock_cto_ref_input(
+        cto_address,
+        mock_cto_governance_datum(
+          datum.launch_id,
+          Some(mock_proposal_anchor(DissolveCTOProposal, Passed, Executed, #"")),
+        ),
+      ),
+    ],
+    outputs: [continuing_output],
+  }
 
   lp_escrow.spend(Some(datum), DissolveCTO, own_ref, self)
 }
 
 test migrate_succeeds_via_community_wallet_after_cto() {
   let target_dex = from_script(#"aa")
-  let datum =
-    LpEscrowDatum {
-      ..mock_datum(Locked, 1000),
-      dex_whitelist: [target_dex.payment_credential],
-      cto_triggered: True,
-      community_wallet_hash: #"ee",
-    }
+  let datum = LpEscrowDatum {
+    ..mock_datum(Locked, 1000),
+    dex_whitelist: [target_dex.payment_credential],
+    cto_triggered: True,
+    community_wallet_hash: #"ee",
+  }
   let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
   let own_address = from_verification_key(#"cc")
-  let own_input =
-    Input {
-      output_reference: own_ref,
-      output: Output {
-        address: own_address,
-        value: mock_thread_nft(),
-        datum: InlineDatum(datum),
-        reference_script: None,
-      },
-    }
-  let migration_output =
-    Output {
-      address: target_dex,
-      value: assets.from_asset(#"33", "lp", 1000),
-      datum: transaction.NoDatum,
+  let own_input = Input {
+    output_reference: own_ref,
+    output: Output {
+      address: own_address,
+      value: mock_thread_nft(),
+      datum: InlineDatum(datum),
       reference_script: None,
-    }
+    },
+  }
+  let migration_output = Output {
+    address: target_dex,
+    value: assets.from_asset(#"33", "lp", 1000),
+    datum: transaction.NoDatum,
+    reference_script: None,
+  }
   // The escrow keeps a continuing output, and its datum has to record when
   // the position moved — that record is what the cooldown is measured from.
-  let migrated_datum =
-    LpEscrowDatum {
-      ..datum,
-      lp_token_policy_id: mock_new_lp_policy,
-      lp_token_name: mock_new_lp_name,
-      lp_token_amount: mock_new_lp_amount,
-      last_migration_timestamp: 1000 + min_lock_duration }
-  let thread_continuing_output =
-    Output {
-      address: own_address,
-      value: mock_thread_nft_with_new_lp(),
-      datum: InlineDatum(migrated_datum),
-      reference_script: None,
-    }
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      outputs: [migration_output, thread_continuing_output],
-      // community wallet signs, not governor
-      extra_signatories: [#"ee"],
-      validity_range: interval.between(1000 + min_lock_duration, 1000 + min_lock_duration + 100),
-    }
-  let redeemer =
-    Migrate {
-      new_lp_policy_id: mock_new_lp_policy,
-      new_lp_name: mock_new_lp_name,
-      new_lp_amount: mock_new_lp_amount,
-      target_dex_credential: target_dex.payment_credential,
-      current_timestamp: 1000 + min_lock_duration,
-    }
+  let migrated_datum = LpEscrowDatum {
+    ..datum,
+    lp_token_policy_id: mock_new_lp_policy,
+    lp_token_name: mock_new_lp_name,
+    lp_token_amount: mock_new_lp_amount,
+    last_migration_timestamp: 1000 + min_lock_duration,
+  }
+  let thread_continuing_output = Output {
+    address: own_address,
+    value: mock_thread_nft_with_new_lp(),
+    datum: InlineDatum(migrated_datum),
+    reference_script: None,
+  }
+  let self = Transaction {
+    ..transaction.placeholder,
+    inputs: [own_input],
+    outputs: [migration_output, thread_continuing_output],
+    // community wallet signs, not governor
+    extra_signatories: [#"ee"],
+    validity_range: interval.between(
+      1000 + min_lock_duration,
+      1000 + min_lock_duration + 100,
+    ),
+    // The community wallet's authority is re-read from the governance
+    // record, which must still name it: a freeze that clears it revokes it.
+    reference_inputs: [
+      mock_cto_ref_input(
+        from_verification_key(#"aa"),
+        mock_cto_governance_datum(
+          datum.launch_id,
+          Some(
+            mock_proposal_anchor(SilenceLockTrigger, Passed, Executed, #"ee"),
+          ),
+        ),
+      ),
+    ],
+  }
+  let redeemer = Migrate {
+    new_lp_policy_id: mock_new_lp_policy,
+    new_lp_name: mock_new_lp_name,
+    new_lp_amount: mock_new_lp_amount,
+    target_dex_credential: target_dex.payment_credential,
+    current_timestamp: 1000 + min_lock_duration,
+  }
 
   lp_escrow.spend(Some(datum), redeemer, own_ref, self)
 }
@@ -2007,31 +2272,28 @@ test cancel_launch_succeeds_on_never_sealed_position() {
   let datum = mock_datum(Locked, 0)
   let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
   let own_address = from_verification_key(#"cc")
-  let own_input =
-    Input {
-      output_reference: own_ref,
-      output: Output {
-        address: own_address,
-        value: mock_thread_nft(),
-        datum: InlineDatum(datum),
-        reference_script: None,
-      },
-    }
-  let new_datum = LpEscrowDatum { ..datum, lp_state: Cancelled }
-  let continuing_output =
-    Output {
+  let own_input = Input {
+    output_reference: own_ref,
+    output: Output {
       address: own_address,
       value: mock_thread_nft(),
-      datum: InlineDatum(new_datum),
+      datum: InlineDatum(datum),
       reference_script: None,
-    }
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      outputs: [continuing_output],
-      extra_signatories: [#"22"],
-    }
+    },
+  }
+  let new_datum = LpEscrowDatum { ..datum, lp_state: Cancelled }
+  let continuing_output = Output {
+    address: own_address,
+    value: mock_thread_nft(),
+    datum: InlineDatum(new_datum),
+    reference_script: None,
+  }
+  let self = Transaction {
+    ..transaction.placeholder,
+    inputs: [own_input],
+    outputs: [continuing_output],
+    extra_signatories: [#"22"],
+  }
 
   lp_escrow.spend(Some(datum), CancelLaunch, own_ref, self)
 }
@@ -2040,37 +2302,40 @@ test cancel_launch_rejects_already_sealed_position() {
   let datum = mock_datum(Locked, 500)
   let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
   let own_address = from_verification_key(#"cc")
-  let own_input =
-    Input {
-      output_reference: own_ref,
-      output: Output {
-        address: own_address,
-        value: assets.merge(mock_thread_nft(), assets.merge(
+  let own_input = Input {
+    output_reference: own_ref,
+    output: Output {
+      address: own_address,
+      value: assets.merge(
+        mock_thread_nft(),
+        assets.merge(
           assets.from_lovelace(15_000_000_000),
           assets.from_asset(#"33", "lp", 1000),
-        )),
-        datum: InlineDatum(datum),
-        reference_script: None,
-      },
-    }
+        ),
+      ),
+      datum: InlineDatum(datum),
+      reference_script: None,
+    },
+  }
   let new_datum = LpEscrowDatum { ..datum, lp_state: Cancelled }
-  let continuing_output =
-    Output {
-      address: own_address,
-      value: assets.merge(mock_thread_nft(), assets.merge(
+  let continuing_output = Output {
+    address: own_address,
+    value: assets.merge(
+      mock_thread_nft(),
+      assets.merge(
         assets.from_lovelace(15_000_000_000),
         assets.from_asset(#"33", "lp", 1000),
-      )),
-      datum: InlineDatum(new_datum),
-      reference_script: None,
-    }
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      outputs: [continuing_output],
-      extra_signatories: [#"22"],
-    }
+      ),
+    ),
+    datum: InlineDatum(new_datum),
+    reference_script: None,
+  }
+  let self = Transaction {
+    ..transaction.placeholder,
+    inputs: [own_input],
+    outputs: [continuing_output],
+    extra_signatories: [#"22"],
+  }
 
   !lp_escrow.spend(Some(datum), CancelLaunch, own_ref, self)
 }
@@ -2082,49 +2347,44 @@ test propose_dex_change_succeeds_with_threshold_signatures() {
   let target_dex = from_script(#"aa")
   let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
   let own_address = from_verification_key(#"cc")
-  let own_input =
-    Input {
-      output_reference: own_ref,
-      output: Output {
-        address: own_address,
-        value: mock_thread_nft(),
-        datum: InlineDatum(datum),
-        reference_script: None,
-      },
-    }
-  let new_datum =
-    LpEscrowDatum {
-      ..datum,
-      pending_dex_change: Some(
-        PendingDexChange {
-          dex_credential: target_dex.payment_credential,
-          action: ProposeAdd,
-          proposed_at: 1000,
-        },
-      ),
-    }
-  let continuing_output =
-    Output {
+  let own_input = Input {
+    output_reference: own_ref,
+    output: Output {
       address: own_address,
       value: mock_thread_nft(),
-      datum: InlineDatum(new_datum),
+      datum: InlineDatum(datum),
       reference_script: None,
-    }
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      outputs: [continuing_output],
-      // 2-of-3: aa and bb sign, cc doesn't
-      extra_signatories: [#"aa", #"bb"],
-      validity_range: interval.between(900, 1100),
-    }
-  let redeemer =
-    ProposeDexChange {
-      dex_credential: target_dex.payment_credential,
-      action: ProposeAdd,
-      timestamp: 1000,
-    }
+    },
+  }
+  let new_datum = LpEscrowDatum {
+    ..datum,
+    pending_dex_change: Some(
+      PendingDexChange {
+        dex_credential: target_dex.payment_credential,
+        action: ProposeAdd,
+        proposed_at: 1000,
+      },
+    ),
+  }
+  let continuing_output = Output {
+    address: own_address,
+    value: mock_thread_nft(),
+    datum: InlineDatum(new_datum),
+    reference_script: None,
+  }
+  let self = Transaction {
+    ..transaction.placeholder,
+    inputs: [own_input],
+    outputs: [continuing_output],
+    // 2-of-3: aa and bb sign, cc doesn't
+    extra_signatories: [#"aa", #"bb"],
+    validity_range: interval.between(900, 1100),
+  }
+  let redeemer = ProposeDexChange {
+    dex_credential: target_dex.payment_credential,
+    action: ProposeAdd,
+    timestamp: 1000,
+  }
 
   lp_escrow.spend(Some(datum), redeemer, own_ref, self)
 }
@@ -2134,50 +2394,45 @@ test propose_dex_change_rejects_wide_validity_range() {
   let target_dex = from_script(#"aa")
   let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
   let own_address = from_verification_key(#"cc")
-  let own_input =
-    Input {
-      output_reference: own_ref,
-      output: Output {
-        address: own_address,
-        value: mock_thread_nft(),
-        datum: InlineDatum(datum),
-        reference_script: None,
-      },
-    }
-  let new_datum =
-    LpEscrowDatum {
-      ..datum,
-      pending_dex_change: Some(
-        PendingDexChange {
-          dex_credential: target_dex.payment_credential,
-          action: ProposeAdd,
-          proposed_at: 1000,
-        },
-      ),
-    }
-  let continuing_output =
-    Output {
+  let own_input = Input {
+    output_reference: own_ref,
+    output: Output {
       address: own_address,
       value: mock_thread_nft(),
-      datum: InlineDatum(new_datum),
+      datum: InlineDatum(datum),
       reference_script: None,
-    }
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      outputs: [continuing_output],
-      extra_signatories: [#"aa", #"bb"],
-      // Wide enough to let the multisig claim any proposed_at within it,
-      // regardless of when the transaction actually lands.
-      validity_range: interval.between(0, 900_000),
-    }
-  let redeemer =
-    ProposeDexChange {
-      dex_credential: target_dex.payment_credential,
-      action: ProposeAdd,
-      timestamp: 1000,
-    }
+    },
+  }
+  let new_datum = LpEscrowDatum {
+    ..datum,
+    pending_dex_change: Some(
+      PendingDexChange {
+        dex_credential: target_dex.payment_credential,
+        action: ProposeAdd,
+        proposed_at: 1000,
+      },
+    ),
+  }
+  let continuing_output = Output {
+    address: own_address,
+    value: mock_thread_nft(),
+    datum: InlineDatum(new_datum),
+    reference_script: None,
+  }
+  let self = Transaction {
+    ..transaction.placeholder,
+    inputs: [own_input],
+    outputs: [continuing_output],
+    extra_signatories: [#"aa", #"bb"],
+    // Wide enough to let the multisig claim any proposed_at within it,
+    // regardless of when the transaction actually lands.
+    validity_range: interval.between(0, 900_000),
+  }
+  let redeemer = ProposeDexChange {
+    dex_credential: target_dex.payment_credential,
+    action: ProposeAdd,
+    timestamp: 1000,
+  }
 
   !lp_escrow.spend(Some(datum), redeemer, own_ref, self)
 }
@@ -2187,49 +2442,44 @@ test propose_dex_change_rejects_below_multisig_threshold() {
   let target_dex = from_script(#"aa")
   let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
   let own_address = from_verification_key(#"cc")
-  let own_input =
-    Input {
-      output_reference: own_ref,
-      output: Output {
-        address: own_address,
-        value: mock_thread_nft(),
-        datum: InlineDatum(datum),
-        reference_script: None,
-      },
-    }
-  let new_datum =
-    LpEscrowDatum {
-      ..datum,
-      pending_dex_change: Some(
-        PendingDexChange {
-          dex_credential: target_dex.payment_credential,
-          action: ProposeAdd,
-          proposed_at: 1000,
-        },
-      ),
-    }
-  let continuing_output =
-    Output {
+  let own_input = Input {
+    output_reference: own_ref,
+    output: Output {
       address: own_address,
       value: mock_thread_nft(),
-      datum: InlineDatum(new_datum),
+      datum: InlineDatum(datum),
       reference_script: None,
-    }
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      outputs: [continuing_output],
-      // only 1-of-3 signs — below the threshold of 2
-      extra_signatories: [#"aa"],
-      validity_range: interval.between(900, 1100),
-    }
-  let redeemer =
-    ProposeDexChange {
-      dex_credential: target_dex.payment_credential,
-      action: ProposeAdd,
-      timestamp: 1000,
-    }
+    },
+  }
+  let new_datum = LpEscrowDatum {
+    ..datum,
+    pending_dex_change: Some(
+      PendingDexChange {
+        dex_credential: target_dex.payment_credential,
+        action: ProposeAdd,
+        proposed_at: 1000,
+      },
+    ),
+  }
+  let continuing_output = Output {
+    address: own_address,
+    value: mock_thread_nft(),
+    datum: InlineDatum(new_datum),
+    reference_script: None,
+  }
+  let self = Transaction {
+    ..transaction.placeholder,
+    inputs: [own_input],
+    outputs: [continuing_output],
+    // only 1-of-3 signs — below the threshold of 2
+    extra_signatories: [#"aa"],
+    validity_range: interval.between(900, 1100),
+  }
+  let redeemer = ProposeDexChange {
+    dex_credential: target_dex.payment_credential,
+    action: ProposeAdd,
+    timestamp: 1000,
+  }
 
   !lp_escrow.spend(Some(datum), redeemer, own_ref, self)
 }
@@ -2237,120 +2487,115 @@ test propose_dex_change_rejects_below_multisig_threshold() {
 test propose_dex_change_rejects_when_a_change_is_already_pending() {
   let target_dex = from_script(#"aa")
   let other_dex = from_script(#"bb")
-  let datum =
-    LpEscrowDatum {
-      ..mock_datum(Locked, 0),
-      pending_dex_change: Some(
-        PendingDexChange {
-          dex_credential: other_dex.payment_credential,
-          action: ProposeAdd,
-          proposed_at: 500,
-        },
-      ),
-    }
+  let datum = LpEscrowDatum {
+    ..mock_datum(Locked, 0),
+    pending_dex_change: Some(
+      PendingDexChange {
+        dex_credential: other_dex.payment_credential,
+        action: ProposeAdd,
+        proposed_at: 500,
+      },
+    ),
+  }
   let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
   let own_address = from_verification_key(#"cc")
-  let own_input =
-    Input {
-      output_reference: own_ref,
-      output: Output {
-        address: own_address,
-        value: mock_thread_nft(),
-        datum: InlineDatum(datum),
-        reference_script: None,
-      },
-    }
-  let new_datum =
-    LpEscrowDatum {
-      ..datum,
-      pending_dex_change: Some(
-        PendingDexChange {
-          dex_credential: target_dex.payment_credential,
-          action: ProposeAdd,
-          proposed_at: 1000,
-        },
-      ),
-    }
-  let continuing_output =
-    Output {
+  let own_input = Input {
+    output_reference: own_ref,
+    output: Output {
       address: own_address,
       value: mock_thread_nft(),
-      datum: InlineDatum(new_datum),
+      datum: InlineDatum(datum),
       reference_script: None,
-    }
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      outputs: [continuing_output],
-      extra_signatories: [#"aa", #"bb"],
-      validity_range: interval.between(900, 1100),
-    }
-  let redeemer =
-    ProposeDexChange {
-      dex_credential: target_dex.payment_credential,
-      action: ProposeAdd,
-      timestamp: 1000,
-    }
+    },
+  }
+  let new_datum = LpEscrowDatum {
+    ..datum,
+    pending_dex_change: Some(
+      PendingDexChange {
+        dex_credential: target_dex.payment_credential,
+        action: ProposeAdd,
+        proposed_at: 1000,
+      },
+    ),
+  }
+  let continuing_output = Output {
+    address: own_address,
+    value: mock_thread_nft(),
+    datum: InlineDatum(new_datum),
+    reference_script: None,
+  }
+  let self = Transaction {
+    ..transaction.placeholder,
+    inputs: [own_input],
+    outputs: [continuing_output],
+    extra_signatories: [#"aa", #"bb"],
+    validity_range: interval.between(900, 1100),
+  }
+  let redeemer = ProposeDexChange {
+    dex_credential: target_dex.payment_credential,
+    action: ProposeAdd,
+    timestamp: 1000,
+  }
 
   !lp_escrow.spend(Some(datum), redeemer, own_ref, self)
 }
 
 test execute_dex_change_succeeds_after_notice_period() {
   let target_dex = from_script(#"aa")
-  let datum =
-    LpEscrowDatum {
-      ..mock_datum(Locked, 0),
-      pending_dex_change: Some(
-        PendingDexChange {
-          dex_credential: target_dex.payment_credential,
-          action: ProposeAdd,
-          proposed_at: 0,
-        },
-      ),
-    }
+  let datum = LpEscrowDatum {
+    ..mock_datum(Locked, 0),
+    pending_dex_change: Some(
+      PendingDexChange {
+        dex_credential: target_dex.payment_credential,
+        action: ProposeAdd,
+        proposed_at: 0,
+      },
+    ),
+  }
   let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
   let own_address = from_verification_key(#"cc")
   // Real, non-zero locked value (15,000 ADA + 150M LP tokens) —
   // proves the new lp_value_unchanged check doesn't reject a genuine,
   // value-preserving whitelist-change execution.
-  let locked_value =
-    assets.merge(assets.from_lovelace(15_000_000_000), assets.from_asset(#"33", "lp", 150_000_000))
-  let own_input =
-    Input {
-      output_reference: own_ref,
-      output: Output {
-        address: own_address,
-        value: assets.merge(mock_thread_nft(), locked_value),
-        datum: InlineDatum(datum),
-        reference_script: None,
-      },
-    }
-  let new_datum =
-    LpEscrowDatum {
-      ..datum,
-      dex_whitelist: [target_dex.payment_credential],
-      pending_dex_change: None,
-    }
-  let continuing_output =
-    Output {
+  let locked_value = assets.merge(
+    assets.from_lovelace(15_000_000_000),
+    assets.from_asset(#"33", "lp", 150_000_000),
+  )
+  let own_input = Input {
+    output_reference: own_ref,
+    output: Output {
       address: own_address,
       value: assets.merge(mock_thread_nft(), locked_value),
-      datum: InlineDatum(new_datum),
+      datum: InlineDatum(datum),
       reference_script: None,
-    }
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      outputs: [continuing_output],
-      // no signatures at all — execution is permissionless once due
-      validity_range: interval.between(
-        dex_change_notice_period - 100,
-        dex_change_notice_period + 100,
-      ),
-    }
-  let redeemer = ExecuteDexChange { current_timestamp: dex_change_notice_period }
+    },
+  }
+  let new_datum = LpEscrowDatum {
+    ..datum,
+    dex_whitelist: [target_dex.payment_credential],
+    pending_dex_change: None,
+  }
+  let continuing_output = Output {
+    address: own_address,
+    value: assets.merge(mock_thread_nft(), locked_value),
+    datum: InlineDatum(new_datum),
+    reference_script: None,
+  }
+  let self = Transaction {
+    ..transaction.placeholder,
+    inputs: [own_input],
+    outputs: [continuing_output],
+    // no signatures at all — execution is permissionless once due
+    // The range STARTS when the notice period ends, so the change is due for
+    // every moment the transaction is valid in.
+    validity_range: interval.between(
+      dex_change_notice_period,
+      dex_change_notice_period + 100,
+    ),
+  }
+  let redeemer = ExecuteDexChange {
+    current_timestamp: dex_change_notice_period,
+  }
 
   lp_escrow.spend(Some(datum), redeemer, own_ref, self)
 }
@@ -2363,69 +2608,70 @@ test execute_dex_change_succeeds_after_notice_period() {
 // diverted away from the script instead) is rejected.
 test execute_dex_change_rejects_value_drain_attempt() {
   let target_dex = from_script(#"aa")
-  let datum =
-    LpEscrowDatum {
-      ..mock_datum(Locked, 0),
-      pending_dex_change: Some(
-        PendingDexChange {
-          dex_credential: target_dex.payment_credential,
-          action: ProposeAdd,
-          proposed_at: 0,
-        },
-      ),
-    }
+  let datum = LpEscrowDatum {
+    ..mock_datum(Locked, 0),
+    pending_dex_change: Some(
+      PendingDexChange {
+        dex_credential: target_dex.payment_credential,
+        action: ProposeAdd,
+        proposed_at: 0,
+      },
+    ),
+  }
   let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
   let own_address = from_verification_key(#"cc")
   let attacker_address = from_verification_key(#"ee")
-  let own_input =
-    Input {
-      output_reference: own_ref,
-      output: Output {
-        address: own_address,
-        value: assets.merge(mock_thread_nft(), assets.merge(
+  let own_input = Input {
+    output_reference: own_ref,
+    output: Output {
+      address: own_address,
+      value: assets.merge(
+        mock_thread_nft(),
+        assets.merge(
           assets.from_lovelace(15_000_000_000),
           assets.from_asset(#"33", "lp", 150_000_000),
-        )),
-        datum: InlineDatum(datum),
-        reference_script: None,
-      },
-    }
-  let new_datum =
-    LpEscrowDatum {
-      ..datum,
-      dex_whitelist: [target_dex.payment_credential],
-      pending_dex_change: None,
-    }
+        ),
+      ),
+      datum: InlineDatum(datum),
+      reference_script: None,
+    },
+  }
+  let new_datum = LpEscrowDatum {
+    ..datum,
+    dex_whitelist: [target_dex.payment_credential],
+    pending_dex_change: None,
+  }
   // Correct new datum, but a nearly-empty continuing output — the real
   // locked value goes to the attacker instead.
-  let continuing_output =
-    Output {
-      address: own_address,
-      value: assets.merge(mock_thread_nft(), assets.from_lovelace(1_500_000)),
-      datum: InlineDatum(new_datum),
-      reference_script: None,
-    }
-  let drain_output =
-    Output {
-      address: attacker_address,
-      value: assets.merge(
-        assets.from_lovelace(13_498_500_000),
-        assets.from_asset(#"33", "lp", 150_000_000),
-      ),
-      datum: transaction.NoDatum,
-      reference_script: None,
-    }
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      outputs: [continuing_output, drain_output],
-      validity_range: interval.between(
-        dex_change_notice_period - 100,
-        dex_change_notice_period + 100,
-      ),
-    }
-  let redeemer = ExecuteDexChange { current_timestamp: dex_change_notice_period }
+  let continuing_output = Output {
+    address: own_address,
+    value: assets.merge(mock_thread_nft(), assets.from_lovelace(1_500_000)),
+    datum: InlineDatum(new_datum),
+    reference_script: None,
+  }
+  let drain_output = Output {
+    address: attacker_address,
+    value: assets.merge(
+      assets.from_lovelace(13_498_500_000),
+      assets.from_asset(#"33", "lp", 150_000_000),
+    ),
+    datum: transaction.NoDatum,
+    reference_script: None,
+  }
+  let self = Transaction {
+    ..transaction.placeholder,
+    inputs: [own_input],
+    outputs: [continuing_output, drain_output],
+    // The range STARTS when the notice period ends, so the change is due for
+    // every moment the transaction is valid in.
+    validity_range: interval.between(
+      dex_change_notice_period,
+      dex_change_notice_period + 100,
+    ),
+  }
+  let redeemer = ExecuteDexChange {
+    current_timestamp: dex_change_notice_period,
+  }
 
   !lp_escrow.spend(Some(datum), redeemer, own_ref, self)
 }
@@ -2439,104 +2685,96 @@ test execute_dex_change_rejects_value_drain_attempt() {
 // period entirely.
 test execute_dex_change_rejects_wide_validity_range() {
   let target_dex = from_script(#"aa")
-  let datum =
-    LpEscrowDatum {
-      ..mock_datum(Locked, 0),
-      pending_dex_change: Some(
-        PendingDexChange {
-          dex_credential: target_dex.payment_credential,
-          action: ProposeAdd,
-          proposed_at: 0,
-        },
-      ),
-    }
+  let datum = LpEscrowDatum {
+    ..mock_datum(Locked, 0),
+    pending_dex_change: Some(
+      PendingDexChange {
+        dex_credential: target_dex.payment_credential,
+        action: ProposeAdd,
+        proposed_at: 0,
+      },
+    ),
+  }
   let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
   let own_address = from_verification_key(#"cc")
-  let own_input =
-    Input {
-      output_reference: own_ref,
-      output: Output {
-        address: own_address,
-        value: mock_thread_nft(),
-        datum: InlineDatum(datum),
-        reference_script: None,
-      },
-    }
-  let new_datum =
-    LpEscrowDatum {
-      ..datum,
-      dex_whitelist: [target_dex.payment_credential],
-      pending_dex_change: None,
-    }
-  let continuing_output =
-    Output {
+  let own_input = Input {
+    output_reference: own_ref,
+    output: Output {
       address: own_address,
       value: mock_thread_nft(),
-      datum: InlineDatum(new_datum),
+      datum: InlineDatum(datum),
       reference_script: None,
-    }
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      outputs: [continuing_output],
-      // Real proposal was at 0; a real, honest ExecuteDexChange tx would
-      // declare a narrow range near the real notice-period boundary. This
-      // one instead spans all the way from 0, comfortably exceeding
-      // max_validity_range_width.
-      validity_range: interval.between(0, dex_change_notice_period + 100),
-    }
-  let redeemer = ExecuteDexChange { current_timestamp: dex_change_notice_period }
+    },
+  }
+  let new_datum = LpEscrowDatum {
+    ..datum,
+    dex_whitelist: [target_dex.payment_credential],
+    pending_dex_change: None,
+  }
+  let continuing_output = Output {
+    address: own_address,
+    value: mock_thread_nft(),
+    datum: InlineDatum(new_datum),
+    reference_script: None,
+  }
+  let self = Transaction {
+    ..transaction.placeholder,
+    inputs: [own_input],
+    outputs: [continuing_output],
+    // Real proposal was at 0; a real, honest ExecuteDexChange tx would
+    // declare a narrow range near the real notice-period boundary. This
+    // one instead spans all the way from 0, comfortably exceeding
+    // max_validity_range_width.
+    validity_range: interval.between(0, dex_change_notice_period + 100),
+  }
+  let redeemer = ExecuteDexChange {
+    current_timestamp: dex_change_notice_period,
+  }
 
   !lp_escrow.spend(Some(datum), redeemer, own_ref, self)
 }
 
 test execute_dex_change_rejects_before_notice_period_elapsed() {
   let target_dex = from_script(#"aa")
-  let datum =
-    LpEscrowDatum {
-      ..mock_datum(Locked, 0),
-      pending_dex_change: Some(
-        PendingDexChange {
-          dex_credential: target_dex.payment_credential,
-          action: ProposeAdd,
-          proposed_at: 0,
-        },
-      ),
-    }
+  let datum = LpEscrowDatum {
+    ..mock_datum(Locked, 0),
+    pending_dex_change: Some(
+      PendingDexChange {
+        dex_credential: target_dex.payment_credential,
+        action: ProposeAdd,
+        proposed_at: 0,
+      },
+    ),
+  }
   let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
   let own_address = from_verification_key(#"cc")
-  let own_input =
-    Input {
-      output_reference: own_ref,
-      output: Output {
-        address: own_address,
-        value: mock_thread_nft(),
-        datum: InlineDatum(datum),
-        reference_script: None,
-      },
-    }
-  let new_datum =
-    LpEscrowDatum {
-      ..datum,
-      dex_whitelist: [target_dex.payment_credential],
-      pending_dex_change: None,
-    }
-  let continuing_output =
-    Output {
+  let own_input = Input {
+    output_reference: own_ref,
+    output: Output {
       address: own_address,
       value: mock_thread_nft(),
-      datum: InlineDatum(new_datum),
+      datum: InlineDatum(datum),
       reference_script: None,
-    }
+    },
+  }
+  let new_datum = LpEscrowDatum {
+    ..datum,
+    dex_whitelist: [target_dex.payment_credential],
+    pending_dex_change: None,
+  }
+  let continuing_output = Output {
+    address: own_address,
+    value: mock_thread_nft(),
+    datum: InlineDatum(new_datum),
+    reference_script: None,
+  }
   let too_early = dex_change_notice_period - 1
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      outputs: [continuing_output],
-      validity_range: interval.between(too_early - 100, too_early + 100),
-    }
+  let self = Transaction {
+    ..transaction.placeholder,
+    inputs: [own_input],
+    outputs: [continuing_output],
+    validity_range: interval.between(too_early - 100, too_early + 100),
+  }
   let redeemer = ExecuteDexChange { current_timestamp: too_early }
 
   !lp_escrow.spend(Some(datum), redeemer, own_ref, self)
@@ -2549,122 +2787,115 @@ test execute_dex_change_rejects_with_no_pending_change() fail {
   let datum = mock_datum(Locked, 0)
   let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
   let own_address = from_verification_key(#"cc")
-  let own_input =
-    Input {
-      output_reference: own_ref,
-      output: Output {
-        address: own_address,
-        value: mock_thread_nft(),
-        datum: InlineDatum(datum),
-        reference_script: None,
-      },
-    }
-  let continuing_output =
-    Output {
+  let own_input = Input {
+    output_reference: own_ref,
+    output: Output {
       address: own_address,
       value: mock_thread_nft(),
       datum: InlineDatum(datum),
       reference_script: None,
-    }
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      outputs: [continuing_output],
-      validity_range: interval.between(
-        dex_change_notice_period - 100,
-        dex_change_notice_period + 100,
-      ),
-    }
-  let redeemer = ExecuteDexChange { current_timestamp: dex_change_notice_period }
+    },
+  }
+  let continuing_output = Output {
+    address: own_address,
+    value: mock_thread_nft(),
+    datum: InlineDatum(datum),
+    reference_script: None,
+  }
+  let self = Transaction {
+    ..transaction.placeholder,
+    inputs: [own_input],
+    outputs: [continuing_output],
+    // The range STARTS when the notice period ends, so the change is due for
+    // every moment the transaction is valid in.
+    validity_range: interval.between(
+      dex_change_notice_period,
+      dex_change_notice_period + 100,
+    ),
+  }
+  let redeemer = ExecuteDexChange {
+    current_timestamp: dex_change_notice_period,
+  }
 
   lp_escrow.spend(Some(datum), redeemer, own_ref, self)
 }
 
 test cancel_pending_dex_change_succeeds_with_multisig() {
   let target_dex = from_script(#"aa")
-  let datum =
-    LpEscrowDatum {
-      ..mock_datum(Locked, 0),
-      pending_dex_change: Some(
-        PendingDexChange {
-          dex_credential: target_dex.payment_credential,
-          action: ProposeAdd,
-          proposed_at: 0,
-        },
-      ),
-    }
+  let datum = LpEscrowDatum {
+    ..mock_datum(Locked, 0),
+    pending_dex_change: Some(
+      PendingDexChange {
+        dex_credential: target_dex.payment_credential,
+        action: ProposeAdd,
+        proposed_at: 0,
+      },
+    ),
+  }
   let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
   let own_address = from_verification_key(#"cc")
-  let own_input =
-    Input {
-      output_reference: own_ref,
-      output: Output {
-        address: own_address,
-        value: mock_thread_nft(),
-        datum: InlineDatum(datum),
-        reference_script: None,
-      },
-    }
-  let new_datum = LpEscrowDatum { ..datum, pending_dex_change: None }
-  let continuing_output =
-    Output {
+  let own_input = Input {
+    output_reference: own_ref,
+    output: Output {
       address: own_address,
       value: mock_thread_nft(),
-      datum: InlineDatum(new_datum),
+      datum: InlineDatum(datum),
       reference_script: None,
-    }
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      outputs: [continuing_output],
-      extra_signatories: [#"bb", #"cc"],
-    }
+    },
+  }
+  let new_datum = LpEscrowDatum { ..datum, pending_dex_change: None }
+  let continuing_output = Output {
+    address: own_address,
+    value: mock_thread_nft(),
+    datum: InlineDatum(new_datum),
+    reference_script: None,
+  }
+  let self = Transaction {
+    ..transaction.placeholder,
+    inputs: [own_input],
+    outputs: [continuing_output],
+    extra_signatories: [#"bb", #"cc"],
+  }
 
   lp_escrow.spend(Some(datum), CancelPendingDexChange, own_ref, self)
 }
 
 test cancel_pending_dex_change_rejects_below_multisig_threshold() {
   let target_dex = from_script(#"aa")
-  let datum =
-    LpEscrowDatum {
-      ..mock_datum(Locked, 0),
-      pending_dex_change: Some(
-        PendingDexChange {
-          dex_credential: target_dex.payment_credential,
-          action: ProposeAdd,
-          proposed_at: 0,
-        },
-      ),
-    }
+  let datum = LpEscrowDatum {
+    ..mock_datum(Locked, 0),
+    pending_dex_change: Some(
+      PendingDexChange {
+        dex_credential: target_dex.payment_credential,
+        action: ProposeAdd,
+        proposed_at: 0,
+      },
+    ),
+  }
   let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
   let own_address = from_verification_key(#"cc")
-  let own_input =
-    Input {
-      output_reference: own_ref,
-      output: Output {
-        address: own_address,
-        value: mock_thread_nft(),
-        datum: InlineDatum(datum),
-        reference_script: None,
-      },
-    }
-  let new_datum = LpEscrowDatum { ..datum, pending_dex_change: None }
-  let continuing_output =
-    Output {
+  let own_input = Input {
+    output_reference: own_ref,
+    output: Output {
       address: own_address,
       value: mock_thread_nft(),
-      datum: InlineDatum(new_datum),
+      datum: InlineDatum(datum),
       reference_script: None,
-    }
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      outputs: [continuing_output],
-      extra_signatories: [#"bb"],
-    }
+    },
+  }
+  let new_datum = LpEscrowDatum { ..datum, pending_dex_change: None }
+  let continuing_output = Output {
+    address: own_address,
+    value: mock_thread_nft(),
+    datum: InlineDatum(new_datum),
+    reference_script: None,
+  }
+  let self = Transaction {
+    ..transaction.placeholder,
+    inputs: [own_input],
+    outputs: [continuing_output],
+    extra_signatories: [#"bb"],
+  }
 
   !lp_escrow.spend(Some(datum), CancelPendingDexChange, own_ref, self)
 }
@@ -2676,48 +2907,55 @@ test harvest_fees_succeeds_paying_the_creator_when_no_cto() {
   let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
   let own_address = from_verification_key(#"cc")
   let recipient_address = from_verification_key(#"dd")
-  let own_input =
-    Input {
-      output_reference: own_ref,
-      output: Output {
-        address: own_address,
-        value: assets.merge(mock_thread_nft(), assets.merge(
+  let own_input = Input {
+    output_reference: own_ref,
+    output: Output {
+      address: own_address,
+      value: assets.merge(
+        mock_thread_nft(),
+        assets.merge(
           assets.from_lovelace(2_000_000),
           assets.from_asset(#"33", "lp", 1000),
-        )),
-        datum: InlineDatum(datum),
-        reference_script: None,
-      },
-    }
-  // Datum is completely unchanged — the LP position itself is never touched.
-  let continuing_output =
-    Output {
-      address: own_address,
-      value: assets.merge(mock_thread_nft(), assets.merge(
-        assets.from_lovelace(2_000_000),
-        assets.from_asset(#"33", "lp", 1000),
-      )),
+        ),
+      ),
       datum: InlineDatum(datum),
       reference_script: None,
-    }
-  let harvest_payout =
-    Output {
-      address: recipient_address,
-      value: assets.from_lovelace(50_000),
-      datum: InlineDatum(own_ref),
-      reference_script: None,
-    }
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      outputs: [continuing_output, harvest_payout],
-      // The recipient signs: a harvest is for them, and requiring it is what
-      // stops anyone else churning this UTXO for the price of a fee.
-      extra_signatories: [mock_datum(Locked, 0).fee_recipient_pub_key_hash],
-    }
+    },
+  }
+  // Datum is completely unchanged — the LP position itself is never touched.
+  let continuing_output = Output {
+    address: own_address,
+    value: assets.merge(
+      mock_thread_nft(),
+      assets.merge(
+        assets.from_lovelace(2_000_000),
+        assets.from_asset(#"33", "lp", 1000),
+      ),
+    ),
+    datum: InlineDatum(datum),
+    reference_script: None,
+  }
+  let harvest_payout = Output {
+    address: recipient_address,
+    value: assets.from_lovelace(50_000),
+    datum: InlineDatum(own_ref),
+    reference_script: None,
+  }
+  let self = Transaction {
+    ..transaction.placeholder,
+    inputs: [own_input],
+    outputs: [continuing_output, harvest_payout],
+    // The recipient signs: a harvest is for them, and requiring it is what
+    // stops anyone else churning this UTXO for the price of a fee.
+    extra_signatories: [mock_datum(Locked, 0).fee_recipient_pub_key_hash],
+  }
 
-  lp_escrow.spend(Some(datum), HarvestFees { harvested_amount: 50_000 }, own_ref, self)
+  lp_escrow.spend(
+    Some(datum),
+    HarvestFees { harvested_amount: 50_000 },
+    own_ref,
+    self,
+  )
 }
 
 test harvest_fees_rejects_padded_output() {
@@ -2730,96 +2968,126 @@ test harvest_fees_rejects_padded_output() {
   let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
   let own_address = from_verification_key(#"cc")
   let recipient_address = from_verification_key(#"dd")
-  let own_input =
-    Input {
-      output_reference: own_ref,
-      output: Output {
-        address: own_address,
-        value: assets.merge(mock_thread_nft(), assets.merge(
+  let own_input = Input {
+    output_reference: own_ref,
+    output: Output {
+      address: own_address,
+      value: assets.merge(
+        mock_thread_nft(),
+        assets.merge(
           assets.from_lovelace(2_000_000),
           assets.from_asset(#"33", "lp", 1000),
-        )),
-        datum: InlineDatum(datum),
-        reference_script: None,
-      },
-    }
-  let continuing_output =
-    Output {
-      address: own_address,
-      value: assets.merge(mock_thread_nft(), assets.merge(
+        ),
+      ),
+      datum: InlineDatum(datum),
+      reference_script: None,
+    },
+  }
+  let continuing_output = Output {
+    address: own_address,
+    value: assets.merge(
+      mock_thread_nft(),
+      assets.merge(
         assets.merge(
           assets.from_lovelace(2_000_000),
           assets.from_asset(#"33", "lp", 1000),
         ),
         // Junk asset from an unrelated policy — the padding attack.
         assets.from_asset(#"deadbeef", "spam", 1),
-      )),
-      datum: InlineDatum(datum),
-      reference_script: None,
-    }
-  let harvest_payout =
-    Output {
-      address: recipient_address,
-      value: assets.from_lovelace(50_000),
-      datum: InlineDatum(own_ref),
-      reference_script: None,
-    }
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      outputs: [continuing_output, harvest_payout],
-    }
+      ),
+    ),
+    datum: InlineDatum(datum),
+    reference_script: None,
+  }
+  let harvest_payout = Output {
+    address: recipient_address,
+    value: assets.from_lovelace(50_000),
+    datum: InlineDatum(own_ref),
+    reference_script: None,
+  }
+  let self = Transaction {
+    ..transaction.placeholder,
+    inputs: [own_input],
+    outputs: [continuing_output, harvest_payout],
+  }
 
-  !lp_escrow.spend(Some(datum), HarvestFees { harvested_amount: 50_000 }, own_ref, self)
+  !lp_escrow.spend(
+    Some(datum),
+    HarvestFees { harvested_amount: 50_000 },
+    own_ref,
+    self,
+  )
 }
 
 test harvest_fees_pays_the_community_wallet_once_cto_triggered() {
-  let datum = LpEscrowDatum { ..mock_datum(Locked, 0), cto_triggered: True, community_wallet_hash: #"ee" }
+  let datum = LpEscrowDatum {
+    ..mock_datum(Locked, 0),
+    cto_triggered: True,
+    community_wallet_hash: #"ee",
+  }
   let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
   let own_address = from_verification_key(#"cc")
   let community_address = from_verification_key(#"ee")
-  let own_input =
-    Input {
-      output_reference: own_ref,
-      output: Output {
-        address: own_address,
-        value: assets.merge(mock_thread_nft(), assets.merge(
+  let own_input = Input {
+    output_reference: own_ref,
+    output: Output {
+      address: own_address,
+      value: assets.merge(
+        mock_thread_nft(),
+        assets.merge(
           assets.from_lovelace(2_000_000),
           assets.from_asset(#"33", "lp", 1000),
-        )),
-        datum: InlineDatum(datum),
-        reference_script: None,
-      },
-    }
-  let continuing_output =
-    Output {
-      address: own_address,
-      value: assets.merge(mock_thread_nft(), assets.merge(
-        assets.from_lovelace(2_000_000),
-        assets.from_asset(#"33", "lp", 1000),
-      )),
+        ),
+      ),
       datum: InlineDatum(datum),
       reference_script: None,
-    }
-  let harvest_payout =
-    Output {
-      address: community_address,
-      value: assets.from_lovelace(50_000),
-      datum: InlineDatum(own_ref),
-      reference_script: None,
-    }
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      outputs: [continuing_output, harvest_payout],
-      // Post-CTO the recipient IS the community wallet, so that is the
-      // signature a harvest now needs.
-      extra_signatories: [#"ee"],
-    }
+    },
+  }
+  let continuing_output = Output {
+    address: own_address,
+    value: assets.merge(
+      mock_thread_nft(),
+      assets.merge(
+        assets.from_lovelace(2_000_000),
+        assets.from_asset(#"33", "lp", 1000),
+      ),
+    ),
+    datum: InlineDatum(datum),
+    reference_script: None,
+  }
+  let harvest_payout = Output {
+    address: community_address,
+    value: assets.from_lovelace(50_000),
+    datum: InlineDatum(own_ref),
+    reference_script: None,
+  }
+  let self = Transaction {
+    ..transaction.placeholder,
+    inputs: [own_input],
+    outputs: [continuing_output, harvest_payout],
+    // Post-CTO the recipient IS the community wallet, so that is the
+    // signature a harvest now needs — and the governance record must still
+    // name that wallet, since a freeze that clears it stops the payout.
+    extra_signatories: [#"ee"],
+    reference_inputs: [
+      mock_cto_ref_input(
+        from_verification_key(#"aa"),
+        mock_cto_governance_datum(
+          datum.launch_id,
+          Some(
+            mock_proposal_anchor(SilenceLockTrigger, Passed, Executed, #"ee"),
+          ),
+        ),
+      ),
+    ],
+  }
 
-  lp_escrow.spend(Some(datum), HarvestFees { harvested_amount: 50_000 }, own_ref, self)
+  lp_escrow.spend(
+    Some(datum),
+    HarvestFees { harvested_amount: 50_000 },
+    own_ref,
+    self,
+  )
 }
 
 test harvest_fees_rejects_payout_to_the_creator_once_cto_triggered() {
@@ -2827,48 +3095,59 @@ test harvest_fees_rejects_payout_to_the_creator_once_cto_triggered() {
   // ORIGINAL creator (fee_recipient_pub_key_hash, #"dd") instead of the
   // community wallet — proves the redirect is actually enforced, not just
   // documented.
-  let datum = LpEscrowDatum { ..mock_datum(Locked, 0), cto_triggered: True, community_wallet_hash: #"ee" }
+  let datum = LpEscrowDatum {
+    ..mock_datum(Locked, 0),
+    cto_triggered: True,
+    community_wallet_hash: #"ee",
+  }
   let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
   let own_address = from_verification_key(#"cc")
   let creator_address = from_verification_key(#"dd")
-  let own_input =
-    Input {
-      output_reference: own_ref,
-      output: Output {
-        address: own_address,
-        value: assets.merge(mock_thread_nft(), assets.merge(
+  let own_input = Input {
+    output_reference: own_ref,
+    output: Output {
+      address: own_address,
+      value: assets.merge(
+        mock_thread_nft(),
+        assets.merge(
           assets.from_lovelace(2_000_000),
           assets.from_asset(#"33", "lp", 1000),
-        )),
-        datum: InlineDatum(datum),
-        reference_script: None,
-      },
-    }
-  let continuing_output =
-    Output {
-      address: own_address,
-      value: assets.merge(mock_thread_nft(), assets.merge(
-        assets.from_lovelace(2_000_000),
-        assets.from_asset(#"33", "lp", 1000),
-      )),
+        ),
+      ),
       datum: InlineDatum(datum),
       reference_script: None,
-    }
-  let harvest_payout =
-    Output {
-      address: creator_address,
-      value: assets.from_lovelace(50_000),
-      datum: InlineDatum(own_ref),
-      reference_script: None,
-    }
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      outputs: [continuing_output, harvest_payout],
-    }
+    },
+  }
+  let continuing_output = Output {
+    address: own_address,
+    value: assets.merge(
+      mock_thread_nft(),
+      assets.merge(
+        assets.from_lovelace(2_000_000),
+        assets.from_asset(#"33", "lp", 1000),
+      ),
+    ),
+    datum: InlineDatum(datum),
+    reference_script: None,
+  }
+  let harvest_payout = Output {
+    address: creator_address,
+    value: assets.from_lovelace(50_000),
+    datum: InlineDatum(own_ref),
+    reference_script: None,
+  }
+  let self = Transaction {
+    ..transaction.placeholder,
+    inputs: [own_input],
+    outputs: [continuing_output, harvest_payout],
+  }
 
-  !lp_escrow.spend(Some(datum), HarvestFees { harvested_amount: 50_000 }, own_ref, self)
+  !lp_escrow.spend(
+    Some(datum),
+    HarvestFees { harvested_amount: 50_000 },
+    own_ref,
+    self,
+  )
 }
 
 test harvest_fees_rejects_if_the_locked_lp_position_shrinks() {
@@ -2879,44 +3158,51 @@ test harvest_fees_rejects_if_the_locked_lp_position_shrinks() {
   let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
   let own_address = from_verification_key(#"cc")
   let recipient_address = from_verification_key(#"dd")
-  let own_input =
-    Input {
-      output_reference: own_ref,
-      output: Output {
-        address: own_address,
-        value: assets.merge(mock_thread_nft(), assets.merge(
+  let own_input = Input {
+    output_reference: own_ref,
+    output: Output {
+      address: own_address,
+      value: assets.merge(
+        mock_thread_nft(),
+        assets.merge(
           assets.from_lovelace(2_000_000),
           assets.from_asset(#"33", "lp", 1000),
-        )),
-        datum: InlineDatum(datum),
-        reference_script: None,
-      },
-    }
-  let continuing_output =
-    Output {
-      address: own_address,
-      value: assets.merge(mock_thread_nft(), assets.merge(
-        assets.from_lovelace(2_000_000),
-        assets.from_asset(#"33", "lp", 900),
-      )),
+        ),
+      ),
       datum: InlineDatum(datum),
       reference_script: None,
-    }
-  let harvest_payout =
-    Output {
-      address: recipient_address,
-      value: assets.from_lovelace(50_000),
-      datum: InlineDatum(own_ref),
-      reference_script: None,
-    }
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      outputs: [continuing_output, harvest_payout],
-    }
+    },
+  }
+  let continuing_output = Output {
+    address: own_address,
+    value: assets.merge(
+      mock_thread_nft(),
+      assets.merge(
+        assets.from_lovelace(2_000_000),
+        assets.from_asset(#"33", "lp", 900),
+      ),
+    ),
+    datum: InlineDatum(datum),
+    reference_script: None,
+  }
+  let harvest_payout = Output {
+    address: recipient_address,
+    value: assets.from_lovelace(50_000),
+    datum: InlineDatum(own_ref),
+    reference_script: None,
+  }
+  let self = Transaction {
+    ..transaction.placeholder,
+    inputs: [own_input],
+    outputs: [continuing_output, harvest_payout],
+  }
 
-  !lp_escrow.spend(Some(datum), HarvestFees { harvested_amount: 50_000 }, own_ref, self)
+  !lp_escrow.spend(
+    Some(datum),
+    HarvestFees { harvested_amount: 50_000 },
+    own_ref,
+    self,
+  )
 }
 
 test harvest_fees_rejects_before_lp_is_locked() {
@@ -2924,44 +3210,51 @@ test harvest_fees_rejects_before_lp_is_locked() {
   let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
   let own_address = from_verification_key(#"cc")
   let recipient_address = from_verification_key(#"dd")
-  let own_input =
-    Input {
-      output_reference: own_ref,
-      output: Output {
-        address: own_address,
-        value: assets.merge(mock_thread_nft(), assets.merge(
+  let own_input = Input {
+    output_reference: own_ref,
+    output: Output {
+      address: own_address,
+      value: assets.merge(
+        mock_thread_nft(),
+        assets.merge(
           assets.from_lovelace(2_000_000),
           assets.from_asset(#"33", "lp", 1000),
-        )),
-        datum: InlineDatum(datum),
-        reference_script: None,
-      },
-    }
-  let continuing_output =
-    Output {
-      address: own_address,
-      value: assets.merge(mock_thread_nft(), assets.merge(
-        assets.from_lovelace(2_000_000),
-        assets.from_asset(#"33", "lp", 1000),
-      )),
+        ),
+      ),
       datum: InlineDatum(datum),
       reference_script: None,
-    }
-  let harvest_payout =
-    Output {
-      address: recipient_address,
-      value: assets.from_lovelace(50_000),
-      datum: InlineDatum(own_ref),
-      reference_script: None,
-    }
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      outputs: [continuing_output, harvest_payout],
-    }
+    },
+  }
+  let continuing_output = Output {
+    address: own_address,
+    value: assets.merge(
+      mock_thread_nft(),
+      assets.merge(
+        assets.from_lovelace(2_000_000),
+        assets.from_asset(#"33", "lp", 1000),
+      ),
+    ),
+    datum: InlineDatum(datum),
+    reference_script: None,
+  }
+  let harvest_payout = Output {
+    address: recipient_address,
+    value: assets.from_lovelace(50_000),
+    datum: InlineDatum(own_ref),
+    reference_script: None,
+  }
+  let self = Transaction {
+    ..transaction.placeholder,
+    inputs: [own_input],
+    outputs: [continuing_output, harvest_payout],
+  }
 
-  !lp_escrow.spend(Some(datum), HarvestFees { harvested_amount: 50_000 }, own_ref, self)
+  !lp_escrow.spend(
+    Some(datum),
+    HarvestFees { harvested_amount: 50_000 },
+    own_ref,
+    self,
+  )
 }
 
 // QueryState previously authorized ANY spend unconditionally
@@ -2972,31 +3265,35 @@ test query_state_rejects_unauthenticated_drain_attempt() {
   let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
   let own_address = from_verification_key(#"cc")
   let attacker_address = from_verification_key(#"ee")
-  let own_input =
-    Input {
-      output_reference: own_ref,
-      output: Output {
-        address: own_address,
-        value: assets.merge(mock_thread_nft(), assets.merge(
+  let own_input = Input {
+    output_reference: own_ref,
+    output: Output {
+      address: own_address,
+      value: assets.merge(
+        mock_thread_nft(),
+        assets.merge(
           assets.from_lovelace(15_000_000),
           assets.from_asset(#"33", "lp", 1000),
-        )),
-        datum: InlineDatum(datum),
-        reference_script: None,
-      },
-    }
-  let drain_output =
-    Output {
-      address: attacker_address,
-      value: assets.merge(
-        assets.from_lovelace(15_000_000),
-        assets.from_asset(#"33", "lp", 1000),
+        ),
       ),
-      datum: transaction.NoDatum,
+      datum: InlineDatum(datum),
       reference_script: None,
-    }
-  let self =
-    Transaction { ..transaction.placeholder, inputs: [own_input], outputs: [drain_output] }
+    },
+  }
+  let drain_output = Output {
+    address: attacker_address,
+    value: assets.merge(
+      assets.from_lovelace(15_000_000),
+      assets.from_asset(#"33", "lp", 1000),
+    ),
+    datum: transaction.NoDatum,
+    reference_script: None,
+  }
+  let self = Transaction {
+    ..transaction.placeholder,
+    inputs: [own_input],
+    outputs: [drain_output],
+  }
 
   !lp_escrow.spend(Some(datum), QueryState, own_ref, self)
 }
@@ -3013,51 +3310,60 @@ test harvest_fees_rejects_real_lovelace_drain_attempt() {
   let own_address = from_verification_key(#"cc")
   let recipient_address = from_verification_key(#"dd")
   let attacker_address = from_verification_key(#"ee")
-  let own_input =
-    Input {
-      output_reference: own_ref,
-      output: Output {
-        address: own_address,
-        value: assets.merge(mock_thread_nft(), assets.merge(
+  let own_input = Input {
+    output_reference: own_ref,
+    output: Output {
+      address: own_address,
+      value: assets.merge(
+        mock_thread_nft(),
+        assets.merge(
           assets.from_lovelace(15_000_000_000),
           assets.from_asset(#"33", "lp", 1000),
-        )),
-        datum: InlineDatum(datum),
-        reference_script: None,
-      },
-    }
+        ),
+      ),
+      datum: InlineDatum(datum),
+      reference_script: None,
+    },
+  }
   // LP token count exactly preserved (satisfies the old, still-present
   // lp_position_untouched check) — but almost all the real lovelace is
   // gone.
-  let continuing_output =
-    Output {
-      address: own_address,
-      value: assets.merge(mock_thread_nft(), assets.merge(assets.from_lovelace(1_500_000), assets.from_asset(#"33", "lp", 1000))),
-      datum: InlineDatum(datum),
-      reference_script: None,
-    }
-  let harvest_payout =
-    Output {
-      address: recipient_address,
-      value: assets.from_lovelace(1),
-      datum: InlineDatum(own_ref),
-      reference_script: None,
-    }
-  let drain_output =
-    Output {
-      address: attacker_address,
-      value: assets.from_lovelace(14_998_500_000),
-      datum: transaction.NoDatum,
-      reference_script: None,
-    }
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      outputs: [continuing_output, harvest_payout, drain_output],
-    }
+  let continuing_output = Output {
+    address: own_address,
+    value: assets.merge(
+      mock_thread_nft(),
+      assets.merge(
+        assets.from_lovelace(1_500_000),
+        assets.from_asset(#"33", "lp", 1000),
+      ),
+    ),
+    datum: InlineDatum(datum),
+    reference_script: None,
+  }
+  let harvest_payout = Output {
+    address: recipient_address,
+    value: assets.from_lovelace(1),
+    datum: InlineDatum(own_ref),
+    reference_script: None,
+  }
+  let drain_output = Output {
+    address: attacker_address,
+    value: assets.from_lovelace(14_998_500_000),
+    datum: transaction.NoDatum,
+    reference_script: None,
+  }
+  let self = Transaction {
+    ..transaction.placeholder,
+    inputs: [own_input],
+    outputs: [continuing_output, harvest_payout, drain_output],
+  }
 
-  !lp_escrow.spend(Some(datum), HarvestFees { harvested_amount: 1 }, own_ref, self)
+  !lp_escrow.spend(
+    Some(datum),
+    HarvestFees { harvested_amount: 1 },
+    own_ref,
+    self,
+  )
 }
 
 // Fix regression test: Migrate previously only verified the LP TOKEN
@@ -3066,55 +3372,58 @@ test harvest_fees_rejects_real_lovelace_drain_attempt() {
 // the real locked ADA elsewhere is now rejected.
 test migrate_rejects_ada_diversion() {
   let target_dex = from_script(#"aa")
-  let datum =
-    LpEscrowDatum { ..mock_datum(Locked, 0), dex_whitelist: [target_dex.payment_credential] }
+  let datum = LpEscrowDatum {
+    ..mock_datum(Locked, 0),
+    dex_whitelist: [target_dex.payment_credential],
+  }
   let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
   let own_address = from_verification_key(#"cc")
   let attacker_address = from_verification_key(#"ee")
-  let own_input =
-    Input {
-      output_reference: own_ref,
-      output: Output {
-        address: own_address,
-        value: assets.merge(mock_thread_nft(), assets.merge(
+  let own_input = Input {
+    output_reference: own_ref,
+    output: Output {
+      address: own_address,
+      value: assets.merge(
+        mock_thread_nft(),
+        assets.merge(
           assets.from_lovelace(15_000_000_000),
           assets.from_asset(#"33", "lp", 1000),
-        )),
-        datum: InlineDatum(datum),
-        reference_script: None,
-      },
-    }
+        ),
+      ),
+      datum: InlineDatum(datum),
+      reference_script: None,
+    },
+  }
   // Full LP token quantity correctly lands at the target DEX, but only a
   // token amount of ADA — the rest diverted to the attacker.
-  let dex_output =
-    Output {
-      address: target_dex,
-      value: assets.merge(assets.from_lovelace(1_500_000), assets.from_asset(#"33", "lp", 1000)),
-      datum: transaction.NoDatum,
-      reference_script: None,
-    }
-  let drain_output =
-    Output {
-      address: attacker_address,
-      value: assets.from_lovelace(14_998_500_000),
-      datum: transaction.NoDatum,
-      reference_script: None,
-    }
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      outputs: [dex_output, drain_output],
-      extra_signatories: [#"22"],
-    }
-  let redeemer =
-    Migrate {
-      new_lp_policy_id: mock_new_lp_policy,
-      new_lp_name: mock_new_lp_name,
-      new_lp_amount: mock_new_lp_amount,
-      target_dex_credential: target_dex.payment_credential,
-      current_timestamp: min_lock_duration,
-    }
+  let dex_output = Output {
+    address: target_dex,
+    value: assets.merge(
+      assets.from_lovelace(1_500_000),
+      assets.from_asset(#"33", "lp", 1000),
+    ),
+    datum: transaction.NoDatum,
+    reference_script: None,
+  }
+  let drain_output = Output {
+    address: attacker_address,
+    value: assets.from_lovelace(14_998_500_000),
+    datum: transaction.NoDatum,
+    reference_script: None,
+  }
+  let self = Transaction {
+    ..transaction.placeholder,
+    inputs: [own_input],
+    outputs: [dex_output, drain_output],
+    extra_signatories: [#"22"],
+  }
+  let redeemer = Migrate {
+    new_lp_policy_id: mock_new_lp_policy,
+    new_lp_name: mock_new_lp_name,
+    new_lp_amount: mock_new_lp_amount,
+    target_dex_credential: target_dex.payment_credential,
+    current_timestamp: min_lock_duration,
+  }
 
   !lp_escrow.spend(Some(datum), redeemer, own_ref, self)
 }
@@ -3128,38 +3437,43 @@ test seal_lock_rejects_a_year_expressed_in_seconds() {
   // SealLock is permissionless now — no extra_signatories at all —
   // verified instead by the continuing output actually holding the seeded
   // ADA and the exact lp_token_amount (1000, per mock_datum).
-  let datum =
-    LpEscrowDatum { ..mock_datum(Cancelled, 0), lock_duration: 31_536_000 }
+  let datum = LpEscrowDatum {
+    ..mock_datum(Cancelled, 0),
+    lock_duration: 31_536_000,
+  }
   let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
   let own_address = from_verification_key(#"cc")
-  let own_input =
-    Input {
-      output_reference: own_ref,
-      output: Output {
-        address: own_address,
-        value: assets.merge(mock_thread_nft(), assets.from_lovelace(2_000_000)),
-        datum: InlineDatum(datum),
-        reference_script: None,
-      },
-    }
-  let new_datum =
-    LpEscrowDatum { ..datum, lock_timestamp: 500, lp_state: Locked }
-  let continuing_output =
-    Output {
+  let own_input = Input {
+    output_reference: own_ref,
+    output: Output {
       address: own_address,
-      value: assets.merge(mock_thread_nft(), assets.merge(
+      value: assets.merge(mock_thread_nft(), assets.from_lovelace(2_000_000)),
+      datum: InlineDatum(datum),
+      reference_script: None,
+    },
+  }
+  let new_datum = LpEscrowDatum {
+    ..datum,
+    lock_timestamp: 500,
+    lp_state: Locked,
+  }
+  let continuing_output = Output {
+    address: own_address,
+    value: assets.merge(
+      mock_thread_nft(),
+      assets.merge(
         assets.from_lovelace(2_000_000 + 98_000),
         assets.from_asset(#"33", "lp", 1000),
-      )),
-      datum: InlineDatum(new_datum),
-      reference_script: None,
-    }
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      outputs: [continuing_output],
-    }
+      ),
+    ),
+    datum: InlineDatum(new_datum),
+    reference_script: None,
+  }
+  let self = Transaction {
+    ..transaction.placeholder,
+    inputs: [own_input],
+    outputs: [continuing_output],
+  }
 
   !lp_escrow.spend(
     Some(datum),
@@ -3174,129 +3488,122 @@ test seal_lock_rejects_a_year_expressed_in_seconds() {
 // reads as one whose lock expired long ago.
 test migrate_rejects_a_position_that_was_never_sealed() {
   let target_dex = from_script(#"aa")
-  let datum =
-    LpEscrowDatum {
-      ..mock_datum(Locked, 0),
-      dex_whitelist: [target_dex.payment_credential],
-    }
+  let datum = LpEscrowDatum {
+    ..mock_datum(Locked, 0),
+    dex_whitelist: [target_dex.payment_credential],
+  }
   let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
   let own_address = from_verification_key(#"cc")
-  let own_input =
-    Input {
-      output_reference: own_ref,
-      output: Output {
-        address: own_address,
-        value: mock_thread_nft(),
-        datum: InlineDatum(datum),
-        reference_script: None,
-      },
-    }
-  let migration_output =
-    Output {
-      address: target_dex,
-      value: assets.from_asset(#"33", "lp", 1000),
-      datum: transaction.NoDatum,
+  let own_input = Input {
+    output_reference: own_ref,
+    output: Output {
+      address: own_address,
+      value: mock_thread_nft(),
+      datum: InlineDatum(datum),
       reference_script: None,
-    }
+    },
+  }
+  let migration_output = Output {
+    address: target_dex,
+    value: assets.from_asset(#"33", "lp", 1000),
+    datum: transaction.NoDatum,
+    reference_script: None,
+  }
   // The escrow keeps a continuing output, and its datum has to record when
   // the position moved — that record is what the cooldown is measured from.
-  let migrated_datum =
-    LpEscrowDatum {
-      ..datum,
-      lp_token_policy_id: mock_new_lp_policy,
-      lp_token_name: mock_new_lp_name,
-      lp_token_amount: mock_new_lp_amount,
-      last_migration_timestamp: 1000 + min_lock_duration }
-  let thread_continuing_output =
-    Output {
-      address: own_address,
-      value: mock_thread_nft_with_new_lp(),
-      datum: InlineDatum(migrated_datum),
-      reference_script: None,
-    }
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      outputs: [migration_output, thread_continuing_output],
-      extra_signatories: [#"22"],
-      validity_range: interval.between(1000 + min_lock_duration, 1000 + min_lock_duration + 100),
-    }
-  let redeemer =
-    Migrate {
-      new_lp_policy_id: mock_new_lp_policy,
-      new_lp_name: mock_new_lp_name,
-      new_lp_amount: mock_new_lp_amount,
-      target_dex_credential: target_dex.payment_credential,
-      current_timestamp: 1000 + min_lock_duration,
-    }
+  let migrated_datum = LpEscrowDatum {
+    ..datum,
+    lp_token_policy_id: mock_new_lp_policy,
+    lp_token_name: mock_new_lp_name,
+    lp_token_amount: mock_new_lp_amount,
+    last_migration_timestamp: 1000 + min_lock_duration,
+  }
+  let thread_continuing_output = Output {
+    address: own_address,
+    value: mock_thread_nft_with_new_lp(),
+    datum: InlineDatum(migrated_datum),
+    reference_script: None,
+  }
+  let self = Transaction {
+    ..transaction.placeholder,
+    inputs: [own_input],
+    outputs: [migration_output, thread_continuing_output],
+    extra_signatories: [#"22"],
+    validity_range: interval.between(
+      1000 + min_lock_duration,
+      1000 + min_lock_duration + 100,
+    ),
+  }
+  let redeemer = Migrate {
+    new_lp_policy_id: mock_new_lp_policy,
+    new_lp_name: mock_new_lp_name,
+    new_lp_amount: mock_new_lp_amount,
+    target_dex_credential: target_dex.payment_credential,
+    current_timestamp: 1000 + min_lock_duration,
+  }
 
   !lp_escrow.spend(Some(datum), redeemer, own_ref, self)
 }
-
 
 // A position that moved a moment ago cannot move again. The cooldown is 90
 // days; this one last migrated on the very block the lock expired, and tries
 // again immediately.
 test migrate_rejects_a_second_move_inside_the_cooldown() {
   let target_dex = from_script(#"aa")
-  let datum =
-    LpEscrowDatum {
-      ..mock_datum(Locked, 1000),
-      last_migration_timestamp: 1000 + min_lock_duration - 1,
-      dex_whitelist: [target_dex.payment_credential],
-    }
+  let datum = LpEscrowDatum {
+    ..mock_datum(Locked, 1000),
+    last_migration_timestamp: 1000 + min_lock_duration - 1,
+    dex_whitelist: [target_dex.payment_credential],
+  }
   let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
   let own_address = from_verification_key(#"cc")
-  let own_input =
-    Input {
-      output_reference: own_ref,
-      output: Output {
-        address: own_address,
-        value: mock_thread_nft(),
-        datum: InlineDatum(datum),
-        reference_script: None,
-      },
-    }
-  let migration_output =
-    Output {
-      address: target_dex,
-      value: assets.from_asset(#"33", "lp", 1000),
-      datum: transaction.NoDatum,
+  let own_input = Input {
+    output_reference: own_ref,
+    output: Output {
+      address: own_address,
+      value: mock_thread_nft(),
+      datum: InlineDatum(datum),
       reference_script: None,
-    }
+    },
+  }
+  let migration_output = Output {
+    address: target_dex,
+    value: assets.from_asset(#"33", "lp", 1000),
+    datum: transaction.NoDatum,
+    reference_script: None,
+  }
   // The escrow keeps a continuing output, and its datum has to record when
   // the position moved — that record is what the cooldown is measured from.
-  let migrated_datum =
-    LpEscrowDatum {
-      ..datum,
-      lp_token_policy_id: mock_new_lp_policy,
-      lp_token_name: mock_new_lp_name,
-      lp_token_amount: mock_new_lp_amount,
-      last_migration_timestamp: 1000 + min_lock_duration }
-  let thread_continuing_output =
-    Output {
-      address: own_address,
-      value: mock_thread_nft_with_new_lp(),
-      datum: InlineDatum(migrated_datum),
-      reference_script: None,
-    }
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      outputs: [migration_output, thread_continuing_output],
-      extra_signatories: [#"22"],
-      validity_range: interval.between(1000 + min_lock_duration, 1000 + min_lock_duration + 100),
-    }
-  let redeemer =
-    Migrate {
-      new_lp_policy_id: mock_new_lp_policy,
-      new_lp_name: mock_new_lp_name,
-      new_lp_amount: mock_new_lp_amount,
-      target_dex_credential: target_dex.payment_credential,
-      current_timestamp: 1000 + min_lock_duration,
-    }
+  let migrated_datum = LpEscrowDatum {
+    ..datum,
+    lp_token_policy_id: mock_new_lp_policy,
+    lp_token_name: mock_new_lp_name,
+    lp_token_amount: mock_new_lp_amount,
+    last_migration_timestamp: 1000 + min_lock_duration,
+  }
+  let thread_continuing_output = Output {
+    address: own_address,
+    value: mock_thread_nft_with_new_lp(),
+    datum: InlineDatum(migrated_datum),
+    reference_script: None,
+  }
+  let self = Transaction {
+    ..transaction.placeholder,
+    inputs: [own_input],
+    outputs: [migration_output, thread_continuing_output],
+    extra_signatories: [#"22"],
+    validity_range: interval.between(
+      1000 + min_lock_duration,
+      1000 + min_lock_duration + 100,
+    ),
+  }
+  let redeemer = Migrate {
+    new_lp_policy_id: mock_new_lp_policy,
+    new_lp_name: mock_new_lp_name,
+    new_lp_amount: mock_new_lp_amount,
+    target_dex_credential: target_dex.payment_credential,
+    current_timestamp: 1000 + min_lock_duration,
+  }
 
   !lp_escrow.spend(Some(datum), redeemer, own_ref, self)
 }
@@ -3313,49 +3620,55 @@ test harvest_fees_succeeds_paying_a_real_base_address_not_just_enterprise() {
   let datum = mock_datum(Locked, 0)
   let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
   let own_address = from_verification_key(#"cc")
-  let recipient_base_address =
-    from_verification_key(#"dd") |> with_delegation_key(#"aa")
-  let own_input =
-    Input {
-      output_reference: own_ref,
-      output: Output {
-        address: own_address,
-        value: assets.merge(mock_thread_nft(), assets.merge(
+  let recipient_base_address = from_verification_key(#"dd")
+    |> with_delegation_key(#"aa")
+  let own_input = Input {
+    output_reference: own_ref,
+    output: Output {
+      address: own_address,
+      value: assets.merge(
+        mock_thread_nft(),
+        assets.merge(
           assets.from_lovelace(2_000_000),
           assets.from_asset(#"33", "lp", 1000),
-        )),
-        datum: InlineDatum(datum),
-        reference_script: None,
-      },
-    }
-  let continuing_output =
-    Output {
-      address: own_address,
-      value: assets.merge(mock_thread_nft(), assets.merge(
-        assets.from_lovelace(2_000_000),
-        assets.from_asset(#"33", "lp", 1000),
-      )),
+        ),
+      ),
       datum: InlineDatum(datum),
       reference_script: None,
-    }
-  let harvest_payout =
-    Output {
-      address: recipient_base_address,
-      value: assets.from_lovelace(50_000),
-      datum: InlineDatum(own_ref),
-      reference_script: None,
-    }
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      outputs: [continuing_output, harvest_payout],
-      extra_signatories: [datum.fee_recipient_pub_key_hash],
-    }
+    },
+  }
+  let continuing_output = Output {
+    address: own_address,
+    value: assets.merge(
+      mock_thread_nft(),
+      assets.merge(
+        assets.from_lovelace(2_000_000),
+        assets.from_asset(#"33", "lp", 1000),
+      ),
+    ),
+    datum: InlineDatum(datum),
+    reference_script: None,
+  }
+  let harvest_payout = Output {
+    address: recipient_base_address,
+    value: assets.from_lovelace(50_000),
+    datum: InlineDatum(own_ref),
+    reference_script: None,
+  }
+  let self = Transaction {
+    ..transaction.placeholder,
+    inputs: [own_input],
+    outputs: [continuing_output, harvest_payout],
+    extra_signatories: [datum.fee_recipient_pub_key_hash],
+  }
 
-  lp_escrow.spend(Some(datum), HarvestFees { harvested_amount: 50_000 }, own_ref, self)
+  lp_escrow.spend(
+    Some(datum),
+    HarvestFees { harvested_amount: 50_000 },
+    own_ref,
+    self,
+  )
 }
-
 
 /// Anyone could rebuild this UTXO at a new reference for the price of a fee.
 ///
@@ -3368,47 +3681,56 @@ test harvest_fees_rejects_a_stranger_churning_the_escrow() {
   let datum = mock_datum(Locked, 0)
   let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
   let own_address = from_verification_key(#"cc")
-  let recipient_address = from_verification_key(datum.fee_recipient_pub_key_hash)
-  let own_input =
-    Input {
-      output_reference: own_ref,
-      output: Output {
-        address: own_address,
-        value: assets.merge(mock_thread_nft(), assets.merge(
+  let recipient_address = from_verification_key(
+    datum.fee_recipient_pub_key_hash,
+  )
+  let own_input = Input {
+    output_reference: own_ref,
+    output: Output {
+      address: own_address,
+      value: assets.merge(
+        mock_thread_nft(),
+        assets.merge(
           assets.from_lovelace(2_000_000),
           assets.from_asset(#"33", "lp", 1000),
-        )),
-        datum: InlineDatum(datum),
-        reference_script: None,
-      },
-    }
-  let continuing_output =
-    Output {
-      address: own_address,
-      value: assets.merge(mock_thread_nft(), assets.merge(
-        assets.from_lovelace(2_000_000),
-        assets.from_asset(#"33", "lp", 1000),
-      )),
+        ),
+      ),
       datum: InlineDatum(datum),
       reference_script: None,
-    }
-  let harvest_payout =
-    Output {
-      address: recipient_address,
-      value: assets.from_lovelace(50_000),
-      datum: InlineDatum(own_ref),
-      reference_script: None,
-    }
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      outputs: [continuing_output, harvest_payout],
-      // Somebody else entirely.
-      extra_signatories: [#"ba"],
-    }
+    },
+  }
+  let continuing_output = Output {
+    address: own_address,
+    value: assets.merge(
+      mock_thread_nft(),
+      assets.merge(
+        assets.from_lovelace(2_000_000),
+        assets.from_asset(#"33", "lp", 1000),
+      ),
+    ),
+    datum: InlineDatum(datum),
+    reference_script: None,
+  }
+  let harvest_payout = Output {
+    address: recipient_address,
+    value: assets.from_lovelace(50_000),
+    datum: InlineDatum(own_ref),
+    reference_script: None,
+  }
+  let self = Transaction {
+    ..transaction.placeholder,
+    inputs: [own_input],
+    outputs: [continuing_output, harvest_payout],
+    // Somebody else entirely.
+    extra_signatories: [#"ba"],
+  }
 
-  !lp_escrow.spend(Some(datum), HarvestFees { harvested_amount: 50_000 }, own_ref, self)
+  !lp_escrow.spend(
+    Some(datum),
+    HarvestFees { harvested_amount: 50_000 },
+    own_ref,
+    self,
+  )
 }
 
 /// The recipient signs a harvest now, which means the transaction can carry
@@ -3419,65 +3741,274 @@ test harvest_fees_rejects_paying_the_recipient_with_their_own_ada() {
   let datum = mock_datum(Locked, 0)
   let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
   let own_address = from_verification_key(#"cc")
-  let recipient_address = from_verification_key(datum.fee_recipient_pub_key_hash)
+  let recipient_address = from_verification_key(
+    datum.fee_recipient_pub_key_hash,
+  )
   let attacker_address = from_verification_key(#"ba")
-  let own_input =
-    Input {
-      output_reference: own_ref,
-      output: Output {
-        address: own_address,
-        value: assets.merge(mock_thread_nft(), assets.merge(
+  let own_input = Input {
+    output_reference: own_ref,
+    output: Output {
+      address: own_address,
+      value: assets.merge(
+        mock_thread_nft(),
+        assets.merge(
           assets.from_lovelace(2_000_000),
           assets.from_asset(#"33", "lp", 1000),
-        )),
-        datum: InlineDatum(datum),
-        reference_script: None,
-      },
-    }
-  // The recipient's own ada, spent in this same transaction.
-  let recipient_input =
-    Input {
-      output_reference: OutputReference { transaction_id: #"77", output_index: 0 },
-      output: Output {
-        address: recipient_address,
-        value: assets.from_lovelace(2_000_000),
-        datum: transaction.NoDatum,
-        reference_script: None,
-      },
-    }
-  let continuing_output =
-    Output {
-      address: own_address,
-      value: assets.merge(mock_thread_nft(), assets.merge(
-        assets.from_lovelace(2_000_000),
-        assets.from_asset(#"33", "lp", 1000),
-      )),
+        ),
+      ),
       datum: InlineDatum(datum),
       reference_script: None,
-    }
-  // Their own ada handed straight back, tagged as though it were the harvest.
-  let recipient_change =
-    Output {
+    },
+  }
+  // The recipient's own ada, spent in this same transaction.
+  let recipient_input = Input {
+    output_reference: OutputReference { transaction_id: #"77", output_index: 0 },
+    output: Output {
       address: recipient_address,
-      value: assets.from_lovelace(1_950_000),
-      datum: InlineDatum(own_ref),
-      reference_script: None,
-    }
-  // The real harvested fee, going somewhere else.
-  let attacker_output =
-    Output {
-      address: attacker_address,
-      value: assets.from_lovelace(50_000),
+      value: assets.from_lovelace(2_000_000),
       datum: transaction.NoDatum,
       reference_script: None,
-    }
-  let self =
+    },
+  }
+  let continuing_output = Output {
+    address: own_address,
+    value: assets.merge(
+      mock_thread_nft(),
+      assets.merge(
+        assets.from_lovelace(2_000_000),
+        assets.from_asset(#"33", "lp", 1000),
+      ),
+    ),
+    datum: InlineDatum(datum),
+    reference_script: None,
+  }
+  // Their own ada handed straight back, tagged as though it were the harvest.
+  let recipient_change = Output {
+    address: recipient_address,
+    value: assets.from_lovelace(1_950_000),
+    datum: InlineDatum(own_ref),
+    reference_script: None,
+  }
+  // The real harvested fee, going somewhere else.
+  let attacker_output = Output {
+    address: attacker_address,
+    value: assets.from_lovelace(50_000),
+    datum: transaction.NoDatum,
+    reference_script: None,
+  }
+  let self = Transaction {
+    ..transaction.placeholder,
+    inputs: [own_input, recipient_input],
+    outputs: [continuing_output, recipient_change, attacker_output],
+    extra_signatories: [datum.fee_recipient_pub_key_hash],
+  }
+
+  !lp_escrow.spend(
+    Some(datum),
+    HarvestFees { harvested_amount: 50_000 },
+    own_ref,
+    self,
+  )
+}
+
+// ============================================================================
+// What a migration may declare, what stays behind, and the live community
+// wallet — pinned 2026-09
+// ============================================================================
+
+/// The governance record with a SilenceLockTrigger naming `wallet` executed;
+/// `live` is whether the record still names it (a freeze clears it).
+fn escrow_silence_record(wallet: VerificationKeyHash, live: Bool) -> Input {
+  let record = mock_cto_governance_datum(
+    #"01",
+    Some(mock_proposal_anchor(SilenceLockTrigger, Passed, Executed, wallet)),
+  )
+  mock_cto_ref_input(
+    from_verification_key(#"aa"),
+    if live {
+      record
+    } else {
+      CtoGovernanceDatum { ..record, community_wallet_hash: #"" }
+    },
+  )
+}
+
+/// A migration after the lock, by the community wallet, with the escrow
+/// holding `escrow_lovelace` and returning `returned_lovelace`, declaring the
+/// replacement `(policy, name, amount)` and receiving `continuing_value`.
+fn run_migration(
+  escrow_lovelace: Int,
+  new_policy: PolicyId,
+  new_name: AssetName,
+  new_amount: Int,
+  continuing_value: assets.Value,
+  record: Input,
+) -> Bool {
+  let target_dex = from_script(#"aa")
+  let datum = LpEscrowDatum {
+    ..mock_datum(Locked, 1000),
+    dex_whitelist: [target_dex.payment_credential],
+    cto_triggered: True,
+    community_wallet_hash: #"ee",
+  }
+  let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
+  let own_address = from_verification_key(#"cc")
+  let own_input = Input {
+    output_reference: own_ref,
+    output: Output {
+      address: own_address,
+      value: assets.merge(
+        mock_thread_nft(),
+        assets.from_lovelace(escrow_lovelace),
+      ),
+      datum: InlineDatum(datum),
+      reference_script: None,
+    },
+  }
+  let migration_output = Output {
+    address: target_dex,
+    value: assets.merge(
+      assets.from_asset(#"33", "lp", 1000),
+      assets.from_lovelace(escrow_lovelace),
+    ),
+    datum: transaction.NoDatum,
+    reference_script: None,
+  }
+  let migrated_datum = LpEscrowDatum {
+    ..datum,
+    lp_token_policy_id: new_policy,
+    lp_token_name: new_name,
+    lp_token_amount: new_amount,
+    last_migration_timestamp: 1000 + min_lock_duration,
+  }
+  let continuing = Output {
+    address: own_address,
+    value: continuing_value,
+    datum: InlineDatum(migrated_datum),
+    reference_script: None,
+  }
+  lp_escrow.spend(
+    Some(datum),
+    Migrate {
+      new_lp_policy_id: new_policy,
+      new_lp_name: new_name,
+      new_lp_amount: new_amount,
+      target_dex_credential: target_dex.payment_credential,
+      current_timestamp: 1000 + min_lock_duration,
+    },
+    own_ref,
     Transaction {
       ..transaction.placeholder,
-      inputs: [own_input, recipient_input],
-      outputs: [continuing_output, recipient_change, attacker_output],
-      extra_signatories: [datum.fee_recipient_pub_key_hash],
-    }
+      inputs: [own_input],
+      outputs: [migration_output, continuing],
+      extra_signatories: [#"ee"],
+      validity_range: interval.between(
+        1000 + min_lock_duration,
+        1000 + min_lock_duration + 100,
+      ),
+      reference_inputs: [record],
+    },
+  )
+}
 
-  !lp_escrow.spend(Some(datum), HarvestFees { harvested_amount: 50_000 }, own_ref, self)
+/// The control: a real replacement comes back, the escrow keeps its ADA.
+test migrate_accepts_a_real_replacement_with_the_escrow_ada_kept() {
+  run_migration(
+    2_000_000,
+    mock_new_lp_policy,
+    mock_new_lp_name,
+    mock_new_lp_amount,
+    assets.merge(mock_thread_nft_with_new_lp(), assets.from_lovelace(2_000_000)),
+    escrow_silence_record(#"ee", True),
+  )
+}
+
+/// The escrow's own thread NFT is not a replacement position, however the
+/// redeemer names it.
+test migrate_rejects_the_thread_nft_as_the_replacement() {
+  !run_migration(
+    2_000_000,
+    #"c0ffee",
+    thread_nft.thread_asset_name(thread_nft.role_lp_escrow, #"01"),
+    1,
+    assets.merge(mock_thread_nft(), assets.from_lovelace(2_000_000)),
+    escrow_silence_record(#"ee", True),
+  )
+}
+
+/// A migration moves the position, not the escrow UTxO's lovelace.
+test migrate_rejects_taking_the_escrow_ada() {
+  !run_migration(
+    2_000_000,
+    mock_new_lp_policy,
+    mock_new_lp_name,
+    mock_new_lp_amount,
+    mock_thread_nft_with_new_lp(),
+    escrow_silence_record(#"ee", True),
+  )
+}
+
+/// The community wallet's authority is read from the governance record; a
+/// wallet the governor has frozen authorises nothing.
+test migrate_rejects_a_frozen_community_wallet() {
+  !run_migration(
+    2_000_000,
+    mock_new_lp_policy,
+    mock_new_lp_name,
+    mock_new_lp_amount,
+    assets.merge(mock_thread_nft_with_new_lp(), assets.from_lovelace(2_000_000)),
+    escrow_silence_record(#"ee", False),
+  )
+}
+
+/// A harvest to the community wallet is paid only while the record still
+/// names that wallet.
+test harvest_fees_rejects_a_frozen_community_wallet() {
+  let datum = LpEscrowDatum {
+    ..mock_datum(Locked, 0),
+    cto_triggered: True,
+    community_wallet_hash: #"ee",
+  }
+  let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
+  let own_address = from_verification_key(#"cc")
+  let held = assets.merge(
+    mock_thread_nft(),
+    assets.merge(
+      assets.from_lovelace(2_000_000),
+      assets.from_asset(#"33", "lp", 1000),
+    ),
+  )
+  let own_input = Input {
+    output_reference: own_ref,
+    output: Output {
+      address: own_address,
+      value: held,
+      datum: InlineDatum(datum),
+      reference_script: None,
+    },
+  }
+  let continuing_output = Output {
+    address: own_address,
+    value: held,
+    datum: InlineDatum(datum),
+    reference_script: None,
+  }
+  let harvest_payout = Output {
+    address: from_verification_key(#"ee"),
+    value: assets.from_lovelace(50_000),
+    datum: InlineDatum(own_ref),
+    reference_script: None,
+  }
+  !lp_escrow.spend(
+    Some(datum),
+    HarvestFees { harvested_amount: 50_000 },
+    own_ref,
+    Transaction {
+      ..transaction.placeholder,
+      inputs: [own_input],
+      outputs: [continuing_output, harvest_payout],
+      extra_signatories: [#"ee"],
+      reference_inputs: [escrow_silence_record(#"ee", False)],
+    },
+  )
 }

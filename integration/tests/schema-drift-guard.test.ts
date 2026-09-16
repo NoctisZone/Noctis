@@ -47,7 +47,6 @@ import { describe, expect, it } from 'vitest';
 import { CtoGovernanceDatumShape as SubmitterCtoGovernanceDatumShape } from '../cardano-cto-anchor-submitter.js';
 
 import {
-  BondingCurveDatumShape,
   BondingCurveTierBDatumShape,
   batchOrderToPlutus,
   CtoGovernanceDatumShape,
@@ -226,7 +225,6 @@ function normalizeLucidDatum(shape: unknown): NormDatum {
 // ---------------------------------------------------------------------------
 
 const CASES: Array<{ name: string; shape: unknown; definition: string }> = [
-  { name: 'BondingCurveDatum', shape: BondingCurveDatumShape, definition: 'bonding_curve/BondingCurveDatum' },
   {
     name: 'BondingCurveTierBDatum',
     shape: BondingCurveTierBDatumShape,
@@ -327,7 +325,7 @@ describe('schema drift guard — plutus.json is the source of truth', () => {
       'cap_proof',
     ];
 
-    for (const module of ['bonding_curve', 'bonding_curve_tier_b']) {
+    for (const module of ['bonding_curve_tier_b']) {
       it(`${module} declares exactly the fields the encoder writes, in that order`, () => {
         const def = blueprint.definitions[`${module}/BatchOrder`] as
           | { anyOf?: Array<{ fields?: Array<{ title?: string }> }> }
