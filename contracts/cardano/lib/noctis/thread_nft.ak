@@ -78,14 +78,12 @@ pub fn thread_asset_name(role: ByteArray, launch_id: ByteArray) -> ByteArray {
 }
 
 test thread_asset_name_is_32_bytes() {
-  let launch_id =
-    #"0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20"
+  let launch_id = #"0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20"
   bytearray.length(thread_asset_name(role_bonding_curve, launch_id)) == 32
 }
 
 test thread_asset_name_differs_per_role() {
-  let launch_id =
-    #"0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20"
+  let launch_id = #"0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20"
   thread_asset_name(role_bonding_curve, launch_id) != thread_asset_name(
     role_lp_escrow,
     launch_id,
@@ -106,8 +104,7 @@ test thread_asset_name_differs_per_launch() {
 /// The two curve tags must never collide — a linear-curve token must not satisfy a
 /// Cardano Launch check for the same launch.
 test curve_roles_do_not_collide() {
-  let launch_id =
-    #"0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20"
+  let launch_id = #"0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20"
   thread_asset_name(role_bonding_curve, launch_id) != thread_asset_name(
     role_bonding_curve_tier_b,
     launch_id,
@@ -124,8 +121,7 @@ test curve_roles_do_not_collide() {
 /// builder, not written by hand — regenerate them the same way if the scheme
 /// changes, and never "fix" a failure here by editing only one side.
 test matches_typescript_implementation() {
-  let launch_id =
-    #"aebfbc87161850827e5620fa667e98c533a419298bbed1a8fff960f1b9e2fa14"
+  let launch_id = #"aebfbc87161850827e5620fa667e98c533a419298bbed1a8fff960f1b9e2fa14"
   and {
     thread_asset_name(role_cto_governance, launch_id) == #"00aebfbc87161850827e5620fa667e98c533a419298bbed1a8fff960f1b9e2fa",
     thread_asset_name(role_bonding_curve, launch_id) == #"01aebfbc87161850827e5620fa667e98c533a419298bbed1a8fff960f1b9e2fa",
@@ -140,8 +136,7 @@ test matches_typescript_implementation() {
 /// The venue's tags sit outside the launch range, and the pool and LQ names
 /// differ from each other.
 test venue_roles_do_not_collide() {
-  let launch_id =
-    #"0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20"
+  let launch_id = #"0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20"
   and {
     thread_asset_name(role_pool, launch_id) != thread_asset_name(
       role_zk_anchor,

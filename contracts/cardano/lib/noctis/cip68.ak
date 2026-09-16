@@ -97,7 +97,10 @@ test reference_label_sorts_before_fungible_label() {
   and {
     bytearray.compare(label_reference_nft, label_fungible_token) == Less,
     bytearray.compare(reference_asset_name("MAXX"), fungible_asset_name("MAXX")) == Less,
-    bytearray.compare(reference_asset_name("ZZZZZZZZ"), fungible_asset_name("A")) == Less,
+    bytearray.compare(
+      reference_asset_name("ZZZZZZZZ"),
+      fungible_asset_name("A"),
+    ) == Less,
   }
 }
 
@@ -146,9 +149,7 @@ pub const required_fungible_keys: List<ByteArray> = ["name", "description"]
 pub fn has_required_fungible_fields(metadata: Pairs<ByteArray, Data>) -> Bool {
   list.all(
     required_fungible_keys,
-    fn(required) {
-      list.any(metadata, fn(entry) { entry.1st == required })
-    },
+    fn(required) { list.any(metadata, fn(entry) { entry.1st == required }) },
   )
 }
 

@@ -87,7 +87,7 @@ fn creator_position() -> stake_accumulator.Position {
 /// tested here is the payout, so the emission arithmetic is kept out of it.
 fn pool_datum() -> staking_pool_datum.StakingPoolDatum {
   staking_pool_datum.StakingPoolDatum {
-    launch_id: launch_id,
+    launch_id,
     creator_pub_key_hash: creator,
     token_policy_id: token_policy,
     token_asset_name: "tok",
@@ -106,7 +106,7 @@ fn pool_datum() -> staking_pool_datum.StakingPoolDatum {
 
 fn vesting_datum() -> vesting.VestingDatum {
   vesting.VestingDatum {
-    launch_id: launch_id,
+    launch_id,
     creator_pub_key_hash: creator,
     governor_pub_key_hash: #"22",
     token_allocation: 100_000_000,
@@ -142,64 +142,56 @@ fn settlement_tx(payouts: List<Output>) -> Transaction {
   let pool_address = from_verification_key(pool_script)
   let vesting_address = from_verification_key(vesting_script)
 
-  let pool_input =
-    Input {
-      output_reference: pool_ref,
-      output: Output {
-        address: pool_address,
-        value: assets.merge(
-          pool_nft(),
-          assets.merge(
-            assets.from_lovelace(2_000_000),
-            assets.from_asset(token_policy, "tok", 1_000),
-          ),
-        ),
-        datum: InlineDatum(pool_datum()),
-        reference_script: None,
-      },
-    }
-  let vesting_input =
-    Input {
-      output_reference: vesting_ref,
-      output: Output {
-        address: vesting_address,
-        value: assets.merge(
-          vesting_nft(),
-          assets.from_asset(token_policy, "tok", 100_000_000),
-        ),
-        datum: InlineDatum(vesting_datum()),
-        reference_script: None,
-      },
-    }
-  let pool_continuing =
-    Output {
+  let pool_input = Input {
+    output_reference: pool_ref,
+    output: Output {
       address: pool_address,
       value: assets.merge(
         pool_nft(),
         assets.merge(
           assets.from_lovelace(2_000_000),
-          assets.from_asset(token_policy, "tok", 1_000 - settled_amount),
+          assets.from_asset(token_policy, "tok", 1_000),
         ),
       ),
-      datum: InlineDatum(pool_after_claim()),
+      datum: InlineDatum(pool_datum()),
       reference_script: None,
-    }
-  let vesting_continuing =
-    Output {
+    },
+  }
+  let vesting_input = Input {
+    output_reference: vesting_ref,
+    output: Output {
       address: vesting_address,
       value: assets.merge(
         vesting_nft(),
-        assets.from_asset(
-          token_policy,
-          "tok",
-          100_000_000 - settled_amount,
-        ),
+        assets.from_asset(token_policy, "tok", 100_000_000),
       ),
-      datum: InlineDatum(
-        vesting.VestingDatum { ..vesting_datum(), claimed_tokens: settled_amount },
-      ),
+      datum: InlineDatum(vesting_datum()),
       reference_script: None,
-    }
+    },
+  }
+  let pool_continuing = Output {
+    address: pool_address,
+    value: assets.merge(
+      pool_nft(),
+      assets.merge(
+        assets.from_lovelace(2_000_000),
+        assets.from_asset(token_policy, "tok", 1_000 - settled_amount),
+      ),
+    ),
+    datum: InlineDatum(pool_after_claim()),
+    reference_script: None,
+  }
+  let vesting_continuing = Output {
+    address: vesting_address,
+    value: assets.merge(
+      vesting_nft(),
+      assets.from_asset(token_policy, "tok", 100_000_000 - settled_amount),
+    ),
+    datum: InlineDatum(
+      vesting.VestingDatum { ..vesting_datum(), claimed_tokens: settled_amount },
+    ),
+    reference_script: None,
+  }
 
   Transaction {
     ..placeholder,
@@ -240,22 +232,20 @@ fn payout(settles: Data) -> Output {
 /// accumulator it was just settled at, and the clock moved to `now`.
 fn pool_after_claim() -> staking_pool_datum.StakingPoolDatum {
   let entries = [(creator, creator_position())]
-  let settled =
-    stake_accumulator.Position {
-      ..creator_position(),
-      debt: staking_pool.debt_at(pool_stake, pool_acc),
-    }
-  let (_, stake_root) =
-    stake_accumulator.transition(
-      pool_datum().stake_root,
-      creator,
-      creator_position(),
-      settled,
-      stake_accumulator.proof_in(creator, entries),
-    )
+  let settled = stake_accumulator.Position {
+    ..creator_position(),
+    debt: staking_pool.debt_at(pool_stake, pool_acc),
+  }
+  let (_, stake_root) = stake_accumulator.transition(
+    pool_datum().stake_root,
+    creator,
+    creator_position(),
+    settled,
+    stake_accumulator.proof_in(creator, entries),
+  )
   staking_pool_datum.StakingPoolDatum {
     ..pool_datum(),
-    stake_root: stake_root,
+    stake_root,
     last_update_ms: claim_time - 100,
   }
 }
@@ -334,17 +324,16 @@ test two_named_outputs_settle_both_contracts() {
 /// A payout that is real, correctly addressed and correctly sized but names
 /// neither input settles neither.
 test an_untagged_payout_settles_nothing() {
-  let self =
-    settlement_tx(
-      [
-        Output {
-          address: from_verification_key(creator),
-          value: assets.from_asset(token_policy, "tok", settled_amount),
-          datum: NoDatum,
-          reference_script: None,
-        },
-      ],
-    )
+  let self = settlement_tx(
+    [
+      Output {
+        address: from_verification_key(creator),
+        value: assets.from_asset(token_policy, "tok", settled_amount),
+        datum: NoDatum,
+        reference_script: None,
+      },
+    ],
+  )
   !or {
     pool_accepts(self),
     vesting_accepts(self),

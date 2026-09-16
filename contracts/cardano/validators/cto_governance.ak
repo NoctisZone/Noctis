@@ -46,16 +46,19 @@
 
 use aiken/collection/list
 use aiken/crypto.{VerificationKeyHash, blake2b_256}
-use aiken/interval
 use aiken/interval.{Interval, IntervalBoundType}
 use aiken/primitive/bytearray
-use cardano/address.{Address, Credential, Script, VerificationKey,
-  from_verification_key, with_delegation_key}
+use cardano/address.{
+  Address, Credential, Script, VerificationKey, from_verification_key,
+  with_delegation_key,
+}
 use cardano/assets.{PolicyId}
-use cardano/transaction.{Input, InlineDatum, Output, OutputReference, Transaction}
+use cardano/transaction.{
+  InlineDatum, Input, Output, OutputReference, Transaction,
+}
+use noctis/clock
 use noctis/lp_escrow_datum.{Locked, LpEscrowDatum}
 use noctis/settlement
-use noctis/clock
 use noctis/thread_nft
 
 /// Same finding/fix as the linear curve's bonding_curve.ak — see that file's own
@@ -409,11 +412,15 @@ fn governance_value_unchanged(
   self: Transaction,
   own_ref: OutputReference,
 ) -> Bool {
-  expect Some(own_input) =
-    list.find(self.inputs, fn(input) { input.output_reference == own_ref })
+  expect Some(own_input) = list.find(
+    self.inputs,
+    fn(input) { input.output_reference == own_ref },
+  )
   let own_address = own_input.output.address
-  expect Some(own_output) =
-    list.find(self.outputs, fn(output) { output.address == own_address })
+  expect Some(own_output) = list.find(
+    self.outputs,
+    fn(output) { output.address == own_address },
+  )
   own_output.value == own_input.output.value
 }
 
@@ -421,11 +428,15 @@ fn own_continuing_datum(
   self: Transaction,
   own_ref: OutputReference,
 ) -> CtoGovernanceDatum {
-  expect Some(own_input) =
-    list.find(self.inputs, fn(input) { input.output_reference == own_ref })
+  expect Some(own_input) = list.find(
+    self.inputs,
+    fn(input) { input.output_reference == own_ref },
+  )
   let own_address = own_input.output.address
-  expect Some(own_output) =
-    list.find(self.outputs, fn(output) { output.address == own_address })
+  expect Some(own_output) = list.find(
+    self.outputs,
+    fn(output) { output.address == own_address },
+  )
   expect InlineDatum(raw_datum) = own_output.datum
   expect new_datum: CtoGovernanceDatum = raw_datum
   new_datum
@@ -467,25 +478,45 @@ fn paid_to(
 /// by exactly `amount` relative to the input — the receiving-side mirror
 /// of bonding_curve.ak's payment_received, applied here to a relayer's
 /// posted bond.
-fn bond_received(self: Transaction, own_ref: OutputReference, amount: Int) -> Bool {
-  expect Some(own_input) =
-    list.find(self.inputs, fn(input) { input.output_reference == own_ref })
+fn bond_received(
+  self: Transaction,
+  own_ref: OutputReference,
+  amount: Int,
+) -> Bool {
+  expect Some(own_input) = list.find(
+    self.inputs,
+    fn(input) { input.output_reference == own_ref },
+  )
   let own_address = own_input.output.address
-  expect Some(own_output) =
-    list.find(self.outputs, fn(output) { output.address == own_address })
-  assets.lovelace_of(own_output.value) == assets.lovelace_of(own_input.output.value) + amount
+  expect Some(own_output) = list.find(
+    self.outputs,
+    fn(output) { output.address == own_address },
+  )
+  assets.lovelace_of(own_output.value) == assets.lovelace_of(
+    own_input.output.value,
+  ) + amount
 }
 
 /// Verify this contract's own continuing output lovelace decreased
 /// by exactly `amount` relative to the input — the paying-side mirror of
 /// bond_received, applied to reclaiming or slashing a relayer's bond.
-fn bond_paid_out(self: Transaction, own_ref: OutputReference, amount: Int) -> Bool {
-  expect Some(own_input) =
-    list.find(self.inputs, fn(input) { input.output_reference == own_ref })
+fn bond_paid_out(
+  self: Transaction,
+  own_ref: OutputReference,
+  amount: Int,
+) -> Bool {
+  expect Some(own_input) = list.find(
+    self.inputs,
+    fn(input) { input.output_reference == own_ref },
+  )
   let own_address = own_input.output.address
-  expect Some(own_output) =
-    list.find(self.outputs, fn(output) { output.address == own_address })
-  assets.lovelace_of(own_input.output.value) == assets.lovelace_of(own_output.value) + amount
+  expect Some(own_output) = list.find(
+    self.outputs,
+    fn(output) { output.address == own_address },
+  )
+  assets.lovelace_of(own_input.output.value) == assets.lovelace_of(
+    own_output.value,
+  ) + amount
 }
 
 /// The anchored bundle reference, derived rather than accepted.
@@ -591,8 +622,7 @@ fn target_dex_bytes(target: Option<Credential>) -> ByteArray {
     None -> bytearray.concat(#"00", blake2b_256(#""))
     Some(cred) ->
       when cred is {
-        VerificationKey(hash) ->
-          bytearray.concat(#"01", blake2b_256(hash))
+        VerificationKey(hash) -> bytearray.concat(#"01", blake2b_256(hash))
         Script(hash) -> bytearray.concat(#"02", blake2b_256(hash))
       }
   }
@@ -640,25 +670,32 @@ fn governance_nft_preserved(
   own_ref: OutputReference,
   datum: CtoGovernanceDatum,
 ) -> Bool {
-  expect Some(own_input) =
-    list.find(self.inputs, fn(input) { input.output_reference == own_ref })
+  expect Some(own_input) = list.find(
+    self.inputs,
+    fn(input) { input.output_reference == own_ref },
+  )
   let own_address = own_input.output.address
   // 2026-08-03 audit: role-tagged asset name — one policy now carries a
   // distinct thread NFT for each of this launch's state UTXOs, so the bare
   // launch_id no longer identifies which one this is. See noctis/thread_nft.
-  let name =
-    thread_nft.thread_asset_name(
-      thread_nft.role_cto_governance,
-      datum.launch_id,
-    )
+  let name = thread_nft.thread_asset_name(
+    thread_nft.role_cto_governance,
+    datum.launch_id,
+  )
   // The input half was added in the same pass. Checking only the continuing
   // output proved the NFT ends up somewhere correct, but not that the UTXO
   // being spent was ever the genuine one. Requiring it on both sides is what
   // makes a UTXO that never held the NFT unspendable here.
-  when list.find(self.outputs, fn(output) { output.address == own_address }) is {
+  when
+    list.find(self.outputs, fn(output) { output.address == own_address })
+  is {
     None -> False
     Some(own_output) -> and {
-        assets.quantity_of(own_input.output.value, datum.thread_nft_policy, name) == 1,
+        assets.quantity_of(
+          own_input.output.value,
+          datum.thread_nft_policy,
+          name,
+        ) == 1,
         assets.quantity_of(own_output.value, datum.thread_nft_policy, name) == 1,
       }
   }
@@ -732,20 +769,16 @@ fn post_graduation_delay_ok(
   datum: CtoGovernanceDatum,
   start_timestamp: Int,
 ) -> Bool {
-  expect Some(lp_ref) =
-    list.find(
-      self.reference_inputs,
-      fn(input) {
-        assets.quantity_of(
-          input.output.value,
-          datum.thread_nft_policy,
-          thread_nft.thread_asset_name(
-            thread_nft.role_lp_escrow,
-            datum.launch_id,
-          ),
-        ) == 1
-      },
-    )
+  expect Some(lp_ref) = list.find(
+    self.reference_inputs,
+    fn(input) {
+      assets.quantity_of(
+        input.output.value,
+        datum.thread_nft_policy,
+        thread_nft.thread_asset_name(thread_nft.role_lp_escrow, datum.launch_id),
+      ) == 1
+    },
+  )
   expect InlineDatum(lp_raw_datum) = lp_ref.output.datum
   expect lp_datum: LpEscrowDatum = lp_raw_datum
 
@@ -766,84 +799,85 @@ validator cto_governance {
     self: Transaction,
   ) {
     expect Some(datum) = datum_opt
-    expect Some(own_input) =
-      list.find(self.inputs, fn(input) { input.output_reference == own_ref })
+    expect Some(own_input) = list.find(
+      self.inputs,
+      fn(input) { input.output_reference == own_ref },
+    )
 
     and {
       when redeemer is {
         AnchorVoteResult {
-        proposal_type,
-        description_hash,
-        proposal_id,
-        yes_votes,
-        no_votes,
-        voter_count,
-        creator_yes_votes,
-        creator_no_votes,
-        outcome,
-        start_timestamp,
-        end_timestamp,
-        anchor_timestamp,
-        target_dex_credential,
-        allocation_amount,
-        allocation_recipient_hash,
-        relayer_credential_hash,
-        relayer_bond,
-      } -> {
-        let total_votes = yes_votes + no_votes
-        // A ballot below the distinct-voter floor is not a vote that failed —
-        // it never reached the threshold to be a vote at all, whatever outcome
-        // it claims. Required for EVERY outcome, not only a passing one: an
-        // anchor takes the launch's single proposal slot and starts its
-        // cooldown either way, so a ballot nobody attended must not be able to
-        // claim either of those. The weight and majority tests below stay
-        // specific to a passing result, since a real ballot can legitimately
-        // fail by falling short of them.
-        let voter_floor_ok = voter_count >= datum.min_voter_count
-        let quorum_ok = if outcome == Passed {
-          let quorum_required = datum.total_supply * datum.quorum_bps
-          let quorum_actual = total_votes * 10_000
-          quorum_actual >= quorum_required && yes_votes > no_votes
-        } else {
-          True
-        }
+          proposal_type,
+          description_hash,
+          proposal_id,
+          yes_votes,
+          no_votes,
+          voter_count,
+          creator_yes_votes,
+          creator_no_votes,
+          outcome,
+          start_timestamp,
+          end_timestamp,
+          anchor_timestamp,
+          target_dex_credential,
+          allocation_amount,
+          allocation_recipient_hash,
+          relayer_credential_hash,
+          relayer_bond,
+        } -> {
+          let total_votes = yes_votes + no_votes
+          // A ballot below the distinct-voter floor is not a vote that failed —
+          // it never reached the threshold to be a vote at all, whatever outcome
+          // it claims. Required for EVERY outcome, not only a passing one: an
+          // anchor takes the launch's single proposal slot and starts its
+          // cooldown either way, so a ballot nobody attended must not be able to
+          // claim either of those. The weight and majority tests below stay
+          // specific to a passing result, since a real ballot can legitimately
+          // fail by falling short of them.
+          let voter_floor_ok = voter_count >= datum.min_voter_count
+          let quorum_ok = if outcome == Passed {
+            let quorum_required = datum.total_supply * datum.quorum_bps
+            let quorum_actual = total_votes * 10_000
+            quorum_actual >= quorum_required && yes_votes > no_votes
+          } else {
+            True
+          }
 
-        // A result can only describe a ballot that has actually finished, and
-        // whose window is the one this launch deploys with. Both timestamps
-        // are the relayer's to name, so without this the window is whatever
-        // they say it is — including one that had not opened when the result
-        // was submitted. anchor_timestamp is itself held inside the
-        // transaction's validity range below, which is what gives these two
-        // comparisons a real clock to work against.
-        let ballot_window_ok = and {
+          // A result can only describe a ballot that has actually finished, and
+          // whose window is the one this launch deploys with. Both timestamps
+          // are the relayer's to name, so without this the window is whatever
+          // they say it is — including one that had not opened when the result
+          // was submitted. anchor_timestamp is itself held inside the
+          // transaction's validity range below, which is what gives these two
+          // comparisons a real clock to work against.
+          let ballot_window_ok = and {
             end_timestamp - start_timestamp == datum.ballot_duration,
             end_timestamp <= anchor_timestamp,
           }
 
-        let creator_total = creator_yes_votes + creator_no_votes
-        let creator_cap = datum.total_supply * datum.creator_vote_cap_bps / 10_000
-        let creator_cap_ok = creator_total <= creator_cap
+          let creator_total = creator_yes_votes + creator_no_votes
+          let creator_cap = datum.total_supply * datum.creator_vote_cap_bps / 10_000
+          let creator_cap_ok = creator_total <= creator_cap
 
-        // SilenceLockTrigger and the dissolve proposal must pass to have
-        // any effect on cto_state / community_wallet_hash
-        let trigger_ok = if proposal_type == SilenceLockTrigger {
-          outcome == Passed
-        } else {
-          True
-        }
-        let dissolve_ok = if proposal_type == DissolveCTOProposal {
-          outcome == Passed
-        } else {
-          True
-        }
+          // SilenceLockTrigger and the dissolve proposal must pass to have
+          // any effect on cto_state / community_wallet_hash
+          let trigger_ok = if proposal_type == SilenceLockTrigger {
+            outcome == Passed
+          } else {
+            True
+          }
+          let dissolve_ok = if proposal_type == DissolveCTOProposal {
+            outcome == Passed
+          } else {
+            True
+          }
 
-        // Built once with the empty placeholder so the reference can be
-        // derived over everything else, then closed over with the derived
-        // value. The placeholder is what `derive_proof_bundle_hash` hashes,
-        // which is why it must be a fixed, known value rather than anything
-        // the submitter supplies.
-        let base_proposal =
-          ProposalAnchor {
+          // Built once with the empty placeholder so the reference can be
+          // derived over everything else, then closed over with the derived
+          // value. The placeholder is what `derive_proof_bundle_hash` hashes,
+          // which is why it must be a fixed, known value rather than anything
+          // the submitter supplies.
+          let base_proposal = ProposalAnchor {
             proposal_type,
             description_hash,
             proof_bundle_hash: #"",
@@ -862,8 +896,7 @@ validator cto_governance {
             allocation_recipient_hash,
             relayer_credential_hash,
           }
-        let proposal =
-          ProposalAnchor {
+          let proposal = ProposalAnchor {
             ..base_proposal,
             proof_bundle_hash: derive_proof_bundle_hash(
               datum.launch_id,
@@ -873,12 +906,11 @@ validator cto_governance {
             ),
           }
 
-        // Fix: cto_state/community_wallet_hash are NO LONGER mutated
-        // here — only ExecuteProposal applies them, once the challenge
-        // window has elapsed unvoided. See this redeemer's own doc
-        // comment in CtoGovernanceRedeemer above for the full reasoning.
-        let expected_datum =
-          CtoGovernanceDatum {
+          // Fix: cto_state/community_wallet_hash are NO LONGER mutated
+          // here — only ExecuteProposal applies them, once the challenge
+          // window has elapsed unvoided. See this redeemer's own doc
+          // comment in CtoGovernanceRedeemer above for the full reasoning.
+          let expected_datum = CtoGovernanceDatum {
             ..datum,
             active_proposal: Some(proposal),
             proposal_count: datum.proposal_count + 1,
@@ -889,238 +921,269 @@ validator cto_governance {
             // cooldown. This is the field the NEXT anchor is measured against.
             last_ballot_end_timestamp: end_timestamp,
           }
-        let new_datum = own_continuing_datum(self, own_ref)
+          let new_datum = own_continuing_datum(self, own_ref)
 
-        and {
-          single_own_utxo(self, own_input.output.address),
-          datum.active_proposal == None,
-          interval.contains(self.validity_range, anchor_timestamp),
-          // Bound the declared validity range's own width — this
-          // redeemer is open-relay/permissionless by design, and
-          // anchor_timestamp becomes the permanent base every later
-          // execution-window check is computed from.
-          validity_range_is_narrow(self.validity_range, max_validity_range_width),
-          voter_floor_ok,
-          quorum_ok,
-          ballot_window_ok,
-          post_graduation_delay_ok(self, datum, start_timestamp),
-          cooldown_elapsed(datum, start_timestamp),
-          creator_cap_ok,
-          trigger_ok,
-          dissolve_ok,
-          // The payee an execution will write, and the amount it will pay, are
-          // decided by the ballot and bound into the derived reference; a
-          // proposal that pays must therefore name a real payee and a real
-          // amount here.
-          when proposal_type is {
-            FundAllocation ->
-              allocation_amount > 0 && allocation_recipient_hash != #""
-            SilenceLockTrigger -> allocation_recipient_hash != #""
-            _ -> True
-          },
-          // CRITICAL fix: a real relayer bond is now required and
-          // actually paid into the contract's own value — closes the
-          // "forge a vote result for free" gap. See CtoGovernanceDatum's
-          // pending_relayer_bond doc comment for the full mechanism.
-          relayer_bond >= min_relayer_bond,
-          bond_received(self, own_ref, relayer_bond),
-          new_datum == expected_datum,
-        }
-      }
-
-      ExecuteProposal { current_timestamp } -> {
-        expect Some(proposal) = datum.active_proposal
-        let executed_proposal =
-          ProposalAnchor { ..proposal, execution_status: Executed }
-        let new_datum = own_continuing_datum(self, own_ref)
-
-        // Fix: cto_state/community_wallet_hash mutation moved here
-        // from AnchorVoteResult (see that redeemer's own comment).
-        let new_cto_state = if proposal.proposal_type == SilenceLockTrigger {
-          CTOTriggered
-        } else if proposal.proposal_type == DissolveCTOProposal {
-          CTODissolved
-        } else {
-          datum.cto_state
-        }
-        let new_community_wallet = if proposal.proposal_type == SilenceLockTrigger {
-          proposal.allocation_recipient_hash
-        } else if proposal.proposal_type == DissolveCTOProposal {
-          #""
-        } else {
-          datum.community_wallet_hash
+          and {
+            single_own_utxo(self, own_input.output.address),
+            datum.active_proposal == None,
+            interval.contains(self.validity_range, anchor_timestamp),
+            // Bound the declared validity range's own width — this
+            // redeemer is open-relay/permissionless by design, and
+            // anchor_timestamp becomes the permanent base every later
+            // execution-window check is computed from.
+            validity_range_is_narrow(
+              self.validity_range,
+              max_validity_range_width,
+            ),
+            voter_floor_ok,
+            quorum_ok,
+            ballot_window_ok,
+            post_graduation_delay_ok(self, datum, start_timestamp),
+            cooldown_elapsed(datum, start_timestamp),
+            creator_cap_ok,
+            trigger_ok,
+            dissolve_ok,
+            // The payee an execution will write, and the amount it will pay, are
+            // decided by the ballot and bound into the derived reference; a
+            // proposal that pays must therefore name a real payee and a real
+            // amount here.
+            when proposal_type is {
+              FundAllocation ->
+                allocation_amount > 0 && allocation_recipient_hash != #""
+              SilenceLockTrigger -> allocation_recipient_hash != #""
+              _ -> True
+            },
+            // CRITICAL fix: a real relayer bond is now required and
+            // actually paid into the contract's own value — closes the
+            // "forge a vote result for free" gap. See CtoGovernanceDatum's
+            // pending_relayer_bond doc comment for the full mechanism.
+            relayer_bond >= min_relayer_bond,
+            bond_received(self, own_ref, relayer_bond),
+            new_datum == expected_datum,
+          }
         }
 
-        and {
-          single_own_utxo(self, own_input.output.address),
-          proposal.outcome == Passed,
-          // Executing marks the proposal done and flips cto_state; the
-          // downstream contracts move the value, not this one.
-          governance_value_unchanged(self, own_ref),
-          proposal.execution_status == PendingExecution,
-          interval.contains(self.validity_range, current_timestamp),
-          // Fix: permissionless (no signature requirement — a real
-          // governor/community signature is no longer meaningful trust
-          // here, now that anchoring itself is bonded and
-          // governor-reviewable during the challenge window; requiring a
-          // signature on EXECUTE too would just reopen the exact
-          // censorship risk the open-relay design was resolved to avoid, since
-          // community_wallet_hash doesn't exist yet for a launch's FIRST
-          // SilenceLockTrigger). validity_range_is_narrow closes the same
-          // "declare an arbitrarily wide range" gap every other
-          // permissionless deadline check in this codebase already closes.
-          validity_range_is_narrow(self.validity_range, max_validity_range_width),
-          // CRITICAL fix: the challenge window must have elapsed —
-          // this is what actually closes the forgery gap (a fraudulent
-          // anchor can be voided by the governor before this point).
-          current_timestamp >= proposal.anchor_timestamp + challenge_window,
-          // The window has elapsed for every moment this transaction is valid
-          // in, not only for the moment the builder named.
-          clock.past(self.validity_range, proposal.anchor_timestamp + challenge_window),
-          current_timestamp <= proposal.anchor_timestamp + execution_window,
-          new_datum == CtoGovernanceDatum {
-            ..datum,
-            cto_state: new_cto_state,
-            community_wallet_hash: new_community_wallet,
-            active_proposal: Some(executed_proposal),
-            // Enforcement: permanent record for downstream reference-
-            // input checks — see the field's own doc comment above.
-            last_executed_proposal: Some(executed_proposal),
-          },
+        ExecuteProposal { current_timestamp } -> {
+          expect Some(proposal) = datum.active_proposal
+          let executed_proposal = ProposalAnchor {
+            ..proposal,
+            execution_status: Executed,
+          }
+          let new_datum = own_continuing_datum(self, own_ref)
+
+          // Fix: cto_state/community_wallet_hash mutation moved here
+          // from AnchorVoteResult (see that redeemer's own comment).
+          let new_cto_state = if proposal.proposal_type == SilenceLockTrigger {
+            CTOTriggered
+          } else if proposal.proposal_type == DissolveCTOProposal {
+            CTODissolved
+          } else {
+            datum.cto_state
+          }
+          let new_community_wallet = if proposal.proposal_type == SilenceLockTrigger {
+            proposal.allocation_recipient_hash
+          } else if proposal.proposal_type == DissolveCTOProposal {
+            #""
+          } else {
+            datum.community_wallet_hash
+          }
+
+          and {
+            single_own_utxo(self, own_input.output.address),
+            proposal.outcome == Passed,
+            // Executing marks the proposal done and flips cto_state; the
+            // downstream contracts move the value, not this one.
+            governance_value_unchanged(self, own_ref),
+            proposal.execution_status == PendingExecution,
+            interval.contains(self.validity_range, current_timestamp),
+            // Fix: permissionless (no signature requirement — a real
+            // governor/community signature is no longer meaningful trust
+            // here, now that anchoring itself is bonded and
+            // governor-reviewable during the challenge window; requiring a
+            // signature on EXECUTE too would just reopen the exact
+            // censorship risk the open-relay design was resolved to avoid, since
+            // community_wallet_hash doesn't exist yet for a launch's FIRST
+            // SilenceLockTrigger). validity_range_is_narrow closes the same
+            // "declare an arbitrarily wide range" gap every other
+            // permissionless deadline check in this codebase already closes.
+            validity_range_is_narrow(
+              self.validity_range,
+              max_validity_range_width,
+            ),
+            // CRITICAL fix: the challenge window must have elapsed —
+            // this is what actually closes the forgery gap (a fraudulent
+            // anchor can be voided by the governor before this point).
+            current_timestamp >= proposal.anchor_timestamp + challenge_window,
+            // The window has elapsed for every moment this transaction is valid
+            // in, not only for the moment the builder named.
+            clock.past(
+              self.validity_range,
+              proposal.anchor_timestamp + challenge_window,
+            ),
+            current_timestamp <= proposal.anchor_timestamp + execution_window,
+            new_datum == CtoGovernanceDatum {
+              ..datum,
+              cto_state: new_cto_state,
+              community_wallet_hash: new_community_wallet,
+              active_proposal: Some(executed_proposal),
+              // Enforcement: permanent record for downstream reference-
+              // input checks — see the field's own doc comment above.
+              last_executed_proposal: Some(executed_proposal),
+            },
+          }
         }
-      }
 
-      // Fix: governor-only, within the challenge window — voids a
-      // pending anchor found to be fraudulent, slashing the relayer's
-      // bond. See this redeemer's own doc comment in CtoGovernanceRedeemer
-      // above for the full reasoning.
-      VoidPendingProposal { current_timestamp } -> {
-        expect Some(proposal) = datum.active_proposal
-        let voided_proposal =
-          ProposalAnchor { ..proposal, execution_status: Expired }
-        let new_datum = own_continuing_datum(self, own_ref)
+        // Fix: governor-only, within the challenge window — voids a
+        // pending anchor found to be fraudulent, slashing the relayer's
+        // bond. See this redeemer's own doc comment in CtoGovernanceRedeemer
+        // above for the full reasoning.
+        VoidPendingProposal { current_timestamp } -> {
+          expect Some(proposal) = datum.active_proposal
+          let voided_proposal = ProposalAnchor {
+            ..proposal,
+            execution_status: Expired,
+          }
+          let new_datum = own_continuing_datum(self, own_ref)
 
-        and {
-          single_own_utxo(self, own_input.output.address),
-          list.has(self.extra_signatories, datum.governor_credential_hash),
-          proposal.execution_status == PendingExecution,
-          interval.contains(self.validity_range, current_timestamp),
-          validity_range_is_narrow(self.validity_range, max_validity_range_width),
-          current_timestamp < proposal.anchor_timestamp + challenge_window,
-          paid_to(self, own_ref, datum.payout_pub_key_hash, datum.pending_relayer_bond),
-          bond_paid_out(self, own_ref, datum.pending_relayer_bond),
-          new_datum == CtoGovernanceDatum {
-            ..datum,
-            active_proposal: Some(voided_proposal),
-            pending_relayer_bond: 0,
-            pending_relayer_key_hash: #"",
-          },
+          and {
+            single_own_utxo(self, own_input.output.address),
+            list.has(self.extra_signatories, datum.governor_credential_hash),
+            proposal.execution_status == PendingExecution,
+            interval.contains(self.validity_range, current_timestamp),
+            validity_range_is_narrow(
+              self.validity_range,
+              max_validity_range_width,
+            ),
+            current_timestamp < proposal.anchor_timestamp + challenge_window,
+            paid_to(
+              self,
+              own_ref,
+              datum.payout_pub_key_hash,
+              datum.pending_relayer_bond,
+            ),
+            bond_paid_out(self, own_ref, datum.pending_relayer_bond),
+            new_datum == CtoGovernanceDatum {
+              ..datum,
+              active_proposal: Some(voided_proposal),
+              pending_relayer_bond: 0,
+              pending_relayer_key_hash: #"",
+            },
+          }
         }
-      }
 
-      // Fix: the relayer reclaims their bond once their anchored
-      // proposal has been legitimately Executed or Expired (a natural
-      // 30-day timeout, not a void) — never reachable if the governor
-      // voided it, since VoidPendingProposal already zeroes
-      // pending_relayer_bond. Permissionless — the payout destination is
-      // fixed by the datum's own pending_relayer_key_hash.
-      ReclaimRelayerBond -> {
-        expect Some(proposal) = datum.active_proposal
-        let new_datum = own_continuing_datum(self, own_ref)
+        // Fix: the relayer reclaims their bond once their anchored
+        // proposal has been legitimately Executed or Expired (a natural
+        // 30-day timeout, not a void) — never reachable if the governor
+        // voided it, since VoidPendingProposal already zeroes
+        // pending_relayer_bond. Permissionless — the payout destination is
+        // fixed by the datum's own pending_relayer_key_hash.
+        ReclaimRelayerBond -> {
+          expect Some(proposal) = datum.active_proposal
+          let new_datum = own_continuing_datum(self, own_ref)
 
-        and {
-          single_own_utxo(self, own_input.output.address),
-          proposal.execution_status == Executed || proposal.execution_status == Expired,
-          datum.pending_relayer_bond > 0,
-          paid_to(self, own_ref, datum.pending_relayer_key_hash, datum.pending_relayer_bond),
-          bond_paid_out(self, own_ref, datum.pending_relayer_bond),
-          new_datum == CtoGovernanceDatum {
-            ..datum,
-            pending_relayer_bond: 0,
-            pending_relayer_key_hash: #"",
-          },
+          and {
+            single_own_utxo(self, own_input.output.address),
+            proposal.execution_status == Executed || proposal.execution_status == Expired,
+            datum.pending_relayer_bond > 0,
+            paid_to(
+              self,
+              own_ref,
+              datum.pending_relayer_key_hash,
+              datum.pending_relayer_bond,
+            ),
+            bond_paid_out(self, own_ref, datum.pending_relayer_bond),
+            new_datum == CtoGovernanceDatum {
+              ..datum,
+              pending_relayer_bond: 0,
+              pending_relayer_key_hash: #"",
+            },
+          }
         }
-      }
 
-      ExpireProposal { current_timestamp } -> {
-        expect Some(proposal) = datum.active_proposal
-        let expired_proposal =
-          ProposalAnchor { ..proposal, execution_status: Expired }
-        let new_datum = own_continuing_datum(self, own_ref)
+        ExpireProposal { current_timestamp } -> {
+          expect Some(proposal) = datum.active_proposal
+          let expired_proposal = ProposalAnchor {
+            ..proposal,
+            execution_status: Expired,
+          }
+          let new_datum = own_continuing_datum(self, own_ref)
 
-        and {
-          single_own_utxo(self, own_input.output.address),
-          proposal.execution_status == PendingExecution,
-          interval.contains(self.validity_range, current_timestamp),
-          // Bound the declared validity range's own width — this
-          // redeemer is permissionless by design (same idiom as ExpireCurve).
-          validity_range_is_narrow(self.validity_range, max_validity_range_width),
-          current_timestamp > proposal.anchor_timestamp + execution_window,
-          clock.strictly_past(
-            self.validity_range,
-            proposal.anchor_timestamp + execution_window,
-          ),
-          new_datum == CtoGovernanceDatum {
-            ..datum,
-            active_proposal: Some(expired_proposal),
-          },
-          // Marking a proposal expired settles nothing. The relayer's bond
-          // stays here for ReclaimRelayerBond, which is the only path that
-          // may pay it out and pays it to the datum's own recorded relayer.
-          governance_value_unchanged(self, own_ref),
+          and {
+            single_own_utxo(self, own_input.output.address),
+            proposal.execution_status == PendingExecution,
+            interval.contains(self.validity_range, current_timestamp),
+            // Bound the declared validity range's own width — this
+            // redeemer is permissionless by design (same idiom as ExpireCurve).
+            validity_range_is_narrow(
+              self.validity_range,
+              max_validity_range_width,
+            ),
+            current_timestamp > proposal.anchor_timestamp + execution_window,
+            clock.strictly_past(
+              self.validity_range,
+              proposal.anchor_timestamp + execution_window,
+            ),
+            new_datum == CtoGovernanceDatum {
+              ..datum,
+              active_proposal: Some(expired_proposal),
+            },
+            // Marking a proposal expired settles nothing. The relayer's bond
+            // stays here for ReclaimRelayerBond, which is the only path that
+            // may pay it out and pays it to the datum's own recorded relayer.
+            governance_value_unchanged(self, own_ref),
+          }
         }
-      }
 
-      ClearProposal -> {
-        expect Some(proposal) = datum.active_proposal
-        let new_datum = own_continuing_datum(self, own_ref)
-        and {
-          list.has(self.extra_signatories, datum.governor_credential_hash),
-          proposal.execution_status == Executed || proposal.execution_status == Expired,
-          // Fix: without this, a governor could ClearProposal (which
-          // resets active_proposal to None) BEFORE the relayer calls
-          // ReclaimRelayerBond — which itself requires `datum.
-          // active_proposal` to be Some — permanently stranding a
-          // legitimate relayer's bond in the contract with no path to
-          // reclaim it. Requiring the bond already be reclaimed (or
-          // already zeroed by VoidPendingProposal) enforces the correct
-          // order: settle the bond first, only then clear the record.
-          datum.pending_relayer_bond == 0,
-          new_datum == CtoGovernanceDatum { ..datum, active_proposal: None },
-          single_own_utxo(self, own_input.output.address),
-          governance_value_unchanged(self, own_ref),
+        ClearProposal -> {
+          expect Some(proposal) = datum.active_proposal
+          let new_datum = own_continuing_datum(self, own_ref)
+          and {
+            list.has(self.extra_signatories, datum.governor_credential_hash),
+            proposal.execution_status == Executed || proposal.execution_status == Expired,
+            // Fix: without this, a governor could ClearProposal (which
+            // resets active_proposal to None) BEFORE the relayer calls
+            // ReclaimRelayerBond — which itself requires `datum.
+            // active_proposal` to be Some — permanently stranding a
+            // legitimate relayer's bond in the contract with no path to
+            // reclaim it. Requiring the bond already be reclaimed (or
+            // already zeroed by VoidPendingProposal) enforces the correct
+            // order: settle the bond first, only then clear the record.
+            datum.pending_relayer_bond == 0,
+            new_datum == CtoGovernanceDatum { ..datum, active_proposal: None },
+            single_own_utxo(self, own_input.output.address),
+            governance_value_unchanged(self, own_ref),
+          }
         }
-      }
 
-      EmergencyFreezeCommunityWallet -> {
-        let new_datum = own_continuing_datum(self, own_ref)
-        and {
-          list.has(self.extra_signatories, datum.governor_credential_hash),
-          datum.cto_state == CTOTriggered,
-          // Nothing to freeze if nothing is set.
-          datum.community_wallet_hash != #"",
-          new_datum == CtoGovernanceDatum {
-            ..datum,
-            // Cleared, never redirected. Every downstream payout to the
-            // community wallet re-reads this record and refuses while the
-            // hash is empty, which is what makes clearing it a brake; a
-            // dissolve, by contrast, propagates by a DissolveCTO spend on
-            // each consumer, and the executed proposal recorded below stays
-            // as history.
-            community_wallet_hash: #"",
-          },
-          single_own_utxo(self, own_input.output.address),
-          governance_value_unchanged(self, own_ref),
+        EmergencyFreezeCommunityWallet -> {
+          let new_datum = own_continuing_datum(self, own_ref)
+          and {
+            list.has(self.extra_signatories, datum.governor_credential_hash),
+            datum.cto_state == CTOTriggered,
+            // Nothing to freeze if nothing is set.
+            datum.community_wallet_hash != #"",
+            new_datum == CtoGovernanceDatum {
+              ..datum,
+              // Cleared, never redirected. Every downstream payout to the
+              // community wallet re-reads this record and refuses while the
+              // hash is empty, which is what makes clearing it a brake; a
+              // dissolve, by contrast, propagates by a DissolveCTO spend on
+              // each consumer, and the executed proposal recorded below stays
+              // as history.
+              community_wallet_hash: #"",
+            },
+            single_own_utxo(self, own_input.output.address),
+            governance_value_unchanged(self, own_ref),
+          }
         }
-      }
 
-      // CRITICAL fix (2026-07-19, full-suite security audit) — same
-      // fix as bonding_curve.ak: was an unconditional `True` (zero checks).
-      // Lower direct-fund-value here than the other 5 files (this contract
-      // mostly anchors vote evidence rather than holding principal), but
-      // still a real unauthenticated-spend gap, closed the same way for
-      // consistency and to remove the attack surface entirely.
-      QueryState -> False
+        // CRITICAL fix (2026-07-19, full-suite security audit) — same
+        // fix as bonding_curve.ak: was an unconditional `True` (zero checks).
+        // Lower direct-fund-value here than the other 5 files (this contract
+        // mostly anchors vote evidence rather than holding principal), but
+        // still a real unauthenticated-spend gap, closed the same way for
+        // consistency and to remove the attack surface entirely.
+        QueryState -> False
       },
       // Fix (2026-07-23 audit): preserve the governance thread NFT on
       // EVERY successful spend — see governance_nft_preserved's doc comment.
@@ -1135,6 +1198,10 @@ validator cto_governance {
       // the NFT.
       governance_nft_preserved(self, own_ref, datum),
     }
+  }
+
+  else(_) {
+    fail
   }
 }
 
@@ -1156,7 +1223,7 @@ fn mock_datum(active_proposal: Option<ProposalAnchor>) -> CtoGovernanceDatum {
     // creator-only)
     min_voter_count: 15,
     // anti-whale-takeover fix (2026-07-28)
-    active_proposal: active_proposal,
+    active_proposal,
     proposal_count: 0,
     last_executed_proposal: None,
     pending_relayer_bond: 0,
@@ -1240,9 +1307,9 @@ fn mock_anchor_base(
     creator_yes_votes: 0,
     creator_no_votes: 0,
     outcome: Passed,
-    start_timestamp: start_timestamp,
-    end_timestamp: end_timestamp,
-    anchor_timestamp: anchor_timestamp,
+    start_timestamp,
+    end_timestamp,
+    anchor_timestamp,
     execution_status: PendingExecution,
     target_dex_credential: None,
     allocation_amount: 0,
@@ -1288,8 +1355,8 @@ fn mock_proposal_windowed(
 ) -> ProposalAnchor {
   ProposalAnchor {
     ..mock_proposal(outcome, execution_status, anchor_timestamp),
-    start_timestamp: start_timestamp,
-    end_timestamp: end_timestamp,
+    start_timestamp,
+    end_timestamp,
   }
 }
 
@@ -1312,11 +1379,11 @@ fn mock_proposal(
     voter_count: 15,
     creator_yes_votes: 0,
     creator_no_votes: 0,
-    outcome: outcome,
+    outcome,
     start_timestamp: 0,
     end_timestamp: 500,
-    anchor_timestamp: anchor_timestamp,
-    execution_status: execution_status,
+    anchor_timestamp,
+    execution_status,
     target_dex_credential: None,
     allocation_amount: 0,
     allocation_recipient_hash: #"ff",
@@ -1351,7 +1418,7 @@ const eligible_start: Int = mock_grad_ts + min_post_grad_delay_ms
 fn mock_lp_datum(lock_timestamp: Int) -> LpEscrowDatum {
   LpEscrowDatum {
     launch_id: #"01",
-    lock_timestamp: lock_timestamp,
+    lock_timestamp,
     lock_duration: 31_536_000_000,
     lp_state: Locked,
     governor_pub_key_hash: #"11",
@@ -1377,10 +1444,7 @@ fn mock_lp_datum(lock_timestamp: Int) -> LpEscrowDatum {
 /// describes — the datum's own launch_id is what closes that.
 fn mock_lp_ref_input_foreign_datum() -> Input {
   Input {
-    output_reference: OutputReference {
-      transaction_id: #"dd",
-      output_index: 0,
-    },
+    output_reference: OutputReference { transaction_id: #"dd", output_index: 0 },
     output: Output {
       address: from_verification_key(#"1e"),
       value: assets.from_asset(
@@ -1402,10 +1466,7 @@ fn mock_lp_ref_input_foreign_datum() -> Input {
 /// cannot find a graduation time at all and refuses.
 fn mock_lp_ref_input(lock_timestamp: Int) -> Input {
   Input {
-    output_reference: OutputReference {
-      transaction_id: #"dd",
-      output_index: 0,
-    },
+    output_reference: OutputReference { transaction_id: #"dd", output_index: 0 },
     output: Output {
       address: from_verification_key(#"1e"),
       value: assets.from_asset(
@@ -1503,71 +1564,71 @@ fn anchor_spend_with_lp_ref(
 ) -> Bool {
   let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
   let own_address = from_verification_key(#"cc")
-  let own_input =
-    Input {
-      output_reference: own_ref,
-      output: Output {
-        address: own_address,
-        value: assets.merge(mock_cto_nft_value(), assets.from_lovelace(2_000_000)),
-        datum: InlineDatum(datum),
-        reference_script: None,
-      },
-    }
-  let base_proposal =
-    mock_anchor_base(start_timestamp, end_timestamp, anchor_timestamp)
-  let proposal =
-    when reference_override is {
-      None -> with_derived_reference(datum, base_proposal)
-      Some(planted) ->
-        ProposalAnchor { ..base_proposal, proof_bundle_hash: planted }
-    }
-  let new_datum =
-    CtoGovernanceDatum {
-      ..datum,
-      active_proposal: Some(proposal),
-      proposal_count: datum.proposal_count + 1,
-      pending_relayer_bond: 25_000_000,
-      pending_relayer_key_hash: #"33",
-      // The anchor records the ballot's end as the cooldown's start. Spelled
-      // out here rather than spread from `datum`, so if the validator stopped
-      // writing it these fixtures would disagree with what it produces.
-      last_ballot_end_timestamp: end_timestamp,
-    }
-  let continuing_output =
-    Output {
+  let own_input = Input {
+    output_reference: own_ref,
+    output: Output {
       address: own_address,
-      value: cto_out_value(27_000_000),
-      datum: InlineDatum(new_datum),
+      value: assets.merge(mock_cto_nft_value(), assets.from_lovelace(2_000_000)),
+      datum: InlineDatum(datum),
       reference_script: None,
-    }
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      reference_inputs: [lp_ref],
-      outputs: [continuing_output],
-      validity_range: interval.between(anchor_timestamp - 100, anchor_timestamp + 100),
-    }
-  let redeemer =
-    AnchorVoteResult {
-      proposal_type: SilenceLockTrigger,
-      description_hash: #"aa",
-      proposal_id: mock_proposal_id(),
-      yes_votes: 60_000,
-      no_votes: 10_000,
-      voter_count: 15,
-      creator_yes_votes: 0,
-      creator_no_votes: 0,
-      outcome: Passed,
-      start_timestamp: start_timestamp,
-      end_timestamp: end_timestamp,
-      anchor_timestamp: anchor_timestamp,
-      target_dex_credential: None,
-      allocation_amount: 0,
-      allocation_recipient_hash: #"ff",
-      relayer_credential_hash: #"33",
-      relayer_bond: 25_000_000,
-    }
+    },
+  }
+  let base_proposal = mock_anchor_base(
+    start_timestamp,
+    end_timestamp,
+    anchor_timestamp,
+  )
+  let proposal = when reference_override is {
+    None -> with_derived_reference(datum, base_proposal)
+    Some(planted) ->
+      ProposalAnchor { ..base_proposal, proof_bundle_hash: planted }
+  }
+  let new_datum = CtoGovernanceDatum {
+    ..datum,
+    active_proposal: Some(proposal),
+    proposal_count: datum.proposal_count + 1,
+    pending_relayer_bond: 25_000_000,
+    pending_relayer_key_hash: #"33",
+    // The anchor records the ballot's end as the cooldown's start. Spelled
+    // out here rather than spread from `datum`, so if the validator stopped
+    // writing it these fixtures would disagree with what it produces.
+    last_ballot_end_timestamp: end_timestamp,
+  }
+  let continuing_output = Output {
+    address: own_address,
+    value: cto_out_value(27_000_000),
+    datum: InlineDatum(new_datum),
+    reference_script: None,
+  }
+  let self = Transaction {
+    ..transaction.placeholder,
+    inputs: [own_input],
+    reference_inputs: [lp_ref],
+    outputs: [continuing_output],
+    validity_range: interval.between(
+      anchor_timestamp - 100,
+      anchor_timestamp + 100,
+    ),
+  }
+  let redeemer = AnchorVoteResult {
+    proposal_type: SilenceLockTrigger,
+    description_hash: #"aa",
+    proposal_id: mock_proposal_id(),
+    yes_votes: 60_000,
+    no_votes: 10_000,
+    voter_count: 15,
+    creator_yes_votes: 0,
+    creator_no_votes: 0,
+    outcome: Passed,
+    start_timestamp,
+    end_timestamp,
+    anchor_timestamp,
+    target_dex_credential: None,
+    allocation_amount: 0,
+    allocation_recipient_hash: #"ff",
+    relayer_credential_hash: #"33",
+    relayer_bond: 25_000_000,
+  }
 
   cto_governance.spend(Some(datum), redeemer, own_ref, self)
 }
@@ -1614,8 +1675,6 @@ test anchor_rejects_a_ballot_window_of_the_wrong_width() {
     eligible_start + 500,
   )
 }
-
-
 
 // A launch gets one ballot, then a quiet period, whatever the outcome. Before
 // this the only spacing between ballots was `active_proposal`, which stops two
@@ -1756,13 +1815,12 @@ test anchor_reference_accepts_the_value_the_validator_derives() {
   // reference the validator itself computes — so those rejections are known to
   // be about the value, not about the mechanism used to place it.
   let datum = mock_datum(None)
-  let expected =
-    derive_proof_bundle_hash(
-      datum.launch_id,
-      datum.proposal_count,
-      mock_proposal_id(),
-      mock_anchor_base(eligible_start, eligible_start + 500, eligible_start + 500),
-    )
+  let expected = derive_proof_bundle_hash(
+    datum.launch_id,
+    datum.proposal_count,
+    mock_proposal_id(),
+    mock_anchor_base(eligible_start, eligible_start + 500, eligible_start + 500),
+  )
   anchor_spend_with_planted_reference(datum, expected)
 }
 
@@ -1783,13 +1841,12 @@ test anchor_reference_rejects_another_launchs_genuine_reference() {
   // for the identical ballot — belonging to a different launch. Anchoring it
   // here is what a relayer holding one launch's legitimate bundle would try.
   let datum = mock_datum(None)
-  let other =
-    derive_proof_bundle_hash(
-      #"02",
-      datum.proposal_count,
-      mock_proposal_id(),
-      mock_anchor_base(eligible_start, eligible_start + 500, eligible_start + 500),
-    )
+  let other = derive_proof_bundle_hash(
+    #"02",
+    datum.proposal_count,
+    mock_proposal_id(),
+    mock_anchor_base(eligible_start, eligible_start + 500, eligible_start + 500),
+  )
   !anchor_spend_with_planted_reference(datum, other)
 }
 
@@ -1798,13 +1855,12 @@ test anchor_reference_rejects_a_reference_derived_for_another_ordinal() {
   // ballot slot on one launch. This stops a genuine reference being re-anchored
   // for the launch's next ballot.
   let datum = mock_datum(None)
-  let other =
-    derive_proof_bundle_hash(
-      datum.launch_id,
-      datum.proposal_count + 1,
-      mock_proposal_id(),
-      mock_anchor_base(eligible_start, eligible_start + 500, eligible_start + 500),
-    )
+  let other = derive_proof_bundle_hash(
+    datum.launch_id,
+    datum.proposal_count + 1,
+    mock_proposal_id(),
+    mock_anchor_base(eligible_start, eligible_start + 500, eligible_start + 500),
+  )
   !anchor_spend_with_planted_reference(datum, other)
 }
 
@@ -1812,13 +1868,12 @@ test anchor_reference_rejects_a_reference_derived_for_another_ballot() {
   // Naming a different Midnight ballot changes the reference, so a relayer
   // cannot cite one ballot while presenting another's numbers.
   let datum = mock_datum(None)
-  let other =
-    derive_proof_bundle_hash(
-      datum.launch_id,
-      datum.proposal_count,
-      #"7a",
-      mock_anchor_base(eligible_start, eligible_start + 500, eligible_start + 500),
-    )
+  let other = derive_proof_bundle_hash(
+    datum.launch_id,
+    datum.proposal_count,
+    #"7a",
+    mock_anchor_base(eligible_start, eligible_start + 500, eligible_start + 500),
+  )
   !anchor_spend_with_planted_reference(datum, other)
 }
 
@@ -1827,27 +1882,33 @@ test anchor_reference_rejects_a_reference_derived_for_a_different_tally() {
   // editing the result underneath it is refused — here by one vote, so the
   // test cannot pass on a coarser difference.
   let datum = mock_datum(None)
-  let base = mock_anchor_base(eligible_start, eligible_start + 500, eligible_start + 500)
-  let other =
-    derive_proof_bundle_hash(
-      datum.launch_id,
-      datum.proposal_count,
-      mock_proposal_id(),
-      ProposalAnchor { ..base, yes_votes: base.yes_votes + 1 },
-    )
+  let base = mock_anchor_base(
+    eligible_start,
+    eligible_start + 500,
+    eligible_start + 500,
+  )
+  let other = derive_proof_bundle_hash(
+    datum.launch_id,
+    datum.proposal_count,
+    mock_proposal_id(),
+    ProposalAnchor { ..base, yes_votes: base.yes_votes + 1 },
+  )
   !anchor_spend_with_planted_reference(datum, other)
 }
 
 test anchor_reference_rejects_a_reference_derived_for_a_different_window() {
   // The ballot window is part of what a reference commits to.
   let datum = mock_datum(None)
-  let other =
-    derive_proof_bundle_hash(
-      datum.launch_id,
-      datum.proposal_count,
-      mock_proposal_id(),
-      mock_anchor_base(eligible_start + 1, eligible_start + 501, eligible_start + 500),
-    )
+  let other = derive_proof_bundle_hash(
+    datum.launch_id,
+    datum.proposal_count,
+    mock_proposal_id(),
+    mock_anchor_base(
+      eligible_start + 1,
+      eligible_start + 501,
+      eligible_start + 500,
+    ),
+  )
   !anchor_spend_with_planted_reference(datum, other)
 }
 
@@ -1855,78 +1916,73 @@ test anchor_vote_result_succeeds_with_quorum_met() {
   let datum = mock_datum(None)
   let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
   let own_address = from_verification_key(#"cc")
-  let own_input =
-    Input {
-      output_reference: own_ref,
-      output: Output {
-        address: own_address,
-        value: assets.merge(mock_cto_nft_value(), assets.from_lovelace(2_000_000)),
-        datum: InlineDatum(datum),
-        reference_script: None,
-      },
-    }
+  let own_input = Input {
+    output_reference: own_ref,
+    output: Output {
+      address: own_address,
+      value: assets.merge(mock_cto_nft_value(), assets.from_lovelace(2_000_000)),
+      datum: InlineDatum(datum),
+      reference_script: None,
+    },
+  }
   // 70_000 total votes out of 1_000_000 supply = 7% > 5% quorum. Yes > No.
-  let proposal =
-    with_derived_reference(
-      datum,
-      mock_proposal_windowed(
-        Passed,
-        PendingExecution,
-        eligible_start,
-        eligible_start + 500,
-        eligible_start + 500,
-      ),
-    )
+  let proposal = with_derived_reference(
+    datum,
+    mock_proposal_windowed(
+      Passed,
+      PendingExecution,
+      eligible_start,
+      eligible_start + 500,
+      eligible_start + 500,
+    ),
+  )
   // AnchorVoteResult no longer mutates cto_state/community_wallet_hash
   // directly (that's ExecuteProposal's job now, after the challenge window)
   // — it only records the pending proposal + the relayer's posted bond.
-  let new_datum =
-    CtoGovernanceDatum {
-      ..datum,
-      active_proposal: Some(proposal),
-      proposal_count: 1,
-      pending_relayer_bond: 25_000_000,
-      pending_relayer_key_hash: #"33",
-      // The ballot's end becomes the cooldown's start. Spelled out rather
-      // than spread from `datum`, so a validator that stopped writing it
-      // would fail this equality instead of quietly agreeing.
-      last_ballot_end_timestamp: eligible_start + 500,
-    }
-  let continuing_output =
-    Output {
-      address: own_address,
-      value: cto_out_value(27_000_000),
-      datum: InlineDatum(new_datum),
-      reference_script: None,
-    }
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      reference_inputs: [mock_lp_ref_input(mock_grad_ts)],
-      outputs: [continuing_output],
-      validity_range: interval.between(eligible_start + 400, eligible_start + 600),
-    }
-  let redeemer =
-    AnchorVoteResult {
-      proposal_type: SilenceLockTrigger,
-      description_hash: #"aa",
-      proposal_id: mock_proposal_id(),
-      yes_votes: 60_000,
-      no_votes: 10_000,
-      voter_count: 15, // bumped 5 -> 15 (anti-whale-takeover fix, 2026-07-28): must meet the new min_voter_count
-      creator_yes_votes: 0,
-      creator_no_votes: 0,
-      outcome: Passed,
-      start_timestamp: eligible_start,
-      end_timestamp: eligible_start + 500,
-      anchor_timestamp: eligible_start + 500,
-      target_dex_credential: None,
-      allocation_amount: 0,
-      allocation_recipient_hash: #"ff",
-      relayer_credential_hash: #"33",
-      relayer_bond: 25_000_000,
-    }
+  let new_datum = CtoGovernanceDatum {
+    ..datum,
+    active_proposal: Some(proposal),
+    proposal_count: 1,
+    pending_relayer_bond: 25_000_000,
+    pending_relayer_key_hash: #"33",
+    // The ballot's end becomes the cooldown's start. Spelled out rather
+    // than spread from `datum`, so a validator that stopped writing it
+    // would fail this equality instead of quietly agreeing.
+    last_ballot_end_timestamp: eligible_start + 500,
+  }
+  let continuing_output = Output {
+    address: own_address,
+    value: cto_out_value(27_000_000),
+    datum: InlineDatum(new_datum),
+    reference_script: None,
+  }
+  let self = Transaction {
+    ..transaction.placeholder,
+    inputs: [own_input],
+    reference_inputs: [mock_lp_ref_input(mock_grad_ts)],
+    outputs: [continuing_output],
+    validity_range: interval.between(eligible_start + 400, eligible_start + 600),
+  }
+  let redeemer = AnchorVoteResult {
+    proposal_type: SilenceLockTrigger,
+    description_hash: #"aa",
+    proposal_id: mock_proposal_id(),
+    yes_votes: 60_000,
+    no_votes: 10_000,
+    voter_count: 15,
+    // bumped 5 -> 15 (anti-whale-takeover fix, 2026-07-28): must meet the new min_voter_count
+    creator_yes_votes: 0,
+    creator_no_votes: 0,
+    outcome: Passed,
+    start_timestamp: eligible_start,
+    end_timestamp: eligible_start + 500,
+    anchor_timestamp: eligible_start + 500,
+    target_dex_credential: None,
+    allocation_amount: 0,
+    allocation_recipient_hash: #"ff",
+    relayer_credential_hash: #"33",
+    relayer_bond: 25_000_000,
+  }
 
   cto_governance.spend(Some(datum), redeemer, own_ref, self)
 }
@@ -1942,67 +1998,62 @@ test anchor_vote_result_rejects_dropping_thread_nft() {
   let datum = mock_datum(None)
   let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
   let own_address = from_verification_key(#"cc")
-  let own_input =
-    Input {
-      output_reference: own_ref,
-      output: Output {
-        address: own_address,
-        value: cto_out_value(2_000_000),
-        datum: InlineDatum(datum),
-        reference_script: None,
-      },
-    }
+  let own_input = Input {
+    output_reference: own_ref,
+    output: Output {
+      address: own_address,
+      value: cto_out_value(2_000_000),
+      datum: InlineDatum(datum),
+      reference_script: None,
+    },
+  }
   let proposal = mock_proposal(Passed, PendingExecution, 500)
-  let new_datum =
-    CtoGovernanceDatum {
-      ..datum,
-      active_proposal: Some(proposal),
-      proposal_count: 1,
-      pending_relayer_bond: 25_000_000,
-      pending_relayer_key_hash: #"33",
-      // The ballot's end becomes the cooldown's start. Spelled out rather
-      // than spread from `datum`, so a validator that stopped writing it
-      // would fail this equality instead of quietly agreeing.
-      last_ballot_end_timestamp: eligible_start + 500,
-    }
+  let new_datum = CtoGovernanceDatum {
+    ..datum,
+    active_proposal: Some(proposal),
+    proposal_count: 1,
+    pending_relayer_bond: 25_000_000,
+    pending_relayer_key_hash: #"33",
+    // The ballot's end becomes the cooldown's start. Spelled out rather
+    // than spread from `datum`, so a validator that stopped writing it
+    // would fail this equality instead of quietly agreeing.
+    last_ballot_end_timestamp: eligible_start + 500,
+  }
   // The continuing output DROPS the NFT — plain lovelace only. The lovelace
   // bond arithmetic still balances (27M == 2M + 25M), so ONLY the missing
   // NFT can be what rejects this spend.
-  let continuing_output =
-    Output {
-      address: own_address,
-      value: assets.merge(mock_cto_nft_value(), assets.from_lovelace(27_000_000)),
-      datum: InlineDatum(new_datum),
-      reference_script: None,
-    }
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      reference_inputs: [mock_lp_ref_input(mock_grad_ts)],
-      outputs: [continuing_output],
-      validity_range: interval.between(eligible_start + 400, eligible_start + 600),
-    }
-  let redeemer =
-    AnchorVoteResult {
-      proposal_type: SilenceLockTrigger,
-      description_hash: #"aa",
-      proposal_id: mock_proposal_id(),
-      yes_votes: 60_000,
-      no_votes: 10_000,
-      voter_count: 5,
-      creator_yes_votes: 0,
-      creator_no_votes: 0,
-      outcome: Passed,
-      start_timestamp: eligible_start,
-      end_timestamp: eligible_start + 500,
-      anchor_timestamp: eligible_start + 500,
-      target_dex_credential: None,
-      allocation_amount: 0,
-      allocation_recipient_hash: #"ff",
-      relayer_credential_hash: #"33",
-      relayer_bond: 25_000_000,
-    }
+  let continuing_output = Output {
+    address: own_address,
+    value: assets.merge(mock_cto_nft_value(), assets.from_lovelace(27_000_000)),
+    datum: InlineDatum(new_datum),
+    reference_script: None,
+  }
+  let self = Transaction {
+    ..transaction.placeholder,
+    inputs: [own_input],
+    reference_inputs: [mock_lp_ref_input(mock_grad_ts)],
+    outputs: [continuing_output],
+    validity_range: interval.between(eligible_start + 400, eligible_start + 600),
+  }
+  let redeemer = AnchorVoteResult {
+    proposal_type: SilenceLockTrigger,
+    description_hash: #"aa",
+    proposal_id: mock_proposal_id(),
+    yes_votes: 60_000,
+    no_votes: 10_000,
+    voter_count: 5,
+    creator_yes_votes: 0,
+    creator_no_votes: 0,
+    outcome: Passed,
+    start_timestamp: eligible_start,
+    end_timestamp: eligible_start + 500,
+    anchor_timestamp: eligible_start + 500,
+    target_dex_credential: None,
+    allocation_amount: 0,
+    allocation_recipient_hash: #"ff",
+    relayer_credential_hash: #"33",
+    relayer_bond: 25_000_000,
+  }
 
   !cto_governance.spend(Some(datum), redeemer, own_ref, self)
 }
@@ -2014,67 +2065,62 @@ test anchor_vote_result_rejects_wrong_launch_nft() {
   let datum = mock_datum(None)
   let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
   let own_address = from_verification_key(#"cc")
-  let own_input =
-    Input {
-      output_reference: own_ref,
-      output: Output {
-        address: own_address,
-        value: cto_out_value(2_000_000),
-        datum: InlineDatum(datum),
-        reference_script: None,
-      },
-    }
+  let own_input = Input {
+    output_reference: own_ref,
+    output: Output {
+      address: own_address,
+      value: cto_out_value(2_000_000),
+      datum: InlineDatum(datum),
+      reference_script: None,
+    },
+  }
   let proposal = mock_proposal(Passed, PendingExecution, 500)
-  let new_datum =
-    CtoGovernanceDatum {
-      ..datum,
-      active_proposal: Some(proposal),
-      proposal_count: 1,
-      pending_relayer_bond: 25_000_000,
-      pending_relayer_key_hash: #"33",
-      // The ballot's end becomes the cooldown's start. Spelled out rather
-      // than spread from `datum`, so a validator that stopped writing it
-      // would fail this equality instead of quietly agreeing.
-      last_ballot_end_timestamp: eligible_start + 500,
-    }
+  let new_datum = CtoGovernanceDatum {
+    ..datum,
+    active_proposal: Some(proposal),
+    proposal_count: 1,
+    pending_relayer_bond: 25_000_000,
+    pending_relayer_key_hash: #"33",
+    // The ballot's end becomes the cooldown's start. Spelled out rather
+    // than spread from `datum`, so a validator that stopped writing it
+    // would fail this equality instead of quietly agreeing.
+    last_ballot_end_timestamp: eligible_start + 500,
+  }
   // Right NFT policy, WRONG asset_name (another launch's id `#"02"`, not this
   // launch's `#"01"`) — quantity_of(value, policy, #"01") == 1 is False.
-  let continuing_output =
-    Output {
-      address: own_address,
-      value: assets.from_lovelace(27_000_000)
-        |> assets.add(mock_cto_nft_policy(), mock_cto_nft_name(#"02"), 1),
-      datum: InlineDatum(new_datum),
-      reference_script: None,
-    }
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      reference_inputs: [mock_lp_ref_input(mock_grad_ts)],
-      outputs: [continuing_output],
-      validity_range: interval.between(eligible_start + 400, eligible_start + 600),
-    }
-  let redeemer =
-    AnchorVoteResult {
-      proposal_type: SilenceLockTrigger,
-      description_hash: #"aa",
-      proposal_id: mock_proposal_id(),
-      yes_votes: 60_000,
-      no_votes: 10_000,
-      voter_count: 5,
-      creator_yes_votes: 0,
-      creator_no_votes: 0,
-      outcome: Passed,
-      start_timestamp: eligible_start,
-      end_timestamp: eligible_start + 500,
-      anchor_timestamp: eligible_start + 500,
-      target_dex_credential: None,
-      allocation_amount: 0,
-      allocation_recipient_hash: #"ff",
-      relayer_credential_hash: #"33",
-      relayer_bond: 25_000_000,
-    }
+  let continuing_output = Output {
+    address: own_address,
+    value: assets.from_lovelace(27_000_000)
+      |> assets.add(mock_cto_nft_policy(), mock_cto_nft_name(#"02"), 1),
+    datum: InlineDatum(new_datum),
+    reference_script: None,
+  }
+  let self = Transaction {
+    ..transaction.placeholder,
+    inputs: [own_input],
+    reference_inputs: [mock_lp_ref_input(mock_grad_ts)],
+    outputs: [continuing_output],
+    validity_range: interval.between(eligible_start + 400, eligible_start + 600),
+  }
+  let redeemer = AnchorVoteResult {
+    proposal_type: SilenceLockTrigger,
+    description_hash: #"aa",
+    proposal_id: mock_proposal_id(),
+    yes_votes: 60_000,
+    no_votes: 10_000,
+    voter_count: 5,
+    creator_yes_votes: 0,
+    creator_no_votes: 0,
+    outcome: Passed,
+    start_timestamp: eligible_start,
+    end_timestamp: eligible_start + 500,
+    anchor_timestamp: eligible_start + 500,
+    target_dex_credential: None,
+    allocation_amount: 0,
+    allocation_recipient_hash: #"ff",
+    relayer_credential_hash: #"33",
+    relayer_bond: 25_000_000,
+  }
 
   !cto_governance.spend(Some(datum), redeemer, own_ref, self)
 }
@@ -2085,64 +2131,59 @@ test anchor_vote_result_rejects_underfunded_bond() {
   let datum = mock_datum(None)
   let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
   let own_address = from_verification_key(#"cc")
-  let own_input =
-    Input {
-      output_reference: own_ref,
-      output: Output {
-        address: own_address,
-        value: assets.merge(mock_cto_nft_value(), assets.from_lovelace(2_000_000)),
-        datum: InlineDatum(datum),
-        reference_script: None,
-      },
-    }
-  let proposal = mock_proposal(Passed, PendingExecution, 500)
-  let new_datum =
-    CtoGovernanceDatum {
-      ..datum,
-      active_proposal: Some(proposal),
-      proposal_count: 1,
-      pending_relayer_bond: 1_000_000,
-      pending_relayer_key_hash: #"33",
-      // The ballot's end becomes the cooldown's start. Spelled out rather
-      // than spread from `datum`, so a validator that stopped writing it
-      // would fail this equality instead of quietly agreeing.
-      last_ballot_end_timestamp: eligible_start + 500,
-    }
-  let continuing_output =
-    Output {
+  let own_input = Input {
+    output_reference: own_ref,
+    output: Output {
       address: own_address,
-      value: cto_out_value(3_000_000),
-      datum: InlineDatum(new_datum),
+      value: assets.merge(mock_cto_nft_value(), assets.from_lovelace(2_000_000)),
+      datum: InlineDatum(datum),
       reference_script: None,
-    }
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      reference_inputs: [mock_lp_ref_input(mock_grad_ts)],
-      outputs: [continuing_output],
-      validity_range: interval.between(eligible_start + 400, eligible_start + 600),
-    }
-  let redeemer =
-    AnchorVoteResult {
-      proposal_type: SilenceLockTrigger,
-      description_hash: #"aa",
-      proposal_id: mock_proposal_id(),
-      yes_votes: 60_000,
-      no_votes: 10_000,
-      voter_count: 5,
-      creator_yes_votes: 0,
-      creator_no_votes: 0,
-      outcome: Passed,
-      start_timestamp: eligible_start,
-      end_timestamp: eligible_start + 500,
-      anchor_timestamp: eligible_start + 500,
-      target_dex_credential: None,
-      allocation_amount: 0,
-      allocation_recipient_hash: #"ff",
-      relayer_credential_hash: #"33",
-      relayer_bond: 1_000_000,
-    }
+    },
+  }
+  let proposal = mock_proposal(Passed, PendingExecution, 500)
+  let new_datum = CtoGovernanceDatum {
+    ..datum,
+    active_proposal: Some(proposal),
+    proposal_count: 1,
+    pending_relayer_bond: 1_000_000,
+    pending_relayer_key_hash: #"33",
+    // The ballot's end becomes the cooldown's start. Spelled out rather
+    // than spread from `datum`, so a validator that stopped writing it
+    // would fail this equality instead of quietly agreeing.
+    last_ballot_end_timestamp: eligible_start + 500,
+  }
+  let continuing_output = Output {
+    address: own_address,
+    value: cto_out_value(3_000_000),
+    datum: InlineDatum(new_datum),
+    reference_script: None,
+  }
+  let self = Transaction {
+    ..transaction.placeholder,
+    inputs: [own_input],
+    reference_inputs: [mock_lp_ref_input(mock_grad_ts)],
+    outputs: [continuing_output],
+    validity_range: interval.between(eligible_start + 400, eligible_start + 600),
+  }
+  let redeemer = AnchorVoteResult {
+    proposal_type: SilenceLockTrigger,
+    description_hash: #"aa",
+    proposal_id: mock_proposal_id(),
+    yes_votes: 60_000,
+    no_votes: 10_000,
+    voter_count: 5,
+    creator_yes_votes: 0,
+    creator_no_votes: 0,
+    outcome: Passed,
+    start_timestamp: eligible_start,
+    end_timestamp: eligible_start + 500,
+    anchor_timestamp: eligible_start + 500,
+    target_dex_credential: None,
+    allocation_amount: 0,
+    allocation_recipient_hash: #"ff",
+    relayer_credential_hash: #"33",
+    relayer_bond: 1_000_000,
+  }
 
   !cto_governance.spend(Some(datum), redeemer, own_ref, self)
 }
@@ -2154,66 +2195,61 @@ test anchor_vote_result_rejects_unpaid_bond() {
   let datum = mock_datum(None)
   let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
   let own_address = from_verification_key(#"cc")
-  let own_input =
-    Input {
-      output_reference: own_ref,
-      output: Output {
-        address: own_address,
-        value: assets.merge(mock_cto_nft_value(), assets.from_lovelace(2_000_000)),
-        datum: InlineDatum(datum),
-        reference_script: None,
-      },
-    }
-  let proposal = mock_proposal(Passed, PendingExecution, 500)
-  let new_datum =
-    CtoGovernanceDatum {
-      ..datum,
-      active_proposal: Some(proposal),
-      proposal_count: 1,
-      pending_relayer_bond: 25_000_000,
-      pending_relayer_key_hash: #"33",
-      // The ballot's end becomes the cooldown's start. Spelled out rather
-      // than spread from `datum`, so a validator that stopped writing it
-      // would fail this equality instead of quietly agreeing.
-      last_ballot_end_timestamp: eligible_start + 500,
-    }
-  let continuing_output =
-    Output {
+  let own_input = Input {
+    output_reference: own_ref,
+    output: Output {
       address: own_address,
-      // Bond claimed is 25 ADA but the continuing output's real lovelace
-      // never increased — no real payment made.
-      value: cto_out_value(2_000_000),
-      datum: InlineDatum(new_datum),
+      value: assets.merge(mock_cto_nft_value(), assets.from_lovelace(2_000_000)),
+      datum: InlineDatum(datum),
       reference_script: None,
-    }
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      reference_inputs: [mock_lp_ref_input(mock_grad_ts)],
-      outputs: [continuing_output],
-      validity_range: interval.between(eligible_start + 400, eligible_start + 600),
-    }
-  let redeemer =
-    AnchorVoteResult {
-      proposal_type: SilenceLockTrigger,
-      description_hash: #"aa",
-      proposal_id: mock_proposal_id(),
-      yes_votes: 60_000,
-      no_votes: 10_000,
-      voter_count: 5,
-      creator_yes_votes: 0,
-      creator_no_votes: 0,
-      outcome: Passed,
-      start_timestamp: eligible_start,
-      end_timestamp: eligible_start + 500,
-      anchor_timestamp: eligible_start + 500,
-      target_dex_credential: None,
-      allocation_amount: 0,
-      allocation_recipient_hash: #"ff",
-      relayer_credential_hash: #"33",
-      relayer_bond: 25_000_000,
-    }
+    },
+  }
+  let proposal = mock_proposal(Passed, PendingExecution, 500)
+  let new_datum = CtoGovernanceDatum {
+    ..datum,
+    active_proposal: Some(proposal),
+    proposal_count: 1,
+    pending_relayer_bond: 25_000_000,
+    pending_relayer_key_hash: #"33",
+    // The ballot's end becomes the cooldown's start. Spelled out rather
+    // than spread from `datum`, so a validator that stopped writing it
+    // would fail this equality instead of quietly agreeing.
+    last_ballot_end_timestamp: eligible_start + 500,
+  }
+  let continuing_output = Output {
+    address: own_address,
+    // Bond claimed is 25 ADA but the continuing output's real lovelace
+    // never increased — no real payment made.
+    value: cto_out_value(2_000_000),
+    datum: InlineDatum(new_datum),
+    reference_script: None,
+  }
+  let self = Transaction {
+    ..transaction.placeholder,
+    inputs: [own_input],
+    reference_inputs: [mock_lp_ref_input(mock_grad_ts)],
+    outputs: [continuing_output],
+    validity_range: interval.between(eligible_start + 400, eligible_start + 600),
+  }
+  let redeemer = AnchorVoteResult {
+    proposal_type: SilenceLockTrigger,
+    description_hash: #"aa",
+    proposal_id: mock_proposal_id(),
+    yes_votes: 60_000,
+    no_votes: 10_000,
+    voter_count: 5,
+    creator_yes_votes: 0,
+    creator_no_votes: 0,
+    outcome: Passed,
+    start_timestamp: eligible_start,
+    end_timestamp: eligible_start + 500,
+    anchor_timestamp: eligible_start + 500,
+    target_dex_credential: None,
+    allocation_amount: 0,
+    allocation_recipient_hash: #"ff",
+    relayer_credential_hash: #"33",
+    relayer_bond: 25_000_000,
+  }
 
   !cto_governance.spend(Some(datum), redeemer, own_ref, self)
 }
@@ -2228,60 +2264,55 @@ test anchor_vote_result_rejects_wide_validity_range() {
   let datum = mock_datum(None)
   let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
   let own_address = from_verification_key(#"cc")
-  let own_input =
-    Input {
-      output_reference: own_ref,
-      output: Output {
-        address: own_address,
-        value: mock_cto_nft_value(),
-        datum: InlineDatum(datum),
-        reference_script: None,
-      },
-    }
-  let proposal = mock_proposal(Passed, PendingExecution, 500)
-  let new_datum =
-    CtoGovernanceDatum {
-      ..datum,
-      cto_state: CTOTriggered,
-      community_wallet_hash: #"ff",
-      active_proposal: Some(proposal),
-      proposal_count: 1,
-    }
-  let continuing_output =
-    Output {
+  let own_input = Input {
+    output_reference: own_ref,
+    output: Output {
       address: own_address,
-      value: assets.from_asset(mock_cto_nft_policy(), mock_cto_nft_name(#"01"), 1),
-      datum: InlineDatum(new_datum),
+      value: mock_cto_nft_value(),
+      datum: InlineDatum(datum),
       reference_script: None,
-    }
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      reference_inputs: [mock_lp_ref_input(mock_grad_ts)],
-      outputs: [continuing_output],
-      validity_range: interval.between(eligible_start, eligible_start + 700_000),
-    }
-  let redeemer =
-    AnchorVoteResult {
-      proposal_type: SilenceLockTrigger,
-      description_hash: #"aa",
-      proposal_id: mock_proposal_id(),
-      yes_votes: 60_000,
-      no_votes: 10_000,
-      voter_count: 5,
-      creator_yes_votes: 0,
-      creator_no_votes: 0,
-      outcome: Passed,
-      start_timestamp: eligible_start,
-      end_timestamp: eligible_start + 500,
-      anchor_timestamp: eligible_start + 500,
-      target_dex_credential: None,
-      allocation_amount: 0,
-      allocation_recipient_hash: #"ff",
-      relayer_credential_hash: #"33",
-      relayer_bond: 25_000_000,
-    }
+    },
+  }
+  let proposal = mock_proposal(Passed, PendingExecution, 500)
+  let new_datum = CtoGovernanceDatum {
+    ..datum,
+    cto_state: CTOTriggered,
+    community_wallet_hash: #"ff",
+    active_proposal: Some(proposal),
+    proposal_count: 1,
+  }
+  let continuing_output = Output {
+    address: own_address,
+    value: assets.from_asset(mock_cto_nft_policy(), mock_cto_nft_name(#"01"), 1),
+    datum: InlineDatum(new_datum),
+    reference_script: None,
+  }
+  let self = Transaction {
+    ..transaction.placeholder,
+    inputs: [own_input],
+    reference_inputs: [mock_lp_ref_input(mock_grad_ts)],
+    outputs: [continuing_output],
+    validity_range: interval.between(eligible_start, eligible_start + 700_000),
+  }
+  let redeemer = AnchorVoteResult {
+    proposal_type: SilenceLockTrigger,
+    description_hash: #"aa",
+    proposal_id: mock_proposal_id(),
+    yes_votes: 60_000,
+    no_votes: 10_000,
+    voter_count: 5,
+    creator_yes_votes: 0,
+    creator_no_votes: 0,
+    outcome: Passed,
+    start_timestamp: eligible_start,
+    end_timestamp: eligible_start + 500,
+    anchor_timestamp: eligible_start + 500,
+    target_dex_credential: None,
+    allocation_amount: 0,
+    allocation_recipient_hash: #"ff",
+    relayer_credential_hash: #"33",
+    relayer_bond: 25_000_000,
+  }
 
   !cto_governance.spend(Some(datum), redeemer, own_ref, self)
 }
@@ -2290,64 +2321,59 @@ test anchor_vote_result_fails_without_quorum() {
   let datum = mock_datum(None)
   let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
   let own_address = from_verification_key(#"cc")
-  let own_input =
-    Input {
-      output_reference: own_ref,
-      output: Output {
-        address: own_address,
-        value: mock_cto_nft_value(),
-        datum: InlineDatum(datum),
-        reference_script: None,
-      },
-    }
+  let own_input = Input {
+    output_reference: own_ref,
+    output: Output {
+      address: own_address,
+      value: mock_cto_nft_value(),
+      datum: InlineDatum(datum),
+      reference_script: None,
+    },
+  }
   // Only 10_000 total votes out of 1_000_000 supply = 1% < 5% quorum.
   let proposal = mock_proposal(Passed, PendingExecution, 500)
-  let new_datum =
-    CtoGovernanceDatum {
-      ..datum,
-      cto_state: CTOTriggered,
-      community_wallet_hash: #"ff",
-      active_proposal: Some(proposal),
-      proposal_count: 1,
-    }
-  let continuing_output =
-    Output {
-      address: own_address,
-      value: assets.from_asset(mock_cto_nft_policy(), mock_cto_nft_name(#"01"), 1),
-      datum: InlineDatum(new_datum),
-      reference_script: None,
-    }
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      reference_inputs: [mock_lp_ref_input(mock_grad_ts)],
-      outputs: [continuing_output],
-      validity_range: interval.between(eligible_start + 400, eligible_start + 600),
-    }
-  let redeemer =
-    AnchorVoteResult {
-      proposal_type: SilenceLockTrigger,
-      description_hash: #"aa",
-      proposal_id: mock_proposal_id(),
-      yes_votes: 9_000,
-      no_votes: 1_000,
-      // Bumped to 15 (the new min_voter_count) so this test isolates the
-      // quorum-weight failure alone, not conflated with the separate
-      // min-voter-count check added 2026-07-28.
-      voter_count: 15,
-      creator_yes_votes: 0,
-      creator_no_votes: 0,
-      outcome: Passed,
-      start_timestamp: eligible_start,
-      end_timestamp: eligible_start + 500,
-      anchor_timestamp: eligible_start + 500,
-      target_dex_credential: None,
-      allocation_amount: 0,
-      allocation_recipient_hash: #"ff",
-      relayer_credential_hash: #"33",
-      relayer_bond: 25_000_000,
-    }
+  let new_datum = CtoGovernanceDatum {
+    ..datum,
+    cto_state: CTOTriggered,
+    community_wallet_hash: #"ff",
+    active_proposal: Some(proposal),
+    proposal_count: 1,
+  }
+  let continuing_output = Output {
+    address: own_address,
+    value: assets.from_asset(mock_cto_nft_policy(), mock_cto_nft_name(#"01"), 1),
+    datum: InlineDatum(new_datum),
+    reference_script: None,
+  }
+  let self = Transaction {
+    ..transaction.placeholder,
+    inputs: [own_input],
+    reference_inputs: [mock_lp_ref_input(mock_grad_ts)],
+    outputs: [continuing_output],
+    validity_range: interval.between(eligible_start + 400, eligible_start + 600),
+  }
+  let redeemer = AnchorVoteResult {
+    proposal_type: SilenceLockTrigger,
+    description_hash: #"aa",
+    proposal_id: mock_proposal_id(),
+    yes_votes: 9_000,
+    no_votes: 1_000,
+    // Bumped to 15 (the new min_voter_count) so this test isolates the
+    // quorum-weight failure alone, not conflated with the separate
+    // min-voter-count check added 2026-07-28.
+    voter_count: 15,
+    creator_yes_votes: 0,
+    creator_no_votes: 0,
+    outcome: Passed,
+    start_timestamp: eligible_start,
+    end_timestamp: eligible_start + 500,
+    anchor_timestamp: eligible_start + 500,
+    target_dex_credential: None,
+    allocation_amount: 0,
+    allocation_recipient_hash: #"ff",
+    relayer_credential_hash: #"33",
+    relayer_bond: 25_000_000,
+  }
 
   !cto_governance.spend(Some(datum), redeemer, own_ref, self)
 }
@@ -2356,65 +2382,60 @@ test anchor_vote_result_fails_when_voter_count_below_minimum() {
   let datum = mock_datum(None)
   let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
   let own_address = from_verification_key(#"cc")
-  let own_input =
-    Input {
-      output_reference: own_ref,
-      output: Output {
-        address: own_address,
-        value: mock_cto_nft_value(),
-        datum: InlineDatum(datum),
-        reference_script: None,
-      },
-    }
+  let own_input = Input {
+    output_reference: own_ref,
+    output: Output {
+      address: own_address,
+      value: mock_cto_nft_value(),
+      datum: InlineDatum(datum),
+      reference_script: None,
+    },
+  }
   // Anti-whale-takeover fix (2026-07-28): 70_000 total votes out of
   // 1_000_000 supply = 7% > 5% quorum, and yes > no — both the old checks
   // pass. Only voter_count (1, a single wallet) is below min_voter_count
   // (15), which is exactly the scenario this safeguard exists to block: a
   // single sufficiently large wallet satisfying quorum and majority alone.
   let proposal = mock_proposal(Passed, PendingExecution, 500)
-  let new_datum =
-    CtoGovernanceDatum {
-      ..datum,
-      cto_state: CTOTriggered,
-      community_wallet_hash: #"ff",
-      active_proposal: Some(proposal),
-      proposal_count: 1,
-    }
-  let continuing_output =
-    Output {
-      address: own_address,
-      value: assets.from_asset(mock_cto_nft_policy(), mock_cto_nft_name(#"01"), 1),
-      datum: InlineDatum(new_datum),
-      reference_script: None,
-    }
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      reference_inputs: [mock_lp_ref_input(mock_grad_ts)],
-      outputs: [continuing_output],
-      validity_range: interval.between(eligible_start + 400, eligible_start + 600),
-    }
-  let redeemer =
-    AnchorVoteResult {
-      proposal_type: SilenceLockTrigger,
-      description_hash: #"aa",
-      proposal_id: mock_proposal_id(),
-      yes_votes: 60_000,
-      no_votes: 10_000,
-      voter_count: 1,
-      creator_yes_votes: 0,
-      creator_no_votes: 0,
-      outcome: Passed,
-      start_timestamp: eligible_start,
-      end_timestamp: eligible_start + 500,
-      anchor_timestamp: eligible_start + 500,
-      target_dex_credential: None,
-      allocation_amount: 0,
-      allocation_recipient_hash: #"ff",
-      relayer_credential_hash: #"33",
-      relayer_bond: 25_000_000,
-    }
+  let new_datum = CtoGovernanceDatum {
+    ..datum,
+    cto_state: CTOTriggered,
+    community_wallet_hash: #"ff",
+    active_proposal: Some(proposal),
+    proposal_count: 1,
+  }
+  let continuing_output = Output {
+    address: own_address,
+    value: assets.from_asset(mock_cto_nft_policy(), mock_cto_nft_name(#"01"), 1),
+    datum: InlineDatum(new_datum),
+    reference_script: None,
+  }
+  let self = Transaction {
+    ..transaction.placeholder,
+    inputs: [own_input],
+    reference_inputs: [mock_lp_ref_input(mock_grad_ts)],
+    outputs: [continuing_output],
+    validity_range: interval.between(eligible_start + 400, eligible_start + 600),
+  }
+  let redeemer = AnchorVoteResult {
+    proposal_type: SilenceLockTrigger,
+    description_hash: #"aa",
+    proposal_id: mock_proposal_id(),
+    yes_votes: 60_000,
+    no_votes: 10_000,
+    voter_count: 1,
+    creator_yes_votes: 0,
+    creator_no_votes: 0,
+    outcome: Passed,
+    start_timestamp: eligible_start,
+    end_timestamp: eligible_start + 500,
+    anchor_timestamp: eligible_start + 500,
+    target_dex_credential: None,
+    allocation_amount: 0,
+    allocation_recipient_hash: #"ff",
+    relayer_credential_hash: #"33",
+    relayer_bond: 25_000_000,
+  }
 
   !cto_governance.spend(Some(datum), redeemer, own_ref, self)
 }
@@ -2423,49 +2444,46 @@ test anchor_vote_result_fails_when_creator_cap_exceeded() {
   let datum = mock_datum(None)
   let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
   let own_address = from_verification_key(#"cc")
-  let own_input =
-    Input {
-      output_reference: own_ref,
-      output: Output {
-        address: own_address,
-        value: mock_cto_nft_value(),
-        datum: InlineDatum(datum),
-        reference_script: None,
-      },
-    }
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      reference_inputs: [mock_lp_ref_input(mock_grad_ts)],
-      outputs: [],
-      validity_range: interval.between(eligible_start + 400, eligible_start + 600),
-    }
+  let own_input = Input {
+    output_reference: own_ref,
+    output: Output {
+      address: own_address,
+      value: mock_cto_nft_value(),
+      datum: InlineDatum(datum),
+      reference_script: None,
+    },
+  }
+  let self = Transaction {
+    ..transaction.placeholder,
+    inputs: [own_input],
+    reference_inputs: [mock_lp_ref_input(mock_grad_ts)],
+    outputs: [],
+    validity_range: interval.between(eligible_start + 400, eligible_start + 600),
+  }
   // Creator cap is 1% of 1_000_000 = 10_000 (anti-whale-takeover fix,
   // 2026-07-28 — was 2% = 20_000). Creator voted 25_000 total, still over
   // either threshold. voter_count bumped to 15 (the new min_voter_count)
   // so this test isolates the creator-cap failure alone, not conflated
   // with the separate min-voter-count check.
-  let redeemer =
-    AnchorVoteResult {
-      proposal_type: FundAllocation,
-      description_hash: #"aa",
-      proposal_id: mock_proposal_id(),
-      yes_votes: 60_000,
-      no_votes: 10_000,
-      voter_count: 15,
-      creator_yes_votes: 25_000,
-      creator_no_votes: 0,
-      outcome: Passed,
-      start_timestamp: eligible_start,
-      end_timestamp: eligible_start + 500,
-      anchor_timestamp: eligible_start + 500,
-      target_dex_credential: None,
-      allocation_amount: 0,
-      allocation_recipient_hash: #"ff",
-      relayer_credential_hash: #"33",
-      relayer_bond: 25_000_000,
-    }
+  let redeemer = AnchorVoteResult {
+    proposal_type: FundAllocation,
+    description_hash: #"aa",
+    proposal_id: mock_proposal_id(),
+    yes_votes: 60_000,
+    no_votes: 10_000,
+    voter_count: 15,
+    creator_yes_votes: 25_000,
+    creator_no_votes: 0,
+    outcome: Passed,
+    start_timestamp: eligible_start,
+    end_timestamp: eligible_start + 500,
+    anchor_timestamp: eligible_start + 500,
+    target_dex_credential: None,
+    allocation_amount: 0,
+    allocation_recipient_hash: #"ff",
+    relayer_credential_hash: #"33",
+    relayer_bond: 25_000_000,
+  }
 
   !cto_governance.spend(Some(datum), redeemer, own_ref, self)
 }
@@ -2475,53 +2493,55 @@ test execute_proposal_succeeds_by_governor_within_window() {
   let datum = mock_datum(Some(proposal))
   let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
   let own_address = from_verification_key(#"cc")
-  let own_input =
-    Input {
-      output_reference: own_ref,
-      output: Output {
-        address: own_address,
-        value: mock_cto_nft_value(),
-        datum: InlineDatum(datum),
-        reference_script: None,
-      },
-    }
-  let executed_proposal = ProposalAnchor { ..proposal, execution_status: Executed }
+  let own_input = Input {
+    output_reference: own_ref,
+    output: Output {
+      address: own_address,
+      value: mock_cto_nft_value(),
+      datum: InlineDatum(datum),
+      reference_script: None,
+    },
+  }
+  let executed_proposal = ProposalAnchor {
+    ..proposal,
+    execution_status: Executed,
+  }
   // ExecuteProposal now applies the cto_state/community_wallet_hash
   // mutation that used to happen directly in AnchorVoteResult — the mock
   // proposal is SilenceLockTrigger/Passed, so a real execution flips
   // cto_state to CTOTriggered and sets community_wallet_hash from the
   // proposal's allocation_recipient_hash.
-  let new_datum =
-    CtoGovernanceDatum {
-      ..datum,
-      cto_state: CTOTriggered,
-      community_wallet_hash: #"ff",
-      active_proposal: Some(executed_proposal),
-      last_executed_proposal: Some(executed_proposal),
-    }
-  let continuing_output =
-    Output {
-      address: own_address,
-      value: assets.from_asset(mock_cto_nft_policy(), mock_cto_nft_name(#"01"), 1),
-      datum: InlineDatum(new_datum),
-      reference_script: None,
-    }
+  let new_datum = CtoGovernanceDatum {
+    ..datum,
+    cto_state: CTOTriggered,
+    community_wallet_hash: #"ff",
+    active_proposal: Some(executed_proposal),
+    last_executed_proposal: Some(executed_proposal),
+  }
+  let continuing_output = Output {
+    address: own_address,
+    value: assets.from_asset(mock_cto_nft_policy(), mock_cto_nft_name(#"01"), 1),
+    datum: InlineDatum(new_datum),
+    reference_script: None,
+  }
   // ms-scale, matches execution_window's real unit — 1000 + 10 days,
   // well within the 30-day window, and well past the 24h challenge window.
   let current_timestamp = 1000 + 864_000_000
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      reference_inputs: [mock_lp_ref_input(mock_grad_ts)],
-      outputs: [continuing_output],
-      validity_range: interval.between(current_timestamp - 100, current_timestamp + 100),
-      extra_signatories: [#"22"],
-    }
+  let self = Transaction {
+    ..transaction.placeholder,
+    inputs: [own_input],
+    reference_inputs: [mock_lp_ref_input(mock_grad_ts)],
+    outputs: [continuing_output],
+    validity_range: interval.between(
+      current_timestamp - 100,
+      current_timestamp + 100,
+    ),
+    extra_signatories: [#"22"],
+  }
 
   cto_governance.spend(
     Some(datum),
-    ExecuteProposal { current_timestamp: current_timestamp },
+    ExecuteProposal { current_timestamp },
     own_ref,
     self,
   )
@@ -2535,46 +2555,48 @@ test execute_proposal_rejects_before_challenge_window_elapsed() {
   let datum = mock_datum(Some(proposal))
   let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
   let own_address = from_verification_key(#"cc")
-  let own_input =
-    Input {
-      output_reference: own_ref,
-      output: Output {
-        address: own_address,
-        value: mock_cto_nft_value(),
-        datum: InlineDatum(datum),
-        reference_script: None,
-      },
-    }
-  let executed_proposal = ProposalAnchor { ..proposal, execution_status: Executed }
-  let new_datum =
-    CtoGovernanceDatum {
-      ..datum,
-      cto_state: CTOTriggered,
-      community_wallet_hash: #"ff",
-      active_proposal: Some(executed_proposal),
-      last_executed_proposal: Some(executed_proposal),
-    }
-  let continuing_output =
-    Output {
+  let own_input = Input {
+    output_reference: own_ref,
+    output: Output {
       address: own_address,
-      value: assets.from_asset(mock_cto_nft_policy(), mock_cto_nft_name(#"01"), 1),
-      datum: InlineDatum(new_datum),
+      value: mock_cto_nft_value(),
+      datum: InlineDatum(datum),
       reference_script: None,
-    }
+    },
+  }
+  let executed_proposal = ProposalAnchor {
+    ..proposal,
+    execution_status: Executed,
+  }
+  let new_datum = CtoGovernanceDatum {
+    ..datum,
+    cto_state: CTOTriggered,
+    community_wallet_hash: #"ff",
+    active_proposal: Some(executed_proposal),
+    last_executed_proposal: Some(executed_proposal),
+  }
+  let continuing_output = Output {
+    address: own_address,
+    value: assets.from_asset(mock_cto_nft_policy(), mock_cto_nft_name(#"01"), 1),
+    datum: InlineDatum(new_datum),
+    reference_script: None,
+  }
   // Only 1 hour after anchoring — well inside the 24h challenge window.
   let current_timestamp = 1000 + 3_600_000
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      reference_inputs: [mock_lp_ref_input(mock_grad_ts)],
-      outputs: [continuing_output],
-      validity_range: interval.between(current_timestamp - 100, current_timestamp + 100),
-    }
+  let self = Transaction {
+    ..transaction.placeholder,
+    inputs: [own_input],
+    reference_inputs: [mock_lp_ref_input(mock_grad_ts)],
+    outputs: [continuing_output],
+    validity_range: interval.between(
+      current_timestamp - 100,
+      current_timestamp + 100,
+    ),
+  }
 
   !cto_governance.spend(
     Some(datum),
-    ExecuteProposal { current_timestamp: current_timestamp },
+    ExecuteProposal { current_timestamp },
     own_ref,
     self,
   )
@@ -2585,45 +2607,47 @@ test execute_proposal_fails_after_window_expired() {
   let datum = mock_datum(Some(proposal))
   let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
   let own_address = from_verification_key(#"cc")
-  let own_input =
-    Input {
-      output_reference: own_ref,
-      output: Output {
-        address: own_address,
-        value: mock_cto_nft_value(),
-        datum: InlineDatum(datum),
-        reference_script: None,
-      },
-    }
-  let executed_proposal = ProposalAnchor { ..proposal, execution_status: Executed }
-  let new_datum =
-    CtoGovernanceDatum {
-      ..datum,
-      active_proposal: Some(executed_proposal),
-      last_executed_proposal: Some(executed_proposal),
-    }
-  let continuing_output =
-    Output {
+  let own_input = Input {
+    output_reference: own_ref,
+    output: Output {
       address: own_address,
-      value: assets.from_asset(mock_cto_nft_policy(), mock_cto_nft_name(#"01"), 1),
-      datum: InlineDatum(new_datum),
+      value: mock_cto_nft_value(),
+      datum: InlineDatum(datum),
       reference_script: None,
-    }
+    },
+  }
+  let executed_proposal = ProposalAnchor {
+    ..proposal,
+    execution_status: Executed,
+  }
+  let new_datum = CtoGovernanceDatum {
+    ..datum,
+    active_proposal: Some(executed_proposal),
+    last_executed_proposal: Some(executed_proposal),
+  }
+  let continuing_output = Output {
+    address: own_address,
+    value: assets.from_asset(mock_cto_nft_policy(), mock_cto_nft_name(#"01"), 1),
+    datum: InlineDatum(new_datum),
+    reference_script: None,
+  }
   // ms-scale, matches execution_window's real unit — 1000 + 31 days, past the 30-day window
   let current_timestamp = 1000 + 2_678_400_000
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      reference_inputs: [mock_lp_ref_input(mock_grad_ts)],
-      outputs: [continuing_output],
-      validity_range: interval.between(current_timestamp - 100, current_timestamp + 100),
-      extra_signatories: [#"22"],
-    }
+  let self = Transaction {
+    ..transaction.placeholder,
+    inputs: [own_input],
+    reference_inputs: [mock_lp_ref_input(mock_grad_ts)],
+    outputs: [continuing_output],
+    validity_range: interval.between(
+      current_timestamp - 100,
+      current_timestamp + 100,
+    ),
+    extra_signatories: [#"22"],
+  }
 
   !cto_governance.spend(
     Some(datum),
-    ExecuteProposal { current_timestamp: current_timestamp },
+    ExecuteProposal { current_timestamp },
     own_ref,
     self,
   )
@@ -2639,47 +2663,49 @@ test execute_proposal_rejects_within_challenge_window_even_for_stranger() {
   let datum = mock_datum(Some(proposal))
   let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
   let own_address = from_verification_key(#"cc")
-  let own_input =
-    Input {
-      output_reference: own_ref,
-      output: Output {
-        address: own_address,
-        value: mock_cto_nft_value(),
-        datum: InlineDatum(datum),
-        reference_script: None,
-      },
-    }
-  let executed_proposal = ProposalAnchor { ..proposal, execution_status: Executed }
-  let new_datum =
-    CtoGovernanceDatum {
-      ..datum,
-      cto_state: CTOTriggered,
-      community_wallet_hash: #"ff",
-      active_proposal: Some(executed_proposal),
-      last_executed_proposal: Some(executed_proposal),
-    }
-  let continuing_output =
-    Output {
+  let own_input = Input {
+    output_reference: own_ref,
+    output: Output {
       address: own_address,
-      value: assets.from_asset(mock_cto_nft_policy(), mock_cto_nft_name(#"01"), 1),
-      datum: InlineDatum(new_datum),
+      value: mock_cto_nft_value(),
+      datum: InlineDatum(datum),
       reference_script: None,
-    }
+    },
+  }
+  let executed_proposal = ProposalAnchor {
+    ..proposal,
+    execution_status: Executed,
+  }
+  let new_datum = CtoGovernanceDatum {
+    ..datum,
+    cto_state: CTOTriggered,
+    community_wallet_hash: #"ff",
+    active_proposal: Some(executed_proposal),
+    last_executed_proposal: Some(executed_proposal),
+  }
+  let continuing_output = Output {
+    address: own_address,
+    value: assets.from_asset(mock_cto_nft_policy(), mock_cto_nft_name(#"01"), 1),
+    datum: InlineDatum(new_datum),
+    reference_script: None,
+  }
   let current_timestamp = 1000 + 864_000
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      reference_inputs: [mock_lp_ref_input(mock_grad_ts)],
-      outputs: [continuing_output],
-      validity_range: interval.between(current_timestamp - 100, current_timestamp + 100),
-      // no signature at all — permissionless, but still inside the window
-      extra_signatories: [],
-    }
+  let self = Transaction {
+    ..transaction.placeholder,
+    inputs: [own_input],
+    reference_inputs: [mock_lp_ref_input(mock_grad_ts)],
+    outputs: [continuing_output],
+    validity_range: interval.between(
+      current_timestamp - 100,
+      current_timestamp + 100,
+    ),
+    // no signature at all — permissionless, but still inside the window
+    extra_signatories: [],
+  }
 
   !cto_governance.spend(
     Some(datum),
-    ExecuteProposal { current_timestamp: current_timestamp },
+    ExecuteProposal { current_timestamp },
     own_ref,
     self,
   )
@@ -2690,39 +2716,45 @@ test expire_proposal_succeeds_after_window() {
   let datum = mock_datum(Some(proposal))
   let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
   let own_address = from_verification_key(#"cc")
-  let own_input =
-    Input {
-      output_reference: own_ref,
-      output: Output {
-        address: own_address,
-        value: mock_cto_nft_value(),
-        datum: InlineDatum(datum),
-        reference_script: None,
-      },
-    }
-  let expired_proposal = ProposalAnchor { ..proposal, execution_status: Expired }
-  let new_datum = CtoGovernanceDatum { ..datum, active_proposal: Some(expired_proposal) }
-  let continuing_output =
-    Output {
+  let own_input = Input {
+    output_reference: own_ref,
+    output: Output {
       address: own_address,
-      value: assets.from_asset(mock_cto_nft_policy(), mock_cto_nft_name(#"01"), 1),
-      datum: InlineDatum(new_datum),
+      value: mock_cto_nft_value(),
+      datum: InlineDatum(datum),
       reference_script: None,
-    }
+    },
+  }
+  let expired_proposal = ProposalAnchor {
+    ..proposal,
+    execution_status: Expired,
+  }
+  let new_datum = CtoGovernanceDatum {
+    ..datum,
+    active_proposal: Some(expired_proposal),
+  }
+  let continuing_output = Output {
+    address: own_address,
+    value: assets.from_asset(mock_cto_nft_policy(), mock_cto_nft_name(#"01"), 1),
+    datum: InlineDatum(new_datum),
+    reference_script: None,
+  }
   // ms-scale, matches execution_window's real unit
   let current_timestamp = 1000 + 2_678_400_000
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      reference_inputs: [mock_lp_ref_input(mock_grad_ts)],
-      outputs: [continuing_output],
-      validity_range: interval.between(current_timestamp - 100, current_timestamp + 100),
-    }
+  let self = Transaction {
+    ..transaction.placeholder,
+    inputs: [own_input],
+    reference_inputs: [mock_lp_ref_input(mock_grad_ts)],
+    outputs: [continuing_output],
+    validity_range: interval.between(
+      current_timestamp - 100,
+      current_timestamp + 100,
+    ),
+  }
 
   cto_governance.spend(
     Some(datum),
-    ExpireProposal { current_timestamp: current_timestamp },
+    ExpireProposal { current_timestamp },
     own_ref,
     self,
   )
@@ -2738,38 +2770,41 @@ test expire_proposal_rejects_wide_validity_range() {
   let datum = mock_datum(Some(proposal))
   let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
   let own_address = from_verification_key(#"cc")
-  let own_input =
-    Input {
-      output_reference: own_ref,
-      output: Output {
-        address: own_address,
-        value: mock_cto_nft_value(),
-        datum: InlineDatum(datum),
-        reference_script: None,
-      },
-    }
-  let expired_proposal = ProposalAnchor { ..proposal, execution_status: Expired }
-  let new_datum = CtoGovernanceDatum { ..datum, active_proposal: Some(expired_proposal) }
-  let continuing_output =
-    Output {
+  let own_input = Input {
+    output_reference: own_ref,
+    output: Output {
       address: own_address,
-      value: assets.from_asset(mock_cto_nft_policy(), mock_cto_nft_name(#"01"), 1),
-      datum: InlineDatum(new_datum),
+      value: mock_cto_nft_value(),
+      datum: InlineDatum(datum),
       reference_script: None,
-    }
+    },
+  }
+  let expired_proposal = ProposalAnchor {
+    ..proposal,
+    execution_status: Expired,
+  }
+  let new_datum = CtoGovernanceDatum {
+    ..datum,
+    active_proposal: Some(expired_proposal),
+  }
+  let continuing_output = Output {
+    address: own_address,
+    value: assets.from_asset(mock_cto_nft_policy(), mock_cto_nft_name(#"01"), 1),
+    datum: InlineDatum(new_datum),
+    reference_script: None,
+  }
   let current_timestamp = 1000 + 2_678_400_000
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      reference_inputs: [mock_lp_ref_input(mock_grad_ts)],
-      outputs: [continuing_output],
-      validity_range: interval.between(0, current_timestamp + 100),
-    }
+  let self = Transaction {
+    ..transaction.placeholder,
+    inputs: [own_input],
+    reference_inputs: [mock_lp_ref_input(mock_grad_ts)],
+    outputs: [continuing_output],
+    validity_range: interval.between(0, current_timestamp + 100),
+  }
 
   !cto_governance.spend(
     Some(datum),
-    ExpireProposal { current_timestamp: current_timestamp },
+    ExpireProposal { current_timestamp },
     own_ref,
     self,
   )
@@ -2780,39 +2815,45 @@ test expire_proposal_fails_before_window() {
   let datum = mock_datum(Some(proposal))
   let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
   let own_address = from_verification_key(#"cc")
-  let own_input =
-    Input {
-      output_reference: own_ref,
-      output: Output {
-        address: own_address,
-        value: mock_cto_nft_value(),
-        datum: InlineDatum(datum),
-        reference_script: None,
-      },
-    }
-  let expired_proposal = ProposalAnchor { ..proposal, execution_status: Expired }
-  let new_datum = CtoGovernanceDatum { ..datum, active_proposal: Some(expired_proposal) }
-  let continuing_output =
-    Output {
+  let own_input = Input {
+    output_reference: own_ref,
+    output: Output {
       address: own_address,
-      value: assets.from_asset(mock_cto_nft_policy(), mock_cto_nft_name(#"01"), 1),
-      datum: InlineDatum(new_datum),
+      value: mock_cto_nft_value(),
+      datum: InlineDatum(datum),
       reference_script: None,
-    }
+    },
+  }
+  let expired_proposal = ProposalAnchor {
+    ..proposal,
+    execution_status: Expired,
+  }
+  let new_datum = CtoGovernanceDatum {
+    ..datum,
+    active_proposal: Some(expired_proposal),
+  }
+  let continuing_output = Output {
+    address: own_address,
+    value: assets.from_asset(mock_cto_nft_policy(), mock_cto_nft_name(#"01"), 1),
+    datum: InlineDatum(new_datum),
+    reference_script: None,
+  }
   // ms-scale, matches execution_window's real unit
   let current_timestamp = 1000 + 864_000_000
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      reference_inputs: [mock_lp_ref_input(mock_grad_ts)],
-      outputs: [continuing_output],
-      validity_range: interval.between(current_timestamp - 100, current_timestamp + 100),
-    }
+  let self = Transaction {
+    ..transaction.placeholder,
+    inputs: [own_input],
+    reference_inputs: [mock_lp_ref_input(mock_grad_ts)],
+    outputs: [continuing_output],
+    validity_range: interval.between(
+      current_timestamp - 100,
+      current_timestamp + 100,
+    ),
+  }
 
   !cto_governance.spend(
     Some(datum),
-    ExpireProposal { current_timestamp: current_timestamp },
+    ExpireProposal { current_timestamp },
     own_ref,
     self,
   )
@@ -2828,25 +2869,26 @@ test query_state_rejects_unauthenticated_spend_attempt() {
   let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
   let own_address = from_verification_key(#"cc")
   let attacker_address = from_verification_key(#"ee")
-  let own_input =
-    Input {
-      output_reference: own_ref,
-      output: Output {
-        address: own_address,
-        value: assets.merge(mock_cto_nft_value(), assets.from_lovelace(2_000_000)),
-        datum: InlineDatum(datum),
-        reference_script: None,
-      },
-    }
-  let drain_output =
-    Output {
-      address: attacker_address,
-      value: assets.from_lovelace(2_000_000),
-      datum: transaction.NoDatum,
+  let own_input = Input {
+    output_reference: own_ref,
+    output: Output {
+      address: own_address,
+      value: assets.merge(mock_cto_nft_value(), assets.from_lovelace(2_000_000)),
+      datum: InlineDatum(datum),
       reference_script: None,
-    }
-  let self =
-    Transaction { ..transaction.placeholder, inputs: [own_input], outputs: [drain_output] }
+    },
+  }
+  let drain_output = Output {
+    address: attacker_address,
+    value: assets.from_lovelace(2_000_000),
+    datum: transaction.NoDatum,
+    reference_script: None,
+  }
+  let self = Transaction {
+    ..transaction.placeholder,
+    inputs: [own_input],
+    outputs: [drain_output],
+  }
 
   !cto_governance.spend(Some(datum), QueryState, own_ref, self)
 }
@@ -2861,7 +2903,7 @@ fn mock_datum_with_bond(
 ) -> CtoGovernanceDatum {
   CtoGovernanceDatum {
     ..mock_datum(active_proposal),
-    pending_relayer_bond: pending_relayer_bond,
+    pending_relayer_bond,
     pending_relayer_key_hash: #"33",
   }
 }
@@ -2871,54 +2913,55 @@ test void_pending_proposal_succeeds_and_slashes_bond() {
   let datum = mock_datum_with_bond(Some(proposal), 25_000_000)
   let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
   let own_address = from_verification_key(#"cc")
-  let own_input =
-    Input {
-      output_reference: own_ref,
-      output: Output {
-        address: own_address,
-        value: assets.merge(mock_cto_nft_value(), assets.from_lovelace(27_000_000)),
-        datum: InlineDatum(datum),
-        reference_script: None,
-      },
-    }
-  let voided_proposal = ProposalAnchor { ..proposal, execution_status: Expired }
-  let new_datum =
-    CtoGovernanceDatum {
-      ..datum,
-      active_proposal: Some(voided_proposal),
-      pending_relayer_bond: 0,
-      pending_relayer_key_hash: #"",
-    }
-  let continuing_output =
-    Output {
+  let own_input = Input {
+    output_reference: own_ref,
+    output: Output {
       address: own_address,
-      value: cto_out_value(2_000_000),
-      datum: InlineDatum(new_datum),
+      value: assets.merge(
+        mock_cto_nft_value(),
+        assets.from_lovelace(27_000_000),
+      ),
+      datum: InlineDatum(datum),
       reference_script: None,
-    }
+    },
+  }
+  let voided_proposal = ProposalAnchor { ..proposal, execution_status: Expired }
+  let new_datum = CtoGovernanceDatum {
+    ..datum,
+    active_proposal: Some(voided_proposal),
+    pending_relayer_bond: 0,
+    pending_relayer_key_hash: #"",
+  }
+  let continuing_output = Output {
+    address: own_address,
+    value: cto_out_value(2_000_000),
+    datum: InlineDatum(new_datum),
+    reference_script: None,
+  }
   // The whole 25 ADA bond, to the one address the datum names.
-  let bond_output =
-    Output {
-      address: from_verification_key(#"55"),
-      value: assets.from_lovelace(25_000_000),
-      datum: InlineDatum(own_ref),
-      reference_script: None,
-    }
+  let bond_output = Output {
+    address: from_verification_key(#"55"),
+    value: assets.from_lovelace(25_000_000),
+    datum: InlineDatum(own_ref),
+    reference_script: None,
+  }
   // 1 hour after anchoring — well inside the 24h challenge window
   let current_timestamp = 1000 + 3_600_000
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      reference_inputs: [mock_lp_ref_input(mock_grad_ts)],
-      outputs: [continuing_output, bond_output],
-      validity_range: interval.between(current_timestamp - 100, current_timestamp + 100),
-      extra_signatories: [#"22"],
-    }
+  let self = Transaction {
+    ..transaction.placeholder,
+    inputs: [own_input],
+    reference_inputs: [mock_lp_ref_input(mock_grad_ts)],
+    outputs: [continuing_output, bond_output],
+    validity_range: interval.between(
+      current_timestamp - 100,
+      current_timestamp + 100,
+    ),
+    extra_signatories: [#"22"],
+  }
 
   cto_governance.spend(
     Some(datum),
-    VoidPendingProposal { current_timestamp: current_timestamp },
+    VoidPendingProposal { current_timestamp },
     own_ref,
     self,
   )
@@ -2929,53 +2972,54 @@ test void_pending_proposal_rejects_for_non_governor() {
   let datum = mock_datum_with_bond(Some(proposal), 25_000_000)
   let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
   let own_address = from_verification_key(#"cc")
-  let own_input =
-    Input {
-      output_reference: own_ref,
-      output: Output {
-        address: own_address,
-        value: assets.merge(mock_cto_nft_value(), assets.from_lovelace(27_000_000)),
-        datum: InlineDatum(datum),
-        reference_script: None,
-      },
-    }
-  let voided_proposal = ProposalAnchor { ..proposal, execution_status: Expired }
-  let new_datum =
-    CtoGovernanceDatum {
-      ..datum,
-      active_proposal: Some(voided_proposal),
-      pending_relayer_bond: 0,
-      pending_relayer_key_hash: #"",
-    }
-  let continuing_output =
-    Output {
+  let own_input = Input {
+    output_reference: own_ref,
+    output: Output {
       address: own_address,
-      value: cto_out_value(2_000_000),
-      datum: InlineDatum(new_datum),
+      value: assets.merge(
+        mock_cto_nft_value(),
+        assets.from_lovelace(27_000_000),
+      ),
+      datum: InlineDatum(datum),
       reference_script: None,
-    }
-  let bond_output =
-    Output {
-      address: from_verification_key(#"55"),
-      value: assets.from_lovelace(25_000_000),
-      datum: InlineDatum(own_ref),
-      reference_script: None,
-    }
+    },
+  }
+  let voided_proposal = ProposalAnchor { ..proposal, execution_status: Expired }
+  let new_datum = CtoGovernanceDatum {
+    ..datum,
+    active_proposal: Some(voided_proposal),
+    pending_relayer_bond: 0,
+    pending_relayer_key_hash: #"",
+  }
+  let continuing_output = Output {
+    address: own_address,
+    value: cto_out_value(2_000_000),
+    datum: InlineDatum(new_datum),
+    reference_script: None,
+  }
+  let bond_output = Output {
+    address: from_verification_key(#"55"),
+    value: assets.from_lovelace(25_000_000),
+    datum: InlineDatum(own_ref),
+    reference_script: None,
+  }
   let current_timestamp = 1000 + 3_600_000
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      reference_inputs: [mock_lp_ref_input(mock_grad_ts)],
-      outputs: [continuing_output, bond_output],
-      validity_range: interval.between(current_timestamp - 100, current_timestamp + 100),
-      // not the governor
-      extra_signatories: [#"99"],
-    }
+  let self = Transaction {
+    ..transaction.placeholder,
+    inputs: [own_input],
+    reference_inputs: [mock_lp_ref_input(mock_grad_ts)],
+    outputs: [continuing_output, bond_output],
+    validity_range: interval.between(
+      current_timestamp - 100,
+      current_timestamp + 100,
+    ),
+    // not the governor
+    extra_signatories: [#"99"],
+  }
 
   !cto_governance.spend(
     Some(datum),
-    VoidPendingProposal { current_timestamp: current_timestamp },
+    VoidPendingProposal { current_timestamp },
     own_ref,
     self,
   )
@@ -2986,53 +3030,54 @@ test void_pending_proposal_rejects_after_challenge_window_elapsed() {
   let datum = mock_datum_with_bond(Some(proposal), 25_000_000)
   let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
   let own_address = from_verification_key(#"cc")
-  let own_input =
-    Input {
-      output_reference: own_ref,
-      output: Output {
-        address: own_address,
-        value: assets.merge(mock_cto_nft_value(), assets.from_lovelace(27_000_000)),
-        datum: InlineDatum(datum),
-        reference_script: None,
-      },
-    }
-  let voided_proposal = ProposalAnchor { ..proposal, execution_status: Expired }
-  let new_datum =
-    CtoGovernanceDatum {
-      ..datum,
-      active_proposal: Some(voided_proposal),
-      pending_relayer_bond: 0,
-      pending_relayer_key_hash: #"",
-    }
-  let continuing_output =
-    Output {
+  let own_input = Input {
+    output_reference: own_ref,
+    output: Output {
       address: own_address,
-      value: cto_out_value(2_000_000),
-      datum: InlineDatum(new_datum),
+      value: assets.merge(
+        mock_cto_nft_value(),
+        assets.from_lovelace(27_000_000),
+      ),
+      datum: InlineDatum(datum),
       reference_script: None,
-    }
-  let bond_output =
-    Output {
-      address: from_verification_key(#"55"),
-      value: assets.from_lovelace(25_000_000),
-      datum: InlineDatum(own_ref),
-      reference_script: None,
-    }
+    },
+  }
+  let voided_proposal = ProposalAnchor { ..proposal, execution_status: Expired }
+  let new_datum = CtoGovernanceDatum {
+    ..datum,
+    active_proposal: Some(voided_proposal),
+    pending_relayer_bond: 0,
+    pending_relayer_key_hash: #"",
+  }
+  let continuing_output = Output {
+    address: own_address,
+    value: cto_out_value(2_000_000),
+    datum: InlineDatum(new_datum),
+    reference_script: None,
+  }
+  let bond_output = Output {
+    address: from_verification_key(#"55"),
+    value: assets.from_lovelace(25_000_000),
+    datum: InlineDatum(own_ref),
+    reference_script: None,
+  }
   // 10 days after anchoring — past the 24h challenge window
   let current_timestamp = 1000 + 864_000_000
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      reference_inputs: [mock_lp_ref_input(mock_grad_ts)],
-      outputs: [continuing_output, bond_output],
-      validity_range: interval.between(current_timestamp - 100, current_timestamp + 100),
-      extra_signatories: [#"22"],
-    }
+  let self = Transaction {
+    ..transaction.placeholder,
+    inputs: [own_input],
+    reference_inputs: [mock_lp_ref_input(mock_grad_ts)],
+    outputs: [continuing_output, bond_output],
+    validity_range: interval.between(
+      current_timestamp - 100,
+      current_timestamp + 100,
+    ),
+    extra_signatories: [#"22"],
+  }
 
   !cto_governance.spend(
     Some(datum),
-    VoidPendingProposal { current_timestamp: current_timestamp },
+    VoidPendingProposal { current_timestamp },
     own_ref,
     self,
   )
@@ -3043,39 +3088,41 @@ test reclaim_relayer_bond_succeeds_after_execution() {
   let datum = mock_datum_with_bond(Some(proposal), 25_000_000)
   let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
   let own_address = from_verification_key(#"cc")
-  let own_input =
-    Input {
-      output_reference: own_ref,
-      output: Output {
-        address: own_address,
-        value: assets.merge(mock_cto_nft_value(), assets.from_lovelace(27_000_000)),
-        datum: InlineDatum(datum),
-        reference_script: None,
-      },
-    }
-  let new_datum =
-    CtoGovernanceDatum { ..datum, pending_relayer_bond: 0, pending_relayer_key_hash: #"" }
-  let continuing_output =
-    Output {
+  let own_input = Input {
+    output_reference: own_ref,
+    output: Output {
       address: own_address,
-      value: cto_out_value(2_000_000),
-      datum: InlineDatum(new_datum),
+      value: assets.merge(
+        mock_cto_nft_value(),
+        assets.from_lovelace(27_000_000),
+      ),
+      datum: InlineDatum(datum),
       reference_script: None,
-    }
-  let relayer_output =
-    Output {
-      address: from_verification_key(#"33"),
-      value: assets.from_lovelace(25_000_000),
-      datum: InlineDatum(own_ref),
-      reference_script: None,
-    }
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      reference_inputs: [mock_lp_ref_input(mock_grad_ts)],
-      outputs: [continuing_output, relayer_output],
-    }
+    },
+  }
+  let new_datum = CtoGovernanceDatum {
+    ..datum,
+    pending_relayer_bond: 0,
+    pending_relayer_key_hash: #"",
+  }
+  let continuing_output = Output {
+    address: own_address,
+    value: cto_out_value(2_000_000),
+    datum: InlineDatum(new_datum),
+    reference_script: None,
+  }
+  let relayer_output = Output {
+    address: from_verification_key(#"33"),
+    value: assets.from_lovelace(25_000_000),
+    datum: InlineDatum(own_ref),
+    reference_script: None,
+  }
+  let self = Transaction {
+    ..transaction.placeholder,
+    inputs: [own_input],
+    reference_inputs: [mock_lp_ref_input(mock_grad_ts)],
+    outputs: [continuing_output, relayer_output],
+  }
 
   cto_governance.spend(Some(datum), ReclaimRelayerBond, own_ref, self)
 }
@@ -3085,25 +3132,26 @@ test reclaim_relayer_bond_rejects_when_nothing_pending() {
   let datum = mock_datum(Some(proposal))
   let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
   let own_address = from_verification_key(#"cc")
-  let own_input =
-    Input {
-      output_reference: own_ref,
-      output: Output {
-        address: own_address,
-        value: assets.merge(mock_cto_nft_value(), assets.from_lovelace(2_000_000)),
-        datum: InlineDatum(datum),
-        reference_script: None,
-      },
-    }
-  let continuing_output =
-    Output {
+  let own_input = Input {
+    output_reference: own_ref,
+    output: Output {
       address: own_address,
       value: assets.merge(mock_cto_nft_value(), assets.from_lovelace(2_000_000)),
       datum: InlineDatum(datum),
       reference_script: None,
-    }
-  let self =
-    Transaction { ..transaction.placeholder, inputs: [own_input], outputs: [continuing_output] }
+    },
+  }
+  let continuing_output = Output {
+    address: own_address,
+    value: assets.merge(mock_cto_nft_value(), assets.from_lovelace(2_000_000)),
+    datum: InlineDatum(datum),
+    reference_script: None,
+  }
+  let self = Transaction {
+    ..transaction.placeholder,
+    inputs: [own_input],
+    outputs: [continuing_output],
+  }
 
   !cto_governance.spend(Some(datum), ReclaimRelayerBond, own_ref, self)
 }
@@ -3117,32 +3165,29 @@ test clear_proposal_rejects_with_pending_relayer_bond() {
   let datum = mock_datum_with_bond(Some(proposal), 25_000_000)
   let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
   let own_address = from_verification_key(#"cc")
-  let own_input =
-    Input {
-      output_reference: own_ref,
-      output: Output {
-        address: own_address,
-        value: mock_cto_nft_value(),
-        datum: InlineDatum(datum),
-        reference_script: None,
-      },
-    }
-  let new_datum = CtoGovernanceDatum { ..datum, active_proposal: None }
-  let continuing_output =
-    Output {
+  let own_input = Input {
+    output_reference: own_ref,
+    output: Output {
       address: own_address,
-      value: assets.from_asset(mock_cto_nft_policy(), mock_cto_nft_name(#"01"), 1),
-      datum: InlineDatum(new_datum),
+      value: mock_cto_nft_value(),
+      datum: InlineDatum(datum),
       reference_script: None,
-    }
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      reference_inputs: [mock_lp_ref_input(mock_grad_ts)],
-      outputs: [continuing_output],
-      extra_signatories: [#"22"],
-    }
+    },
+  }
+  let new_datum = CtoGovernanceDatum { ..datum, active_proposal: None }
+  let continuing_output = Output {
+    address: own_address,
+    value: assets.from_asset(mock_cto_nft_policy(), mock_cto_nft_name(#"01"), 1),
+    datum: InlineDatum(new_datum),
+    reference_script: None,
+  }
+  let self = Transaction {
+    ..transaction.placeholder,
+    inputs: [own_input],
+    reference_inputs: [mock_lp_ref_input(mock_grad_ts)],
+    outputs: [continuing_output],
+    extra_signatories: [#"22"],
+  }
 
   !cto_governance.spend(Some(datum), ClearProposal, own_ref, self)
 }
@@ -3152,32 +3197,29 @@ test clear_proposal_succeeds_once_bond_settled() {
   let datum = mock_datum(Some(proposal))
   let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
   let own_address = from_verification_key(#"cc")
-  let own_input =
-    Input {
-      output_reference: own_ref,
-      output: Output {
-        address: own_address,
-        value: mock_cto_nft_value(),
-        datum: InlineDatum(datum),
-        reference_script: None,
-      },
-    }
-  let new_datum = CtoGovernanceDatum { ..datum, active_proposal: None }
-  let continuing_output =
-    Output {
+  let own_input = Input {
+    output_reference: own_ref,
+    output: Output {
       address: own_address,
-      value: assets.from_asset(mock_cto_nft_policy(), mock_cto_nft_name(#"01"), 1),
-      datum: InlineDatum(new_datum),
+      value: mock_cto_nft_value(),
+      datum: InlineDatum(datum),
       reference_script: None,
-    }
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      reference_inputs: [mock_lp_ref_input(mock_grad_ts)],
-      outputs: [continuing_output],
-      extra_signatories: [#"22"],
-    }
+    },
+  }
+  let new_datum = CtoGovernanceDatum { ..datum, active_proposal: None }
+  let continuing_output = Output {
+    address: own_address,
+    value: assets.from_asset(mock_cto_nft_policy(), mock_cto_nft_name(#"01"), 1),
+    datum: InlineDatum(new_datum),
+    reference_script: None,
+  }
+  let self = Transaction {
+    ..transaction.placeholder,
+    inputs: [own_input],
+    reference_inputs: [mock_lp_ref_input(mock_grad_ts)],
+    outputs: [continuing_output],
+    extra_signatories: [#"22"],
+  }
 
   cto_governance.spend(Some(datum), ClearProposal, own_ref, self)
 }
@@ -3190,87 +3232,81 @@ test anchor_vote_result_rejects_unattended_ballot_claiming_failure() {
   let datum = mock_datum(None)
   let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
   let own_address = from_verification_key(#"cc")
-  let own_input =
-    Input {
-      output_reference: own_ref,
-      output: Output {
-        address: own_address,
-        value: mock_cto_nft_value(),
-        datum: InlineDatum(datum),
-        reference_script: None,
-      },
-    }
-  let base_proposal =
-    ProposalAnchor {
-      proposal_type: FundAllocation,
-      description_hash: #"aa",
-      proof_bundle_hash: #"",
-      yes_votes: 0,
-      no_votes: 0,
-      voter_count: 0,
-      creator_yes_votes: 0,
-      creator_no_votes: 0,
-      outcome: Failed,
-      start_timestamp: eligible_start,
-      end_timestamp: eligible_start + 500,
-      anchor_timestamp: eligible_start + 500,
-      execution_status: PendingExecution,
-      target_dex_credential: None,
-      allocation_amount: 0,
-      allocation_recipient_hash: #"ff",
-      relayer_credential_hash: #"33",
-        }
-  let proposal = with_derived_reference(datum, base_proposal)
-  let new_datum =
-    CtoGovernanceDatum {
-      ..datum,
-      active_proposal: Some(proposal),
-      proposal_count: 1,
-      pending_relayer_bond: 25_000_000,
-      pending_relayer_key_hash: #"33",
-      // The ballot's end becomes the cooldown's start. Spelled out rather
-      // than spread from `datum`, so a validator that stopped writing it
-      // would fail this equality instead of quietly agreeing.
-      last_ballot_end_timestamp: eligible_start + 500,
-    }
-  let continuing_output =
-    Output {
+  let own_input = Input {
+    output_reference: own_ref,
+    output: Output {
       address: own_address,
-      value: assets.merge(
-        assets.from_asset(mock_cto_nft_policy(), mock_cto_nft_name(#"01"), 1),
-        assets.from_lovelace(25_000_000),
-      ),
-      datum: InlineDatum(new_datum),
+      value: mock_cto_nft_value(),
+      datum: InlineDatum(datum),
       reference_script: None,
-    }
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      reference_inputs: [mock_lp_ref_input(mock_grad_ts)],
-      outputs: [continuing_output],
-      validity_range: interval.between(eligible_start + 400, eligible_start + 600),
-    }
-  let redeemer =
-    AnchorVoteResult {
-      proposal_type: FundAllocation,
-      description_hash: #"aa",
-      proposal_id: mock_proposal_id(),
-      yes_votes: 0,
-      no_votes: 0,
-      voter_count: 0,
-      creator_yes_votes: 0,
-      creator_no_votes: 0,
-      outcome: Failed,
-      start_timestamp: eligible_start,
-      end_timestamp: eligible_start + 500,
-      anchor_timestamp: eligible_start + 500,
-      target_dex_credential: None,
-      allocation_amount: 0,
-      allocation_recipient_hash: #"ff",
-      relayer_credential_hash: #"33",
-      relayer_bond: 25_000_000,
-    }
+    },
+  }
+  let base_proposal = ProposalAnchor {
+    proposal_type: FundAllocation,
+    description_hash: #"aa",
+    proof_bundle_hash: #"",
+    yes_votes: 0,
+    no_votes: 0,
+    voter_count: 0,
+    creator_yes_votes: 0,
+    creator_no_votes: 0,
+    outcome: Failed,
+    start_timestamp: eligible_start,
+    end_timestamp: eligible_start + 500,
+    anchor_timestamp: eligible_start + 500,
+    execution_status: PendingExecution,
+    target_dex_credential: None,
+    allocation_amount: 0,
+    allocation_recipient_hash: #"ff",
+    relayer_credential_hash: #"33",
+  }
+  let proposal = with_derived_reference(datum, base_proposal)
+  let new_datum = CtoGovernanceDatum {
+    ..datum,
+    active_proposal: Some(proposal),
+    proposal_count: 1,
+    pending_relayer_bond: 25_000_000,
+    pending_relayer_key_hash: #"33",
+    // The ballot's end becomes the cooldown's start. Spelled out rather
+    // than spread from `datum`, so a validator that stopped writing it
+    // would fail this equality instead of quietly agreeing.
+    last_ballot_end_timestamp: eligible_start + 500,
+  }
+  let continuing_output = Output {
+    address: own_address,
+    value: assets.merge(
+      assets.from_asset(mock_cto_nft_policy(), mock_cto_nft_name(#"01"), 1),
+      assets.from_lovelace(25_000_000),
+    ),
+    datum: InlineDatum(new_datum),
+    reference_script: None,
+  }
+  let self = Transaction {
+    ..transaction.placeholder,
+    inputs: [own_input],
+    reference_inputs: [mock_lp_ref_input(mock_grad_ts)],
+    outputs: [continuing_output],
+    validity_range: interval.between(eligible_start + 400, eligible_start + 600),
+  }
+  let redeemer = AnchorVoteResult {
+    proposal_type: FundAllocation,
+    description_hash: #"aa",
+    proposal_id: mock_proposal_id(),
+    yes_votes: 0,
+    no_votes: 0,
+    voter_count: 0,
+    creator_yes_votes: 0,
+    creator_no_votes: 0,
+    outcome: Failed,
+    start_timestamp: eligible_start,
+    end_timestamp: eligible_start + 500,
+    anchor_timestamp: eligible_start + 500,
+    target_dex_credential: None,
+    allocation_amount: 0,
+    allocation_recipient_hash: #"ff",
+    relayer_credential_hash: #"33",
+    relayer_bond: 25_000_000,
+  }
 
   !cto_governance.spend(Some(datum), redeemer, own_ref, self)
 }
@@ -3287,43 +3323,44 @@ test reclaim_relayer_bond_succeeds_paying_a_real_base_address_not_just_enterpris
   let datum = mock_datum_with_bond(Some(proposal), 25_000_000)
   let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
   let own_address = from_verification_key(#"cc")
-  let own_input =
-    Input {
-      output_reference: own_ref,
-      output: Output {
-        address: own_address,
-        value: assets.merge(mock_cto_nft_value(), assets.from_lovelace(27_000_000)),
-        datum: InlineDatum(datum),
-        reference_script: None,
-      },
-    }
-  let new_datum =
-    CtoGovernanceDatum { ..datum, pending_relayer_bond: 0, pending_relayer_key_hash: #"" }
-  let continuing_output =
-    Output {
+  let own_input = Input {
+    output_reference: own_ref,
+    output: Output {
       address: own_address,
-      value: cto_out_value(2_000_000),
-      datum: InlineDatum(new_datum),
+      value: assets.merge(
+        mock_cto_nft_value(),
+        assets.from_lovelace(27_000_000),
+      ),
+      datum: InlineDatum(datum),
       reference_script: None,
-    }
-  let relayer_output =
-    Output {
-      address: from_verification_key(#"33") |> with_delegation_key(#"aa"),
-      value: assets.from_lovelace(25_000_000),
-      datum: InlineDatum(own_ref),
-      reference_script: None,
-    }
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      reference_inputs: [mock_lp_ref_input(mock_grad_ts)],
-      outputs: [continuing_output, relayer_output],
-    }
+    },
+  }
+  let new_datum = CtoGovernanceDatum {
+    ..datum,
+    pending_relayer_bond: 0,
+    pending_relayer_key_hash: #"",
+  }
+  let continuing_output = Output {
+    address: own_address,
+    value: cto_out_value(2_000_000),
+    datum: InlineDatum(new_datum),
+    reference_script: None,
+  }
+  let relayer_output = Output {
+    address: from_verification_key(#"33") |> with_delegation_key(#"aa"),
+    value: assets.from_lovelace(25_000_000),
+    datum: InlineDatum(own_ref),
+    reference_script: None,
+  }
+  let self = Transaction {
+    ..transaction.placeholder,
+    inputs: [own_input],
+    reference_inputs: [mock_lp_ref_input(mock_grad_ts)],
+    outputs: [continuing_output, relayer_output],
+  }
 
   cto_governance.spend(Some(datum), ReclaimRelayerBond, own_ref, self)
 }
-
 
 // ----------------------------------------------------------------------------
 // EmergencyFreezeCommunityWallet
@@ -3348,39 +3385,44 @@ fn emergency_tx(
 ) -> (OutputReference, Transaction) {
   let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
   let own_address = from_verification_key(#"cc")
-  let own_input =
-    Input {
-      output_reference: own_ref,
-      output: Output {
-        address: own_address,
-        value: assets.merge(mock_cto_nft_value(), assets.from_lovelace(2_000_000)),
-        datum: InlineDatum(datum),
-        reference_script: None,
-      },
-    }
-  let continuing_output =
-    Output {
+  let own_input = Input {
+    output_reference: own_ref,
+    output: Output {
       address: own_address,
-      value: cto_out_value(2_000_000),
-      datum: InlineDatum(new_datum),
+      value: assets.merge(mock_cto_nft_value(), assets.from_lovelace(2_000_000)),
+      datum: InlineDatum(datum),
       reference_script: None,
-    }
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      outputs: [continuing_output],
-      extra_signatories: [signer],
-    }
+    },
+  }
+  let continuing_output = Output {
+    address: own_address,
+    value: cto_out_value(2_000_000),
+    datum: InlineDatum(new_datum),
+    reference_script: None,
+  }
+  let self = Transaction {
+    ..transaction.placeholder,
+    inputs: [own_input],
+    outputs: [continuing_output],
+    extra_signatories: [signer],
+  }
   (own_ref, self)
 }
 
 test emergency_freeze_clears_a_compromised_community_wallet() {
   let datum = frozen_datum()
   let new_datum = CtoGovernanceDatum { ..datum, community_wallet_hash: #"" }
-  let (own_ref, self) =
-    emergency_tx(datum, new_datum, datum.governor_credential_hash)
-  cto_governance.spend(Some(datum), EmergencyFreezeCommunityWallet, own_ref, self)
+  let (own_ref, self) = emergency_tx(
+    datum,
+    new_datum,
+    datum.governor_credential_hash,
+  )
+  cto_governance.spend(
+    Some(datum),
+    EmergencyFreezeCommunityWallet,
+    own_ref,
+    self,
+  )
 }
 
 /// The point of the change. Stopping payouts is urgent and safe to hand to
@@ -3390,27 +3432,51 @@ test emergency_freeze_clears_a_compromised_community_wallet() {
 test emergency_freeze_cannot_redirect_to_a_wallet_of_the_governors_choosing() {
   let datum = frozen_datum()
   let new_datum = CtoGovernanceDatum { ..datum, community_wallet_hash: #"ba" }
-  let (own_ref, self) =
-    emergency_tx(datum, new_datum, datum.governor_credential_hash)
-  !cto_governance.spend(Some(datum), EmergencyFreezeCommunityWallet, own_ref, self)
+  let (own_ref, self) = emergency_tx(
+    datum,
+    new_datum,
+    datum.governor_credential_hash,
+  )
+  !cto_governance.spend(
+    Some(datum),
+    EmergencyFreezeCommunityWallet,
+    own_ref,
+    self,
+  )
 }
 
 test emergency_freeze_rejects_a_non_governor() {
   let datum = frozen_datum()
   let new_datum = CtoGovernanceDatum { ..datum, community_wallet_hash: #"" }
   let (own_ref, self) = emergency_tx(datum, new_datum, #"ba")
-  !cto_governance.spend(Some(datum), EmergencyFreezeCommunityWallet, own_ref, self)
+  !cto_governance.spend(
+    Some(datum),
+    EmergencyFreezeCommunityWallet,
+    own_ref,
+    self,
+  )
 }
 
 /// Nothing to freeze before a CTO has triggered, and nothing to freeze once
 /// the wallet is already clear — the second keeps this from being a way to
 /// churn the governance UTXO for free.
 test emergency_freeze_rejects_when_no_wallet_is_set() {
-  let datum = CtoGovernanceDatum { ..frozen_datum(), community_wallet_hash: #"" }
+  let datum = CtoGovernanceDatum {
+    ..frozen_datum(),
+    community_wallet_hash: #"",
+  }
   let new_datum = datum
-  let (own_ref, self) =
-    emergency_tx(datum, new_datum, datum.governor_credential_hash)
-  !cto_governance.spend(Some(datum), EmergencyFreezeCommunityWallet, own_ref, self)
+  let (own_ref, self) = emergency_tx(
+    datum,
+    new_datum,
+    datum.governor_credential_hash,
+  )
+  !cto_governance.spend(
+    Some(datum),
+    EmergencyFreezeCommunityWallet,
+    own_ref,
+    self,
+  )
 }
 
 // ============================================================================
@@ -3447,38 +3513,40 @@ test expire_proposal_rejects_a_value_drain() {
   let datum = mock_datum(Some(proposal))
   let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
   let own_address = from_verification_key(#"cc")
-  let own_input =
-    Input {
-      output_reference: own_ref,
-      output: Output {
-        address: own_address,
-        value: assets.merge(mock_cto_nft_value(), assets.from_lovelace(2_000_000)),
-        datum: InlineDatum(datum),
-        reference_script: None,
-      },
-    }
-  let expired_proposal = ProposalAnchor { ..proposal, execution_status: Expired }
-  let new_datum =
-    CtoGovernanceDatum { ..datum, active_proposal: Some(expired_proposal) }
-  let continuing_output =
-    Output {
+  let own_input = Input {
+    output_reference: own_ref,
+    output: Output {
       address: own_address,
-      value: mock_cto_nft_value(),
-      datum: InlineDatum(new_datum),
+      value: assets.merge(mock_cto_nft_value(), assets.from_lovelace(2_000_000)),
+      datum: InlineDatum(datum),
       reference_script: None,
-    }
+    },
+  }
+  let expired_proposal = ProposalAnchor {
+    ..proposal,
+    execution_status: Expired,
+  }
+  let new_datum = CtoGovernanceDatum {
+    ..datum,
+    active_proposal: Some(expired_proposal),
+  }
+  let continuing_output = Output {
+    address: own_address,
+    value: mock_cto_nft_value(),
+    datum: InlineDatum(new_datum),
+    reference_script: None,
+  }
   let current_timestamp = 1000 + 2_678_400_000
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      reference_inputs: [mock_lp_ref_input(mock_grad_ts)],
-      outputs: [continuing_output],
-      validity_range: interval.between(current_timestamp, current_timestamp + 100),
-    }
+  let self = Transaction {
+    ..transaction.placeholder,
+    inputs: [own_input],
+    reference_inputs: [mock_lp_ref_input(mock_grad_ts)],
+    outputs: [continuing_output],
+    validity_range: interval.between(current_timestamp, current_timestamp + 100),
+  }
   !cto_governance.spend(
     Some(datum),
-    ExpireProposal { current_timestamp: current_timestamp },
+    ExpireProposal { current_timestamp },
     own_ref,
     self,
   )
@@ -3490,32 +3558,29 @@ test clear_proposal_rejects_a_value_drain() {
   let datum = mock_datum(Some(proposal))
   let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
   let own_address = from_verification_key(#"cc")
-  let own_input =
-    Input {
-      output_reference: own_ref,
-      output: Output {
-        address: own_address,
-        value: assets.merge(mock_cto_nft_value(), assets.from_lovelace(2_000_000)),
-        datum: InlineDatum(datum),
-        reference_script: None,
-      },
-    }
-  let new_datum = CtoGovernanceDatum { ..datum, active_proposal: None }
-  let continuing_output =
-    Output {
+  let own_input = Input {
+    output_reference: own_ref,
+    output: Output {
       address: own_address,
-      value: mock_cto_nft_value(),
-      datum: InlineDatum(new_datum),
+      value: assets.merge(mock_cto_nft_value(), assets.from_lovelace(2_000_000)),
+      datum: InlineDatum(datum),
       reference_script: None,
-    }
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      reference_inputs: [mock_lp_ref_input(mock_grad_ts)],
-      outputs: [continuing_output],
-      extra_signatories: [#"22"],
-    }
+    },
+  }
+  let new_datum = CtoGovernanceDatum { ..datum, active_proposal: None }
+  let continuing_output = Output {
+    address: own_address,
+    value: mock_cto_nft_value(),
+    datum: InlineDatum(new_datum),
+    reference_script: None,
+  }
+  let self = Transaction {
+    ..transaction.placeholder,
+    inputs: [own_input],
+    reference_inputs: [mock_lp_ref_input(mock_grad_ts)],
+    outputs: [continuing_output],
+    extra_signatories: [#"22"],
+  }
   !cto_governance.spend(Some(datum), ClearProposal, own_ref, self)
 }
 
@@ -3525,29 +3590,31 @@ test emergency_freeze_rejects_a_value_drain() {
   let new_datum = CtoGovernanceDatum { ..datum, community_wallet_hash: #"" }
   let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
   let own_address = from_verification_key(#"cc")
-  let own_input =
-    Input {
-      output_reference: own_ref,
-      output: Output {
-        address: own_address,
-        value: assets.merge(mock_cto_nft_value(), assets.from_lovelace(2_000_000)),
-        datum: InlineDatum(datum),
-        reference_script: None,
-      },
-    }
-  let continuing_output =
-    Output {
+  let own_input = Input {
+    output_reference: own_ref,
+    output: Output {
       address: own_address,
-      value: mock_cto_nft_value(),
-      datum: InlineDatum(new_datum),
+      value: assets.merge(mock_cto_nft_value(), assets.from_lovelace(2_000_000)),
+      datum: InlineDatum(datum),
       reference_script: None,
-    }
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      outputs: [continuing_output],
-      extra_signatories: [datum.governor_credential_hash],
-    }
-  !cto_governance.spend(Some(datum), EmergencyFreezeCommunityWallet, own_ref, self)
+    },
+  }
+  let continuing_output = Output {
+    address: own_address,
+    value: mock_cto_nft_value(),
+    datum: InlineDatum(new_datum),
+    reference_script: None,
+  }
+  let self = Transaction {
+    ..transaction.placeholder,
+    inputs: [own_input],
+    outputs: [continuing_output],
+    extra_signatories: [datum.governor_credential_hash],
+  }
+  !cto_governance.spend(
+    Some(datum),
+    EmergencyFreezeCommunityWallet,
+    own_ref,
+    self,
+  )
 }

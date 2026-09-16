@@ -1,6 +1,6 @@
 name: Cardano contracts
 
-# Aiken validators: tests, build, and a blueprint-freshness guard.
+# Aiken validators: formatting gate, tests, build, and a blueprint-freshness guard.
 #
 # WHY THIS EXISTS
 # ---------------
@@ -102,6 +102,13 @@ jobs:
 
       - name: Confirm the installed toolchain matches the pin
         run: aiken --version
+
+      # The formatter is a gate, not a suggestion. Both packages are formatted
+      # with the pinned toolchain's own `aiken fmt`, and a tree that drifts
+      # from it fails here, so layout differences never accumulate silently
+      # again and every validator diff reads as a change of meaning.
+      - name: aiken fmt --check
+        run: aiken fmt --check
 
       # The real validator test suite for this package.
       - name: aiken check

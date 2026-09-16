@@ -53,17 +53,18 @@
 
 use aiken/collection/list
 use aiken/crypto.{VerificationKeyHash}
-use aiken/interval
 use aiken/interval.{Interval, IntervalBoundType}
 use cardano/address.{Address, Credential, from_verification_key}
 use cardano/assets.{AssetName, PolicyId}
-use cardano/transaction.{Input, InlineDatum, Output, OutputReference, Transaction}
-use noctis/settlement
-use noctis/thread_nft
+use cardano/transaction.{
+  InlineDatum, Input, Output, OutputReference, Transaction,
+}
 use cto_governance.{
   CtoGovernanceDatum, DissolveCTOProposal, Executed, FundAllocation, Passed,
   ProposalAnchor, ProposalType, SilenceLockTrigger,
 }
+use noctis/settlement
+use noctis/thread_nft
 
 /// Fix (2026-07-19, full-suite security audit): CRITICAL finding —
 /// this file previously had ZERO usages of validity_range/interval
@@ -197,11 +198,15 @@ pub type VestingRedeemer {
 /// the same short-circuiting `and`, so a continuing output is guaranteed to
 /// exist by the time any branch evaluates.
 fn vesting_value_unchanged(self: Transaction, own_ref: OutputReference) -> Bool {
-  expect Some(own_input) =
-    list.find(self.inputs, fn(input) { input.output_reference == own_ref })
+  expect Some(own_input) = list.find(
+    self.inputs,
+    fn(input) { input.output_reference == own_ref },
+  )
   let own_address = own_input.output.address
-  expect Some(own_output) =
-    list.find(self.outputs, fn(output) { output.address == own_address })
+  expect Some(own_output) = list.find(
+    self.outputs,
+    fn(output) { output.address == own_address },
+  )
   own_output.value == own_input.output.value
 }
 
@@ -211,11 +216,15 @@ fn own_continuing_datum(
   self: Transaction,
   own_ref: OutputReference,
 ) -> VestingDatum {
-  expect Some(own_input) =
-    list.find(self.inputs, fn(input) { input.output_reference == own_ref })
+  expect Some(own_input) = list.find(
+    self.inputs,
+    fn(input) { input.output_reference == own_ref },
+  )
   let own_address = own_input.output.address
-  expect Some(own_output) =
-    list.find(self.outputs, fn(output) { output.address == own_address })
+  expect Some(own_output) = list.find(
+    self.outputs,
+    fn(output) { output.address == own_address },
+  )
   expect InlineDatum(raw_datum) = own_output.datum
   expect new_datum: VestingDatum = raw_datum
   new_datum
@@ -259,13 +268,12 @@ fn cto_vote_verified(
   proposal_type: ProposalType,
   expected_recipient: Option<VerificationKeyHash>,
 ) -> Bool {
-  expect Some(cto_ref_input) =
-    list.find(
-      self.reference_inputs,
-      fn(input) {
-        input.output.address.payment_credential == datum.cto_governance_credential
-      },
-    )
+  expect Some(cto_ref_input) = list.find(
+    self.reference_inputs,
+    fn(input) {
+      input.output.address.payment_credential == datum.cto_governance_credential
+    },
+  )
   expect InlineDatum(cto_raw_datum) = cto_ref_input.output.datum
   expect cto_datum: CtoGovernanceDatum = cto_raw_datum
   expect Some(executed) = cto_datum.last_executed_proposal
@@ -329,7 +337,11 @@ fn tokens_delivered(
         // payout owed by an entirely different contract answers just as well
         // — one payment, two obligations discharged, the difference free.
         settlement.settles(output, own_ref),
-        assets.quantity_of(output.value, datum.token_policy_id, datum.token_asset_name) == claim_amount,
+        assets.quantity_of(
+          output.value,
+          datum.token_policy_id,
+          datum.token_asset_name,
+        ) == claim_amount,
       }
     },
   )
@@ -357,7 +369,11 @@ fn community_allocation_delivered(
       and {
         settlement.settles(output, own_ref),
         output.address == recipient_address,
-        assets.quantity_of(output.value, datum.token_policy_id, datum.token_asset_name) == amount,
+        assets.quantity_of(
+          output.value,
+          datum.token_policy_id,
+          datum.token_asset_name,
+        ) == amount,
       }
     },
   )
@@ -381,11 +397,15 @@ fn vesting_tokens_retained(
   datum: VestingDatum,
   claim_amount: Int,
 ) -> Bool {
-  expect Some(own_input) =
-    list.find(self.inputs, fn(input) { input.output_reference == own_ref })
+  expect Some(own_input) = list.find(
+    self.inputs,
+    fn(input) { input.output_reference == own_ref },
+  )
   let own_address = own_input.output.address
-  expect Some(own_output) =
-    list.find(self.outputs, fn(output) { output.address == own_address })
+  expect Some(own_output) = list.find(
+    self.outputs,
+    fn(output) { output.address == own_address },
+  )
   assets.quantity_of(
     own_input.output.value,
     datum.token_policy_id,
@@ -397,7 +417,6 @@ fn vesting_tokens_retained(
   ) + claim_amount
 }
 
-
 /// State authentication (2026-08-03 audit) — the launch's own thread NFT must be present on the UTXO being
 /// spent AND on the continuing output. See noctis/thread_nft, and the linear curve's
 /// bonding_curve.ak thread_nft_intact, for the full reasoning: every
@@ -408,15 +427,25 @@ fn thread_nft_intact(
   own_ref: OutputReference,
   datum: VestingDatum,
 ) -> Bool {
-  expect Some(own_input) =
-    list.find(self.inputs, fn(input) { input.output_reference == own_ref })
+  expect Some(own_input) = list.find(
+    self.inputs,
+    fn(input) { input.output_reference == own_ref },
+  )
   let own_address = own_input.output.address
-  let name =
-    thread_nft.thread_asset_name(thread_nft.role_vesting, datum.launch_id)
-  when list.find(self.outputs, fn(output) { output.address == own_address }) is {
+  let name = thread_nft.thread_asset_name(
+    thread_nft.role_vesting,
+    datum.launch_id,
+  )
+  when
+    list.find(self.outputs, fn(output) { output.address == own_address })
+  is {
     None -> False
     Some(own_output) -> and {
-        assets.quantity_of(own_input.output.value, datum.thread_nft_policy, name) == 1,
+        assets.quantity_of(
+          own_input.output.value,
+          datum.thread_nft_policy,
+          name,
+        ) == 1,
         assets.quantity_of(own_output.value, datum.thread_nft_policy, name) == 1,
       }
   }
@@ -434,8 +463,10 @@ validator vesting {
     self: Transaction,
   ) {
     expect Some(datum) = datum_opt
-    expect Some(own_input) =
-      list.find(self.inputs, fn(input) { input.output_reference == own_ref })
+    expect Some(own_input) = list.find(
+      self.inputs,
+      fn(input) { input.output_reference == own_ref },
+    )
 
     and {
       // See single_own_utxo's own doc comment — closes the
@@ -446,267 +477,275 @@ validator vesting {
       thread_nft_intact(self, own_ref, datum),
       when redeemer is {
         StartVesting { start_timestamp } -> {
-        let new_datum = own_continuing_datum(self, own_ref)
-        and {
-          list.has(self.extra_signatories, datum.governor_pub_key_hash),
-          datum.vesting_state == NotStarted,
-          // `start_timestamp` is the origin the entire release schedule is
-          // measured from, so it is bound to real chain time the same way
-          // bonding_curve.ak's ActivateCurve binds `phase_started_at`: the
-          // declared value must sit inside the transaction's validity range,
-          // AND that range must be narrow. Containment on its own is not the
-          // binding it looks like — a range wide enough to hold both real
-          // chain time and a distant `start_timestamp` satisfies it — so the
-          // width bound is the half that makes the declared value mean now.
-          //
-          // A test that wants a schedule already part-elapsed sets
-          // `vest_start_timestamp` in the datum it starts from rather than
-          // declaring a start time the chain would not agree with.
-          interval.contains(self.validity_range, start_timestamp),
-          validity_range_is_narrow(self.validity_range, max_validity_range_width),
-          new_datum == VestingDatum {
-            ..datum,
-            vesting_state: Vesting,
-            vest_start_timestamp: start_timestamp,
-          },
-          // Starting the clock moves nothing: the whole allocation stays put,
-          // as it does on every other arm that only advances state.
-          vesting_value_unchanged(self, own_ref),
+          let new_datum = own_continuing_datum(self, own_ref)
+          and {
+            list.has(self.extra_signatories, datum.governor_pub_key_hash),
+            datum.vesting_state == NotStarted,
+            // `start_timestamp` is the origin the entire release schedule is
+            // measured from, so it is bound to real chain time the same way
+            // bonding_curve.ak's ActivateCurve binds `phase_started_at`: the
+            // declared value must sit inside the transaction's validity range,
+            // AND that range must be narrow. Containment on its own is not the
+            // binding it looks like — a range wide enough to hold both real
+            // chain time and a distant `start_timestamp` satisfies it — so the
+            // width bound is the half that makes the declared value mean now.
+            //
+            // A test that wants a schedule already part-elapsed sets
+            // `vest_start_timestamp` in the datum it starts from rather than
+            // declaring a start time the chain would not agree with.
+            interval.contains(self.validity_range, start_timestamp),
+            validity_range_is_narrow(
+              self.validity_range,
+              max_validity_range_width,
+            ),
+            new_datum == VestingDatum {
+              ..datum,
+              vesting_state: Vesting,
+              vest_start_timestamp: start_timestamp,
+            },
+            // Starting the clock moves nothing: the whole allocation stays put,
+            // as it does on every other arm that only advances state.
+            vesting_value_unchanged(self, own_ref),
+          }
         }
-      }
 
-      ClaimVested { claim_amount, current_timestamp } -> {
-        // Both sides in MILLISECONDS. `current_timestamp` is bound through
-        // `interval.contains(self.validity_range, ...)`, so the elapsed term
-        // arrives on Cardano's ms scale; the divisor has to match it or the
-        // schedule runs fast by a factor of a thousand. The formula in this
-        // file's own header comment — vest_days*86400*1000 — was already
-        // right.
-        let elapsed_ms = current_timestamp - datum.vest_start_timestamp
-        let vest_ms = datum.vest_days * 86_400_000
-        // Plain division is fine on Cardano — no ZK-circuit restriction.
-        let vested_to_date =
-          datum.token_allocation * elapsed_ms / vest_ms
-        let new_total_claimed = datum.claimed_tokens + claim_amount
-        let next_state = if new_total_claimed == datum.token_allocation {
-          FullyClaimed
-        } else {
-          datum.vesting_state
-        }
-        let new_datum =
-          VestingDatum {
+        ClaimVested { claim_amount, current_timestamp } -> {
+          // Both sides in MILLISECONDS. `current_timestamp` is bound through
+          // `interval.contains(self.validity_range, ...)`, so the elapsed term
+          // arrives on Cardano's ms scale; the divisor has to match it or the
+          // schedule runs fast by a factor of a thousand. The formula in this
+          // file's own header comment — vest_days*86400*1000 — was already
+          // right.
+          let elapsed_ms = current_timestamp - datum.vest_start_timestamp
+          let vest_ms = datum.vest_days * 86_400_000
+          // Plain division is fine on Cardano — no ZK-circuit restriction.
+          let vested_to_date = datum.token_allocation * elapsed_ms / vest_ms
+          let new_total_claimed = datum.claimed_tokens + claim_amount
+          let next_state = if new_total_claimed == datum.token_allocation {
+            FullyClaimed
+          } else {
+            datum.vesting_state
+          }
+          let new_datum = VestingDatum {
             ..datum,
             claimed_tokens: new_total_claimed,
             vesting_state: next_state,
           }
-        let continuing_datum = own_continuing_datum(self, own_ref)
+          let continuing_datum = own_continuing_datum(self, own_ref)
 
-        and {
-          // Fix (2026-07-18): this redeemer had NO identity check of any
-          // kind, and tokens_delivered only verifies SOME output holds
-          // claim_amount of the token — not whose output. Since the vested
-          // amount is fully derivable from public on-chain data
-          // (vest_start_timestamp/vest_days/token_allocation), any third
-          // party could previously construct a valid ClaimVested transaction
-          // redirecting the creator's own vested tokens to their own
-          // wallet — a real fund-theft vector, not just griefing. Fixed by
-          // requiring the creator's real signature, the same pattern
-          // bonding_curve.ak's ClaimCreatorFees already uses (list.has(
-          // self.extra_signatories, ...)) — once only the creator can
-          // authorize the claim, self-direction to their own address is
-          // implicit, same trust model as every other claim-style redeemer
-          // in this codebase.
-          list.has(self.extra_signatories, datum.creator_pub_key_hash),
-          datum.vesting_state == Vesting,
-          !datum.cto_triggered,
-          claim_amount > 0,
-          new_total_claimed <= datum.token_allocation,
-          new_total_claimed <= vested_to_date,
-          // CRITICAL fix: current_timestamp was previously a
-          // completely free redeemer field feeding directly into
-          // vested_to_date's math — the creator (a required signer with a
-          // real incentive to claim early) could forge a far-future value
-          // and instantly unlock 100% of their allocation. Both checks
-          // together close this: interval.contains ties the claim to real
-          // chain time, and the narrow width bound (unlike StartVesting's
-          // trusted-governor exemption) limits how much self-serving
-          // "wiggle room" the creator gets within an otherwise-honest
-          // declared range.
-          interval.contains(self.validity_range, current_timestamp),
-          validity_range_is_narrow(self.validity_range, max_validity_range_width),
-          continuing_datum == new_datum,
-          tokens_delivered(self, own_ref, datum, claim_amount),
-          vesting_tokens_retained(self, own_ref, datum, claim_amount),
+          and {
+            // Fix (2026-07-18): this redeemer had NO identity check of any
+            // kind, and tokens_delivered only verifies SOME output holds
+            // claim_amount of the token — not whose output. Since the vested
+            // amount is fully derivable from public on-chain data
+            // (vest_start_timestamp/vest_days/token_allocation), any third
+            // party could previously construct a valid ClaimVested transaction
+            // redirecting the creator's own vested tokens to their own
+            // wallet — a real fund-theft vector, not just griefing. Fixed by
+            // requiring the creator's real signature, the same pattern
+            // bonding_curve.ak's ClaimCreatorFees already uses (list.has(
+            // self.extra_signatories, ...)) — once only the creator can
+            // authorize the claim, self-direction to their own address is
+            // implicit, same trust model as every other claim-style redeemer
+            // in this codebase.
+            list.has(self.extra_signatories, datum.creator_pub_key_hash),
+            datum.vesting_state == Vesting,
+            !datum.cto_triggered,
+            claim_amount > 0,
+            new_total_claimed <= datum.token_allocation,
+            new_total_claimed <= vested_to_date,
+            // CRITICAL fix: current_timestamp was previously a
+            // completely free redeemer field feeding directly into
+            // vested_to_date's math — the creator (a required signer with a
+            // real incentive to claim early) could forge a far-future value
+            // and instantly unlock 100% of their allocation. Both checks
+            // together close this: interval.contains ties the claim to real
+            // chain time, and the narrow width bound (unlike StartVesting's
+            // trusted-governor exemption) limits how much self-serving
+            // "wiggle room" the creator gets within an otherwise-honest
+            // declared range.
+            interval.contains(self.validity_range, current_timestamp),
+            validity_range_is_narrow(
+              self.validity_range,
+              max_validity_range_width,
+            ),
+            continuing_datum == new_datum,
+            tokens_delivered(self, own_ref, datum, claim_amount),
+            vesting_tokens_retained(self, own_ref, datum, claim_amount),
+          }
         }
-      }
 
-      TriggerCTO { community_treasury_wallet } -> {
-        let new_datum = own_continuing_datum(self, own_ref)
-        and {
-          // Enforcement: permissionless, gated on real anchored vote
-          // evidence instead of a bare governor signature.
-          cto_vote_verified(
-            self,
-            datum,
-            SilenceLockTrigger,
-            Some(community_treasury_wallet),
-          ),
-          !datum.cto_triggered,
-          // Fix: was `!= FullyClaimed`, which is satisfiable from
-          // NotStarted — the genesis state, before StartVesting has ever
-          // run. A real CTO vote should only ever be able to freeze a
-          // launch that has actually graduated and begun vesting (a
-          // legitimate SilenceLockTrigger proposal requires 30+ days
-          // post-graduation per CLAUDE.md, so a real one anchoring while
-          // still NotStarted shouldn't be reachable from the Midnight side
-          // either — this is defense-in-depth on the Cardano side). This
-          // also closes a real gap: DissolveCTO never resets
-          // vest_start_timestamp (it doesn't need to — it only ever ran
-          // after a legitimate Vesting-state freeze before this fix), so
-          // TriggerCTO from NotStarted -> DissolveCTO -> ClaimVested would
-          // have computed elapsed time from a genesis-placeholder
-          // timestamp, instantly unlocking the full allocation. Requiring
-          // Vesting here means vest_start_timestamp is always already a
-          // real value by the time TriggerCTO can ever fire.
-          datum.vesting_state == Vesting,
-          new_datum == VestingDatum {
-            ..datum,
-            cto_triggered: True,
-            community_treasury_wallet: community_treasury_wallet,
-            vesting_state: CTOFrozen,
-          },
-          // Freezing the schedule redirects who may later claim; it moves
-          // nothing now, so the whole unvested allocation stays put.
-          vesting_value_unchanged(self, own_ref),
+        TriggerCTO { community_treasury_wallet } -> {
+          let new_datum = own_continuing_datum(self, own_ref)
+          and {
+            // Enforcement: permissionless, gated on real anchored vote
+            // evidence instead of a bare governor signature.
+            cto_vote_verified(
+              self,
+              datum,
+              SilenceLockTrigger,
+              Some(community_treasury_wallet),
+            ),
+            !datum.cto_triggered,
+            // Fix: was `!= FullyClaimed`, which is satisfiable from
+            // NotStarted — the genesis state, before StartVesting has ever
+            // run. A real CTO vote should only ever be able to freeze a
+            // launch that has actually graduated and begun vesting (a
+            // legitimate SilenceLockTrigger proposal requires 30+ days
+            // post-graduation per CLAUDE.md, so a real one anchoring while
+            // still NotStarted shouldn't be reachable from the Midnight side
+            // either — this is defense-in-depth on the Cardano side). This
+            // also closes a real gap: DissolveCTO never resets
+            // vest_start_timestamp (it doesn't need to — it only ever ran
+            // after a legitimate Vesting-state freeze before this fix), so
+            // TriggerCTO from NotStarted -> DissolveCTO -> ClaimVested would
+            // have computed elapsed time from a genesis-placeholder
+            // timestamp, instantly unlocking the full allocation. Requiring
+            // Vesting here means vest_start_timestamp is always already a
+            // real value by the time TriggerCTO can ever fire.
+            datum.vesting_state == Vesting,
+            new_datum == VestingDatum {
+              ..datum,
+              cto_triggered: True,
+              community_treasury_wallet,
+              vesting_state: CTOFrozen,
+            },
+            // Freezing the schedule redirects who may later claim; it moves
+            // nothing now, so the whole unvested allocation stays put.
+            vesting_value_unchanged(self, own_ref),
+          }
         }
-      }
 
-      DissolveCTO -> {
-        let new_datum = own_continuing_datum(self, own_ref)
-        and {
-          // Enforcement: same reasoning, gated on a real anchored
-          // DissolveCTOProposal instead of a bare governor signature.
-          cto_vote_verified(self, datum, DissolveCTOProposal, None),
-          datum.cto_triggered,
-          new_datum == VestingDatum {
-            ..datum,
-            cto_triggered: False,
-            vesting_state: Vesting,
-          },
-          vesting_value_unchanged(self, own_ref),
+        DissolveCTO -> {
+          let new_datum = own_continuing_datum(self, own_ref)
+          and {
+            // Enforcement: same reasoning, gated on a real anchored
+            // DissolveCTOProposal instead of a bare governor signature.
+            cto_vote_verified(self, datum, DissolveCTOProposal, None),
+            datum.cto_triggered,
+            new_datum == VestingDatum {
+              ..datum,
+              cto_triggered: False,
+              vesting_state: Vesting,
+            },
+            vesting_value_unchanged(self, own_ref),
+          }
         }
-      }
 
-      ClaimCommunityAllocation -> {
-        expect Some(cto_ref_input) =
-          list.find(
+        ClaimCommunityAllocation -> {
+          expect Some(cto_ref_input) = list.find(
             self.reference_inputs,
             fn(input) {
               input.output.address.payment_credential == datum.cto_governance_credential
             },
           )
-        expect InlineDatum(cto_raw_datum) = cto_ref_input.output.datum
-        expect cto_datum: CtoGovernanceDatum = cto_raw_datum
-        expect Some(executed) = cto_datum.last_executed_proposal
+          expect InlineDatum(cto_raw_datum) = cto_ref_input.output.datum
+          expect cto_datum: CtoGovernanceDatum = cto_raw_datum
+          expect Some(executed) = cto_datum.last_executed_proposal
 
-        let new_datum = own_continuing_datum(self, own_ref)
-        let amount = executed.allocation_amount
-        let recipient = executed.allocation_recipient_hash
+          let new_datum = own_continuing_datum(self, own_ref)
+          let amount = executed.allocation_amount
+          let recipient = executed.allocation_recipient_hash
 
-        and {
-          // Fix (2026-07-23 audit): this redeemer reads the referenced
-          // governance datum DIRECTLY (not via cto_vote_verified), so it
-          // needs the same NFT guard inline. `amount` and `recipient` above
-          // come straight out of that datum and are paid out as real tokens
-          // below — without this check, a UTXO planted at
-          // cto_governance_credential with a forged
-          // governance datum claiming an executed allocation
-          // datum would drain the vesting reserve. The genuine per-launch
-          // governance thread NFT (policy = thread_nft_policy, asset_name =
-          // launch_id) can only ever sit in the real governance UTXO.
-          assets.quantity_of(
-            cto_ref_input.output.value,
-            datum.thread_nft_policy,
-            thread_nft.thread_asset_name(
-              thread_nft.role_cto_governance,
-              datum.launch_id,
+          and {
+            // Fix (2026-07-23 audit): this redeemer reads the referenced
+            // governance datum DIRECTLY (not via cto_vote_verified), so it
+            // needs the same NFT guard inline. `amount` and `recipient` above
+            // come straight out of that datum and are paid out as real tokens
+            // below — without this check, a UTXO planted at
+            // cto_governance_credential with a forged
+            // governance datum claiming an executed allocation
+            // datum would drain the vesting reserve. The genuine per-launch
+            // governance thread NFT (policy = thread_nft_policy, asset_name =
+            // launch_id) can only ever sit in the real governance UTXO.
+            assets.quantity_of(
+              cto_ref_input.output.value,
+              datum.thread_nft_policy,
+              thread_nft.thread_asset_name(
+                thread_nft.role_cto_governance,
+                datum.launch_id,
+              ),
+            ) == 1,
+            cto_datum.launch_id == datum.launch_id,
+            // The governor's emergency brake clears the record's community
+            // wallet; while it is cleared, nothing is paid out of this reserve.
+            cto_datum.community_wallet_hash != #"",
+            executed.proposal_type == FundAllocation,
+            executed.outcome == Passed,
+            executed.execution_status == Executed,
+            // Replay guard: this exact proposal (or any earlier one) can't
+            // fund a second payout — see the datum field's own doc comment.
+            executed.anchor_timestamp > datum.last_claimed_allocation_timestamp,
+            datum.cto_triggered,
+            datum.vesting_state == CTOFrozen,
+            amount > 0,
+            community_allocation_delivered(
+              self,
+              own_ref,
+              datum,
+              amount,
+              recipient,
             ),
-          ) == 1,
-          cto_datum.launch_id == datum.launch_id,
-          // The governor's emergency brake clears the record's community
-          // wallet; while it is cleared, nothing is paid out of this reserve.
-          cto_datum.community_wallet_hash != #"",
-          executed.proposal_type == FundAllocation,
-          executed.outcome == Passed,
-          executed.execution_status == Executed,
-          // Replay guard: this exact proposal (or any earlier one) can't
-          // fund a second payout — see the datum field's own doc comment.
-          executed.anchor_timestamp > datum.last_claimed_allocation_timestamp,
-          datum.cto_triggered,
-          datum.vesting_state == CTOFrozen,
-          amount > 0,
-          community_allocation_delivered(
-            self,
-            own_ref,
-            datum, amount, recipient),
-          vesting_tokens_retained(self, own_ref, datum, amount),
-          new_datum == VestingDatum {
-            ..datum,
-            last_claimed_allocation_timestamp: executed.anchor_timestamp,
-          },
+            vesting_tokens_retained(self, own_ref, datum, amount),
+            new_datum == VestingDatum {
+              ..datum,
+              last_claimed_allocation_timestamp: executed.anchor_timestamp,
+            },
+          }
         }
-      }
 
-      CancelLaunch -> {
-        let new_datum = own_continuing_datum(self, own_ref)
-        and {
-          list.has(self.extra_signatories, datum.governor_pub_key_hash),
-          // Fix: was `!= Cancelled` (reachable from Vesting/
-          // CTOFrozen/FullyClaimed too). This redeemer's own stated
-          // purpose is "bonding curve expired without graduation."
-          // A launch that already reached Vesting already graduated, so
-          // that rationale no longer applies; cancelling a genuinely
-          // in-progress or completed vesting schedule is a materially
-          // different, unresolved question this fix deliberately does not
-          // attempt to answer unilaterally (what should happen to a
-          // partially-vested creator's REMAINING allocation is a real
-          // product decision, not a mechanical bug fix). Restricting to
-          // NotStarted keeps this redeemer inside the one case with a
-          // clear, safe answer: nothing was ever vested, so there is
-          // nothing ambiguous about giving the creator their own
-          // never-distributed tokens back (see ClaimCancelledAllocation).
-          datum.vesting_state == NotStarted,
-          new_datum == VestingDatum { ..datum, vesting_state: Cancelled },
-          // The allocation stays here for ClaimCancelledAllocation to
-          // return to the creator — cancelling must not be a withdrawal.
-          vesting_value_unchanged(self, own_ref),
+        CancelLaunch -> {
+          let new_datum = own_continuing_datum(self, own_ref)
+          and {
+            list.has(self.extra_signatories, datum.governor_pub_key_hash),
+            // Fix: was `!= Cancelled` (reachable from Vesting/
+            // CTOFrozen/FullyClaimed too). This redeemer's own stated
+            // purpose is "bonding curve expired without graduation."
+            // A launch that already reached Vesting already graduated, so
+            // that rationale no longer applies; cancelling a genuinely
+            // in-progress or completed vesting schedule is a materially
+            // different, unresolved question this fix deliberately does not
+            // attempt to answer unilaterally (what should happen to a
+            // partially-vested creator's REMAINING allocation is a real
+            // product decision, not a mechanical bug fix). Restricting to
+            // NotStarted keeps this redeemer inside the one case with a
+            // clear, safe answer: nothing was ever vested, so there is
+            // nothing ambiguous about giving the creator their own
+            // never-distributed tokens back (see ClaimCancelledAllocation).
+            datum.vesting_state == NotStarted,
+            new_datum == VestingDatum { ..datum, vesting_state: Cancelled },
+            // The allocation stays here for ClaimCancelledAllocation to
+            // return to the creator — cancelling must not be a withdrawal.
+            vesting_value_unchanged(self, own_ref),
+          }
         }
-      }
 
-      // Fix: real recovery path for a NotStarted launch's Cancelled
-      // allocation — see this redeemer's own doc comment in
-      // VestingRedeemer above.
-      ClaimCancelledAllocation -> {
-        and {
-          list.has(self.extra_signatories, datum.creator_pub_key_hash),
-          datum.vesting_state == Cancelled,
-          // Sanity, not load-bearing given CancelLaunch's own NotStarted
-          // restriction above — but cheap defense-in-depth against any
-          // future change to that guard silently reopening this path with
-          // real claimed_tokens outstanding.
-          datum.claimed_tokens == 0,
-          tokens_delivered(self, own_ref, datum, datum.token_allocation),
-        }
-      }
+        // Fix: real recovery path for a NotStarted launch's Cancelled
+        // allocation — see this redeemer's own doc comment in
+        // VestingRedeemer above.
+        ClaimCancelledAllocation -> and {
+            list.has(self.extra_signatories, datum.creator_pub_key_hash),
+            datum.vesting_state == Cancelled,
+            // Sanity, not load-bearing given CancelLaunch's own NotStarted
+            // restriction above — but cheap defense-in-depth against any
+            // future change to that guard silently reopening this path with
+            // real claimed_tokens outstanding.
+            datum.claimed_tokens == 0,
+            tokens_delivered(self, own_ref, datum, datum.token_allocation),
+          }
 
-      // CRITICAL fix (2026-07-19, full-suite security audit) — same
-      // fix as bonding_curve.ak: was an unconditional `True` (zero checks),
-      // an unconditional authorization over the creator's locked vesting
-      // allocation. See that file's own comment on this exact line for the
-      // full explanation.
-      QueryState -> False
+        // CRITICAL fix (2026-07-19, full-suite security audit) — same
+        // fix as bonding_curve.ak: was an unconditional `True` (zero checks),
+        // an unconditional authorization over the creator's locked vesting
+        // allocation. See that file's own comment on this exact line for the
+        // full explanation.
+        QueryState -> False
       },
     }
+  }
+
+  else(_) {
+    fail
   }
 }
 
@@ -726,7 +765,6 @@ fn mock_thread_nft() -> assets.Value {
   )
 }
 
-
 fn mock_datum(vesting_state: VestingState, vest_start: Int) -> VestingDatum {
   VestingDatum {
     launch_id: #"01",
@@ -734,7 +772,7 @@ fn mock_datum(vesting_state: VestingState, vest_start: Int) -> VestingDatum {
     governor_pub_key_hash: #"22",
     token_allocation: 100_000_000,
     vest_days: 90,
-    vesting_state: vesting_state,
+    vesting_state,
     claimed_tokens: 0,
     vest_start_timestamp: vest_start,
     cto_triggered: False,
@@ -754,7 +792,7 @@ fn mock_proposal_anchor(
   allocation_recipient_hash: ByteArray,
 ) -> ProposalAnchor {
   ProposalAnchor {
-    proposal_type: proposal_type,
+    proposal_type,
     description_hash: #"aa",
     proof_bundle_hash: #"bb",
     yes_votes: 60_000,
@@ -762,14 +800,14 @@ fn mock_proposal_anchor(
     voter_count: 5,
     creator_yes_votes: 0,
     creator_no_votes: 0,
-    outcome: outcome,
+    outcome,
     start_timestamp: 0,
     end_timestamp: 1000,
     anchor_timestamp: 500,
-    execution_status: execution_status,
+    execution_status,
     target_dex_credential: None,
     allocation_amount: 0,
-    allocation_recipient_hash: allocation_recipient_hash,
+    allocation_recipient_hash,
     relayer_credential_hash: #"33",
   }
 }
@@ -813,7 +851,7 @@ fn mock_cto_governance_datum(
   last_executed_proposal: Option<ProposalAnchor>,
 ) -> CtoGovernanceDatum {
   CtoGovernanceDatum {
-    launch_id: launch_id,
+    launch_id,
     cto_state: mock_cto_state(last_executed_proposal),
     community_wallet_hash: mock_community_wallet(last_executed_proposal),
     governor_credential_hash: #"22",
@@ -825,7 +863,7 @@ fn mock_cto_governance_datum(
     min_voter_count: 15,
     active_proposal: None,
     proposal_count: 1,
-    last_executed_proposal: last_executed_proposal,
+    last_executed_proposal,
     pending_relayer_bond: 0,
     pending_relayer_key_hash: #"",
     payout_pub_key_hash: #"55",
@@ -882,33 +920,33 @@ test start_vesting_rejects_a_start_far_from_real_chain_time() {
   let datum = mock_datum(NotStarted, 0)
   let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
   let own_address = from_verification_key(#"cc")
-  let own_input =
-    Input {
-      output_reference: own_ref,
-      output: Output {
-        address: own_address,
-        value: mock_thread_nft(),
-        datum: InlineDatum(datum),
-        reference_script: None,
-      },
-    }
-  let new_datum =
-    VestingDatum { ..datum, vesting_state: Vesting, vest_start_timestamp: back }
-  let continuing_output =
-    Output {
+  let own_input = Input {
+    output_reference: own_ref,
+    output: Output {
       address: own_address,
       value: mock_thread_nft(),
-      datum: InlineDatum(new_datum),
+      datum: InlineDatum(datum),
       reference_script: None,
-    }
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      outputs: [continuing_output],
-      extra_signatories: [#"22"],
-      validity_range: interval.between(back - 1000, now + 1000),
-    }
+    },
+  }
+  let new_datum = VestingDatum {
+    ..datum,
+    vesting_state: Vesting,
+    vest_start_timestamp: back,
+  }
+  let continuing_output = Output {
+    address: own_address,
+    value: mock_thread_nft(),
+    datum: InlineDatum(new_datum),
+    reference_script: None,
+  }
+  let self = Transaction {
+    ..transaction.placeholder,
+    inputs: [own_input],
+    outputs: [continuing_output],
+    extra_signatories: [#"22"],
+    validity_range: interval.between(back - 1000, now + 1000),
+  }
 
   !vesting.spend(
     Some(datum),
@@ -922,38 +960,43 @@ test start_vesting_succeeds_with_governor_signature() {
   let datum = mock_datum(NotStarted, 0)
   let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
   let own_address = from_verification_key(#"cc")
-  let own_input =
-    Input {
-      output_reference: own_ref,
-      output: Output {
-        address: own_address,
-        value: mock_thread_nft(),
-        datum: InlineDatum(datum),
-        reference_script: None,
-      },
-    }
-  let new_datum =
-    VestingDatum { ..datum, vesting_state: Vesting, vest_start_timestamp: 500 }
-  let continuing_output =
-    Output {
+  let own_input = Input {
+    output_reference: own_ref,
+    output: Output {
       address: own_address,
       value: mock_thread_nft(),
-      datum: InlineDatum(new_datum),
+      datum: InlineDatum(datum),
       reference_script: None,
-    }
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      outputs: [continuing_output],
-      extra_signatories: [#"22"],
-      // A real, narrow range around the declared start. The placeholder's own
-      // range is unbounded, which satisfies containment without saying
-      // anything about when this transaction actually happened.
-      validity_range: interval.between(400, 600),
-    }
+    },
+  }
+  let new_datum = VestingDatum {
+    ..datum,
+    vesting_state: Vesting,
+    vest_start_timestamp: 500,
+  }
+  let continuing_output = Output {
+    address: own_address,
+    value: mock_thread_nft(),
+    datum: InlineDatum(new_datum),
+    reference_script: None,
+  }
+  let self = Transaction {
+    ..transaction.placeholder,
+    inputs: [own_input],
+    outputs: [continuing_output],
+    extra_signatories: [#"22"],
+    // A real, narrow range around the declared start. The placeholder's own
+    // range is unbounded, which satisfies containment without saying
+    // anything about when this transaction actually happened.
+    validity_range: interval.between(400, 600),
+  }
 
-  vesting.spend(Some(datum), StartVesting { start_timestamp: 500 }, own_ref, self)
+  vesting.spend(
+    Some(datum),
+    StartVesting { start_timestamp: 500 },
+    own_ref,
+    self,
+  )
 }
 
 test claim_vested_succeeds_for_amount_within_vested_total() {
@@ -966,48 +1009,52 @@ test claim_vested_succeeds_for_amount_within_vested_total() {
   let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
   let own_address = from_verification_key(#"cc")
   let creator_address = from_verification_key(#"11")
-  let own_input =
-    Input {
-      output_reference: own_ref,
-      output: Output {
-        address: own_address,
-        value: assets.merge(mock_thread_nft(), assets.from_asset(#"33", "tok", 100_000_000)),
-        datum: InlineDatum(datum),
-        reference_script: None,
-      },
-    }
-  let claim_amount = 40_000_000
-  let new_datum =
-    VestingDatum { ..datum, claimed_tokens: claim_amount }
-  let continuing_output =
-    Output {
+  let own_input = Input {
+    output_reference: own_ref,
+    output: Output {
       address: own_address,
-      value: assets.merge(mock_thread_nft(), assets.from_asset(#"33", "tok", 100_000_000 - claim_amount)),
-      datum: InlineDatum(new_datum),
+      value: assets.merge(
+        mock_thread_nft(),
+        assets.from_asset(#"33", "tok", 100_000_000),
+      ),
+      datum: InlineDatum(datum),
       reference_script: None,
-    }
-  let delivery_output =
-    Output {
-      address: creator_address,
-      value: assets.from_asset(#"33", "tok", claim_amount),
-      datum: InlineDatum(own_ref),
-      reference_script: None,
-    }
+    },
+  }
+  let claim_amount = 40_000_000
+  let new_datum = VestingDatum { ..datum, claimed_tokens: claim_amount }
+  let continuing_output = Output {
+    address: own_address,
+    value: assets.merge(
+      mock_thread_nft(),
+      assets.from_asset(#"33", "tok", 100_000_000 - claim_amount),
+    ),
+    datum: InlineDatum(new_datum),
+    reference_script: None,
+  }
+  let delivery_output = Output {
+    address: creator_address,
+    value: assets.from_asset(#"33", "tok", claim_amount),
+    datum: InlineDatum(own_ref),
+    reference_script: None,
+  }
   let current_timestamp = 45 * 86_400_000
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      outputs: [continuing_output, delivery_output],
-      extra_signatories: [#"11"],
-      // current_timestamp must now fall within a real, narrow
-      // validity range.
-      validity_range: interval.between(current_timestamp - 100, current_timestamp + 100),
-    }
+  let self = Transaction {
+    ..transaction.placeholder,
+    inputs: [own_input],
+    outputs: [continuing_output, delivery_output],
+    extra_signatories: [#"11"],
+    // current_timestamp must now fall within a real, narrow
+    // validity range.
+    validity_range: interval.between(
+      current_timestamp - 100,
+      current_timestamp + 100,
+    ),
+  }
 
   vesting.spend(
     Some(datum),
-    ClaimVested { claim_amount: claim_amount, current_timestamp: current_timestamp },
+    ClaimVested { claim_amount, current_timestamp },
     own_ref,
     self,
   )
@@ -1024,48 +1071,46 @@ test claim_vested_fails_when_continuing_output_drained() {
   let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
   let own_address = from_verification_key(#"cc")
   let creator_address = from_verification_key(#"11")
-  let own_input =
-    Input {
-      output_reference: own_ref,
-      output: Output {
-        address: own_address,
-        value: assets.merge(mock_thread_nft(), assets.from_asset(#"33", "tok", 100_000_000)),
-        datum: InlineDatum(datum),
-        reference_script: None,
-      },
-    }
-  let claim_amount = 40_000_000
-  let new_datum =
-    VestingDatum { ..datum, claimed_tokens: claim_amount }
-  let continuing_output =
-    Output {
+  let own_input = Input {
+    output_reference: own_ref,
+    output: Output {
       address: own_address,
-      value: mock_thread_nft(),
-      // drained — should hold 60_000_000
-      datum: InlineDatum(new_datum),
+      value: assets.merge(
+        mock_thread_nft(),
+        assets.from_asset(#"33", "tok", 100_000_000),
+      ),
+      datum: InlineDatum(datum),
       reference_script: None,
-    }
-  let delivery_output =
-    Output {
-      address: creator_address,
-      // attacker/creator receives the FULL 100M, not just claim_amount —
-      // real fund-theft simulation, tokens_delivered alone doesn't catch this.
-      value: assets.from_asset(#"33", "tok", 100_000_000),
-      datum: InlineDatum(own_ref),
-      reference_script: None,
-    }
+    },
+  }
+  let claim_amount = 40_000_000
+  let new_datum = VestingDatum { ..datum, claimed_tokens: claim_amount }
+  let continuing_output = Output {
+    address: own_address,
+    value: mock_thread_nft(),
+    // drained — should hold 60_000_000
+    datum: InlineDatum(new_datum),
+    reference_script: None,
+  }
+  let delivery_output = Output {
+    address: creator_address,
+    // attacker/creator receives the FULL 100M, not just claim_amount —
+    // real fund-theft simulation, tokens_delivered alone doesn't catch this.
+    value: assets.from_asset(#"33", "tok", 100_000_000),
+    datum: InlineDatum(own_ref),
+    reference_script: None,
+  }
   let current_timestamp = 45 * 86_400_000
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      outputs: [continuing_output, delivery_output],
-      extra_signatories: [#"11"],
-    }
+  let self = Transaction {
+    ..transaction.placeholder,
+    inputs: [own_input],
+    outputs: [continuing_output, delivery_output],
+    extra_signatories: [#"11"],
+  }
 
   !vesting.spend(
     Some(datum),
-    ClaimVested { claim_amount: claim_amount, current_timestamp: current_timestamp },
+    ClaimVested { claim_amount, current_timestamp },
     own_ref,
     self,
   )
@@ -1083,45 +1128,46 @@ test claim_vested_fails_without_creator_signature() {
   let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
   let own_address = from_verification_key(#"cc")
   let creator_address = from_verification_key(#"11")
-  let own_input =
-    Input {
-      output_reference: own_ref,
-      output: Output {
-        address: own_address,
-        value: assets.merge(mock_thread_nft(), assets.from_asset(#"33", "tok", 100_000_000)),
-        datum: InlineDatum(datum),
-        reference_script: None,
-      },
-    }
-  let claim_amount = 40_000_000
-  let new_datum =
-    VestingDatum { ..datum, claimed_tokens: claim_amount }
-  let continuing_output =
-    Output {
+  let own_input = Input {
+    output_reference: own_ref,
+    output: Output {
       address: own_address,
-      value: assets.merge(mock_thread_nft(), assets.from_asset(#"33", "tok", 100_000_000 - claim_amount)),
-      datum: InlineDatum(new_datum),
+      value: assets.merge(
+        mock_thread_nft(),
+        assets.from_asset(#"33", "tok", 100_000_000),
+      ),
+      datum: InlineDatum(datum),
       reference_script: None,
-    }
-  let delivery_output =
-    Output {
-      address: creator_address,
-      value: assets.from_asset(#"33", "tok", claim_amount),
-      datum: InlineDatum(own_ref),
-      reference_script: None,
-    }
+    },
+  }
+  let claim_amount = 40_000_000
+  let new_datum = VestingDatum { ..datum, claimed_tokens: claim_amount }
+  let continuing_output = Output {
+    address: own_address,
+    value: assets.merge(
+      mock_thread_nft(),
+      assets.from_asset(#"33", "tok", 100_000_000 - claim_amount),
+    ),
+    datum: InlineDatum(new_datum),
+    reference_script: None,
+  }
+  let delivery_output = Output {
+    address: creator_address,
+    value: assets.from_asset(#"33", "tok", claim_amount),
+    datum: InlineDatum(own_ref),
+    reference_script: None,
+  }
   let current_timestamp = 45 * 86_400_000
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      outputs: [continuing_output, delivery_output],
-      extra_signatories: [],
-    }
+  let self = Transaction {
+    ..transaction.placeholder,
+    inputs: [own_input],
+    outputs: [continuing_output, delivery_output],
+    extra_signatories: [],
+  }
 
   !vesting.spend(
     Some(datum),
-    ClaimVested { claim_amount: claim_amount, current_timestamp: current_timestamp },
+    ClaimVested { claim_amount, current_timestamp },
     own_ref,
     self,
   )
@@ -1132,45 +1178,40 @@ test claim_vested_fails_for_amount_exceeding_vested_total() {
   let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
   let own_address = from_verification_key(#"cc")
   let creator_address = from_verification_key(#"11")
-  let own_input =
-    Input {
-      output_reference: own_ref,
-      output: Output {
-        address: own_address,
-        value: mock_thread_nft(),
-        datum: InlineDatum(datum),
-        reference_script: None,
-      },
-    }
-  // Attempting to claim more than the 50% vested at the 45-day mark
-  let claim_amount = 60_000_000
-  let new_datum =
-    VestingDatum { ..datum, claimed_tokens: claim_amount }
-  let continuing_output =
-    Output {
+  let own_input = Input {
+    output_reference: own_ref,
+    output: Output {
       address: own_address,
       value: mock_thread_nft(),
-      datum: InlineDatum(new_datum),
+      datum: InlineDatum(datum),
       reference_script: None,
-    }
-  let delivery_output =
-    Output {
-      address: creator_address,
-      value: assets.from_asset(#"33", "tok", claim_amount),
-      datum: InlineDatum(own_ref),
-      reference_script: None,
-    }
+    },
+  }
+  // Attempting to claim more than the 50% vested at the 45-day mark
+  let claim_amount = 60_000_000
+  let new_datum = VestingDatum { ..datum, claimed_tokens: claim_amount }
+  let continuing_output = Output {
+    address: own_address,
+    value: mock_thread_nft(),
+    datum: InlineDatum(new_datum),
+    reference_script: None,
+  }
+  let delivery_output = Output {
+    address: creator_address,
+    value: assets.from_asset(#"33", "tok", claim_amount),
+    datum: InlineDatum(own_ref),
+    reference_script: None,
+  }
   let current_timestamp = 45 * 86_400_000
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      outputs: [continuing_output, delivery_output],
-    }
+  let self = Transaction {
+    ..transaction.placeholder,
+    inputs: [own_input],
+    outputs: [continuing_output, delivery_output],
+  }
 
   !vesting.spend(
     Some(datum),
-    ClaimVested { claim_amount: claim_amount, current_timestamp: current_timestamp },
+    ClaimVested { claim_amount, current_timestamp },
     own_ref,
     self,
   )
@@ -1181,42 +1222,38 @@ test claim_vested_fails_before_start_vesting() {
   let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
   let own_address = from_verification_key(#"cc")
   let creator_address = from_verification_key(#"11")
-  let own_input =
-    Input {
-      output_reference: own_ref,
-      output: Output {
-        address: own_address,
-        value: mock_thread_nft(),
-        datum: InlineDatum(datum),
-        reference_script: None,
-      },
-    }
-  let claim_amount = 1_000_000
-  let new_datum = VestingDatum { ..datum, claimed_tokens: claim_amount }
-  let continuing_output =
-    Output {
+  let own_input = Input {
+    output_reference: own_ref,
+    output: Output {
       address: own_address,
       value: mock_thread_nft(),
-      datum: InlineDatum(new_datum),
+      datum: InlineDatum(datum),
       reference_script: None,
-    }
-  let delivery_output =
-    Output {
-      address: creator_address,
-      value: assets.from_asset(#"33", "tok", claim_amount),
-      datum: InlineDatum(own_ref),
-      reference_script: None,
-    }
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      outputs: [continuing_output, delivery_output],
-    }
+    },
+  }
+  let claim_amount = 1_000_000
+  let new_datum = VestingDatum { ..datum, claimed_tokens: claim_amount }
+  let continuing_output = Output {
+    address: own_address,
+    value: mock_thread_nft(),
+    datum: InlineDatum(new_datum),
+    reference_script: None,
+  }
+  let delivery_output = Output {
+    address: creator_address,
+    value: assets.from_asset(#"33", "tok", claim_amount),
+    datum: InlineDatum(own_ref),
+    reference_script: None,
+  }
+  let self = Transaction {
+    ..transaction.placeholder,
+    inputs: [own_input],
+    outputs: [continuing_output, delivery_output],
+  }
 
   !vesting.spend(
     Some(datum),
-    ClaimVested { claim_amount: claim_amount, current_timestamp: 86_400_000 },
+    ClaimVested { claim_amount, current_timestamp: 86_400_000 },
     own_ref,
     self,
   )
@@ -1227,42 +1264,44 @@ test trigger_cto_freezes_vesting() {
   let cto_address = from_verification_key(#"aa")
   let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
   let own_address = from_verification_key(#"cc")
-  let own_input =
-    Input {
-      output_reference: own_ref,
-      output: Output {
-        address: own_address,
-        value: mock_thread_nft(),
-        datum: InlineDatum(datum),
-        reference_script: None,
-      },
-    }
-  let new_datum =
-    VestingDatum {
-      ..datum,
-      cto_triggered: True,
-      community_treasury_wallet: #"ee",
-      vesting_state: CTOFrozen,
-    }
-  let continuing_output =
-    Output {
+  let own_input = Input {
+    output_reference: own_ref,
+    output: Output {
       address: own_address,
       value: mock_thread_nft(),
-      datum: InlineDatum(new_datum),
+      datum: InlineDatum(datum),
       reference_script: None,
-    }
-  let executed_proposal =
-    mock_proposal_anchor(SilenceLockTrigger, Passed, Executed, #"ee")
-  let cto_datum =
-    mock_cto_governance_datum(datum.launch_id, Some(executed_proposal))
+    },
+  }
+  let new_datum = VestingDatum {
+    ..datum,
+    cto_triggered: True,
+    community_treasury_wallet: #"ee",
+    vesting_state: CTOFrozen,
+  }
+  let continuing_output = Output {
+    address: own_address,
+    value: mock_thread_nft(),
+    datum: InlineDatum(new_datum),
+    reference_script: None,
+  }
+  let executed_proposal = mock_proposal_anchor(
+    SilenceLockTrigger,
+    Passed,
+    Executed,
+    #"ee",
+  )
+  let cto_datum = mock_cto_governance_datum(
+    datum.launch_id,
+    Some(executed_proposal),
+  )
   let cto_ref_input = mock_cto_ref_input(cto_address, cto_datum)
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      reference_inputs: [cto_ref_input],
-      outputs: [continuing_output],
-    }
+  let self = Transaction {
+    ..transaction.placeholder,
+    inputs: [own_input],
+    reference_inputs: [cto_ref_input],
+    outputs: [continuing_output],
+  }
 
   vesting.spend(
     Some(datum),
@@ -1280,37 +1319,33 @@ test trigger_cto_rejects_without_reference_input() fail {
   let datum = mock_datum(Vesting, 0)
   let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
   let own_address = from_verification_key(#"cc")
-  let own_input =
-    Input {
-      output_reference: own_ref,
-      output: Output {
-        address: own_address,
-        value: mock_thread_nft(),
-        datum: InlineDatum(datum),
-        reference_script: None,
-      },
-    }
-  let new_datum =
-    VestingDatum {
-      ..datum,
-      cto_triggered: True,
-      community_treasury_wallet: #"ee",
-      vesting_state: CTOFrozen,
-    }
-  let continuing_output =
-    Output {
+  let own_input = Input {
+    output_reference: own_ref,
+    output: Output {
       address: own_address,
       value: mock_thread_nft(),
-      datum: InlineDatum(new_datum),
+      datum: InlineDatum(datum),
       reference_script: None,
-    }
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      outputs: [continuing_output],
-      extra_signatories: [#"22"],
-    }
+    },
+  }
+  let new_datum = VestingDatum {
+    ..datum,
+    cto_triggered: True,
+    community_treasury_wallet: #"ee",
+    vesting_state: CTOFrozen,
+  }
+  let continuing_output = Output {
+    address: own_address,
+    value: mock_thread_nft(),
+    datum: InlineDatum(new_datum),
+    reference_script: None,
+  }
+  let self = Transaction {
+    ..transaction.placeholder,
+    inputs: [own_input],
+    outputs: [continuing_output],
+    extra_signatories: [#"22"],
+  }
 
   vesting.spend(
     Some(datum),
@@ -1321,103 +1356,112 @@ test trigger_cto_rejects_without_reference_input() fail {
 }
 
 test dissolve_cto_resumes_vesting_with_real_anchored_vote() {
-  let datum =
-    VestingDatum {
-      ..mock_datum(CTOFrozen, 0),
-      cto_triggered: True,
-      community_treasury_wallet: #"ee",
-    }
+  let datum = VestingDatum {
+    ..mock_datum(CTOFrozen, 0),
+    cto_triggered: True,
+    community_treasury_wallet: #"ee",
+  }
   let cto_address = from_verification_key(#"aa")
   let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
   let own_address = from_verification_key(#"cc")
-  let own_input =
-    Input {
-      output_reference: own_ref,
-      output: Output {
-        address: own_address,
-        value: mock_thread_nft(),
-        datum: InlineDatum(datum),
-        reference_script: None,
-      },
-    }
-  let new_datum =
-    VestingDatum { ..datum, cto_triggered: False, vesting_state: Vesting }
-  let continuing_output =
-    Output {
+  let own_input = Input {
+    output_reference: own_ref,
+    output: Output {
       address: own_address,
       value: mock_thread_nft(),
-      datum: InlineDatum(new_datum),
+      datum: InlineDatum(datum),
       reference_script: None,
-    }
-  let executed_proposal =
-    mock_proposal_anchor(DissolveCTOProposal, Passed, Executed, #"")
-  let cto_datum =
-    mock_cto_governance_datum(datum.launch_id, Some(executed_proposal))
+    },
+  }
+  let new_datum = VestingDatum {
+    ..datum,
+    cto_triggered: False,
+    vesting_state: Vesting,
+  }
+  let continuing_output = Output {
+    address: own_address,
+    value: mock_thread_nft(),
+    datum: InlineDatum(new_datum),
+    reference_script: None,
+  }
+  let executed_proposal = mock_proposal_anchor(
+    DissolveCTOProposal,
+    Passed,
+    Executed,
+    #"",
+  )
+  let cto_datum = mock_cto_governance_datum(
+    datum.launch_id,
+    Some(executed_proposal),
+  )
   let cto_ref_input = mock_cto_ref_input(cto_address, cto_datum)
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      reference_inputs: [cto_ref_input],
-      outputs: [continuing_output],
-    }
+  let self = Transaction {
+    ..transaction.placeholder,
+    inputs: [own_input],
+    reference_inputs: [cto_ref_input],
+    outputs: [continuing_output],
+  }
 
   vesting.spend(Some(datum), DissolveCTO, own_ref, self)
 }
 
 test claim_community_allocation_succeeds_with_real_anchored_fund_allocation() {
-  let datum =
-    VestingDatum {
-      ..mock_datum(CTOFrozen, 0),
-      cto_triggered: True,
-      community_treasury_wallet: #"ee",
-    }
+  let datum = VestingDatum {
+    ..mock_datum(CTOFrozen, 0),
+    cto_triggered: True,
+    community_treasury_wallet: #"ee",
+  }
   let cto_address = from_verification_key(#"aa")
   let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
   let own_address = from_verification_key(#"cc")
   let recipient_address = from_verification_key(#"ee")
-  let own_input =
-    Input {
-      output_reference: own_ref,
-      output: Output {
-        address: own_address,
-        value: assets.merge(mock_thread_nft(), assets.from_asset(#"33", "tok", 100_000_000)),
-        datum: InlineDatum(datum),
-        reference_script: None,
-      },
-    }
-  let claim_amount = 30_000_000
-  let new_datum =
-    VestingDatum { ..datum, last_claimed_allocation_timestamp: 500 }
-  let continuing_output =
-    Output {
+  let own_input = Input {
+    output_reference: own_ref,
+    output: Output {
       address: own_address,
-      value: assets.merge(mock_thread_nft(), assets.from_asset(#"33", "tok", 100_000_000 - claim_amount)),
-      datum: InlineDatum(new_datum),
+      value: assets.merge(
+        mock_thread_nft(),
+        assets.from_asset(#"33", "tok", 100_000_000),
+      ),
+      datum: InlineDatum(datum),
       reference_script: None,
-    }
-  let delivery_output =
-    Output {
-      address: recipient_address,
-      value: assets.from_asset(#"33", "tok", claim_amount),
-      datum: InlineDatum(own_ref),
-      reference_script: None,
-    }
-  let executed_proposal =
-    ProposalAnchor {
-      ..mock_proposal_anchor(FundAllocation, Passed, Executed, #"ee"),
-      allocation_amount: claim_amount,
-    }
-  let cto_datum =
-    mock_cto_governance_datum(datum.launch_id, Some(executed_proposal))
+    },
+  }
+  let claim_amount = 30_000_000
+  let new_datum = VestingDatum {
+    ..datum,
+    last_claimed_allocation_timestamp: 500,
+  }
+  let continuing_output = Output {
+    address: own_address,
+    value: assets.merge(
+      mock_thread_nft(),
+      assets.from_asset(#"33", "tok", 100_000_000 - claim_amount),
+    ),
+    datum: InlineDatum(new_datum),
+    reference_script: None,
+  }
+  let delivery_output = Output {
+    address: recipient_address,
+    value: assets.from_asset(#"33", "tok", claim_amount),
+    datum: InlineDatum(own_ref),
+    reference_script: None,
+  }
+  let executed_proposal = ProposalAnchor {
+    ..mock_proposal_anchor(FundAllocation, Passed, Executed, #"ee"),
+    allocation_amount: claim_amount,
+  }
+  let cto_datum = mock_cto_governance_datum(
+    datum.launch_id,
+    Some(executed_proposal),
+  )
   let cto_ref_input = mock_cto_ref_input(cto_address, cto_datum)
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      reference_inputs: [cto_ref_input],
-      outputs: [continuing_output, delivery_output],
-    }
+  let self = Transaction {
+    ..transaction.placeholder,
+    inputs: [own_input],
+    reference_inputs: [cto_ref_input],
+    outputs: [continuing_output, delivery_output],
+  }
 
   vesting.spend(Some(datum), ClaimCommunityAllocation, own_ref, self)
 }
@@ -1432,70 +1476,73 @@ test claim_community_allocation_succeeds_with_real_anchored_fund_allocation() {
 // genuine governance thread NFT must be rejected. Cleanly returns False (the
 // ref input exists, it just lacks the NFT), so a plain `!spend(...)` works.
 test claim_community_allocation_rejects_forged_governance_utxo_without_nft() {
-  let datum =
-    VestingDatum {
-      ..mock_datum(CTOFrozen, 0),
-      cto_triggered: True,
-      community_treasury_wallet: #"ee",
-    }
+  let datum = VestingDatum {
+    ..mock_datum(CTOFrozen, 0),
+    cto_triggered: True,
+    community_treasury_wallet: #"ee",
+  }
   let cto_address = from_verification_key(#"aa")
   let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
   let own_address = from_verification_key(#"cc")
   let attacker_address = from_verification_key(#"ba")
-  let own_input =
-    Input {
-      output_reference: own_ref,
-      output: Output {
-        address: own_address,
-        value: assets.merge(mock_thread_nft(), assets.from_asset(#"33", "tok", 100_000_000)),
-        datum: InlineDatum(datum),
-        reference_script: None,
-      },
-    }
+  let own_input = Input {
+    output_reference: own_ref,
+    output: Output {
+      address: own_address,
+      value: assets.merge(
+        mock_thread_nft(),
+        assets.from_asset(#"33", "tok", 100_000_000),
+      ),
+      datum: InlineDatum(datum),
+      reference_script: None,
+    },
+  }
   // Regression: a caller attempts to release the entire reserve to themselves.
   let claim_amount = 100_000_000
-  let new_datum =
-    VestingDatum { ..datum, last_claimed_allocation_timestamp: 500 }
-  let continuing_output =
-    Output {
-      address: own_address,
-      value: assets.merge(mock_thread_nft(), assets.from_asset(#"33", "tok", 100_000_000 - claim_amount)),
-      datum: InlineDatum(new_datum),
-      reference_script: None,
-    }
-  let delivery_output =
-    Output {
-      address: attacker_address,
-      value: assets.from_asset(#"33", "tok", claim_amount),
-      datum: InlineDatum(own_ref),
-      reference_script: None,
-    }
-  let forged_proposal =
-    ProposalAnchor {
-      ..mock_proposal_anchor(FundAllocation, Passed, Executed, #"ba"),
-      allocation_amount: claim_amount,
-    }
-  let cto_datum =
-    mock_cto_governance_datum(datum.launch_id, Some(forged_proposal))
+  let new_datum = VestingDatum {
+    ..datum,
+    last_claimed_allocation_timestamp: 500,
+  }
+  let continuing_output = Output {
+    address: own_address,
+    value: assets.merge(
+      mock_thread_nft(),
+      assets.from_asset(#"33", "tok", 100_000_000 - claim_amount),
+    ),
+    datum: InlineDatum(new_datum),
+    reference_script: None,
+  }
+  let delivery_output = Output {
+    address: attacker_address,
+    value: assets.from_asset(#"33", "tok", claim_amount),
+    datum: InlineDatum(own_ref),
+    reference_script: None,
+  }
+  let forged_proposal = ProposalAnchor {
+    ..mock_proposal_anchor(FundAllocation, Passed, Executed, #"ba"),
+    allocation_amount: claim_amount,
+  }
+  let cto_datum = mock_cto_governance_datum(
+    datum.launch_id,
+    Some(forged_proposal),
+  )
   // FORGED: correct governance address, a fully "passed" fund-allocation
   // datum naming the attacker as recipient — but the UTXO holds no NFT.
-  let forged_ref_input =
-    Input {
-      output_reference: OutputReference { transaction_id: #"cd", output_index: 0 },
-      output: Output {
-        address: cto_address,
-        value: assets.zero,
-        datum: InlineDatum(cto_datum),
-        reference_script: None,
-      },
-    }
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      reference_inputs: [forged_ref_input],
-      outputs: [continuing_output, delivery_output],
-    }
+  let forged_ref_input = Input {
+    output_reference: OutputReference { transaction_id: #"cd", output_index: 0 },
+    output: Output {
+      address: cto_address,
+      value: assets.zero,
+      datum: InlineDatum(cto_datum),
+      reference_script: None,
+    },
+  }
+  let self = Transaction {
+    ..transaction.placeholder,
+    inputs: [own_input],
+    reference_inputs: [forged_ref_input],
+    outputs: [continuing_output, delivery_output],
+  }
 
   !vesting.spend(Some(datum), ClaimCommunityAllocation, own_ref, self)
 }
@@ -1503,48 +1550,51 @@ test claim_community_allocation_rejects_forged_governance_utxo_without_nft() {
 // Same `expect Some(cto_ref_input) = ...` panic reasoning as
 // trigger_cto_rejects_without_reference_input above.
 test claim_community_allocation_rejects_without_reference_input() fail {
-  let datum =
-    VestingDatum {
-      ..mock_datum(CTOFrozen, 0),
-      cto_triggered: True,
-      community_treasury_wallet: #"ee",
-    }
+  let datum = VestingDatum {
+    ..mock_datum(CTOFrozen, 0),
+    cto_triggered: True,
+    community_treasury_wallet: #"ee",
+  }
   let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
   let own_address = from_verification_key(#"cc")
   let recipient_address = from_verification_key(#"ee")
-  let own_input =
-    Input {
-      output_reference: own_ref,
-      output: Output {
-        address: own_address,
-        value: assets.merge(mock_thread_nft(), assets.from_asset(#"33", "tok", 100_000_000)),
-        datum: InlineDatum(datum),
-        reference_script: None,
-      },
-    }
-  let claim_amount = 30_000_000
-  let new_datum =
-    VestingDatum { ..datum, last_claimed_allocation_timestamp: 500 }
-  let continuing_output =
-    Output {
+  let own_input = Input {
+    output_reference: own_ref,
+    output: Output {
       address: own_address,
-      value: assets.merge(mock_thread_nft(), assets.from_asset(#"33", "tok", 100_000_000 - claim_amount)),
-      datum: InlineDatum(new_datum),
+      value: assets.merge(
+        mock_thread_nft(),
+        assets.from_asset(#"33", "tok", 100_000_000),
+      ),
+      datum: InlineDatum(datum),
       reference_script: None,
-    }
-  let delivery_output =
-    Output {
-      address: recipient_address,
-      value: assets.from_asset(#"33", "tok", claim_amount),
-      datum: InlineDatum(own_ref),
-      reference_script: None,
-    }
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      outputs: [continuing_output, delivery_output],
-    }
+    },
+  }
+  let claim_amount = 30_000_000
+  let new_datum = VestingDatum {
+    ..datum,
+    last_claimed_allocation_timestamp: 500,
+  }
+  let continuing_output = Output {
+    address: own_address,
+    value: assets.merge(
+      mock_thread_nft(),
+      assets.from_asset(#"33", "tok", 100_000_000 - claim_amount),
+    ),
+    datum: InlineDatum(new_datum),
+    reference_script: None,
+  }
+  let delivery_output = Output {
+    address: recipient_address,
+    value: assets.from_asset(#"33", "tok", claim_amount),
+    datum: InlineDatum(own_ref),
+    reference_script: None,
+  }
+  let self = Transaction {
+    ..transaction.placeholder,
+    inputs: [own_input],
+    outputs: [continuing_output, delivery_output],
+  }
 
   vesting.spend(Some(datum), ClaimCommunityAllocation, own_ref, self)
 }
@@ -1553,59 +1603,63 @@ test claim_community_allocation_rejects_replayed_proposal() {
   // datum's watermark already equals the proposal's anchor_timestamp (500)
   // — the exact same proposal being presented a second time. Proves a
   // relayer can't replay one passed FundAllocation vote into two payouts.
-  let datum =
-    VestingDatum {
-      ..mock_datum(CTOFrozen, 0),
-      cto_triggered: True,
-      community_treasury_wallet: #"ee",
-      last_claimed_allocation_timestamp: 500,
-    }
+  let datum = VestingDatum {
+    ..mock_datum(CTOFrozen, 0),
+    cto_triggered: True,
+    community_treasury_wallet: #"ee",
+    last_claimed_allocation_timestamp: 500,
+  }
   let cto_address = from_verification_key(#"aa")
   let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
   let own_address = from_verification_key(#"cc")
   let recipient_address = from_verification_key(#"ee")
-  let own_input =
-    Input {
-      output_reference: own_ref,
-      output: Output {
-        address: own_address,
-        value: assets.merge(mock_thread_nft(), assets.from_asset(#"33", "tok", 100_000_000)),
-        datum: InlineDatum(datum),
-        reference_script: None,
-      },
-    }
-  let claim_amount = 30_000_000
-  let new_datum =
-    VestingDatum { ..datum, last_claimed_allocation_timestamp: 500 }
-  let continuing_output =
-    Output {
+  let own_input = Input {
+    output_reference: own_ref,
+    output: Output {
       address: own_address,
-      value: assets.merge(mock_thread_nft(), assets.from_asset(#"33", "tok", 100_000_000 - claim_amount)),
-      datum: InlineDatum(new_datum),
+      value: assets.merge(
+        mock_thread_nft(),
+        assets.from_asset(#"33", "tok", 100_000_000),
+      ),
+      datum: InlineDatum(datum),
       reference_script: None,
-    }
-  let delivery_output =
-    Output {
-      address: recipient_address,
-      value: assets.from_asset(#"33", "tok", claim_amount),
-      datum: InlineDatum(own_ref),
-      reference_script: None,
-    }
-  let executed_proposal =
-    ProposalAnchor {
-      ..mock_proposal_anchor(FundAllocation, Passed, Executed, #"ee"),
-      allocation_amount: claim_amount,
-    }
-  let cto_datum =
-    mock_cto_governance_datum(datum.launch_id, Some(executed_proposal))
+    },
+  }
+  let claim_amount = 30_000_000
+  let new_datum = VestingDatum {
+    ..datum,
+    last_claimed_allocation_timestamp: 500,
+  }
+  let continuing_output = Output {
+    address: own_address,
+    value: assets.merge(
+      mock_thread_nft(),
+      assets.from_asset(#"33", "tok", 100_000_000 - claim_amount),
+    ),
+    datum: InlineDatum(new_datum),
+    reference_script: None,
+  }
+  let delivery_output = Output {
+    address: recipient_address,
+    value: assets.from_asset(#"33", "tok", claim_amount),
+    datum: InlineDatum(own_ref),
+    reference_script: None,
+  }
+  let executed_proposal = ProposalAnchor {
+    ..mock_proposal_anchor(FundAllocation, Passed, Executed, #"ee"),
+    allocation_amount: claim_amount,
+  }
+  let cto_datum = mock_cto_governance_datum(
+    datum.launch_id,
+    Some(executed_proposal),
+  )
   let cto_ref_input = mock_cto_ref_input(cto_address, cto_datum)
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      reference_inputs: [cto_ref_input],
-      outputs: [continuing_output, delivery_output],
-    }
+  let self = Transaction {
+    ..transaction.placeholder,
+    inputs: [own_input],
+    reference_inputs: [cto_ref_input],
+    outputs: [continuing_output, delivery_output],
+  }
 
   !vesting.spend(Some(datum), ClaimCommunityAllocation, own_ref, self)
 }
@@ -1615,58 +1669,62 @@ test claim_community_allocation_rejects_wrong_recipient() {
   // authorized (#"ee") — proves a relayer can't redirect the payout to
   // themselves, the reason community_allocation_delivered pins the
   // recipient instead of reusing the looser tokens_delivered.
-  let datum =
-    VestingDatum {
-      ..mock_datum(CTOFrozen, 0),
-      cto_triggered: True,
-      community_treasury_wallet: #"ee",
-    }
+  let datum = VestingDatum {
+    ..mock_datum(CTOFrozen, 0),
+    cto_triggered: True,
+    community_treasury_wallet: #"ee",
+  }
   let cto_address = from_verification_key(#"aa")
   let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
   let own_address = from_verification_key(#"cc")
   let attacker_address = from_verification_key(#"ff")
-  let own_input =
-    Input {
-      output_reference: own_ref,
-      output: Output {
-        address: own_address,
-        value: assets.merge(mock_thread_nft(), assets.from_asset(#"33", "tok", 100_000_000)),
-        datum: InlineDatum(datum),
-        reference_script: None,
-      },
-    }
-  let claim_amount = 30_000_000
-  let new_datum =
-    VestingDatum { ..datum, last_claimed_allocation_timestamp: 500 }
-  let continuing_output =
-    Output {
+  let own_input = Input {
+    output_reference: own_ref,
+    output: Output {
       address: own_address,
-      value: assets.merge(mock_thread_nft(), assets.from_asset(#"33", "tok", 100_000_000 - claim_amount)),
-      datum: InlineDatum(new_datum),
+      value: assets.merge(
+        mock_thread_nft(),
+        assets.from_asset(#"33", "tok", 100_000_000),
+      ),
+      datum: InlineDatum(datum),
       reference_script: None,
-    }
-  let delivery_output =
-    Output {
-      address: attacker_address,
-      value: assets.from_asset(#"33", "tok", claim_amount),
-      datum: InlineDatum(own_ref),
-      reference_script: None,
-    }
-  let executed_proposal =
-    ProposalAnchor {
-      ..mock_proposal_anchor(FundAllocation, Passed, Executed, #"ee"),
-      allocation_amount: claim_amount,
-    }
-  let cto_datum =
-    mock_cto_governance_datum(datum.launch_id, Some(executed_proposal))
+    },
+  }
+  let claim_amount = 30_000_000
+  let new_datum = VestingDatum {
+    ..datum,
+    last_claimed_allocation_timestamp: 500,
+  }
+  let continuing_output = Output {
+    address: own_address,
+    value: assets.merge(
+      mock_thread_nft(),
+      assets.from_asset(#"33", "tok", 100_000_000 - claim_amount),
+    ),
+    datum: InlineDatum(new_datum),
+    reference_script: None,
+  }
+  let delivery_output = Output {
+    address: attacker_address,
+    value: assets.from_asset(#"33", "tok", claim_amount),
+    datum: InlineDatum(own_ref),
+    reference_script: None,
+  }
+  let executed_proposal = ProposalAnchor {
+    ..mock_proposal_anchor(FundAllocation, Passed, Executed, #"ee"),
+    allocation_amount: claim_amount,
+  }
+  let cto_datum = mock_cto_governance_datum(
+    datum.launch_id,
+    Some(executed_proposal),
+  )
   let cto_ref_input = mock_cto_ref_input(cto_address, cto_datum)
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      reference_inputs: [cto_ref_input],
-      outputs: [continuing_output, delivery_output],
-    }
+  let self = Transaction {
+    ..transaction.placeholder,
+    inputs: [own_input],
+    reference_inputs: [cto_ref_input],
+    outputs: [continuing_output, delivery_output],
+  }
 
   !vesting.spend(Some(datum), ClaimCommunityAllocation, own_ref, self)
 }
@@ -1679,94 +1737,94 @@ test claim_community_allocation_rejects_if_not_cto_triggered() {
   let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
   let own_address = from_verification_key(#"cc")
   let recipient_address = from_verification_key(#"ee")
-  let own_input =
-    Input {
-      output_reference: own_ref,
-      output: Output {
-        address: own_address,
-        value: assets.merge(mock_thread_nft(), assets.from_asset(#"33", "tok", 100_000_000)),
-        datum: InlineDatum(datum),
-        reference_script: None,
-      },
-    }
-  let claim_amount = 30_000_000
-  let new_datum =
-    VestingDatum { ..datum, last_claimed_allocation_timestamp: 500 }
-  let continuing_output =
-    Output {
+  let own_input = Input {
+    output_reference: own_ref,
+    output: Output {
       address: own_address,
-      value: assets.merge(mock_thread_nft(), assets.from_asset(#"33", "tok", 100_000_000 - claim_amount)),
-      datum: InlineDatum(new_datum),
+      value: assets.merge(
+        mock_thread_nft(),
+        assets.from_asset(#"33", "tok", 100_000_000),
+      ),
+      datum: InlineDatum(datum),
       reference_script: None,
-    }
-  let delivery_output =
-    Output {
-      address: recipient_address,
-      value: assets.from_asset(#"33", "tok", claim_amount),
-      datum: InlineDatum(own_ref),
-      reference_script: None,
-    }
-  let executed_proposal =
-    ProposalAnchor {
-      ..mock_proposal_anchor(FundAllocation, Passed, Executed, #"ee"),
-      allocation_amount: claim_amount,
-    }
-  let cto_datum =
-    mock_cto_governance_datum(datum.launch_id, Some(executed_proposal))
+    },
+  }
+  let claim_amount = 30_000_000
+  let new_datum = VestingDatum {
+    ..datum,
+    last_claimed_allocation_timestamp: 500,
+  }
+  let continuing_output = Output {
+    address: own_address,
+    value: assets.merge(
+      mock_thread_nft(),
+      assets.from_asset(#"33", "tok", 100_000_000 - claim_amount),
+    ),
+    datum: InlineDatum(new_datum),
+    reference_script: None,
+  }
+  let delivery_output = Output {
+    address: recipient_address,
+    value: assets.from_asset(#"33", "tok", claim_amount),
+    datum: InlineDatum(own_ref),
+    reference_script: None,
+  }
+  let executed_proposal = ProposalAnchor {
+    ..mock_proposal_anchor(FundAllocation, Passed, Executed, #"ee"),
+    allocation_amount: claim_amount,
+  }
+  let cto_datum = mock_cto_governance_datum(
+    datum.launch_id,
+    Some(executed_proposal),
+  )
   let cto_ref_input = mock_cto_ref_input(cto_address, cto_datum)
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      reference_inputs: [cto_ref_input],
-      outputs: [continuing_output, delivery_output],
-    }
+  let self = Transaction {
+    ..transaction.placeholder,
+    inputs: [own_input],
+    reference_inputs: [cto_ref_input],
+    outputs: [continuing_output, delivery_output],
+  }
 
   !vesting.spend(Some(datum), ClaimCommunityAllocation, own_ref, self)
 }
 
 test claim_vested_fails_while_cto_triggered() {
-  let datum =
-    VestingDatum { ..mock_datum(CTOFrozen, 0), cto_triggered: True }
+  let datum = VestingDatum { ..mock_datum(CTOFrozen, 0), cto_triggered: True }
   let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
   let own_address = from_verification_key(#"cc")
   let creator_address = from_verification_key(#"11")
-  let own_input =
-    Input {
-      output_reference: own_ref,
-      output: Output {
-        address: own_address,
-        value: mock_thread_nft(),
-        datum: InlineDatum(datum),
-        reference_script: None,
-      },
-    }
-  let claim_amount = 1_000_000
-  let new_datum = VestingDatum { ..datum, claimed_tokens: claim_amount }
-  let continuing_output =
-    Output {
+  let own_input = Input {
+    output_reference: own_ref,
+    output: Output {
       address: own_address,
       value: mock_thread_nft(),
-      datum: InlineDatum(new_datum),
+      datum: InlineDatum(datum),
       reference_script: None,
-    }
-  let delivery_output =
-    Output {
-      address: creator_address,
-      value: assets.from_asset(#"33", "tok", claim_amount),
-      datum: InlineDatum(own_ref),
-      reference_script: None,
-    }
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      outputs: [continuing_output, delivery_output],
-    }
+    },
+  }
+  let claim_amount = 1_000_000
+  let new_datum = VestingDatum { ..datum, claimed_tokens: claim_amount }
+  let continuing_output = Output {
+    address: own_address,
+    value: mock_thread_nft(),
+    datum: InlineDatum(new_datum),
+    reference_script: None,
+  }
+  let delivery_output = Output {
+    address: creator_address,
+    value: assets.from_asset(#"33", "tok", claim_amount),
+    datum: InlineDatum(own_ref),
+    reference_script: None,
+  }
+  let self = Transaction {
+    ..transaction.placeholder,
+    inputs: [own_input],
+    outputs: [continuing_output, delivery_output],
+  }
 
   !vesting.spend(
     Some(datum),
-    ClaimVested { claim_amount: claim_amount, current_timestamp: 45 * 86_400_000 },
+    ClaimVested { claim_amount, current_timestamp: 45 * 86_400_000 },
     own_ref,
     self,
   )
@@ -1780,31 +1838,35 @@ test query_state_rejects_unauthenticated_drain_attempt() {
   let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
   let own_address = from_verification_key(#"cc")
   let attacker_address = from_verification_key(#"ee")
-  let own_input =
-    Input {
-      output_reference: own_ref,
-      output: Output {
-        address: own_address,
-        value: assets.merge(mock_thread_nft(), assets.merge(
+  let own_input = Input {
+    output_reference: own_ref,
+    output: Output {
+      address: own_address,
+      value: assets.merge(
+        mock_thread_nft(),
+        assets.merge(
           assets.from_lovelace(2_000_000),
           assets.from_asset(#"33", "tok", 100_000_000),
-        )),
-        datum: InlineDatum(datum),
-        reference_script: None,
-      },
-    }
-  let drain_output =
-    Output {
-      address: attacker_address,
-      value: assets.merge(
-        assets.from_lovelace(2_000_000),
-        assets.from_asset(#"33", "tok", 100_000_000),
+        ),
       ),
-      datum: transaction.NoDatum,
+      datum: InlineDatum(datum),
       reference_script: None,
-    }
-  let self =
-    Transaction { ..transaction.placeholder, inputs: [own_input], outputs: [drain_output] }
+    },
+  }
+  let drain_output = Output {
+    address: attacker_address,
+    value: assets.merge(
+      assets.from_lovelace(2_000_000),
+      assets.from_asset(#"33", "tok", 100_000_000),
+    ),
+    datum: transaction.NoDatum,
+    reference_script: None,
+  }
+  let self = Transaction {
+    ..transaction.placeholder,
+    inputs: [own_input],
+    outputs: [drain_output],
+  }
 
   !vesting.spend(Some(datum), QueryState, own_ref, self)
 }
@@ -1827,49 +1889,52 @@ test claim_vested_rejects_wide_validity_range() {
   let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
   let own_address = from_verification_key(#"cc")
   let creator_address = from_verification_key(#"11")
-  let own_input =
-    Input {
-      output_reference: own_ref,
-      output: Output {
-        address: own_address,
-        value: assets.merge(mock_thread_nft(), assets.from_asset(#"33", "tok", 100_000_000)),
-        datum: InlineDatum(datum),
-        reference_script: None,
-      },
-    }
+  let own_input = Input {
+    output_reference: own_ref,
+    output: Output {
+      address: own_address,
+      value: assets.merge(
+        mock_thread_nft(),
+        assets.from_asset(#"33", "tok", 100_000_000),
+      ),
+      datum: InlineDatum(datum),
+      reference_script: None,
+    },
+  }
   let claim_amount = 100_000_000
   let forged_timestamp = 90 * 86_400_000
-  let new_datum = VestingDatum { ..datum, claimed_tokens: claim_amount, vesting_state: FullyClaimed }
-  let continuing_output =
-    Output {
-      address: own_address,
-      value: assets.merge(mock_thread_nft(), assets.from_asset(#"33", "tok", 0)),
-      datum: InlineDatum(new_datum),
-      reference_script: None,
-    }
-  let delivery_output =
-    Output {
-      address: creator_address,
-      value: assets.from_asset(#"33", "tok", claim_amount),
-      datum: InlineDatum(own_ref),
-      reference_script: None,
-    }
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      outputs: [continuing_output, delivery_output],
-      extra_signatories: [#"11"],
-      // Spans the ENTIRE 90-day vesting period (far beyond the
-      // 600,000ms/10-minute max_validity_range_width) — interval.contains
-      // alone would accept this (forged_timestamp genuinely falls inside
-      // the range), but validity_range_is_narrow must not.
-      validity_range: interval.between(0, forged_timestamp + 100),
-    }
+  let new_datum = VestingDatum {
+    ..datum,
+    claimed_tokens: claim_amount,
+    vesting_state: FullyClaimed,
+  }
+  let continuing_output = Output {
+    address: own_address,
+    value: assets.merge(mock_thread_nft(), assets.from_asset(#"33", "tok", 0)),
+    datum: InlineDatum(new_datum),
+    reference_script: None,
+  }
+  let delivery_output = Output {
+    address: creator_address,
+    value: assets.from_asset(#"33", "tok", claim_amount),
+    datum: InlineDatum(own_ref),
+    reference_script: None,
+  }
+  let self = Transaction {
+    ..transaction.placeholder,
+    inputs: [own_input],
+    outputs: [continuing_output, delivery_output],
+    extra_signatories: [#"11"],
+    // Spans the ENTIRE 90-day vesting period (far beyond the
+    // 600,000ms/10-minute max_validity_range_width) — interval.contains
+    // alone would accept this (forged_timestamp genuinely falls inside
+    // the range), but validity_range_is_narrow must not.
+    validity_range: interval.between(0, forged_timestamp + 100),
+  }
 
   !vesting.spend(
     Some(datum),
-    ClaimVested { claim_amount: claim_amount, current_timestamp: forged_timestamp },
+    ClaimVested { claim_amount, current_timestamp: forged_timestamp },
     own_ref,
     self,
   )
@@ -1881,42 +1946,57 @@ test trigger_cto_rejects_before_vesting_started() {
   let datum = mock_datum(NotStarted, 0)
   let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
   let own_address = from_verification_key(#"cc")
-  let own_input =
-    Input {
-      output_reference: own_ref,
-      output: Output {
-        address: own_address,
-        value: assets.merge(mock_thread_nft(), assets.from_asset(#"33", "tok", 100_000_000)),
-        datum: InlineDatum(datum),
-        reference_script: None,
-      },
-    }
-  let proposal = mock_proposal_anchor(SilenceLockTrigger, Passed, Executed, #"ee")
-  let cto_datum = mock_cto_governance_datum(datum.launch_id, Some(proposal))
-  let cto_ref_input = mock_cto_ref_input(from_verification_key(#"aa"), cto_datum)
-  let new_datum =
-    VestingDatum {
-      ..datum,
-      cto_triggered: True,
-      community_treasury_wallet: #"ee",
-      vesting_state: CTOFrozen,
-    }
-  let continuing_output =
-    Output {
+  let own_input = Input {
+    output_reference: own_ref,
+    output: Output {
       address: own_address,
-      value: assets.merge(mock_thread_nft(), assets.from_asset(#"33", "tok", 100_000_000)),
-      datum: InlineDatum(new_datum),
+      value: assets.merge(
+        mock_thread_nft(),
+        assets.from_asset(#"33", "tok", 100_000_000),
+      ),
+      datum: InlineDatum(datum),
       reference_script: None,
-    }
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      reference_inputs: [cto_ref_input],
-      outputs: [continuing_output],
-    }
+    },
+  }
+  let proposal = mock_proposal_anchor(
+    SilenceLockTrigger,
+    Passed,
+    Executed,
+    #"ee",
+  )
+  let cto_datum = mock_cto_governance_datum(datum.launch_id, Some(proposal))
+  let cto_ref_input = mock_cto_ref_input(
+    from_verification_key(#"aa"),
+    cto_datum,
+  )
+  let new_datum = VestingDatum {
+    ..datum,
+    cto_triggered: True,
+    community_treasury_wallet: #"ee",
+    vesting_state: CTOFrozen,
+  }
+  let continuing_output = Output {
+    address: own_address,
+    value: assets.merge(
+      mock_thread_nft(),
+      assets.from_asset(#"33", "tok", 100_000_000),
+    ),
+    datum: InlineDatum(new_datum),
+    reference_script: None,
+  }
+  let self = Transaction {
+    ..transaction.placeholder,
+    inputs: [own_input],
+    reference_inputs: [cto_ref_input],
+    outputs: [continuing_output],
+  }
 
-  !vesting.spend(Some(datum), TriggerCTO { community_treasury_wallet: #"ee" }, own_ref, self)
+  !vesting.spend(
+    Some(datum),
+    TriggerCTO { community_treasury_wallet: #"ee" },
+    own_ref,
+    self,
+  )
 }
 
 // Real recovery path for the creator's own never-vested allocation
@@ -1926,37 +2006,36 @@ test claim_cancelled_allocation_succeeds_for_creator() {
   let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
   let own_address = from_verification_key(#"cc")
   let creator_address = from_verification_key(#"11")
-  let own_input =
-    Input {
-      output_reference: own_ref,
-      output: Output {
-        address: own_address,
-        value: assets.merge(mock_thread_nft(), assets.from_asset(#"33", "tok", 100_000_000)),
-        datum: InlineDatum(datum),
-        reference_script: None,
-      },
-    }
-  let delivery_output =
-    Output {
-      address: creator_address,
-      value: assets.from_asset(#"33", "tok", 100_000_000),
-      datum: InlineDatum(own_ref),
-      reference_script: None,
-    }
-  let thread_continuing_output =
-    Output {
+  let own_input = Input {
+    output_reference: own_ref,
+    output: Output {
       address: own_address,
-      value: mock_thread_nft(),
+      value: assets.merge(
+        mock_thread_nft(),
+        assets.from_asset(#"33", "tok", 100_000_000),
+      ),
       datum: InlineDatum(datum),
       reference_script: None,
-    }
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      outputs: [delivery_output, thread_continuing_output],
-      extra_signatories: [#"11"],
-    }
+    },
+  }
+  let delivery_output = Output {
+    address: creator_address,
+    value: assets.from_asset(#"33", "tok", 100_000_000),
+    datum: InlineDatum(own_ref),
+    reference_script: None,
+  }
+  let thread_continuing_output = Output {
+    address: own_address,
+    value: mock_thread_nft(),
+    datum: InlineDatum(datum),
+    reference_script: None,
+  }
+  let self = Transaction {
+    ..transaction.placeholder,
+    inputs: [own_input],
+    outputs: [delivery_output, thread_continuing_output],
+    extra_signatories: [#"11"],
+  }
 
   vesting.spend(Some(datum), ClaimCancelledAllocation, own_ref, self)
 }
@@ -1967,31 +2046,34 @@ test cancel_launch_rejects_after_vesting_started() {
   let datum = mock_datum(Vesting, 0)
   let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
   let own_address = from_verification_key(#"cc")
-  let own_input =
-    Input {
-      output_reference: own_ref,
-      output: Output {
-        address: own_address,
-        value: assets.merge(mock_thread_nft(), assets.from_asset(#"33", "tok", 100_000_000)),
-        datum: InlineDatum(datum),
-        reference_script: None,
-      },
-    }
-  let new_datum = VestingDatum { ..datum, vesting_state: Cancelled }
-  let continuing_output =
-    Output {
+  let own_input = Input {
+    output_reference: own_ref,
+    output: Output {
       address: own_address,
-      value: assets.merge(mock_thread_nft(), assets.from_asset(#"33", "tok", 100_000_000)),
-      datum: InlineDatum(new_datum),
+      value: assets.merge(
+        mock_thread_nft(),
+        assets.from_asset(#"33", "tok", 100_000_000),
+      ),
+      datum: InlineDatum(datum),
       reference_script: None,
-    }
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      outputs: [continuing_output],
-      extra_signatories: [#"22"],
-    }
+    },
+  }
+  let new_datum = VestingDatum { ..datum, vesting_state: Cancelled }
+  let continuing_output = Output {
+    address: own_address,
+    value: assets.merge(
+      mock_thread_nft(),
+      assets.from_asset(#"33", "tok", 100_000_000),
+    ),
+    datum: InlineDatum(new_datum),
+    reference_script: None,
+  }
+  let self = Transaction {
+    ..transaction.placeholder,
+    inputs: [own_input],
+    outputs: [continuing_output],
+    extra_signatories: [#"22"],
+  }
 
   !vesting.spend(Some(datum), CancelLaunch, own_ref, self)
 }
@@ -2016,48 +2098,52 @@ test claim_vested_rejects_a_million_an_hour_into_a_ninety_day_vest() {
   let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
   let own_address = from_verification_key(#"cc")
   let creator_address = from_verification_key(#"11")
-  let own_input =
-    Input {
-      output_reference: own_ref,
-      output: Output {
-        address: own_address,
-        value: assets.merge(mock_thread_nft(), assets.from_asset(#"33", "tok", 100_000_000)),
-        datum: InlineDatum(datum),
-        reference_script: None,
-      },
-    }
-  let claim_amount = 1_000_000
-  let new_datum =
-    VestingDatum { ..datum, claimed_tokens: claim_amount }
-  let continuing_output =
-    Output {
+  let own_input = Input {
+    output_reference: own_ref,
+    output: Output {
       address: own_address,
-      value: assets.merge(mock_thread_nft(), assets.from_asset(#"33", "tok", 100_000_000 - claim_amount)),
-      datum: InlineDatum(new_datum),
+      value: assets.merge(
+        mock_thread_nft(),
+        assets.from_asset(#"33", "tok", 100_000_000),
+      ),
+      datum: InlineDatum(datum),
       reference_script: None,
-    }
-  let delivery_output =
-    Output {
-      address: creator_address,
-      value: assets.from_asset(#"33", "tok", claim_amount),
-      datum: InlineDatum(own_ref),
-      reference_script: None,
-    }
+    },
+  }
+  let claim_amount = 1_000_000
+  let new_datum = VestingDatum { ..datum, claimed_tokens: claim_amount }
+  let continuing_output = Output {
+    address: own_address,
+    value: assets.merge(
+      mock_thread_nft(),
+      assets.from_asset(#"33", "tok", 100_000_000 - claim_amount),
+    ),
+    datum: InlineDatum(new_datum),
+    reference_script: None,
+  }
+  let delivery_output = Output {
+    address: creator_address,
+    value: assets.from_asset(#"33", "tok", claim_amount),
+    datum: InlineDatum(own_ref),
+    reference_script: None,
+  }
   let current_timestamp = 3_600_000
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [own_input],
-      outputs: [continuing_output, delivery_output],
-      extra_signatories: [#"11"],
-      // current_timestamp must now fall within a real, narrow
-      // validity range.
-      validity_range: interval.between(current_timestamp - 100, current_timestamp + 100),
-    }
+  let self = Transaction {
+    ..transaction.placeholder,
+    inputs: [own_input],
+    outputs: [continuing_output, delivery_output],
+    extra_signatories: [#"11"],
+    // current_timestamp must now fall within a real, narrow
+    // validity range.
+    validity_range: interval.between(
+      current_timestamp - 100,
+      current_timestamp + 100,
+    ),
+  }
 
   !vesting.spend(
     Some(datum),
-    ClaimVested { claim_amount: claim_amount, current_timestamp: current_timestamp },
+    ClaimVested { claim_amount, current_timestamp },
     own_ref,
     self,
   )
@@ -2088,7 +2174,7 @@ fn vesting_input(datum: VestingDatum, own_ref: OutputReference) -> Input {
 fn vesting_output(datum: VestingDatum, value: assets.Value) -> Output {
   Output {
     address: from_verification_key(#"cc"),
-    value: value,
+    value,
     datum: InlineDatum(datum),
     reference_script: None,
   }
@@ -2098,44 +2184,61 @@ fn vesting_output(datum: VestingDatum, value: assets.Value) -> Output {
 test start_vesting_rejects_a_value_drain() {
   let datum = mock_datum(NotStarted, 0)
   let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
-  let new_datum =
-    VestingDatum { ..datum, vesting_state: Vesting, vest_start_timestamp: 500 }
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [vesting_input(datum, own_ref)],
-      outputs: [vesting_output(new_datum, mock_thread_nft())],
-      extra_signatories: [#"22"],
-      validity_range: interval.between(400, 600),
-    }
-  !vesting.spend(Some(datum), StartVesting { start_timestamp: 500 }, own_ref, self)
+  let new_datum = VestingDatum {
+    ..datum,
+    vesting_state: Vesting,
+    vest_start_timestamp: 500,
+  }
+  let self = Transaction {
+    ..transaction.placeholder,
+    inputs: [vesting_input(datum, own_ref)],
+    outputs: [vesting_output(new_datum, mock_thread_nft())],
+    extra_signatories: [#"22"],
+    validity_range: interval.between(400, 600),
+  }
+  !vesting.spend(
+    Some(datum),
+    StartVesting { start_timestamp: 500 },
+    own_ref,
+    self,
+  )
 }
 
 /// The control: the same start with the allocation kept is accepted.
 test start_vesting_accepts_when_the_allocation_stays() {
   let datum = mock_datum(NotStarted, 0)
   let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
-  let new_datum =
-    VestingDatum { ..datum, vesting_state: Vesting, vest_start_timestamp: 500 }
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [vesting_input(datum, own_ref)],
-      outputs: [vesting_output(new_datum, vesting_value_with_allocation())],
-      extra_signatories: [#"22"],
-      validity_range: interval.between(400, 600),
-    }
-  vesting.spend(Some(datum), StartVesting { start_timestamp: 500 }, own_ref, self)
+  let new_datum = VestingDatum {
+    ..datum,
+    vesting_state: Vesting,
+    vest_start_timestamp: 500,
+  }
+  let self = Transaction {
+    ..transaction.placeholder,
+    inputs: [vesting_input(datum, own_ref)],
+    outputs: [vesting_output(new_datum, vesting_value_with_allocation())],
+    extra_signatories: [#"22"],
+    validity_range: interval.between(400, 600),
+  }
+  vesting.spend(
+    Some(datum),
+    StartVesting { start_timestamp: 500 },
+    own_ref,
+    self,
+  )
 }
 
 /// A genuine SilenceLockTrigger record naming `wallet` as the community
 /// wallet; `live` is whether the record still names it (a freeze clears it).
-fn silence_record(launch_id: ByteArray, wallet: VerificationKeyHash, live: Bool) -> Input {
-  let record =
-    mock_cto_governance_datum(
-      launch_id,
-      Some(mock_proposal_anchor(SilenceLockTrigger, Passed, Executed, wallet)),
-    )
+fn silence_record(
+  launch_id: ByteArray,
+  wallet: VerificationKeyHash,
+  live: Bool,
+) -> Input {
+  let record = mock_cto_governance_datum(
+    launch_id,
+    Some(mock_proposal_anchor(SilenceLockTrigger, Passed, Executed, wallet)),
+  )
   mock_cto_ref_input(
     from_verification_key(#"aa"),
     if live {
@@ -2149,19 +2252,17 @@ fn silence_record(launch_id: ByteArray, wallet: VerificationKeyHash, live: Bool)
 fn run_trigger(record: Input, keep_allocation: Bool) -> Bool {
   let datum = mock_datum(Vesting, 0)
   let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
-  let new_datum =
-    VestingDatum {
-      ..datum,
-      cto_triggered: True,
-      community_treasury_wallet: #"ee",
-      vesting_state: CTOFrozen,
-    }
-  let out_value =
-    if keep_allocation {
-      vesting_value_with_allocation()
-    } else {
-      mock_thread_nft()
-    }
+  let new_datum = VestingDatum {
+    ..datum,
+    cto_triggered: True,
+    community_treasury_wallet: #"ee",
+    vesting_state: CTOFrozen,
+  }
+  let out_value = if keep_allocation {
+    vesting_value_with_allocation()
+  } else {
+    mock_thread_nft()
+  }
   vesting.spend(
     Some(datum),
     TriggerCTO { community_treasury_wallet: #"ee" },
@@ -2193,46 +2294,45 @@ test trigger_cto_rejects_a_frozen_community_wallet() {
 /// While the record's community wallet is cleared, nothing is paid out of the
 /// reserve — the brake reaches the payout itself.
 test claim_community_allocation_rejects_while_the_wallet_is_frozen() {
-  let datum =
-    VestingDatum {
-      ..mock_datum(CTOFrozen, 0),
-      cto_triggered: True,
-      community_treasury_wallet: #"ee",
-    }
+  let datum = VestingDatum {
+    ..mock_datum(CTOFrozen, 0),
+    cto_triggered: True,
+    community_treasury_wallet: #"ee",
+  }
   let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
   let claim_amount = 30_000_000
-  let new_datum = VestingDatum { ..datum, last_claimed_allocation_timestamp: 500 }
-  let continuing_output =
-    vesting_output(
-      new_datum,
-      assets.merge(
-        mock_thread_nft(),
-        assets.from_asset(#"33", "tok", 100_000_000 - claim_amount),
-      ),
-    )
-  let delivery_output =
-    Output {
-      address: from_verification_key(#"ee"),
-      value: assets.from_asset(#"33", "tok", claim_amount),
-      datum: InlineDatum(own_ref),
-      reference_script: None,
-    }
-  let executed_proposal =
-    ProposalAnchor {
-      ..mock_proposal_anchor(FundAllocation, Passed, Executed, #"ee"),
-      allocation_amount: claim_amount,
-    }
-  let frozen_record =
-    CtoGovernanceDatum {
-      ..mock_cto_governance_datum(datum.launch_id, Some(executed_proposal)),
-      community_wallet_hash: #"",
-    }
-  let self =
-    Transaction {
-      ..transaction.placeholder,
-      inputs: [vesting_input(datum, own_ref)],
-      reference_inputs: [mock_cto_ref_input(from_verification_key(#"aa"), frozen_record)],
-      outputs: [continuing_output, delivery_output],
-    }
+  let new_datum = VestingDatum {
+    ..datum,
+    last_claimed_allocation_timestamp: 500,
+  }
+  let continuing_output = vesting_output(
+    new_datum,
+    assets.merge(
+      mock_thread_nft(),
+      assets.from_asset(#"33", "tok", 100_000_000 - claim_amount),
+    ),
+  )
+  let delivery_output = Output {
+    address: from_verification_key(#"ee"),
+    value: assets.from_asset(#"33", "tok", claim_amount),
+    datum: InlineDatum(own_ref),
+    reference_script: None,
+  }
+  let executed_proposal = ProposalAnchor {
+    ..mock_proposal_anchor(FundAllocation, Passed, Executed, #"ee"),
+    allocation_amount: claim_amount,
+  }
+  let frozen_record = CtoGovernanceDatum {
+    ..mock_cto_governance_datum(datum.launch_id, Some(executed_proposal)),
+    community_wallet_hash: #"",
+  }
+  let self = Transaction {
+    ..transaction.placeholder,
+    inputs: [vesting_input(datum, own_ref)],
+    reference_inputs: [
+      mock_cto_ref_input(from_verification_key(#"aa"), frozen_record),
+    ],
+    outputs: [continuing_output, delivery_output],
+  }
   !vesting.spend(Some(datum), ClaimCommunityAllocation, own_ref, self)
 }
