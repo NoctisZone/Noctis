@@ -8,6 +8,28 @@ import {
   inMemoryLevelFactory,
 } from '../private-state-store.js';
 
+// Every test here that builds a store pays for real password-based key
+// derivation and real encryption, several times over, and that cost is what
+// the file is for -- a mocked provider would prove nothing about the
+// guarantee a DarkVeil buyer depends on. So these are slow by construction,
+// and the runner's 5s default is sized for trivial unit tests.
+//
+// MEASURED, on a 32-thread machine, for the slowest test in this file:
+//   run alone ................................ ~0.7s
+//   inside the full suite (107 files) ........ 1.8s
+//   with every core saturated ................ 4.5s
+//
+// That last figure is 89% of the default, which is why this file produced a
+// single unreproducible failure inside one full run and passed on the retry
+// and in isolation. Nothing here can fail on its VALUE -- an identity and a
+// buy nonce are each a pure hash of a fixed signature and a fixed launch id,
+// so the same inputs cannot derive two answers. The only failure available
+// to it was running out of time.
+//
+// A generous ceiling rather than a tuned one: it exists to stop the clock
+// being the thing under test, and a real hang still fails, just later.
+vi.setConfig({ testTimeout: 30_000 });
+
 // Real password meeting the SDK's actual strength policy (validatePassword:
 // 16+ chars, 3+ character classes, no 4+-char runs/sequences, no more than
 // 3 consecutive identical chars) -- not a mock, this is what gets fed to the

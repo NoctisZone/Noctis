@@ -1,6 +1,12 @@
-import { MemoryLevel } from 'memory-level';
 import { describe, expect, it, vi } from 'vitest';
 import { createCtoPrivateStore } from '../cto-private-state-store.js';
+import { inMemoryLevelFactory } from '../private-state-store.js';
+
+// Same measured reason as private-state-store.test.ts, which this file's
+// stores cost the same as: real key derivation and real encryption per
+// store, slow by construction, and within a tenth of the runner's 5s
+// default once every core is busy. See that file for the figures.
+vi.setConfig({ testTimeout: 30_000 });
 
 // Real password meeting the SDK's actual strength policy — not a mock, this
 // is what gets fed to the real levelPrivateStateProvider/StorageEncryption
@@ -15,21 +21,12 @@ const OTHER_REAL_PASSWORD = 'Qx7$mVenice42Lagoon';
 const WALLET_A_SIGNATURE = 'aa'.repeat(64);
 const WALLET_B_SIGNATURE = 'bb'.repeat(64);
 
-function freshMemoryLevelFactory() {
-  // Memoized by dbName WITHIN one call to this function, matching
-  // private-state-store.test.ts's own documented gotcha: an unmemoized
-  // factory silently breaks read-after-write (each set()/get() hitting a
-  // different empty MemoryLevel).
-  const cache = new Map<string, MemoryLevel<string, string>>();
-  return (dbName: string) => {
-    let db = cache.get(dbName);
-    if (!db) {
-      db = new MemoryLevel<string, string>();
-      cache.set(dbName, db);
-    }
-    return db;
-  };
-}
+// The shared factory the CLIs use, not a copy of it. This file carried its
+// own duplicate, which is the exact thing private-state-store.test.ts warns
+// about in its own comment: a test-only copy is how the production CLIs once
+// came to pass an unmemoized factory while a test file quietly held the
+// correct one. Two copies of a rule cannot disagree if there is only one.
+const freshMemoryLevelFactory = inMemoryLevelFactory;
 
 function makeStore(accountId: string, walletSignature: string, password = REAL_PASSWORD) {
   const getMasterSignature = vi.fn(async () => walletSignature);
