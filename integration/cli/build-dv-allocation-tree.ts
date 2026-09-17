@@ -12,7 +12,12 @@
 // DarkVeil buyer (governor computes this list off-chain from
 // eligibility_gate.compact's dvTokensPurchased map, per the
 // documented Cardano-wallet<->Midnight-identity trust boundary — this CLI
-// only does the tree math). Order matters: leaf index == array index.
+// only does the tree math). The order entries arrive in does NOT matter and
+// is not preserved: the builder sorts them by a key derived from each
+// buyer's own salt, so a claimant's published index says nothing about when
+// they registered, and the same entries in any order anchor the same root.
+// Each proof below is emitted with the leaf index the tree actually gave
+// that buyer, which is what they must claim with.
 // Output: { "root": "<hex>", "proofs": [{ "vkhHex": "...", "dvAmount":
 // "...", "proof": [{ "siblingHex": "...", "goesLeft": bool }, ...] }, ...] }.
 //
@@ -61,9 +66,11 @@ async function main() {
 
   const tree = buildDvAllocationTree(entries);
 
-  const proofs = input.entries.map((e, i) => ({
-    vkhHex: e.vkhHex,
-    dvAmount: e.dvAmount,
+  // Walks the tree's own entries, not the input's — the builder reorders them,
+  // and the position here is the one that was hashed into the leaf.
+  const proofs = tree.entries.map((e, i) => ({
+    vkhHex: toHex(e.vkh),
+    dvAmount: e.dvAmount.toString(),
     // Position in the tree, which is also the registrant's bit in the curve's
     // claimed_bits nullifier, and is hashed into their leaf. The claimer must
     // present it, so it has to be handed back with the proof.

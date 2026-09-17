@@ -62,11 +62,6 @@ async function main() {
   }
   requireFieldsFalsy(input, ['targetVkhHex']);
 
-  const targetIndex = input.entries.findIndex((e) => e.vkhHex.toLowerCase() === input.targetVkhHex.toLowerCase());
-  if (targetIndex === -1) {
-    throw new Error(`No entry found for vkhHex ${input.targetVkhHex} — this wallet did not purchase during DarkVeil.`);
-  }
-
   const entries: DvAllocationEntry[] = input.entries.map((e) => ({
     vkh: fromHex(e.vkhHex),
     dvAmount: BigInt(e.dvAmount),
@@ -74,15 +69,24 @@ async function main() {
   }));
 
   const tree = buildDvAllocationTree(entries);
-  const targetEntry = input.entries[targetIndex];
+
+  // Asked of the tree rather than of the input list. The builder reorders
+  // entries, so the position this wallet occupies in the caller's copy is not
+  // the index that was hashed into its leaf, and serving the caller's one
+  // would produce a proof that verifies against nothing.
+  const leafIndex = tree.leafIndexOf(fromHex(input.targetVkhHex));
+  if (leafIndex === -1) {
+    throw new Error(`No entry found for vkhHex ${input.targetVkhHex} — this wallet did not purchase during DarkVeil.`);
+  }
+  const targetEntry = tree.entries[leafIndex];
 
   process.stdout.write(
     JSON.stringify({
-      dvAmount: targetEntry.dvAmount,
-      saltHex: targetEntry.saltHex,
+      dvAmount: targetEntry.dvAmount.toString(),
+      saltHex: toHex(targetEntry.salt),
       // See build-dv-allocation-tree.ts — position is the nullifier bit.
-      leafIndex: targetIndex,
-      proof: tree.getProof(targetIndex).map((step) => ({
+      leafIndex,
+      proof: tree.getProof(leafIndex).map((step) => ({
         siblingHex: toHex(step.sibling),
         goesLeft: step.goesLeft,
       })),

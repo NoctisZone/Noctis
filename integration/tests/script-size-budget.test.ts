@@ -44,6 +44,21 @@ for (const v of blueprint.validators) {
 /**
  * Measured 2026-08-08. Update in the same commit that moves one. Newest first.
  *
+ * token_metadata +175, 2026-09-17: a metadata key that is present has to say
+ * something. The map was already refused when empty, on the reasoning that a
+ * token with nothing to display is broken; a present key holding an empty
+ * string leaves a wallet exactly as empty-handed, so the same rule now reaches
+ * the values. The cost is a walk of the whole map with two shapes to check per
+ * value, because CIP-68 chunks anything past 64 bytes into a list of
+ * bytestrings and both forms carry text. Integers are passed through
+ * deliberately: `decimals: 0` is a real value and reading it as empty would
+ * refuse the most ordinary launch on the platform.
+ *
+ * The other ten validators are byte for byte identical, including
+ * launch_token_policy, which imports the same module — an added library
+ * function nobody calls is not compiled in, and this register is where that is
+ * measured rather than assumed.
+ *
  * Last moved by the adversarial pass over the launch package, 2026-09-16 —
  * ten validators at once; launch_token_policy alone is byte for byte what it
  * was. Each figure is a guarantee the validator now makes:
@@ -319,7 +334,7 @@ const RECORDED: Record<string, number> = {
   lp_escrow: 8_178,
   nhop_challenge: 3_285,
   staking_pool: 5_835,
-  token_metadata: 4_849,
+  token_metadata: 5_024,
   vesting: 5_867,
   zk_anchor: 2_613,
 };
@@ -352,7 +367,7 @@ const RECORDED_HASHES: Record<string, string> = {
   lp_escrow: '0c93febe5966945efac06debcc4b6acab376c3c3cda6836cf12db687',
   nhop_challenge: '0d70cb4bcea572833ea9367f569e71042ada1e34f218c1677ad245fb',
   staking_pool: '1f4afea6652972deb367192ff26207c0a599b5f1ed0683a45cd41cdd',
-  token_metadata: '874b93fe79f6725dbf94d1bcd6e31ab7935f343c9e885d7edbb27d67',
+  token_metadata: '9f996561e6b63e84156171fd4039b13d7606f61470c1a1c0ecf5310a',
   vesting: 'd6d1ce3fff91223a4533429c110a72c1359c89fc79dc29831496c63d',
   zk_anchor: '95750d0fe26787711f9937916194681047e15d8652f13a0b65b382e4',
 };

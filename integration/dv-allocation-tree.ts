@@ -53,8 +53,18 @@ export interface DvAllocationEntry {
 export interface DvAllocationTree {
   /** The 32-byte value to submit as AnchorDvAllocationRoot's dv_allocation_root. */
   root: Uint8Array;
+  /**
+   * The entries in TREE order, which is not the order they were handed in.
+   * A position in this array is the leaf index: it is hashed into that
+   * entry's leaf and it selects that entry's bit in the curve's
+   * `claimed_bits`. Read a buyer's index from here rather than from the
+   * input, which the builder deliberately reorders.
+   */
+  entries: readonly DvAllocationEntry[];
+  /** The leaf index for a buyer's key hash, or -1 if they did not buy. */
+  leafIndexOf(vkh: Uint8Array): number;
   /** Real proof length varies with tree size — no fixed-depth padding, matching bonding_curve_tier_b.ak's variable-length list.foldl verifier. */
-  getProof(index: number): MerkleProofStep[];
+  getProof(leafIndex: number): MerkleProofStep[];
 }
 
 function toBigEndian16(n: bigint): Uint8Array {
@@ -106,6 +116,48 @@ function toBigEndian4(n: number): Uint8Array {
   return out;
 }
 
+/**
+ * Domain tag for the leaf ORDER key.
+ *
+ * Deliberately unlike anything the leaf hash itself is built from, so an
+ * order key can never be mistaken for a leaf or fed to the on-chain verifier
+ * as one. This value is never published and never leaves this process — it
+ * decides a sort and nothing else.
+ */
+const DV_LEAF_ORDER_DOMAIN = new TextEncoder().encode('noctis.dv.leaf-order.v1');
+
+/**
+ * The sort key that decides a buyer's position in the tree.
+ *
+ * Keyed on the buyer's own salt, which is already per-registrant and already
+ * unguessable — that is what stops a leaf being brute-forced from a guessed
+ * (vkh, dvAmount) pair. Reusing it here means the resulting order is
+ * unpredictable to anyone who does not hold every salt, while staying exactly
+ * reproducible for the governor, who does.
+ *
+ * Honest about what this does and does not buy: a governor who wanted to leak
+ * registration order could still grind salts to arrange one, and a governor is
+ * already trusted to compute the allocations themselves. What this removes is
+ * the accidental leak — the case where the order is simply whatever order the
+ * registrations arrived in, and every claimant publishes their place in it.
+ */
+export function dvLeafOrderKey(vkh: Uint8Array, salt: Uint8Array): Uint8Array {
+  return blake2b(concatBytes(DV_LEAF_ORDER_DOMAIN, vkh, salt), { dkLen: 32 });
+}
+
+/** Byte-lexicographic, shorter-is-smaller on a common prefix. */
+function compareBytes(a: Uint8Array, b: Uint8Array): number {
+  const shared = Math.min(a.length, b.length);
+  for (let i = 0; i < shared; i++) {
+    if (a[i] !== b[i]) return a[i] - b[i];
+  }
+  return a.length - b.length;
+}
+
+function toHexKey(bytes: Uint8Array): string {
+  return Buffer.from(bytes).toString('hex');
+}
+
 /** bonding_curve_tier_b.ak:274 — `hash_dv_node`. `left || right`, blake2b_256 — NO domain-separation prefix (unlike the Compact allowlist tree's node hash), matched exactly as coded on-chain. */
 export function hashDvNode(left: Uint8Array, right: Uint8Array): Uint8Array {
   return blake2b(concatBytes(left, right), { dkLen: 32 });
@@ -119,6 +171,27 @@ export function hashDvNode(left: Uint8Array, right: Uint8Array): Uint8Array {
  * documented trust boundary — this function only does the tree math, it
  * does not itself establish the Cardano-wallet<->Midnight-identity
  * binding each entry's `vkh` represents).
+ *
+ * THE LEAF ORDER IS THE BUILDER'S, NOT THE CALLER'S. Entries are sorted by
+ * `dvLeafOrderKey` before anything is hashed, and the resulting position is
+ * what gets hashed into each leaf. Two consequences, both deliberate:
+ *
+ * 1. A claimant's proof publishes their index, and their index no longer says
+ *    anything about when they registered. Sorting on a key derived from each
+ *    buyer's own salt is what makes the order unrelated to arrival order
+ *    without anyone having to remember a shuffle.
+ * 2. The same entries in any input order produce the same root. That matters
+ *    more than it looks: the root-anchoring CLI and the proof-serving CLI
+ *    build this tree independently from their own copy of the list, so under
+ *    the previous input-order rule two lists that differed only in order
+ *    would anchor one root and serve proofs against another, and every claim
+ *    would fail with nothing to point at. Sorting removes that failure
+ *    outright rather than documenting it.
+ *
+ * Duplicate key hashes are refused. One buyer has one allocation, the claim
+ * path binds the leaf to a signing key, and two leaves for one key would make
+ * `leafIndexOf` ambiguous — silently serving the first and stranding the
+ * second. A list that contains one is wrong upstream, so it fails here.
  *
  * No fixed-depth padding (unlike buildAllowlistTree) — an odd node at any
  * level is promoted by self-pairing (Bitcoin-style: hashDvNode(node,
@@ -134,10 +207,27 @@ export function buildDvAllocationTree(entries: DvAllocationEntry[]): DvAllocatio
     throw new Error('buildDvAllocationTree: at least one entry is required');
   }
 
-  // Index is position, so the tree's own ordering IS the bit assignment. The
-  // caller must keep this order stable between building the tree and telling
-  // each registrant which index to claim with.
-  const leaves = entries.map((e, i) => hashDvLeaf(e.vkh, e.dvAmount, i, e.salt));
+  const byVkh = new Map<string, number>();
+
+  // Sorted by a key derived from each buyer's own salt, so position encodes
+  // nothing about registration order and any input order gives one root.
+  const ordered = [...entries].sort((a, b) =>
+    compareBytes(dvLeafOrderKey(a.vkh, a.salt), dvLeafOrderKey(b.vkh, b.salt)),
+  );
+
+  // Index is position in the SORTED list, so the tree's own ordering IS the
+  // bit assignment. Callers read an index back out via leafIndexOf or entries,
+  // never from the list they handed in.
+  const leaves = ordered.map((e, i) => {
+    const key = toHexKey(e.vkh);
+    if (byVkh.has(key)) {
+      throw new Error(
+        `buildDvAllocationTree: duplicate key hash ${key} — one buyer has one allocation, and two leaves for one key would make their index ambiguous.`,
+      );
+    }
+    byVkh.set(key, i);
+    return hashDvLeaf(e.vkh, e.dvAmount, i, e.salt);
+  });
 
   const levels: Uint8Array[][] = [leaves];
   let current = leaves;
@@ -156,12 +246,12 @@ export function buildDvAllocationTree(entries: DvAllocationEntry[]): DvAllocatio
   }
   const root = current[0];
 
-  function getProof(index: number): MerkleProofStep[] {
-    if (index < 0 || index >= entries.length) {
-      throw new Error(`getProof: index ${index} out of range (0..${entries.length - 1})`);
+  function getProof(leafIndex: number): MerkleProofStep[] {
+    if (leafIndex < 0 || leafIndex >= ordered.length) {
+      throw new Error(`getProof: leafIndex ${leafIndex} out of range (0..${ordered.length - 1})`);
     }
     const proof: MerkleProofStep[] = [];
-    let idx = index;
+    let idx = leafIndex;
     for (let d = 0; d < levels.length - 1; d++) {
       const level = levels[d];
       const isRightChild = idx % 2 === 1;
@@ -172,7 +262,12 @@ export function buildDvAllocationTree(entries: DvAllocationEntry[]): DvAllocatio
     return proof;
   }
 
-  return { root, getProof };
+  function leafIndexOf(vkh: Uint8Array): number {
+    const found = byVkh.get(toHexKey(vkh));
+    return found === undefined ? -1 : found;
+  }
+
+  return { root, entries: ordered, leafIndexOf, getProof };
 }
 
 /**

@@ -144,8 +144,10 @@ pub const required_fungible_keys: List<ByteArray> = ["name", "description"]
 /// that only holds at genesis is not conformance, so the check belongs where
 /// revisions happen rather than only where the first version is built.
 ///
-/// What the values SAY is deliberately not checked. A launch may rename
-/// itself to anything; it may not stop having a name.
+/// This checks only that the KEYS are present. What a value says is still
+/// entirely the creator's business — a launch may rename itself to
+/// anything — but it may not stop saying anything at all, which is
+/// `no_empty_values`'s job below.
 pub fn has_required_fungible_fields(metadata: Pairs<ByteArray, Data>) -> Bool {
   list.all(
     required_fungible_keys,
@@ -153,6 +155,52 @@ pub fn has_required_fungible_fields(metadata: Pairs<ByteArray, Data>) -> Bool {
   )
 }
 
+/// Whether a single metadata value says anything.
+///
+/// A metadata map is refused when it is empty, because a token with nothing
+/// to display is a broken token. A present key holding an empty value leaves
+/// it exactly as undisplayable — a wallet reading `name` and finding an
+/// empty string has learned nothing it would not have learned from the key's
+/// absence. So the same reasoning that refuses the empty map refuses the
+/// empty value.
+///
+/// Two shapes carry text and both are handled, because CIP-68 chunks a value
+/// longer than 64 bytes into a LIST of bytestrings rather than one long one:
+/// a bytestring must have length, and a chunk list must have chunks and no
+/// empty chunk among them.
+///
+/// Everything else passes, and that is deliberate rather than an oversight.
+/// `decimals: 0` is a real, meaningful value — a token with zero decimal
+/// places — and an integer has no notion of emptiness to test. Reading 0
+/// as empty would refuse the most ordinary launch on the platform.
+pub fn value_is_non_empty(value: Data) -> Bool {
+  if value is text: ByteArray {
+    bytearray.length(text) > 0
+  } else if value is chunks: List<ByteArray> {
+    and {
+      !list.is_empty(chunks),
+      list.all(chunks, fn(chunk) { bytearray.length(chunk) > 0 }),
+    }
+  } else {
+    True
+  }
+}
+
+/// Whether every value in a metadata map says something.
+///
+/// Applied to the whole map rather than only to the two required keys, so one
+/// rule covers `name`, `description`, `ticker` and `url` alike: a key that is
+/// present is a key that claims to carry information. A creator with no
+/// ticker omits the key; CIP-68 makes it optional precisely so that absence
+/// is expressible without a placeholder.
+pub fn no_empty_values(metadata: Pairs<ByteArray, Data>) -> Bool {
+  list.all(metadata, fn(entry) { value_is_non_empty(entry.2nd) })
+}
+
+/// The tests below are about which KEYS are present, so the value genuinely
+/// does not matter to them — this is deliberately the emptiest one there
+/// is. Note that a real map containing it would be refused, by
+/// `no_empty_values` rather than by the key check these tests exercise.
 fn any_value() -> Data {
   let v: Data = ""
   v
@@ -180,4 +228,89 @@ test required_fields_rejects_a_map_missing_name() {
 
 test required_fields_rejects_an_empty_map() {
   !has_required_fungible_fields([])
+}
+
+// ----------------------------------------------------------------------------
+// A PRESENT KEY MUST SAY SOMETHING
+// ----------------------------------------------------------------------------
+
+test a_value_with_text_says_something() {
+  let v: Data = "MAXX"
+  value_is_non_empty(v)
+}
+
+test an_empty_bytestring_says_nothing() {
+  let v: Data = ""
+  !value_is_non_empty(v)
+}
+
+/// CIP-68 chunks a value longer than 64 bytes into a list, so the list form is
+/// as ordinary as the bytestring form and gets the same treatment.
+test a_chunked_value_says_something() {
+  let v: Data = ["the first sixty-four bytes", "and the rest of it"]
+  value_is_non_empty(v)
+}
+
+test a_chunk_list_with_no_chunks_says_nothing() {
+  let chunks: List<ByteArray> = []
+  let v: Data = chunks
+  !value_is_non_empty(v)
+}
+
+/// One empty chunk is enough to refuse the whole value — otherwise the check
+/// could be walked straight past by padding an empty name with a real chunk.
+test a_chunk_list_with_an_empty_chunk_says_nothing() {
+  let v: Data = ["a real chunk", ""]
+  !value_is_non_empty(v)
+}
+
+/// The carve-out that matters most, pinned so nobody tightens it later: a
+/// token with zero decimal places is the most ordinary launch there is, and 0
+/// is what it says. An integer is not a thing that can be empty.
+test zero_decimals_is_a_value_not_an_absence() {
+  let v: Data = 0
+  value_is_non_empty(v)
+}
+
+test a_conformant_map_passes_both_checks() {
+  let name: Data = "Mock Token"
+  let description: Data = "A token"
+  let ticker: Data = "TOK"
+  let decimals: Data = 0
+  let metadata = [
+    Pair("name", name), Pair("description", description), Pair("ticker", ticker),
+    Pair("decimals", decimals),
+  ]
+  and {
+    has_required_fungible_fields(metadata),
+    no_empty_values(metadata),
+  }
+}
+
+/// The exact hole this closes: every required key present, so the key check is
+/// satisfied, and the token still has no name.
+test a_map_naming_nothing_is_refused() {
+  let name: Data = ""
+  let description: Data = "A token"
+  let metadata = [Pair("name", name), Pair("description", description)]
+  and {
+    has_required_fungible_fields(metadata),
+    !no_empty_values(metadata),
+  }
+}
+
+/// An optional key is held to the same rule when it is present. A creator with
+/// no ticker leaves the key out; that is what optional means.
+test an_empty_optional_key_is_refused_but_an_absent_one_is_not() {
+  let name: Data = "Mock Token"
+  let description: Data = "A token"
+  let blank: Data = ""
+  let with_blank_ticker = [
+    Pair("name", name), Pair("description", description), Pair("ticker", blank),
+  ]
+  let without_ticker = [Pair("name", name), Pair("description", description)]
+  and {
+    !no_empty_values(with_blank_ticker),
+    no_empty_values(without_ticker),
+  }
 }

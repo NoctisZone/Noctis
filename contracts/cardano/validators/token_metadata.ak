@@ -381,10 +381,16 @@ validator token_metadata {
             // conformance held only at the first version: a later revision
             // could drop `name` or `description` and leave the token
             // unreadable to any wallet following the standard, on a file that
-            // calls itself CIP-68 in its own first line. What the values say
-            // is still entirely the creator's business — a launch may rename
-            // itself to anything, it may not stop having a name.
+            // calls itself CIP-68 in its own first line.
             cip68.has_required_fungible_fields(new_metadata),
+            // ...and that the keys it keeps still say something. What a value
+            // says is entirely the creator's business — a launch may rename
+            // itself to anything — but a present key holding an empty
+            // string leaves a wallet exactly as empty-handed as a missing one,
+            // so the rule that refuses the empty map above refuses the empty
+            // value too. `decimals: 0` is unaffected: an integer is a value,
+            // not a gap.
+            cip68.no_empty_values(new_metadata),
             // Security-audit fix: current_timestamp was previously entirely
             // self-declared with no correspondence-to-reality check, unlike
             // bonding_curve_tier_b.ak's ActivateCurve (see that file's own fix
@@ -755,6 +761,15 @@ fn updated_metadata() -> Pairs<ByteArray, Data> {
 fn non_conformant_metadata() -> Pairs<ByteArray, Data> {
   let name: Data = "Renamed Token"
   [Pair("name", name)]
+}
+
+/// A revision that keeps both required keys and empties one of them. This is
+/// what a map looks like when it satisfies the key check and still leaves the
+/// token with no name to show.
+fn blanked_metadata() -> Pairs<ByteArray, Data> {
+  let name: Data = ""
+  let description: Data = "A launch that changed its mind about its name."
+  [Pair("name", name), Pair("description", description)]
 }
 
 const real_creator_key = #"11"
@@ -1455,6 +1470,51 @@ test update_metadata_fails_when_a_revision_drops_a_required_field() {
     own_ref,
     self,
   )
+}
+
+/// The same revision one step subtler: both required keys are present, so the
+/// key check above is satisfied, and the token still has nothing for a wallet
+/// to show. A present key holding an empty string leaves a holder exactly as
+/// empty-handed as a missing one, so it is refused the same way.
+///
+/// This is the passing transaction from the first test in this file with one
+/// delta — the metadata — so a failure here is that delta and not a
+/// fixture that has quietly gone inert.
+test update_metadata_fails_when_a_revision_blanks_a_required_field() {
+  let (curve_credential, _curve_address, curve_ref_input) = mock_curve_setup()
+  let datum = mock_datum(curve_credential)
+  let (own_input, own_ref, own_address) = mock_own_input(datum)
+  let new_datum = TokenMetadataDatum {
+    ..datum,
+    metadata: blanked_metadata(),
+    extra: NoctisMetadataExtra {
+      ..datum.extra,
+      metadata_revision: 2,
+      last_updated_ts: 2000,
+    },
+  }
+  let self = Transaction {
+    ..transaction.placeholder,
+    inputs: [own_input],
+    reference_inputs: [curve_ref_input],
+    outputs: [mock_continuing_output(own_address, new_datum)],
+    extra_signatories: [real_creator_key],
+  }
+  and {
+    // The delta really is only the metadata: the same transaction with a
+    // conformant map is the passing test above, and this map passes the key
+    // check on its own, so the refusal below can only come from the values.
+    cip68.has_required_fungible_fields(blanked_metadata()),
+    !token_metadata.spend(
+      Some(datum),
+      UpdateMetadata {
+        new_metadata: blanked_metadata(),
+        current_timestamp: 2000,
+      },
+      own_ref,
+      self,
+    ),
+  }
 }
 
 // ============================================================================
