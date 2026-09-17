@@ -172,6 +172,49 @@ export async function readEligibilityGateLedger(
 }
 
 /**
+ * The bond this launch actually sealed, read from the contract itself.
+ *
+ * THIS IS THE ONLY SUPPORTED WAY FOR A REGISTRANT TO LEARN THE AMOUNT. The
+ * bond is a USD value converted to NIGHT once, at deploy, and paid at
+ * registration up to forty-eight hours later. A registrant who converts the
+ * same USD value again at the rate prevailing when they register arrives at a
+ * different integer, and the contract's payment enforcement rejects it — so
+ * every registration would fail, for a reason that looks like a payment bug
+ * rather than like two correct conversions of a moving price.
+ *
+ * One conversion, at deploy. Everyone else reads it back.
+ */
+export async function readSealedBondAmount(
+  publicDataProvider: PublicDataProvider,
+  contractAddress: string,
+): Promise<bigint> {
+  const ledger = await readEligibilityGateLedger(publicDataProvider, contractAddress);
+  return ledger.bondAmount;
+}
+
+/**
+ * Holds the figure recorded off chain at deploy against the figure the chain
+ * actually carries.
+ *
+ * The chain is the authority — a caller that has only one of the two should
+ * use the sealed one. This exists so that a launch record which has drifted
+ * announces itself as a mismatch here, with both numbers named, instead of as
+ * a registration that will not go through.
+ */
+export function assertSealedBondMatchesRecord(sealed: bigint, recorded: bigint, contractAddress?: string): void {
+  if (sealed === recorded) {
+    return;
+  }
+  const where = contractAddress ? ` at ${contractAddress}` : '';
+  throw new Error(
+    `The DarkVeil bond recorded for this launch does not match the one sealed in the contract${where}: ` +
+      `recorded ${recorded} atomic NIGHT, sealed ${sealed}. The sealed figure is the one registrants must pay, ` +
+      'so the record is what is wrong. Correct the record from the contract rather than the other way round — ' +
+      'the sealed value cannot be changed after deploy.',
+  );
+}
+
+/**
  * The headline figures of a DarkVeil phase, as a plain object.
  *
  * Deliberately flat and free of live map handles so it can be serialised

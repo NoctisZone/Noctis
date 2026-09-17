@@ -36,6 +36,7 @@ import { levelPrivateStateProvider } from '@midnight-ntwrk/midnight-js-level-pri
 import { setNetworkId } from '@midnight-ntwrk/midnight-js-network-id';
 import { NodeZkConfigProvider } from '@midnight-ntwrk/midnight-js-node-zk-config-provider';
 import type { MerkleProofEntry } from '../../contracts/midnight/witnesses.js';
+import { resolveDarkVeilBond } from '../darkveil-bond-pricing.js';
 import { fromHex32, resolveEligibilityGateDeployArgs } from '../eligibility-gate-deploy-args.js';
 import { describeError, safeShow, unwrapForDiagnosis } from '../error-detail.js';
 import { NoctisMidnightClient } from '../midnight-client.js';
@@ -96,7 +97,22 @@ interface Input extends SnapshotCliInput {
 
   totalSupply: string;
   maxWalletPercent: number;
-  bondAmount: string;
+  /**
+   * Optional. Omitted, the bond is priced at the current NIGHT rate from
+   * `bondUsd` — which is what a launch should normally do, because the bond is
+   * sealed for the life of the launch and a figure carried over from an
+   * earlier deploy prices a different market. Supplied, it is held to that
+   * same rate and refused if it disagrees beyond `bondToleranceBps`.
+   *
+   * Whatever is sealed here is the figure registration must pay. Registration
+   * reads it back off the contract rather than re-deriving it — deriving it
+   * twice, 48 hours apart, is how every registration comes to fail.
+   */
+  bondAmount?: string;
+  /** Defaults to CLAUDE.md's NIGHT_BOND_USD. */
+  bondUsd?: number;
+  /** Defaults to BOND_SPOT_TOLERANCE_BPS. Only consulted when bondAmount is supplied. */
+  bondToleranceBps?: string | number;
   dvAllocation: string;
   dvPrice: string;
   allowlistSize: number;
@@ -128,7 +144,6 @@ async function main() {
     'allowlistThreshold',
     'totalSupply',
     'maxWalletPercent',
-    'bondAmount',
     'dvAllocation',
     'dvPrice',
     'allowlistSize',
@@ -144,11 +159,27 @@ async function main() {
 
   setNetworkId(input.network);
 
+  // The bond is priced here, once, and sealed by this deploy. It is the cost
+  // of a second DarkVeil identity rather than a display figure, so a stale one
+  // is a cap that does not bind. A caller may still name its own figure; it is
+  // held to the same rate and refused if it disagrees.
+  //
+  // This runs before the wallet because it is a cheap check that can refuse the
+  // whole deploy, and after the reachability checks for the same reason.
+  const bond = await resolveDarkVeilBond(input.bondAmount, input.bondUsd, input.bondToleranceBps);
+  process.stderr.write(
+    `DarkVeil bond: ${bond.bondAmount} atomic NIGHT ` +
+      `(${(Number(bond.bondAmount) / 1e6).toFixed(6)} NIGHT) for $${bond.quote.usd} at ` +
+      `$${bond.quote.nightUsdApprox.toPrecision(4)}/NIGHT over ${bond.quote.twapSamplesUsed} samples` +
+      `${bond.wasSupplied ? ' — supplied by the caller and checked against that rate' : ' — priced now'}
+`,
+  );
+
   // Every constructor assertion, mirrored — and walletCap DERIVED rather than
   // trusted, since the contract can only check it is positive. Lifted into
   // eligibility-gate-deploy-args.ts so it is reachable by a test; this file
   // runs main() on import and is not.
-  const args = resolveEligibilityGateDeployArgs(input);
+  const args = resolveEligibilityGateDeployArgs({ ...input, bondAmount: bond.bondAmount.toString() });
 
   // --- providers ----------------------------------------------------------
 
@@ -247,6 +278,20 @@ async function main() {
           contractAddress: record.contractAddress,
           launchIdHex: input.launchIdHex,
           walletCap: args.walletCap.toString(),
+          // The sealed bond, and the quote that justified it. RECORD THIS
+          // AGAINST THE LAUNCH. Registration reads the figure back off the
+          // contract and pays that; this record is the second opinion that
+          // makes a disagreement visible as an error instead of as a
+          // registration that will not go through.
+          bondAmount: bond.bondAmount.toString(),
+          bondQuote: {
+            usd: bond.quote.usd,
+            nightUsdApprox: bond.quote.nightUsdApprox,
+            twapSamplesUsed: bond.quote.twapSamplesUsed,
+            sources: bond.quote.sources,
+            quotedAtMs: bond.quote.quotedAtMs,
+            suppliedByCaller: bond.wasSupplied,
+          },
           ...(record.pendingCircuits ? { pendingCircuits: record.pendingCircuits } : {}),
           note: record.pendingCircuits
             ? 'Record contractAddress against the launch — the whole DarkVeil path keys off it. ' +

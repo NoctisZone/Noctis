@@ -16,6 +16,7 @@
 import type { ContractProviders } from '@midnight-ntwrk/midnight-js-contracts';
 import type { MerkleProofEntry } from '../../contracts/midnight/witnesses.js';
 import { NoctisLaunchManager, NoctisMidnightClient } from '../midnight-client.js';
+import { assertSealedBondMatchesRecord, readSealedBondAmount } from '../midnight-public-state.js';
 import { type CardanoWalletConnection, signCardanoData } from '../wallet-connection.js';
 import { buildBinds } from './wallet-control.js';
 import type { DarkVeilSession } from './wallet-session.js';
@@ -237,13 +238,23 @@ export interface RegisterOnChainParams {
   /** The deploy-time launchId baked into the contract's own ledger state — a separate value from contractAddress. */
   launchIdBytes: Uint8Array;
   /**
-   * The real NIGHT amount (atomic units) being bonded — must match what the
-   * contract's own payment enforcement expects. Computing this correctly
-   * (matching NP_NIGHT_BOND_USD at the oracle's current price) is the
-   * caller's responsibility; this module only builds the commitment hash
-   * from whatever value is supplied.
+   * Optional. The bond figure recorded against this launch when it was
+   * deployed, if the caller has it.
+   *
+   * IT IS NOT WHAT GETS PAID. The amount paid is read from the contract's own
+   * sealed `bondAmount`, because that is the integer its payment enforcement
+   * compares against. Supplying this asks for the two to be checked, and a
+   * disagreement is raised here — naming both figures — rather than surfacing
+   * later as a registration that will not go through.
+   *
+   * This used to be a required value that the caller computed, with the
+   * comment that doing so correctly was the caller's responsibility. It could
+   * not be: the bond is a USD value converted once at deploy, and a caller
+   * converting the same USD value at registration time — up to forty-eight
+   * hours later, at a different rate — necessarily arrives at a different
+   * integer than the one sealed.
    */
-  bondAmount: bigint;
+  expectedBondAmount?: bigint;
   merkleProof: MerkleProofEntry[];
   providers: ContractProviders;
 }
@@ -251,6 +262,20 @@ export interface RegisterOnChainParams {
 export async function registerOnChain(session: DarkVeilSession, params: RegisterOnChainParams) {
   const identity = await session.getIdentity();
   const buyNonce = await session.getBuyNonce(params.contractAddress);
+
+  // The contract charges its own sealed bond — `registerForDarkVeil` takes no
+  // arguments and the circuit reads `bondAmount` from its own ledger — so this
+  // read is not what makes the payment correct. It is what lets a caller show
+  // the registrant the real figure, and hold enough of the bond token to
+  // satisfy the constraint the circuit will impose.
+  //
+  // Reading it before connecting also means a launch record that has drifted
+  // from the chain is caught here, with both figures named, rather than as a
+  // transaction that fails to balance for no stated reason.
+  const sealedBondAmount = await readSealedBondAmount(params.providers.publicDataProvider, params.contractAddress);
+  if (params.expectedBondAmount !== undefined) {
+    assertSealedBondMatchesRecord(sealedBondAmount, params.expectedBondAmount, params.contractAddress);
+  }
 
   const client = new NoctisMidnightClient(identity.userSecretKey);
   if (params.tier === 'B') {
@@ -263,7 +288,8 @@ export async function registerOnChain(session: DarkVeilSession, params: Register
   // registration nullifier in-circuit from the witness secret the client
   // above was constructed with.
   const manager = new NoctisLaunchManager(client);
-  return manager.registerForDarkVeil();
+  const result = await manager.registerForDarkVeil();
+  return { ...result, bondAmount: sealedBondAmount };
 }
 
 export { bytesToHex, hexToBytes };

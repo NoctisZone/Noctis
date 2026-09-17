@@ -263,7 +263,13 @@ async function register(params: {
   tier: 'B' | 'C';
   contractAddress: string;
   launchIdHex: string;
-  bondAmount: bigint;
+  /**
+   * Optional. The bond recorded against this launch, if the page has it.
+   * What gets paid is the contract's own sealed figure, which registerOnChain
+   * reads and returns; passing this asks for the two to be compared so a
+   * drifted record is reported rather than silently disagreed with.
+   */
+  expectedBondAmount?: bigint;
   allowlistProof: AllowlistStatus;
 }) {
   const s = requireSession();
@@ -275,7 +281,7 @@ async function register(params: {
     tier: params.tier,
     contractAddress: params.contractAddress,
     launchIdBytes: hexToBytes(params.launchIdHex),
-    bondAmount: params.bondAmount,
+    expectedBondAmount: params.expectedBondAmount,
     merkleProof: params.allowlistProof.proof,
     providers,
   });

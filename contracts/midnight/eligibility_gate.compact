@@ -314,7 +314,20 @@ sealed ledger maxWalletPercent: Uint<8>;
 // bondTokenColour below — NOT necessarily NIGHT. A USD-denominated bond in a
 // USD stablecoin is a fixed integer for the life of the launch, which is the
 // whole reason the pair below is sealed rather than re-derived per call.
-sealed ledger bondAmount: Uint<128>;
+//
+// EXPORTED, for the same reason dvPrice is: the amount a registrant is charged
+// is verifiable from chain state alone. It is also what makes the amount
+// payable at all. The bond is sealed here at deploy and paid at registration,
+// and those are up to forty-eight hours apart; a registrant who re-derives the
+// figure from a USD value at the rate prevailing when they register computes a
+// different integer than the one sealed, and payment enforcement rejects it.
+// Reading it back is the only way for the two sides to agree on one number.
+//
+// Exporting reveals nothing about any registrant: it is one per-launch
+// constant, identical for everyone, and already published as a USD figure in
+// the registration UI. Contrast bondTokenColour below, which stays sealed
+// because naming it is an authority, not an observation.
+export sealed ledger bondAmount: Uint<128>;
 
 // The unshielded token the bond is posted in. 32 zero bytes is nativeToken()
 // (NIGHT) and reproduces this contract's original behaviour exactly; any other
