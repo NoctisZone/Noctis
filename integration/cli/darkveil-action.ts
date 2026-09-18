@@ -215,9 +215,17 @@ async function main() {
   // Whose identity the circuits see. A governor action presents the governor
   // secret for both, matching what publish-allowlist-root does: no user-side
   // circuit runs, and the governor witness is the one being checked.
+  //
+  // "read" presents nobody. It runs no circuit and proves nothing — it reads
+  // public ledger state — so it is the one action with no identity to derive.
+  // The validation above already exempts it from needing a registrant seed;
+  // deriving one here anyway made that exemption unreachable, and asking to
+  // read a launch's state failed for want of a secret it never uses.
   const identitySecret = isGovernorAction
     ? fromHex32(input.governorSecretHex as string, 'governorSecretHex')
-    : deriveUserSecretFromSeed(fromHex32(input.registrantSeedHex as string, 'registrantSeedHex'));
+    : input.action === 'read'
+      ? new Uint8Array(32)
+      : deriveUserSecretFromSeed(fromHex32(input.registrantSeedHex as string, 'registrantSeedHex'));
   const governorSecret = input.governorSecretHex
     ? fromHex32(input.governorSecretHex, 'governorSecretHex')
     : identitySecret;
