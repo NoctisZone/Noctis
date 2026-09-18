@@ -51,7 +51,7 @@ import {
 } from '../midnight-server-wallet.js';
 import { ephemeralPrivateStatePassword, inMemoryLevelFactory } from '../private-state-store.js';
 import { assertZkConfigMatchesBuild } from '../zk-config-fingerprint.js';
-import { jsonSafe, parseJsonStdin, readStdin, requireFieldsFalsy } from './cli-io.js';
+import { jsonSafe, parseJsonStdin, readStdin, requireFieldsFalsy, requireFieldsStrict } from './cli-io.js';
 
 interface Input extends SnapshotCliInput {
   network: MidnightNetwork;
@@ -146,10 +146,16 @@ async function main() {
     'maxWalletPercent',
     'dvAllocation',
     'dvPrice',
-    'allowlistSize',
     'registrationCloseTime',
     'minDvParticipants',
   ]);
+
+  // allowlistSize is the one field here that is legitimately zero: a launch
+  // deploys before anyone has registered, and the governor raises the root as
+  // registrants pass eligibility. A falsy check cannot express that, so it
+  // gets the validator that rejects only undefined, null and '' — the count
+  // is still bounds-checked downstream by resolveEligibilityGateDeployArgs.
+  requireFieldsStrict(input, ['allowlistSize']);
 
   // Before the wallet, the network, or anything that costs time or money.
   assertZkConfigMatchesBuild(input.zkConfigBasePath, 'eligibility_gate');
