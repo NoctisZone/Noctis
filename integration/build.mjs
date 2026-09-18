@@ -292,6 +292,22 @@ const stakeActionCliConfig = {
 	logLevel: "info",
 };
 
+// NoctisSwap (2026-09-18): one action-dispatched CLI for the venue
+// (read-pools/read-round/batch/serve), same pattern as stakeActionCliConfig
+// above. `serve` is the one that matters operationally — a browser can place
+// an order and can never fill one, so a venue with nothing running is a venue
+// where every order rests forever.
+const venueActionCliConfig = {
+	entryPoints: [join(__dirname, "cli/venue-action.ts")],
+	outfile: join(__dirname, "cli/dist/venue-action.cjs"),
+	bundle: true,
+	platform: "node",
+	format: "cjs",
+	target: "node20",
+	sourcemap,
+	logLevel: "info",
+};
+
 const anchorDvAllocationRootCliConfig = {
 	entryPoints: [join(__dirname, "cli/anchor-dv-allocation-root-tier-b.ts")],
 	outfile: join(__dirname, "cli/dist/anchor-dv-allocation-root-tier-b.cjs"),
@@ -840,6 +856,7 @@ async function copyWasmFiles() {
 		dirname(tierBCurveActionCliConfig.outfile),
 		dirname(resolveAddressVkhCliConfig.outfile),
 		dirname(stakeActionCliConfig.outfile),
+		dirname(venueActionCliConfig.outfile),
 		dirname(tokenMetadataActionCliConfig.outfile),
 		dirname(executeCtoProposalCliConfig.outfile),
 		dirname(voidCtoProposalCliConfig.outfile),
@@ -1008,6 +1025,7 @@ async function run() {
 		tierBCurveActionCliConfig,
 		resolveAddressVkhCliConfig,
 		stakeActionCliConfig,
+		venueActionCliConfig,
 		deriveMidnightAddressCliConfig,
 		midnightWalletBalanceCliConfig,
 		midnightWalletBalancesCliConfig,
