@@ -36,6 +36,7 @@ import { levelPrivateStateProvider } from '@midnight-ntwrk/midnight-js-level-pri
 import { setNetworkId } from '@midnight-ntwrk/midnight-js-network-id';
 import { NodeZkConfigProvider } from '@midnight-ntwrk/midnight-js-node-zk-config-provider';
 import type { MerkleProofEntry } from '../../contracts/midnight/witnesses.js';
+import { DOMAINS, deriveRoleKey } from '../../contracts/midnight/witnesses.js';
 import { resolveDarkVeilBond } from '../darkveil-bond-pricing.js';
 import { fromHex32, resolveEligibilityGateDeployArgs } from '../eligibility-gate-deploy-args.js';
 import { describeError, safeShow, unwrapForDiagnosis } from '../error-detail.js';
@@ -69,8 +70,21 @@ interface Input extends SnapshotCliInput {
   allowlistRootHex: string;
   creatorPubKeyHex: string;
   platformAddrHex: string;
-  /** The three keys that may attest this contract's allowlist root. */
-  allowlistAttestorKeysHex: [string, string, string];
+  /**
+   * The three attestors that may raise this contract's allowlist root, given
+   * EITHER way round — exactly one of the two, never both.
+   *
+   * `allowlistAttestorSecretsHex` is the right one when one operator holds all
+   * three (a rehearsal, a devnet): the keys are DERIVED here, so a value that
+   * is merely 32 bytes of the right shape cannot reach the constructor.
+   *
+   * `allowlistAttestorKeysHex` is for the real arrangement, where the three
+   * are separate parties who derive their own key and hand over only that.
+   * Nothing can check a key has a holder — that is what the separation buys
+   * and what it costs — so supply keys only when each came from its holder.
+   */
+  allowlistAttestorSecretsHex?: [string, string, string];
+  allowlistAttestorKeysHex?: [string, string, string];
   allowlistThreshold: number;
 
   /**
@@ -127,6 +141,39 @@ interface Input extends SnapshotCliInput {
   walletCap?: string;
 }
 
+/**
+ * Turn whichever attestor form was supplied into the three keys the
+ * constructor takes, refusing both forms and neither.
+ *
+ * Exported for the same reason resolveEligibilityGateDeployArgs is: a CLI runs
+ * main() on import and cannot be exercised directly, and this is the part
+ * worth exercising.
+ */
+export function resolveAttestorKeysHex(input: Input): [string, string, string] {
+  const secrets = input.allowlistAttestorSecretsHex;
+  const keys = input.allowlistAttestorKeysHex;
+  if (secrets && keys) {
+    throw new Error(
+      'Supply allowlistAttestorSecretsHex OR allowlistAttestorKeysHex, not both — ' +
+        'two answers to who the attestors are is one answer too many.',
+    );
+  }
+  if (!secrets && !keys) {
+    throw new Error(
+      'One of allowlistAttestorSecretsHex or allowlistAttestorKeysHex is required. ' +
+        'Prefer secrets unless the three attestors are separate parties who derived their own keys.',
+    );
+  }
+  if (keys) return keys;
+  if (!Array.isArray(secrets) || secrets.length !== 3) {
+    throw new Error('allowlistAttestorSecretsHex must be exactly three secrets.');
+  }
+  return secrets.map((hex, i) => {
+    const sk = fromHex32(hex, `allowlistAttestorSecretsHex[${i}]`);
+    return Buffer.from(deriveRoleKey({ bytes: sk }, DOMAINS.ELIGIBILITY_GOVERNOR).bytes).toString('hex');
+  }) as [string, string, string];
+}
+
 async function main() {
   const input = parseJsonStdin<Input>(await readStdin());
 
@@ -140,7 +187,6 @@ async function main() {
     'allowlistRootHex',
     'creatorPubKeyHex',
     'platformAddrHex',
-    'allowlistAttestorKeysHex',
     'allowlistThreshold',
     'totalSupply',
     'maxWalletPercent',
@@ -156,6 +202,15 @@ async function main() {
   // gets the validator that rejects only undefined, null and '' — the count
   // is still bounds-checked downstream by resolveEligibilityGateDeployArgs.
   requireFieldsStrict(input, ['allowlistSize']);
+
+  // A key is a hash, so any 32 bytes look like one. The allowlist attestor
+  // slots are the only constructor arguments where that mattered and nothing
+  // downstream could catch it: deploy with three values nobody holds a secret
+  // for and every check still passes, the contract seals them, and
+  // updateAllowlistRoot becomes unsatisfiable by anyone — no root, no
+  // registration, for the life of the launch. Deriving from secrets here is
+  // what makes the shape and the holder the same question.
+  const attestorKeysHex = resolveAttestorKeysHex(input);
 
   // Before the wallet, the network, or anything that costs time or money.
   assertZkConfigMatchesBuild(input.zkConfigBasePath, 'eligibility_gate');
@@ -185,7 +240,11 @@ async function main() {
   // trusted, since the contract can only check it is positive. Lifted into
   // eligibility-gate-deploy-args.ts so it is reachable by a test; this file
   // runs main() on import and is not.
-  const args = resolveEligibilityGateDeployArgs({ ...input, bondAmount: bond.bondAmount.toString() });
+  const args = resolveEligibilityGateDeployArgs({
+    ...input,
+    allowlistAttestorKeysHex: attestorKeysHex,
+    bondAmount: bond.bondAmount.toString(),
+  });
 
   // --- providers ----------------------------------------------------------
 
