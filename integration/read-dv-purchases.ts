@@ -59,6 +59,18 @@ export interface DecodedEligibilityGateLedger {
   totalRaisedCommitted?: bigint;
   phase?: bigint | number;
   dvState?: bigint | number;
+  /**
+   * The live registrant count, and the two sealed figures a launch page needs
+   * to make sense of it.
+   *
+   * The certificate carries `totalParticipants`, but `closeDarkVeil` is what
+   * stamps it — so before the phase closes it reads zero however many wallets
+   * have really registered. These are the running values, which is what a page
+   * shown DURING registration has to display.
+   */
+  registrationCount?: bigint;
+  dvAllocation?: bigint;
+  dvPrice?: bigint;
 }
 
 /** The contract's own enums, in declaration order. */
@@ -145,6 +157,12 @@ export async function readDvPurchases(
   /** Named rather than numeric: a caller comparing against 3 has to know the enum. */
   phase?: string;
   dvState?: string;
+  /** Decimal-stringified, like the certificate's own figures: these are
+   *  Uint<128> on chain and a bigint does not survive JSON.stringify. */
+  registrationCount?: string;
+  dvAllocation?: string;
+  dvPrice?: string;
+  baseSlot?: string;
 }> {
   const contractState = await publicDataProvider.queryContractState(contractAddress);
   if (!contractState) {
@@ -160,5 +178,9 @@ export async function readDvPurchases(
     certificate: extractFairLaunchCert(decoded),
     phase: LAUNCH_PHASES[Number(decoded.phase ?? 0)],
     dvState: DV_STATES[Number(decoded.dvState ?? 0)],
+    registrationCount: String(decoded.registrationCount ?? 0n),
+    dvAllocation: String(decoded.dvAllocation ?? 0n),
+    dvPrice: String(decoded.dvPrice ?? 0n),
+    baseSlot: String(decoded.baseSlot ?? 0n),
   };
 }

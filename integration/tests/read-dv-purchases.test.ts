@@ -127,6 +127,46 @@ describe('readDvPurchases', () => {
     expect(mockedLedger).not.toHaveBeenCalled();
   });
 
+  it('reports the live registrant count while the certificate still reads zero', async () => {
+    // The bug this pins: a launch page showed "0 wallets registered" through a
+    // whole registration phase. The certificate's totalParticipants is stamped
+    // by closeDarkVeil, so before the close it is genuinely zero however many
+    // wallets have bonded — reading it as the registrant count is reading the
+    // wrong field, not reading a stale one.
+    mockedLedger.mockReturnValue({
+      dvTokensPurchased: [],
+      registrationCount: 15n,
+      dvAllocation: 150_000_000n,
+      dvPrice: 3n,
+      baseSlot: 0n,
+      fairLaunchCert: {
+        launchId: key(0x01),
+        totalParticipants: 0n,
+        totalTokensAllocated: 0n,
+        totalRaised: 0n,
+        participationRate: 0n,
+        closeTimestamp: 0n,
+        certHash: key(0x00),
+      },
+    } as unknown as ReturnType<typeof ledger>);
+
+    const result = await readDvPurchases(provider({ data: 'opaque-state' }), 'addr_contract');
+
+    expect(result.registrationCount).toBe('15');
+    expect(result.certificate?.totalParticipants).toBe('0');
+    expect(result.dvAllocation).toBe('150000000');
+    expect(result.dvPrice).toBe('3');
+  });
+
+  it('reports zero for the running figures a contract has not set yet', async () => {
+    mockedLedger.mockReturnValue(decoded([]) as unknown as ReturnType<typeof ledger>);
+    const result = await readDvPurchases(provider({ data: 'opaque-state' }), 'addr_contract');
+    // Absent and zero mean the same thing here, and a page formatting a number
+    // should not have to tell them apart.
+    expect(result.registrationCount).toBe('0');
+    expect(result.baseSlot).toBe('0');
+  });
+
   it('decodes the queried state and returns its real purchases', async () => {
     mockedLedger.mockReturnValue(decoded([[key(0x07), 42n]]) as unknown as ReturnType<typeof ledger>);
     const result = await readDvPurchases(provider({ data: 'opaque-state' }), 'addr_contract');
