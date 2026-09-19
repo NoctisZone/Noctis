@@ -26,13 +26,17 @@
 //
 // What's different from the linear curve's bonding_curve.ak:
 //   - Quadratic pricing, not linear (see buy_cost and sell_proceeds below)
-//   - The wallet cap here is per-TRANSACTION, exactly as on the linear curve. Both
-//     tiers previously kept a cumulative per-wallet running total in the
-//     datum; a datum that grows with every new participant eventually
-//     exceeds the transaction size limit, which would strand a curve at
-//     precisely the moment it was succeeding. See the `wallet_cap` field.
-//     Cardano Launch's real sybil resistance is DarkVeil's eligibility checks and
-//     the N-hop challenge, not this cap.
+//   - The wallet cap is CUMULATIVE per wallet key, across DarkVeil and the
+//     public phase together. It is carried as one 32-byte Merkle root,
+//     `cap_root`, and each trade proves its own key's running total against
+//     it. An earlier design held those totals as a list in the datum, which
+//     grows with every new participant until the datum no longer fits in a
+//     transaction — a curve that strands at precisely the moment it is
+//     succeeding. A root is the same size whether one wallet trades or a
+//     million. See the `cap_root` field for what the proof carries.
+//     What it binds is one wallet KEY, not one person: Cardano Launch's real
+//     sybil resistance is DarkVeil's eligibility checks and the N-hop
+//     challenge, not this cap.
 //
 // Privacy fix (2026-07-11): the ORIGINAL version of this file
 // pre-seeded `identity_purchases` at deploy with every registrant's
