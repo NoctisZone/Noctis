@@ -34,6 +34,72 @@ export const DV_ALLOC_MAX_PCT = 20n;
 /** CLAUDE.md: STAKING_ALLOC_PCT — fixed if enabled, absent if not. */
 export const STAKING_ALLOC_PCT = 25n;
 
+/** CLAUDE.md: VESTING_MIN_DAYS / VESTING_MAX_DAYS. */
+export const VESTING_MIN_DAYS = 90n;
+export const VESTING_MAX_DAYS = 365n;
+
+/**
+ * CLAUDE.md: VESTING_FLOOR_BANDS. The shortest vesting a creator allocation of
+ * a given size may commit to.
+ *
+ * WHY A TABLE OF LITERALS
+ * The rule in words is "under 5% vests 90 days, 5 to 8 vests 180, above that
+ * 365" -- and every boundary in that sentence is ambiguous to the next reader.
+ * Is 5% the first band or the second? Is 8%? Every bound below is written out,
+ * inclusive on both ends, so there is nothing left to re-derive. A test
+ * asserts the bands tile 0..CREATOR_ALLOC_MAX_PCT with no gap and no overlap,
+ * which is what actually stops someone editing one number and leaving a hole.
+ *
+ * WHY A FLOOR AND NOT A VALUE
+ * It narrows the range the creator chooses from; it does not choose for them.
+ * CLAUDE.md's "no default, forced active selection" still holds -- a creator
+ * at 6% picks somewhere in 180..365, actively. What the floor removes is the
+ * ability to take a large allocation and vest it briefly, which is the only
+ * thing it was ever meant to remove.
+ */
+export const VESTING_FLOOR_BANDS = [
+  { minPercentInclusive: 0n, maxPercentInclusive: 4n, floorDays: 90n },
+  { minPercentInclusive: 5n, maxPercentInclusive: 8n, floorDays: 180n },
+  { minPercentInclusive: 9n, maxPercentInclusive: 10n, floorDays: 365n },
+] as const;
+
+export interface VestingRequirement {
+  /**
+   * False only at 0%. Nothing is allocated, so nothing vests and the wizard
+   * has nothing to ask. A datum still carries a vest_days -- it has a field to
+   * fill -- but with token_allocation at zero the value is inert: no schedule
+   * can release a share of nothing.
+   */
+  readonly required: boolean;
+  /** The shortest commitment this allocation may make. Absent when not required. */
+  readonly floorDays?: bigint;
+  /** VESTING_MAX_DAYS whenever vesting is required. The floor narrows, never fixes. */
+  readonly maxDays?: bigint;
+}
+
+/**
+ * What vesting a creator allocation of this size must commit to.
+ *
+ * Throws on a percentage outside 0..CREATOR_ALLOC_MAX_PCT rather than falling
+ * through to the last band -- a share nobody has a rule for is a share nobody
+ * should be able to mint.
+ */
+export function creatorVestingRequirement(creatorPercent: bigint): VestingRequirement {
+  if (creatorPercent < 0n || creatorPercent > CREATOR_ALLOC_MAX_PCT) {
+    throw new Error(`Creator allocation must be 0-${CREATOR_ALLOC_MAX_PCT}%, got ${creatorPercent}%`);
+  }
+  if (creatorPercent === 0n) {
+    return { required: false };
+  }
+  const band = VESTING_FLOOR_BANDS.find(
+    (b) => creatorPercent >= b.minPercentInclusive && creatorPercent <= b.maxPercentInclusive,
+  );
+  if (!band) {
+    throw new Error(`No vesting band covers a creator allocation of ${creatorPercent}%`);
+  }
+  return { required: true, floorDays: band.floorDays, maxDays: VESTING_MAX_DAYS };
+}
+
 export type Tier = 'A' | 'B' | 'C';
 
 export interface LaunchAllocationRequest {

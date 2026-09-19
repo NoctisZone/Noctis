@@ -159,3 +159,49 @@ describe('tier-a-genesis-datums.ts — the lock on leaving a staking position', 
     expect(g.datums.stakingPool).toBeNull();
   });
 });
+
+describe('tier-a-genesis-datums.ts — a bigger creator allocation must vest longer', () => {
+  // Both figures were already bounded on their own, and every pairing of the
+  // two passed: the largest allocation on the shortest schedule built a datum
+  // like any other. These are the pairings that must now be refused, and the
+  // ones that must still build.
+
+  it('refuses the largest allocation on the shortest schedule', async () => {
+    await expect(buildGenesisDatums(input({ creatorAllocPct: 10, vestDays: 90 }))).rejects.toThrow(/at least 365 days/);
+  });
+
+  it('refuses a recommended-band allocation on the minimum schedule', async () => {
+    await expect(buildGenesisDatums(input({ creatorAllocPct: 5, vestDays: 90 }))).rejects.toThrow(/at least 180 days/);
+    await expect(buildGenesisDatums(input({ creatorAllocPct: 8, vestDays: 179 }))).rejects.toThrow(/at least 180 days/);
+  });
+
+  it('refuses one day short of a floor, and accepts the floor itself', async () => {
+    // The off-by-one is the whole point of a boundary, so it is asserted from
+    // both sides rather than from the comfortable one.
+    await expect(buildGenesisDatums(input({ creatorAllocPct: 9, vestDays: 364 }))).rejects.toThrow(/at least 365 days/);
+    await expect(buildGenesisDatums(input({ creatorAllocPct: 9, vestDays: 365 }))).resolves.toBeDefined();
+    await expect(buildGenesisDatums(input({ creatorAllocPct: 5, vestDays: 180 }))).resolves.toBeDefined();
+  });
+
+  it('lets a small allocation keep the minimum schedule', async () => {
+    await expect(buildGenesisDatums(input({ creatorAllocPct: 4, vestDays: 90 }))).resolves.toBeDefined();
+  });
+
+  it('asks nothing of a launch whose creator takes no allocation', async () => {
+    // Nothing is allocated, so no floor applies and the datum's vest_days is
+    // inert -- no schedule releases a share of nothing.
+    await expect(buildGenesisDatums(input({ creatorAllocPct: 0, vestDays: 90 }))).resolves.toBeDefined();
+  });
+
+  it('still lets a creator vest for longer than their floor', async () => {
+    // A floor, not a value: the creator chooses above it.
+    const g = await buildGenesisDatums(input({ creatorAllocPct: 5, vestDays: 300 }));
+    expect(g.datums.vesting).toBeDefined();
+  });
+
+  it('keeps the standalone bounds it already had', async () => {
+    await expect(buildGenesisDatums(input({ creatorAllocPct: 4, vestDays: 89 }))).rejects.toThrow(/90-365/);
+    await expect(buildGenesisDatums(input({ creatorAllocPct: 4, vestDays: 366 }))).rejects.toThrow(/90-365/);
+    await expect(buildGenesisDatums(input({ creatorAllocPct: 11, vestDays: 365 }))).rejects.toThrow(/0-10/);
+  });
+});

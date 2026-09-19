@@ -84,7 +84,7 @@ import { calculateMinLovelaceFromUTxO, PROTOCOL_PARAMETERS_DEFAULT } from '@luci
 import { blake2b } from '@noble/hashes/blake2.js';
 import { CAP_EMPTY_ROOT, bytesToHex as capBytesToHex } from './cap-accumulator-tree.js';
 import { CARDANO_NETWORK_MAP, loadPlutusBlueprint, type PlutusBlueprint, requireFieldsStrict } from './cli/cli-io.js';
-import { LP_RESERVE_PCT } from './launch-allocation.js';
+import { creatorVestingRequirement, LP_RESERVE_PCT, VESTING_MAX_DAYS, VESTING_MIN_DAYS } from './launch-allocation.js';
 import {
   assertValidCip68BaseName,
   type BondingCurveDatumData,
@@ -188,7 +188,15 @@ export interface BuildGenesisDatumsInput {
    *  permits — a pool opening BELOW the graduation price would put late curve
    *  buyers underwater at the moment trading starts. */
   lpReservePct?: number;
-  creatorAllocPct?: number; // default 5 (CREATOR_ALLOC_REC low end; 5-8 recommended, 10 max)
+  /**
+   * Whole percent, 0..CREATOR_ALLOC_MAX_PCT. Defaults to 0 -- a launch whose
+   * creator did not ask for a share does not get one. (This comment read
+   * "default 5" for a long time while the code said 0; the code was right.)
+   *
+   * Its size sets the shortest vesting the launch may commit to; see the
+   * VESTING_FLOOR_BANDS check below.
+   */
+  creatorAllocPct?: number;
   walletCapPct?: number; // default 5 (WALLET_CAP_PCT)
   stakingEnabled?: boolean; // default false
   stakingAllocPct?: number; // default 25 (STAKING_ALLOC_PCT), only applied if stakingEnabled
@@ -432,11 +440,36 @@ export async function buildGenesisDatums(input: BuildGenesisDatumsInput) {
     }
   }
 
-  if (input.vestDays < 90 || input.vestDays > 365) {
-    throw new Error(`vestDays must be 90-365 (VESTING_MIN_DAYS/VESTING_MAX_DAYS), got ${input.vestDays}`);
+  if (input.vestDays < Number(VESTING_MIN_DAYS) || input.vestDays > Number(VESTING_MAX_DAYS)) {
+    throw new Error(
+      `vestDays must be ${VESTING_MIN_DAYS}-${VESTING_MAX_DAYS} (VESTING_MIN_DAYS/VESTING_MAX_DAYS), got ${input.vestDays}`,
+    );
   }
   if (creatorAllocPct < 0 || creatorAllocPct > 10) {
     throw new Error(`creatorAllocPct must be 0-10 (CREATOR_ALLOC_MAX), got ${creatorAllocPct}`);
+  }
+  if (!Number.isInteger(creatorAllocPct)) {
+    throw new Error(`creatorAllocPct must be a whole percent, got ${creatorAllocPct}`);
+  }
+  // The size of the allocation sets the shortest vesting it may commit to.
+  //
+  // This is the only place the two are related. Each was already bounded on
+  // its own -- 0-10% and 90-365 days -- and every pairing of the two passed,
+  // so a launch could take the largest allocation on the shortest schedule.
+  // What the creator is charged for a bigger share is time, and this is where
+  // that price is collected.
+  //
+  // It is a floor: anything from it up to VESTING_MAX_DAYS is accepted, so the
+  // creator still chooses. At 0% there is nothing to vest and no floor to
+  // apply; vestDays is still range-checked above, because the datum has the
+  // field either way, but with no allocation behind it no schedule can release
+  // anything.
+  const vesting = creatorVestingRequirement(BigInt(creatorAllocPct));
+  if (vesting.required && input.vestDays < Number(vesting.floorDays)) {
+    throw new Error(
+      `A creator allocation of ${creatorAllocPct}% must vest for at least ${vesting.floorDays} days ` +
+        `(VESTING_FLOOR_BANDS), got ${input.vestDays}. Vest longer, or take a smaller allocation.`,
+    );
   }
   if (lpLockDurationMs < 31_536_000_000) {
     throw new Error(

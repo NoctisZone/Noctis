@@ -128,6 +128,29 @@ SETTLEMENT_WINDOW = 10 // Minutes between DV close and public curve open (defaul
 MAX_CURVE_DURATION_DAYS = 90 // Max days a bonding curve can sit Active without reaching Graduated before anyone can force-cancel it (default — force-cancellation is the permissionless `ExpireCurve` mechanism)
 VESTING_MIN_DAYS = 90 // Minimum creator vesting
 VESTING_MAX_DAYS = 365 // Maximum creator vesting
+// VESTING_FLOOR_BANDS (2026-09-19) — the size of a creator allocation sets the
+// SHORTEST vesting it may commit to. Both figures were already bounded on their
+// own, and every pairing of the two passed, so the largest allocation could be
+// taken on the shortest schedule. What a creator is charged for a bigger share
+// is time; this is where that price is collected. Bounds are written out
+// inclusive on both ends because "5 to 8" gets re-derived differently by
+// whoever reads it next:
+//     0%          → no allocation, nothing vests, the wizard asks nothing
+//     1%  to 4%   → at least  90 days
+//     5%  to 8%   → at least 180 days   (the CREATOR_ALLOC_REC band)
+//     9%  to 10%  → at least 365 days
+// It is a FLOOR, not a value: the creator still chooses anywhere from it to
+// VESTING_MAX_DAYS, so the forced active selection in design principle #6
+// survives — the range narrows, it is never filled in. Enforced in
+// integration/launch-allocation.ts (VESTING_FLOOR_BANDS, the definition) and
+// re-checked by the genesis-datum builder before any datum is written; the
+// mint route and the wizard carry mirrors so a creator is refused before
+// paying rather than after. NOT retroactive — a launch already minted keeps
+// the schedule in its own datum.
+// Deliberately NOT accompanied by a fee. A surcharge for taking an allocation
+// would earn the platform more when creators take bigger ones, which is the
+// opposite of the incentive to be seen holding, and $20 against 100M tokens
+// reads as a receipt rather than a price.
 STAKING_ALLOC_PCT = 25 // % of total supply, optional per-launch toggle (2026-07-14) — fixed, not a creator-adjustable range
 STAKING_DURATION_MIN_DAYS = 1095 // Minimum staking pool runway (3 years) — creator must actively select, no default
 STAKING_DURATION_MAX_DAYS = 1825 // Maximum staking pool runway (5 years)
@@ -1102,7 +1125,11 @@ noctis/
 
 5. **No withdraw button for LP exists.** Do not build one. Do not show it as greyed out. It does not exist — in either the Cardano LP Escrow or the Midnight LP Escrow PSM. **Distinct from the pre-graduation buyback mechanism:** `ClaimBuyback` (Cardano `bonding_curve.ak`/`bonding_curve_tier_b.ak`) only exists pre-graduation, on a curve that stalled and was force-cancelled before ever seeding an LP — it lets holders reclaim a pro-rata share of principal that was never going to become an LP in the first place. It does not touch LP tokens, does not exist on `lp_escrow.ak`, and does not apply to a launch that actually graduated. Do not generalize it into anything resembling LP withdrawal.
 
-6. **Creator vesting has no default.** The launch wizard must force an active selection between 90 and 365 days. No pre-filled value.
+6. **Creator vesting has no default.** The launch wizard must force an active
+   selection, with no pre-filled value. The RANGE it selects from is set by the
+   size of the creator allocation — see VESTING_FLOOR_BANDS — so a 6% allocation
+   chooses between 180 and 365 days, actively. A creator taking 0% has nothing to
+   vest and is asked nothing.
 
 7. **The ZK Fair Launch Certificate is a badge.** After every Cardano Launch or Midnight Launch DarkVeil close, generate and display it prominently. It is a marketing asset. Make it shareable. For Midnight Launch, the certificate still appears on Cardano (via relayer) — display it the same way.
 

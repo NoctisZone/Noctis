@@ -2,12 +2,16 @@ import { describe, expect, it } from 'vitest';
 import {
   assertSupplyConserved,
   CREATOR_ALLOC_MAX_PCT,
+  creatorVestingRequirement,
   DV_ALLOC_MAX_PCT,
   type LaunchAllocation,
   LP_RESERVE_PCT,
   planLaunchAllocations,
   STAKING_ALLOC_PCT,
   TOTAL_SUPPLY_CAP,
+  VESTING_FLOOR_BANDS,
+  VESTING_MAX_DAYS,
+  VESTING_MIN_DAYS,
 } from '../launch-allocation.js';
 
 const SUPPLY = TOTAL_SUPPLY_CAP;
@@ -186,5 +190,61 @@ describe('assertSupplyConserved — for figures that did not come from the plann
     expect(() =>
       assertSupplyConserved({ ...good, lpReserve: good.lpReserve + good.curveSupply, curveSupply: 0n }),
     ).toThrow(/never graduate/);
+  });
+});
+
+describe('creatorVestingRequirement — a bigger allocation is paid for in time', () => {
+  it('the bands tile every permitted allocation, with no gap and no overlap', () => {
+    // The guard that actually matters. Any single boundary can be read two
+    // ways by whoever edits it next; this fails the moment one of them moves
+    // and leaves a percentage nothing covers, or two bands claiming the same
+    // one.
+    const seen = new Map<bigint, bigint>();
+    for (const band of VESTING_FLOOR_BANDS) {
+      expect(band.minPercentInclusive).toBeLessThanOrEqual(band.maxPercentInclusive);
+      for (let p = band.minPercentInclusive; p <= band.maxPercentInclusive; p++) {
+        expect(seen.has(p)).toBe(false); // no overlap
+        seen.set(p, band.floorDays);
+      }
+    }
+    for (let p = 0n; p <= CREATOR_ALLOC_MAX_PCT; p++) {
+      expect(seen.has(p)).toBe(true); // no gap
+    }
+    expect(seen.size).toBe(Number(CREATOR_ALLOC_MAX_PCT) + 1);
+  });
+
+  it('puts each boundary percentage in the band the rule names', () => {
+    // Written out rather than looped, because these six values ARE the rule:
+    // under 5 is 90 days, 5 through 8 is 180, above 8 is 365.
+    expect(creatorVestingRequirement(1n).floorDays).toBe(90n);
+    expect(creatorVestingRequirement(4n).floorDays).toBe(90n);
+    expect(creatorVestingRequirement(5n).floorDays).toBe(180n);
+    expect(creatorVestingRequirement(8n).floorDays).toBe(180n);
+    expect(creatorVestingRequirement(9n).floorDays).toBe(365n);
+    expect(creatorVestingRequirement(10n).floorDays).toBe(365n);
+  });
+
+  it('asks nothing of a creator taking no allocation', () => {
+    const none = creatorVestingRequirement(0n);
+    expect(none.required).toBe(false);
+    expect(none.floorDays).toBeUndefined();
+  });
+
+  it('leaves the creator a real choice above every floor', () => {
+    // A floor narrows the range; it does not fill it in. Principle #6 -- no
+    // default, forced active selection -- survives this change, and would not
+    // if any band's floor equalled the maximum for an allocation the wizard
+    // permits below the top of the scale.
+    for (let p = 1n; p < CREATOR_ALLOC_MAX_PCT; p++) {
+      const req = creatorVestingRequirement(p);
+      expect(req.maxDays).toBe(VESTING_MAX_DAYS);
+      expect(req.floorDays).toBeGreaterThanOrEqual(VESTING_MIN_DAYS);
+      expect(req.floorDays).toBeLessThanOrEqual(VESTING_MAX_DAYS);
+    }
+  });
+
+  it('refuses an allocation no band covers rather than falling through to one', () => {
+    expect(() => creatorVestingRequirement(11n)).toThrow(/0-10/);
+    expect(() => creatorVestingRequirement(-1n)).toThrow(/0-10/);
   });
 });
