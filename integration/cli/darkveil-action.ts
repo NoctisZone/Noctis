@@ -76,9 +76,20 @@ type Action =
   | 'record-settlement'
   | 'finalize-settlement'
   | 'claim-refund'
+  | 'sweep-forfeited'
   | 'cancel'
   | 'mark-failed'
   | 'read';
+
+/**
+ * Actions that present no identity, because the circuit consults none.
+ *
+ * "read" runs no circuit. "sweep-forfeited" runs one, but it names the
+ * registrant it acts on as an argument and proves them with a Merkle path —
+ * it never derives a caller — and the contract deliberately leaves it
+ * permissionless, so anyone may finish a settlement nobody else has.
+ */
+const IDENTITYLESS_ACTIONS = new Set<Action>(['read', 'sweep-forfeited']);
 
 /** Actions the governor's own key must make. */
 const GOVERNOR_ACTIONS = new Set<Action>([
@@ -132,6 +143,8 @@ interface Input extends SnapshotCliInput {
   baseSlot?: string;
   /** record-settlement: whose settlement, and how much they really settled. */
   buyerKeyHex?: string;
+  /** sweep-forfeited: whose bond, proved against the registrant tree. */
+  registrantKeyHex?: string;
   settledAmount?: string;
   /** claim-refund: where the NIGHT goes, and the floor of the refund owed. */
   recipientAddrHex?: string;
@@ -190,7 +203,7 @@ async function main() {
   if (isGovernorAction && !input.governorSecretHex) {
     throw new Error(`Action "${input.action}" moves the DarkVeil phase, so it needs governorSecretHex.`);
   }
-  if (!isGovernorAction && input.action !== 'read' && !input.registrantSeedHex) {
+  if (!isGovernorAction && !IDENTITYLESS_ACTIONS.has(input.action) && !input.registrantSeedHex) {
     throw new Error(`Action "${input.action}" is made by a registrant, so it needs registrantSeedHex.`);
   }
 
@@ -223,7 +236,7 @@ async function main() {
   // read a launch's state failed for want of a secret it never uses.
   const identitySecret = isGovernorAction
     ? fromHex32(input.governorSecretHex as string, 'governorSecretHex')
-    : input.action === 'read'
+    : IDENTITYLESS_ACTIONS.has(input.action)
       ? new Uint8Array(32)
       : deriveUserSecretFromSeed(fromHex32(input.registrantSeedHex as string, 'registrantSeedHex'));
   const governorSecret = input.governorSecretHex
@@ -391,6 +404,12 @@ async function main() {
         result = await manager.claimRatioBondRefund(
           fromHex32(requireHex(input.recipientAddrHex, 'recipientAddrHex'), 'recipientAddrHex'),
           requireBigint(input.claimedRefund, 'claimedRefund'),
+        );
+        break;
+
+      case 'sweep-forfeited':
+        result = await manager.sweepForfeitedBond(
+          fromHex32(requireHex(input.registrantKeyHex, 'registrantKeyHex'), 'registrantKeyHex'),
         );
         break;
 
