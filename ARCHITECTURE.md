@@ -501,7 +501,7 @@ DarkVeil bond refunds are a separate flow from curve refunds entirely: a registr
 
 ## CTO Governance Flow
 
-Community takeover (CTO) governance, shared infrastructure across every launch type (`cto_governance.compact` on Midnight for the private ballot, `cto_governance.ak` on Cardano L1 for anchoring and enforcement). This flow has been through multiple independent security review passes. Anchoring a vote result requires a real bond and passes through a 24-hour challenge window before it takes effect; the downstream validators that enforce a passed vote authenticate the governance record cryptographically rather than by address (see the thread-NFT note below the diagram); and the creator's own tokens may vote but are weight-capped and tallied separately. **Current build status:** the ballot logic is contract-complete and audited, but the vote-casting transaction layer is not yet built, so no CTO vote can be cast in production today.
+Community takeover (CTO) governance, shared infrastructure across every launch type (`cto_governance.compact` on Midnight for the private ballot, `cto_governance.ak` on Cardano L1 for anchoring and enforcement). This flow has been through multiple independent security review passes. Anchoring a vote result requires a real bond and passes through a 24-hour challenge window before it takes effect; the downstream validators that enforce a passed vote authenticate the governance record cryptographically rather than by address (see the thread-NFT note below the diagram); and the creator's own tokens may vote but are weight-capped and tallied separately. **Current build status:** the ballot logic is contract-complete and audited, and the vote-casting layer is built and deployed — the browser voter path, the command-line actions and the submitters all call the governance circuits. What it has not had is a run against a deployed governance contract: the voting UI appears only on a graduated launch, and no launch has graduated yet.
 
 ```
 ┌─────────────────────────┐
@@ -530,8 +530,10 @@ Community takeover (CTO) governance, shared infrastructure across every launch t
 │ Quorum: 5% of supply from 15+ distinct voters             │
 │ (minVoterCount). A balance only counts if held 30+ days   │
 │ before the proposal started (minHoldingPeriod).           │
-│ NOT YET BUILT: no submitter calls createProposal/castVote │
-│ today — contract-complete and audited, but unwired        │
+│ BUILT AND DEPLOYED: the browser voter path, the CLI and   │
+│ the submitters all call createProposal/castVote. Not yet  │
+│ run against a deployed governance contract — a launch     │
+│ must graduate first, and none has.                        │
 └───────────────────────────────────────────────────────────┘
                 ┌──────────────────────────┐
                 │                          │
