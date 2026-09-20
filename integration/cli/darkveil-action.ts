@@ -256,16 +256,36 @@ async function main() {
   );
 
   try {
-    // Every action pays a fee, so it proves a DUST spend. Proved against a view
-    // of the chain that has moved on, the node refuses it as an invalid proof —
+    // Every action that pays a fee proves a DUST spend. Proved against a view
+    // of the chain that has moved on, the node refuses it as an invalid proof,
     // a failure that names the proof rather than the staleness behind it.
-    process.stderr.write('waiting for the wallet to catch up to the chain head\n');
-    const synced = await waitForWalletState(
-      serverWallet.facade,
-      (state) => state.isSynced && state.dust.balance(new Date()) > 0n,
-      input.syncTimeoutMs ?? 900_000,
-      'the wallet to reach the chain head with spendable DUST',
+    //
+    // "read" pays no fee. It runs no circuit and proves nothing, so spendable
+    // DUST is not a precondition of it and neither is a fully synced wallet:
+    // the same reasoning that already exempts it from needing an identity, a
+    // reachable proof server and a snapshot refresh. Waiting anyway made a
+    // read-only ledger query block on `isSynced`, which requires all three
+    // sub-wallets strictly complete and which the preprod dust sub-wallet is
+    // documented as not reaching in reasonable time or memory.
+    const needsFee = input.action !== 'read';
+    process.stderr.write(
+      needsFee
+        ? 'waiting for the wallet to catch up to the chain head\n'
+        : 'read: skipping the sync wait, it pays no fee and proves nothing\n',
     );
+    const synced = needsFee
+      ? await waitForWalletState(
+          serverWallet.facade,
+          (state) => state.isSynced && state.dust.balance(new Date()) > 0n,
+          input.syncTimeoutMs ?? 900_000,
+          'the wallet to reach the chain head with spendable DUST',
+        )
+      : await waitForWalletState(
+          serverWallet.facade,
+          () => true,
+          input.syncTimeoutMs ?? 900_000,
+          'the wallet to emit its first state',
+        );
 
     // COINS, not just the balance. `balance(time)` is a generated figure for a
     // moment in time; the fee balancer chooses from these. The two can disagree,
