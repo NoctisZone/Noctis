@@ -46,8 +46,13 @@ const constructorArgs = [
   150_000_000n,
   3n,
   9n,
-  BigInt(Math.floor(Date.now() / 1000) + 86_400),
-  5n,
+  BigInt(Math.floor(Date.now() / 1000) + 86_400), // registrationCloseTime
+  // The DarkVeil schedule the contract derives and seals: registration runs
+  // T-48h to T-2h, a 2h freeze, then 24h of buying.
+  BigInt(46 * 3600), // registrationWindowSeconds
+  BigInt(2 * 3600), // freezeWindowSeconds
+  BigInt(24 * 3600), // buyingWindowSeconds
+  5n, // minDvParticipants
   b32(3),
   b32(4),
   b32(5),
@@ -60,7 +65,18 @@ const constructorArgs = [
 const build = (ctor: any) =>
   new ctor(witnesses).initialState(createConstructorContext(undefined, { bytes: b32(1) }), ...constructorArgs);
 
-const DEFERRED = ['disputeRegistrantExclusion', 'rebutRegistrantExclusion', 'claimDisputedBond'];
+// The dispute trio, plus the two late-lifecycle circuits nothing can reach
+// until long after deploy. Deferring only the trio no longer fits: the
+// permissionless-transition work added circuits, and the deploy that carries
+// them all prices above the budget — which is exactly what this file exists to
+// catch, and why the real deploy names its own deferral list as an input.
+const DEFERRED = [
+  'disputeRegistrantExclusion',
+  'rebutRegistrantExclusion',
+  'claimDisputedBond',
+  'expireDvSettlement',
+  'sweepForfeitedBond',
+];
 
 describe('trimContractState', () => {
   it('keeps every circuit that was not deferred', () => {

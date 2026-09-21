@@ -45,6 +45,15 @@ export interface EligibilityGateDeployInput {
   dvPrice: string | number;
   allowlistSize: string | number;
   registrationCloseTime: string | number;
+  /**
+   * The three DarkVeil window durations, in seconds. Optional, defaulting to
+   * CLAUDE.md's own sequence — registration T-48h to T-2h, a 2h freeze, then a
+   * 24h buying window — so an existing caller gets the real schedule without
+   * naming it. A rehearsal shortens them deliberately.
+   */
+  registrationWindowSeconds?: string | number;
+  freezeWindowSeconds?: string | number;
+  buyingWindowSeconds?: string | number;
   minDvParticipants: string | number;
   /** Optional. If given it must equal the derived value. */
   walletCap?: string | number;
@@ -62,6 +71,9 @@ export interface EligibilityGateDeployArgs {
   dvPrice: bigint;
   allowlistSize: bigint;
   registrationCloseTime: bigint;
+  registrationWindowSeconds: bigint;
+  freezeWindowSeconds: bigint;
+  buyingWindowSeconds: bigint;
   minDvParticipants: bigint;
   creatorPubKey: Uint8Array;
   platformAddr: Uint8Array;
@@ -163,6 +175,12 @@ export function resolveEligibilityGateDeployArgs(input: EligibilityGateDeployInp
   const dvPrice = toBigInt(input.dvPrice, 'dvPrice');
   const allowlistSize = toBigInt(input.allowlistSize, 'allowlistSize');
   const registrationCloseTime = toBigInt(input.registrationCloseTime, 'registrationCloseTime');
+  // CLAUDE.md's DarkVeil sequence: registration runs T-48h to T-2h (so a 46h
+  // window, since registrationCloseTime IS the T-2h freeze), a 2h freeze, then
+  // DV_BUYING_HRS of buying.
+  const registrationWindowSeconds = toBigInt(input.registrationWindowSeconds ?? 46 * 3600, 'registrationWindowSeconds');
+  const freezeWindowSeconds = toBigInt(input.freezeWindowSeconds ?? 2 * 3600, 'freezeWindowSeconds');
+  const buyingWindowSeconds = toBigInt(input.buyingWindowSeconds ?? 24 * 3600, 'buyingWindowSeconds');
   const minDvParticipants = toBigInt(input.minDvParticipants, 'minDvParticipants');
 
   if (totalSupply <= 0n) {
@@ -179,6 +197,23 @@ export function resolveEligibilityGateDeployArgs(input: EligibilityGateDeployInp
   }
   if (registrationCloseTime <= 0n) {
     throw new Error('registrationCloseTime must be greater than 0.');
+  }
+  // The contract seals the derived schedule and refuses these itself; refusing
+  // here too means a bad schedule costs a validation error rather than a
+  // deploy. The registration window has to fit before the close, or the
+  // derived open time would wrap.
+  for (const [name, value] of [
+    ['registrationWindowSeconds', registrationWindowSeconds],
+    ['freezeWindowSeconds', freezeWindowSeconds],
+    ['buyingWindowSeconds', buyingWindowSeconds],
+  ] as const) {
+    if (value <= 0n) throw new Error(`${name} must be greater than 0.`);
+  }
+  if (registrationCloseTime <= registrationWindowSeconds) {
+    throw new Error(
+      `registrationCloseTime ${registrationCloseTime} must be later than registrationWindowSeconds ` +
+        `${registrationWindowSeconds}, or registration would open before the epoch.`,
+    );
   }
   if (minDvParticipants <= 0n) {
     throw new Error('minDvParticipants must be greater than 0.');
@@ -216,6 +251,9 @@ export function resolveEligibilityGateDeployArgs(input: EligibilityGateDeployInp
     dvPrice,
     allowlistSize,
     registrationCloseTime,
+    registrationWindowSeconds,
+    freezeWindowSeconds,
+    buyingWindowSeconds,
     minDvParticipants,
     creatorPubKey,
     platformAddr,

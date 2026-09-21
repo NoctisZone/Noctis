@@ -7,10 +7,16 @@
 //
 // TWO KINDS OF CALLER, and the difference decides which secret is needed:
 //
-//   GOVERNOR actions move the phase — advance-phase, start-registration,
-//   start-buying, close, record-settlement, finalize-settlement, cancel,
-//   mark-failed. They are checked in-circuit against the governorKey sealed at
-//   deploy, so only the key that deployed the launch can make them.
+//   GOVERNOR actions are the ones that carry information only the platform
+//   holds — advance-phase, publish-registrant-root, record-settlement,
+//   finalize-settlement, cancel, mark-failed. They are checked in-circuit
+//   against the governorKey sealed at deploy.
+//
+//   The phase TRANSITIONS are no longer among them. start-registration,
+//   open-buying, close and expire-dv-settlement run on the schedule sealed at
+//   deploy and consult no key at all, so a launch cannot stall on one wallet
+//   being available. They still need a funded wallet to pay the fee, which is
+//   why they take the governor secret here by default rather than by rule.
 //
 //   OPENING A LAUNCH TAKES TWO OF THEM, not one. `phase` is the launch's
 //   lifecycle and `dvState` is DarkVeil's sub-phase within it; registration
@@ -68,7 +74,9 @@ import { jsonSafe, parseJsonStdin, readStdin, requireFieldsFalsy } from './cli-i
 type Action =
   | 'advance-phase'
   | 'start-registration'
-  | 'start-buying'
+  | 'publish-registrant-root'
+  | 'open-buying'
+  | 'expire-dv-settlement'
   | 'register'
   | 'buy-commit'
   | 'reveal'
@@ -89,14 +97,21 @@ type Action =
  * it never derives a caller — and the contract deliberately leaves it
  * permissionless, so anyone may finish a settlement nobody else has.
  */
-const IDENTITYLESS_ACTIONS = new Set<Action>(['read', 'sweep-forfeited']);
+const IDENTITYLESS_ACTIONS = new Set<Action>([
+  'read',
+  'sweep-forfeited',
+  // Clock-gated and permissionless: the circuit derives no caller and checks
+  // no key, so presenting one would only be theatre.
+  'start-registration',
+  'open-buying',
+  'close',
+  'expire-dv-settlement',
+]);
 
 /** Actions the governor's own key must make. */
 const GOVERNOR_ACTIONS = new Set<Action>([
   'advance-phase',
-  'start-registration',
-  'start-buying',
-  'close',
+  'publish-registrant-root',
   'record-settlement',
   'finalize-settlement',
   'cancel',
@@ -123,7 +138,7 @@ interface Input extends SnapshotCliInput {
   registrantSeedHex?: string;
   /** Registrant actions: this registrant's allowlist membership proof. */
   allowlistProof?: Array<{ siblingHex: string; goesLeft: boolean }>;
-  /** buy-commit / reveal: membership in the registrant tree published at start-buying. */
+  /** buy-commit / reveal: membership in the registrant tree published at publish-registrant-root. */
   registrantProof?: Array<{ siblingHex: string; goesLeft: boolean }>;
 
   /**
@@ -133,7 +148,7 @@ interface Input extends SnapshotCliInput {
    * transition is one-way — an off-by-one here cannot be walked back.
    */
   phase?: string;
-  /** start-buying: the root over the frozen registrant set. */
+  /** publish-registrant-root: the root over the frozen registrant set. */
   registrantRootHex?: string;
   /** buy-commit, reveal: how many tokens, and the flat DarkVeil price. */
   tokenAmount?: string;
@@ -351,10 +366,21 @@ async function main() {
         result = await manager.startRegistration();
         break;
 
-      case 'start-buying':
-        result = await manager.startBuying(
+      // `start-buying` was split to match the contract: the governor publishes
+      // the registrant root, and the buying window then opens on the sealed
+      // clock without anyone's key.
+      case 'publish-registrant-root':
+        result = await manager.publishRegistrantRoot(
           fromHex32(requireHex(input.registrantRootHex, 'registrantRootHex'), 'registrantRootHex'),
         );
+        break;
+
+      case 'open-buying':
+        result = await manager.openBuying();
+        break;
+
+      case 'expire-dv-settlement':
+        result = await manager.expireDvSettlement();
         break;
 
       case 'register':
@@ -403,10 +429,10 @@ async function main() {
       }
 
       case 'close':
-        result = await manager.closeDarkVeil(
-          requireBigint(input.closeTimestamp, 'closeTimestamp'),
-          requireBigint(input.baseSlot, 'baseSlot'),
-        );
+        // No closeTimestamp: the circuit stamps the certificate with the
+        // scheduled close sealed at deploy, so there is nothing for a caller
+        // to supply and nothing to get wrong.
+        result = await manager.closeDarkVeil(0n, requireBigint(input.baseSlot, 'baseSlot'));
         break;
 
       case 'record-settlement':

@@ -268,6 +268,12 @@ sealed ledger allowlistExpirySeconds: Uint<64>;
 
 export ledger pendingAllowlistRoot: Bytes<32>;
 
+// The registrant root the governor has published but that has not yet taken
+// effect, mirroring pendingAllowlistRoot above. Buying opens on the clock
+// (openBuying), so the root has to be in place beforehand rather than
+// supplied by whoever opens the phase — see publishRegistrantRoot.
+export ledger pendingRegistrantRoot: Bytes<32>;
+
 export ledger pendingAllowlistOpenedAt: Uint<64>;
 
 export ledger allowlistRound: Counter;
@@ -431,11 +437,35 @@ sealed ledger revealWindowSeconds: Uint<64>;
 // should not be able to push out.
 sealed ledger darkVeilExpirySeconds: Uint<64>;
 
-// Registration close timestamp — stored for off-chain/informational use
-// only (not read by any circuit's own logic; DarkVeil failure is a
-// governor-triggered call via markDarkVeilFailed, not an automatic
-// timeout check, same as before this merge).
+// Registration close timestamp, and the anchor the whole DarkVeil schedule is
+// derived from. Read in circuit by expireDarkVeil (its deadline is measured
+// from here) and by publishRegistrantRoot (the root may only be published once
+// the registrant set has stopped growing). The three derived times below come
+// from it at deploy.
 sealed ledger registrationCloseTime: Uint<64>;
+
+// The rest of the DarkVeil schedule, derived at deploy from
+// registrationCloseTime and the three window durations, and sealed with it.
+//
+// These exist so the phase transitions below can be driven by the clock
+// instead of by a key. Every one is fixed before anyone bonds and cannot move
+// afterwards, which is the property that makes a permissionless transition
+// safe: the caller supplies no timestamp, so there is nothing to name a
+// favourable value for. See startRegistration/openBuying/closeDarkVeil.
+sealed ledger registrationOpenTime: Uint<64>;
+
+sealed ledger buyingOpenTime: Uint<64>;
+
+sealed ledger buyingCloseTime: Uint<64>;
+
+// How long after buyingCloseTime the settlement record may stay open before
+// anyone may give up on it. The Cardano claim window plus its settlement
+// window is what legitimately runs in here, so this is sized well above both.
+// Hardcoded rather than a constructor argument, matching revealWindowSeconds'
+// convention for a platform-wide policy constant, and for the same reason
+// darkVeilExpirySeconds is: this is a deadline a governor should not be able
+// to push out. See expireDvSettlement.
+sealed ledger settlementDeadlineSeconds: Uint<64>;
 
 // Resolution (2026-07-13): minimum absolute registrant count required
 // before buying can open. Below this, startBuying() rejects and the
@@ -758,6 +788,14 @@ constructor(
   dvPrice_: Uint<128>,
   allowlistSize_: Uint<64>,
   registrationCloseTime_: Uint<64>,
+  // The three DarkVeil window durations, in seconds. Parameters rather than
+  // constants because a rehearsal needs a schedule it can actually run
+  // through, while a real launch uses CLAUDE.md's DV_REGISTRATION_HRS /
+  // DV_FREEZE_HRS / DV_BUYING_HRS. They are sealed at deploy either way, so
+  // shortening them is a decision made once, in public, before anyone bonds.
+  registrationWindowSeconds_: Uint<64>,
+  freezeWindowSeconds_: Uint<64>,
+  buyingWindowSeconds_: Uint<64>,
   minDvParticipants_: Uint<64>,
   creatorPubKey_: Bytes<32>,
   platformAddr_: Bytes<32>,
@@ -785,7 +823,8 @@ constructor(
   allowlistExpirySeconds = disclose(86400); // 24 hours
   pendingAllowlistRoot = disclose(pad(32, ""));
   pendingAllowlistOpenedAt = disclose(0);
-  registrantRoot = disclose(pad(32, "")); // meaningless until startBuying sets it
+  registrantRoot = disclose(pad(32, "")); // meaningless until openBuying sets it
+  pendingRegistrantRoot = disclose(pad(32, ""));
   totalSupply = disclose(totalSupply_);
   maxWalletPercent = disclose(maxWalletPercent_);
   // Fix (2026-07-30): verifyRatioRefund's own 2^44-1 ceiling on
@@ -832,6 +871,22 @@ constructor(
   // deploy, so the launch could be expired before it began.
   assert(disclose(registrationCloseTime_ > 0), "registrationCloseTime must be set");
   registrationCloseTime = disclose(registrationCloseTime_);
+
+  // Derive the rest of the schedule from that one anchor. Every window must
+  // be real: a zero-length one would collapse two transitions onto the same
+  // instant, and the registration window must fit before the close or the
+  // subtraction below would wrap and put the open time in the far future.
+  assert(disclose(registrationWindowSeconds_ > 0), "registrationWindowSeconds must be positive");
+  assert(disclose(freezeWindowSeconds_ > 0), "freezeWindowSeconds must be positive");
+  assert(disclose(buyingWindowSeconds_ > 0), "buyingWindowSeconds must be positive");
+  assert(
+    disclose(registrationCloseTime_ > registrationWindowSeconds_),
+    "registrationCloseTime must be later than the registration window is long"
+  );
+  registrationOpenTime = disclose((registrationCloseTime_ - registrationWindowSeconds_) as Uint<64>);
+  const buyingOpen = (registrationCloseTime_ + freezeWindowSeconds_) as Uint<64>;
+  buyingOpenTime = disclose(buyingOpen);
+  buyingCloseTime = disclose((buyingOpen + buyingWindowSeconds_) as Uint<64>);
   assert(disclose(minDvParticipants_ > 0), "minDvParticipants must be positive");
   minDvParticipants = disclose(minDvParticipants_);
   dvState = DarkVeilState.Inactive;
@@ -841,6 +896,7 @@ constructor(
   revealWindowSeconds = disclose(2592000); // 30 days — see ledger comment
   darkVeilExpirySeconds = disclose(604800); // 7 days — see ledger comment
   exclusionDisputeWindow = disclose(259200); // 72 hours — see ledger comment
+  settlementDeadlineSeconds = disclose(604800); // 7 days — see ledger comment
 
   fairLaunchCert = disclose(FairLaunchCert {
     launchId: launchId_,
@@ -1079,6 +1135,14 @@ export circuit claimRatioBondRefund(
     disclose(phase != LaunchPhase.Cancelled && !dvFailed && dvState == DarkVeilState.Closed),
     "Only claimable after a normally-closed, non-cancelled, non-failed DarkVeil"
   );
+  // A refund is computed only against a COMPLETE settlement record. This reads
+  // settledDvPurchases, and that map is only final once finalizeDvSettlement
+  // has closed it, so the refund waits for the same flag sweepForfeitedBond and
+  // claimDisputedBond wait for. Every circuit that decides what a bond is owed
+  // therefore reads the record in the one state where it can be believed.
+  // A record that is never closed is expireDvSettlement's business, and that
+  // path returns the bond in full rather than computing against a partial one.
+  assert(disclose(settlementFinalized), "DarkVeil settlement is not finalized yet");
 
   const sk = getUserSecret();
   const caller = deriveUserPublicKey(sk, launchId);
@@ -1330,21 +1394,31 @@ export circuit cancelBuyCommit(commitment: Bytes<32>): [] {
 // CIRCUITS — ZK FAIR LAUNCH CERTIFICATE
 // ============================================================================
 
-// Close DarkVeil and generate the ZK Fair Launch Certificate
-// Governor only — called after the buying phase ends
+// Close DarkVeil and generate the ZK Fair Launch Certificate.
 //
-// Also takes `baseSlot_`, the per-registrant DarkVeil allocation, computed
-// off-chain by the governor from `dvAllocation / registrationCount` at
-// this exact moment — the final registrant count is only known once
-// registration is over.
-export circuit closeDarkVeil(closeTimestamp: Uint<64>, baseSlot_: Uint<128>): [] {
+// Permissionless, on the sealed clock. The close is a scheduled event, and
+// leaving it behind a key meant a governor could hold a finished buying window
+// open indefinitely with every bond locked behind it.
+//
+// `baseSlot_` is still supplied by the caller, and is safe here for a reason
+// worth stating plainly: the two bounds below pin it to exactly one value.
+// floor(dvAllocation / registrationCount) is the only integer that satisfies
+// both, so a caller does not choose it — they compute it, and any other value
+// is refused. Compact cannot divide in-circuit, which is why the value is
+// supplied and bounded rather than derived; this is the same floor idiom
+// verifyRatioRefund already uses on the refund amount.
+//
+// The close timestamp is no longer a parameter. A permissionless circuit must
+// not take a time from its caller, and it does not need to: the launch closes
+// at the time it was scheduled to close, which is sealed and public.
+export circuit closeDarkVeil(baseSlot_: Uint<128>): [] {
   // Must be in Buying phase
   assert(disclose(dvState == DarkVeilState.Buying), "DarkVeil not in buying phase");
 
-  // Verify governor
-  const govSecret = getGovernorSecret();
-  const govKey = deriveGovernorKey(govSecret);
-  assert(disclose(govKey.bytes == governorKey), "Only governor can close DarkVeil");
+  assert(
+    blockTimeGt(buyingCloseTime),
+    "DarkVeil has not yet reached its scheduled close time"
+  );
 
   assert(disclose(baseSlot_ > 0), "baseSlot must be positive");
   // Fix (2026-07-30): verifyRatioRefund's own 2^40-1 ceiling on
@@ -1361,9 +1435,22 @@ export circuit closeDarkVeil(closeTimestamp: Uint<64>, baseSlot_: Uint<128>): []
   // drain the pool before later ones can claim their fair share. Verified
   // via Field multiplication (avoids the non-Field multiplication
   // result-width ceiling — same idiom as revealBuyCommit's raisedF below).
-  const totalAllocatedF = ((baseSlot_ as Field) * (registrationCount.read() as Field)) as Field;
+  //
+  // The two bounds together admit exactly one integer: the largest whole number
+  // of tokens that divides among the registrants within dvAllocation. So
+  // baseSlot is DETERMINED by public ledger state rather than chosen by whoever
+  // calls — it is computed, not supplied, and every other value is refused.
+  // That is what lets this circuit be permissionless: a caller who names any
+  // figure but the true one cannot close the phase at all.
+  const countF = registrationCount.read() as Field;
+  const baseF = baseSlot_ as Field;
+  const totalAllocatedF = (baseF * countF) as Field;
   const totalAllocated = totalAllocatedF as Uint<128>;
   assert(disclose(totalAllocated <= dvAllocation), "baseSlot * registrationCount exceeds dvAllocation");
+  // ...and the next slot up must overshoot, which is what makes it the floor.
+  const nextAllocatedF = (((baseF + 1) as Field) * countF) as Field;
+  const nextAllocated = nextAllocatedF as Uint<128>;
+  assert(disclose(dvAllocation < nextAllocated), "baseSlot is not the largest that fits dvAllocation");
   baseSlot = disclose(baseSlot_);
 
   // Transition to Closed
@@ -1375,7 +1462,7 @@ export circuit closeDarkVeil(closeTimestamp: Uint<64>, baseSlot_: Uint<128>): []
     dvTotalParticipants.read(),
     totalTokensCommitted,
     totalRaisedCommitted,
-    closeTimestamp
+    buyingCloseTime
   );
 
   // Store the certificate
@@ -1385,7 +1472,7 @@ export circuit closeDarkVeil(closeTimestamp: Uint<64>, baseSlot_: Uint<128>): []
     totalTokensAllocated: totalTokensCommitted,
     totalRaised: totalRaisedCommitted,
     participationRate: 0, // Computed off-chain from raw numbers
-    closeTimestamp: closeTimestamp,
+    closeTimestamp: buyingCloseTime,
     certHash: certHash
   });
 }
@@ -1804,12 +1891,22 @@ export circuit advancePhase(newPhase: LaunchPhase): [] {
 
 // --- from darkveil.compact: dvState sub-phase admin circuits ---
 
-// Start registration phase
+// Open registration.
+//
+// Permissionless, on the sealed clock. Registration opening is a scheduled
+// event, not a decision: the time was fixed at deploy and is public, so there
+// is nothing here for a key to decide and nothing a caller could bias. Holding
+// this behind a signature only ever meant a launch could miss its own
+// advertised window because one key was unavailable.
+//
+// Real chain time against a sealed field, never a caller-supplied timestamp —
+// the same shape as expireDarkVeil, and for the same reason it gives there.
 export circuit startRegistration(): [] {
-  const govSecret = getGovernorSecret();
-  const govKey = deriveGovernorKey(govSecret);
-  assert(disclose(govKey.bytes == governorKey), "Only governor can start");
   assert(disclose(dvState == DarkVeilState.Inactive), "DarkVeil already started");
+  assert(
+    blockTimeGt(registrationOpenTime),
+    "Registration has not yet reached its scheduled open time"
+  );
   dvState = DarkVeilState.Registration;
 }
 
@@ -1822,18 +1919,63 @@ export circuit startRegistration(): [] {
 // from lockedBonds/registrationNullifiers — same off-chain-computed,
 // governor-published-root trust model already used for allowlistRoot and
 // every other Merkle root on this platform), not a new trust assumption.
-export circuit startBuying(registrantRoot_: Bytes<32>): [] {
+// Publish the registrant root, ready for buying to open.
+//
+// Still governor-only, and this is the honest reason: the root commits to the
+// registrant set and only whoever can enumerate that set off-chain can compute
+// it. Opening the phase is a scheduled event; computing the root is not. So
+// the two are separated rather than bundled — the same publish-then-activate
+// split pendingAllowlistRoot already uses, which is what lets the activation
+// half below be driven by the clock.
+//
+// Callable only once registration has actually closed: the root must commit to
+// a registrant set that has stopped growing, which is exactly what the sealed
+// close time marks. Re-publishing before buying opens is allowed and simply
+// replaces the pending value — a governor who computed a root over a stale
+// snapshot can correct it, and after openBuying nothing here is read again.
+export circuit publishRegistrantRoot(registrantRoot_: Bytes<32>): [] {
   const govSecret = getGovernorSecret();
   const govKey = deriveGovernorKey(govSecret);
-  assert(disclose(govKey.bytes == governorKey), "Only governor can start buying");
+  assert(disclose(govKey.bytes == governorKey), "Only governor can publish the registrant root");
   assert(disclose(dvState == DarkVeilState.Registration), "Must be in registration phase");
-  // Refuse to open buying below the minimum registrant floor — the
-  // governor must call cancelDarkVeil() instead, which is fully refundable.
+  assert(
+    blockTimeGt(registrationCloseTime),
+    "Registration has not yet reached its scheduled close time"
+  );
+  // An empty root would let openBuying's own emptiness check pass on a value
+  // that commits to nothing, so refuse it at the point it is supplied.
+  assert(disclose(registrantRoot_ != pad(32, "")), "registrantRoot cannot be empty");
+  pendingRegistrantRoot = disclose(registrantRoot_);
+}
+
+// Open the buying window.
+//
+// Permissionless, on the sealed clock. Everything this needs was decided
+// earlier and is already public: the schedule at deploy, the registrant root
+// at the freeze, the participant floor at deploy. Nothing is left to judge, so
+// nothing is left to a key.
+//
+// A launch that never reaches the participant floor, or whose root is never
+// published, simply never opens — and expireDarkVeil then returns every bond
+// in full without anyone's permission. That is the intended outcome, and it no
+// longer depends on a governor calling cancelDarkVeil to reach it.
+export circuit openBuying(): [] {
+  assert(disclose(dvState == DarkVeilState.Registration), "Must be in registration phase");
+  assert(
+    blockTimeGt(buyingOpenTime),
+    "Buying has not yet reached its scheduled open time"
+  );
+  assert(
+    disclose(pendingRegistrantRoot != pad(32, "")),
+    "No registrant root has been published"
+  );
+  // The minimum registrant floor, unchanged — below it, buying must not open
+  // and the bonds go back through expireDarkVeil instead.
   assert(
     disclose(registrationCount.read() >= minDvParticipants),
-    "Below minimum DarkVeil participant threshold — cancel instead"
+    "Below minimum DarkVeil participant threshold"
   );
-  registrantRoot = disclose(registrantRoot_);
+  registrantRoot = pendingRegistrantRoot;
   dvState = DarkVeilState.Buying;
 }
 
@@ -1883,6 +2025,55 @@ export circuit expireDarkVeil(): [] {
   dvFailed = disclose(true);
   // Terminal, so a governor who wakes up afterwards cannot carry on with a
   // launch whose registrants have already been refunded.
+  phase = LaunchPhase.Cancelled;
+}
+
+// Give up on a settlement that was never closed, without asking the key that
+// never closed it.
+//
+// expireDarkVeil covers a DarkVeil that stalls BEFORE it closes. This covers
+// the window after it: once dvState is Closed, expireDarkVeil deliberately
+// refuses, and every remaining route to a bond — claimRatioBondRefund,
+// sweepForfeitedBond, claimDisputedBond — reads a settlement record only the
+// governor can write, with no deadline on writing it. That left one stretch of
+// the lifecycle where a governor going quiet cost registrants their money
+// rather than costing them the launch.
+//
+// What this does NOT do is make the settlement itself trustless. It cannot:
+// recordDarkVeilSettlement attests real Cardano ClaimDarkVeilTokens
+// transactions, and a Compact circuit has no way to observe Cardano. The
+// attestation stays trusted; what changes is that failing to make it now has
+// a bounded, automatic consequence instead of an open-ended one.
+//
+// Marking the phase failed routes every bond back IN FULL through
+// claimBondRefund, the path cancelDarkVeil already uses. Full refund rather
+// than ratio refund is the correct outcome and not merely the convenient one:
+// without a closed settlement record there is no evidence of who bought what,
+// and forfeiting a bond on absent evidence is precisely the failure being
+// fixed. It also puts the incentive the right way round — a governor who lets
+// this fire forfeits every forfeitable bond the platform would have swept.
+//
+// Permissionless, and the deadline is the entire authorization. Real chain
+// time against sealed fields, no caller-supplied timestamp.
+export circuit expireDvSettlement(): [] {
+  // Only a normally-closed DarkVeil. A cancelled or failed one is already
+  // refundable, and an unclosed one is expireDarkVeil's business.
+  assert(
+    disclose(phase != LaunchPhase.Cancelled && !dvFailed && dvState == DarkVeilState.Closed),
+    "Only expirable after a normally-closed, non-cancelled, non-failed DarkVeil"
+  );
+  // Once the record is closed, the refund path works and there is nothing to
+  // rescue. This is what stops the circuit undoing a settled launch.
+  assert(disclose(!settlementFinalized), "DarkVeil settlement is already finalized");
+
+  assert(
+    blockTimeGt((buyingCloseTime + settlementDeadlineSeconds) as Uint<64>),
+    "DarkVeil settlement has not yet exceeded its deadline"
+  );
+
+  dvFailed = disclose(true);
+  // Terminal, matching expireDarkVeil: a governor who wakes up afterwards
+  // cannot carry on with a launch whose registrants are already being refunded.
   phase = LaunchPhase.Cancelled;
 }
 

@@ -6,6 +6,35 @@ Notable changes to the Noctis Zone, by release. Internal development history pre
 
 ## [Unreleased]
 
+### Changed
+
+- A Cardano Launch's DarkVeil phase now runs on a schedule sealed at deploy
+  rather than on a signature. Registration opening, the buying window opening,
+  and the DarkVeil close are each driven by a deadline fixed before anyone
+  bonds, so a launch reaches its own advertised window on time and any wallet
+  may submit the transaction that moves it. Each of these reads real chain time
+  against the sealed deadline and takes no timestamp from its caller, so there
+  is no value for a caller to name. The Fair Launch Certificate records the
+  scheduled close for the same reason.
+- Closing DarkVeil accepts exactly one per-registrant allocation: the largest
+  whole number of tokens that divides among the registrants within the DarkVeil
+  allocation. Two bounds admit one integer, so the figure is determined by
+  public ledger state and any other value is refused.
+- Publishing the registrant set and opening the buying window are now separate
+  actions. The platform publishes the root, because computing it needs the
+  registrant set; the window then opens on the clock. This mirrors how the
+  allowlist root is already published before it takes effect.
+
+### Added
+
+- A DarkVeil that closes and whose settlement record is not closed within its
+  sealed deadline can be ended by anyone, returning every NIGHT bond in full
+  through the existing refund. A bond's route home therefore never depends on a
+  single party continuing to act.
+- The ratio-based bond refund waits for the settlement record to be closed
+  before reading it, so a refund is computed only against a complete record.
+  This matches the two other circuits that already read that record.
+
 ### Removed
 
 - The linear-curve launch path's two browser widgets: the live-curve buy widget

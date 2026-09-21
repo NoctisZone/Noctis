@@ -285,6 +285,11 @@ describe('NoctisMidnightClient.deployEligibilityGate / connectEligibilityGate', 
     dvPrice: 100n,
     allowlistSize: 500n,
     registrationCloseTime: 5000n,
+    // 46h/2h/24h is CLAUDE.md's real DarkVeil sequence; these are only large
+    // enough here to be distinguishable from each other in the arg order.
+    registrationWindowSeconds: 4000n,
+    freezeWindowSeconds: 100n,
+    buyingWindowSeconds: 200n,
     minDvParticipants: 15n,
     creatorPubKey: fakeBytes32(12),
     platformAddr: fakeBytes32(13),
@@ -312,6 +317,9 @@ describe('NoctisMidnightClient.deployEligibilityGate / connectEligibilityGate', 
       args.dvPrice,
       args.allowlistSize,
       args.registrationCloseTime,
+      args.registrationWindowSeconds,
+      args.freezeWindowSeconds,
+      args.buyingWindowSeconds,
       args.minDvParticipants,
       args.creatorPubKey,
       // One platform wallet, not a treasury/ops pair.
@@ -737,13 +745,19 @@ const FALLBACK_METHODS: Array<{
   method: ManagerMethod;
   circuit: string;
   args: unknown[];
+  /**
+   * What the eligibility gate's circuit is called with, when that differs from
+   * what the wrapper is called with. Only closeDarkVeil differs today: Cardano
+   * Launch's circuit takes no timestamp, because a permissionless circuit must
+   * not accept a time from whoever calls it.
+   */
+  gateArgs?: unknown[];
 }> = [
   // LaunchPhase.DarkVeil. The lifecycle phase, which registration asserts
   // ALONGSIDE the DarkVeil sub-phase startRegistration opens — two separate
   // calls, both required.
   { method: 'advancePhase', circuit: 'advancePhase', args: [1] },
   { method: 'startRegistration', circuit: 'startRegistration', args: [] },
-  { method: 'startBuying', circuit: 'startBuying', args: [fakeBytes32(100)] },
   { method: 'registerForDarkVeil', circuit: 'registerForDarkVeil', args: [] },
   {
     method: 'updateAllowlistRoot',
@@ -756,7 +770,17 @@ const FALLBACK_METHODS: Array<{
     circuit: 'submitBuyCommit',
     args: [fakeBytes32(102), 1_000n],
   },
-  { method: 'closeDarkVeil', circuit: 'closeDarkVeil', args: [2_000n, 500n] },
+  {
+    method: 'closeDarkVeil',
+    circuit: 'closeDarkVeil',
+    args: [2_000n, 500n],
+    // Cardano Launch's circuit is permissionless and clock-gated, so it takes
+    // no timestamp — it stamps the certificate with the close sealed at
+    // deploy. Midnight Launch's merged contract still carries the
+    // governor-gated two-argument form, which is why the wrapper keeps the
+    // parameter and the two branches expect different calls.
+    gateArgs: [500n],
+  },
   {
     method: 'claimBondRefund',
     circuit: 'claimBondRefund',
@@ -781,7 +805,7 @@ const FALLBACK_METHODS: Array<{
 
 describe.each(FALLBACK_METHODS)(
   'NoctisLaunchManager.$method (eligibilityGate-or-bondingCurve fallback)',
-  ({ method, circuit, args }) => {
+  ({ method, circuit, args, gateArgs }) => {
     it('calls the correct circuit on eligibilityGate, with the exact arguments, when connected', async () => {
       const circuitFn = vi.fn().mockResolvedValue({ ok: true });
       const client = new NoctisMidnightClient(USER_SK);
@@ -792,7 +816,7 @@ describe.each(FALLBACK_METHODS)(
       await (manager[method] as (...a: unknown[]) => Promise<unknown>)(...args);
 
       expect(circuitFn).toHaveBeenCalledTimes(1);
-      expect(circuitFn).toHaveBeenCalledWith(...args);
+      expect(circuitFn).toHaveBeenCalledWith(...(gateArgs ?? args));
     });
 
     it('falls back to bondingCurve when eligibilityGate is not connected', async () => {
@@ -1387,4 +1411,50 @@ describe('NoctisLaunchManager.cancelLaunch', () => {
       await expect(manager.cancelLaunch()).rejects.toThrow(/not connected/);
     },
   );
+});
+
+describe('NoctisLaunchManager — the startBuying split (Cardano Launch)', () => {
+  it('refuses startBuying against an eligibility gate, naming the two circuits that replaced it', async () => {
+    // The gate has no startBuying circuit any more. Reaching for it would fail
+    // deep in the SDK with a missing-circuit error; this says what to call.
+    const client = new NoctisMidnightClient(USER_SK);
+    client.eligibilityGate = fakeHandle({});
+    const manager = new NoctisLaunchManager(client);
+
+    await expect(manager.startBuying(fakeBytes32(100))).rejects.toThrow(/publishRegistrantRoot.*openBuying/s);
+  });
+
+  it('still drives Midnight Launch, whose merged contract keeps the single circuit', async () => {
+    const circuitFn = vi.fn().mockResolvedValue({ ok: true });
+    const client = new NoctisMidnightClient(USER_SK);
+    client.bondingCurve = fakeHandle({ startBuying: circuitFn });
+    const manager = new NoctisLaunchManager(client);
+
+    await manager.startBuying(fakeBytes32(100));
+    expect(circuitFn).toHaveBeenCalledWith(fakeBytes32(100));
+  });
+
+  it('publishes the registrant root and opens buying as two separate circuits', async () => {
+    const publishFn = vi.fn().mockResolvedValue({ ok: true });
+    const openFn = vi.fn().mockResolvedValue({ ok: true });
+    const client = new NoctisMidnightClient(USER_SK);
+    client.eligibilityGate = fakeHandle({ publishRegistrantRoot: publishFn, openBuying: openFn });
+    const manager = new NoctisLaunchManager(client);
+
+    await manager.publishRegistrantRoot(fakeBytes32(100));
+    await manager.openBuying();
+
+    expect(publishFn).toHaveBeenCalledWith(fakeBytes32(100));
+    expect(openFn).toHaveBeenCalledWith();
+  });
+
+  it('exposes the permissionless settlement expiry', async () => {
+    const expireFn = vi.fn().mockResolvedValue({ ok: true });
+    const client = new NoctisMidnightClient(USER_SK);
+    client.eligibilityGate = fakeHandle({ expireDvSettlement: expireFn });
+    const manager = new NoctisLaunchManager(client);
+
+    await manager.expireDvSettlement();
+    expect(expireFn).toHaveBeenCalledWith();
+  });
 });
