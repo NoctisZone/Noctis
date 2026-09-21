@@ -47,6 +47,26 @@ function baseCert(overrides: Partial<FairLaunchCert> = {}): FairLaunchCert {
 }
 
 describe('assembleProofBundle', () => {
+  it('refuses a certificate the contract has not sealed yet', () => {
+    // The contract leaves certHash empty until finalizeDvSettlement seals the
+    // certificate from the settled figures. This bundle is hashed and anchored
+    // on Cardano L1, so reading one early would make a launch's opening zeros
+    // its permanent public result.
+    const unsealed = baseCert({
+      certHash: fakeBytes(0),
+      totalParticipants: 0n,
+      totalTokensAllocated: 0n,
+      totalRaised: 0n,
+    });
+    expect(() => assembleProofBundle(unsealed, 'B', dvRoot())).toThrow(/has not been sealed yet/);
+  });
+
+  it('refuses a certHash that is not 32 bytes', () => {
+    expect(() => assembleProofBundle(baseCert({ certHash: fakeBytes(2, 31) }), 'B', dvRoot())).toThrow(
+      /has not been sealed yet/,
+    );
+  });
+
   it('hex-encodes byte fields and stringifies bigints (bigints do not survive JSON.stringify)', () => {
     const cert = baseCert();
     const bundle = assembleProofBundle(cert, 'B', dvRoot());

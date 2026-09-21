@@ -127,14 +127,43 @@ export interface ProofBundle {
    * disagreement is visible without trusting the relayer that published both.
    *
    * Empty string on Midnight Launch, and that is a real difference rather than an
-   * omission: Midnight Launch allocates every registrant the same `baseSlot`
-   * (`closeDarkVeil` sets one figure for all of them), so there is no
-   * per-registrant tree for a root to summarise. `totalTokensAllocated` and
-   * `totalParticipants` already pin that distribution between them. If Midnight Launch
-   * ever gains per-registrant allocations, this is the field they bind to.
+   * omission: a Midnight Launch settles its DarkVeil purchases in the PSM's own
+   * ledger, so there is no second chain carrying a separate record for a root
+   * to bind the certificate to. The root exists on Cardano Launch precisely
+   * because the money moves somewhere the certificate does not live.
+   *
+   * This reasoning was corrected 2026-09-21. It previously argued that
+   * `totalTokensAllocated` and `totalParticipants` "pin that distribution
+   * between them", which does not hold and is worth stating plainly so it is
+   * not re-derived: every registrant is allotted the same `baseSlot`, but each
+   * buys any amount up to it, so those two figures give an AVERAGE and never
+   * the per-registrant split. They pin the aggregate, which is all a
+   * certificate claims to. If Midnight Launch ever settles anywhere outside its
+   * own PSM, this is the field that binding goes in.
    */
   dvAllocationRoot: string;
 }
+
+/**
+ * Two of the things the Fair Launch Certificate is specified to publish carry
+ * no field here, because they are INVARIANTS the contract enforces rather than
+ * figures it measures, and a reader of this bundle should not have to read
+ * Compact to learn that:
+ *
+ *   - The creator bought nothing during DarkVeil. `registerForDarkVeil` and
+ *     `revealBuyCommit` both refuse a caller whose derived identity matches the
+ *     creator key sealed at deploy, so there is no amount to report — the
+ *     purchase could not have happened.
+ *   - No wallet exceeded the 5% cap. `revealBuyCommit` checks each buyer's
+ *     running total against the `walletCap` sealed at deploy and rejects the
+ *     reveal outright, so the cap is a precondition of every purchase in the
+ *     totals above rather than a property checked afterwards.
+ *
+ * The NIGHT returned-versus-forfeited split is absent for a different reason —
+ * it is a real figure, it keeps moving after the certificate is sealed, and it
+ * is derivable from public ledger state. See the contract's own note where the
+ * certificate is sealed.
+ */
 
 function toHex(bytes: Uint8Array): string {
   return Array.from(bytes)
@@ -165,6 +194,20 @@ export function assembleProofBundle(cert: FairLaunchCert, tier: 'B' | 'C', dvAll
         'confused it with something else.',
     );
   }
+  // An unsealed certificate is refused outright. The contract leaves `certHash`
+  // empty until `finalizeDvSettlement` seals the certificate from the settled
+  // figures, so an empty hash means no certificate has been issued yet — and
+  // this bundle is hashed and anchored on Cardano L1, where what it carries
+  // becomes the immutable public record. Reading one early would anchor a
+  // launch's opening zeros as its result.
+  if (cert.certHash.length !== 32 || cert.certHash.every((b) => b === 0)) {
+    throw new Error(
+      'This DarkVeil certificate has not been sealed yet: certHash is empty. The contract seals it ' +
+        'at finalizeDvSettlement, once every reveal and settlement is recorded. Anchoring before ' +
+        'then would publish figures the launch had not produced.',
+    );
+  }
+
   // Narrowed here, not at the boundary, and checked rather than trusted. The
   // bundle is hashed by JSON serialisation, and JSON has no bigint — so a value
   // arriving as one has to become a number for the hash to exist at all. The

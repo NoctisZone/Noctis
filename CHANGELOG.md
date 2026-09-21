@@ -27,6 +27,16 @@ Notable changes to the Noctis Zone, by release. Internal development history pre
 
 ### Added
 
+- The ZK Fair Launch Certificate is issued when the DarkVeil settlement record
+  closes, which is the first moment every figure in it is final, and it can be
+  issued only once. Until then its hash is empty, which is how a reader tells an
+  unissued certificate from one that certifies nothing. The relayer refuses to
+  assemble and anchor a bundle from a certificate that has not been issued.
+- The certificate publishes what a launch actually settled — the tokens that
+  really moved and the amount really raised at the DarkVeil price — rather than
+  what buyers stated they intended during the private phase. Both sets of totals
+  remain in public state, so the two can be compared by anyone.
+
 - A DarkVeil that closes and whose settlement record is not closed within its
   sealed deadline can be ended by anyone, returning every NIGHT bond in full
   through the existing refund. A bond's route home therefore never depends on a

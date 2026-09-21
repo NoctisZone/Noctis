@@ -401,6 +401,26 @@ export ledger dvTotalParticipants: Counter;
 export ledger totalTokensCommitted: Uint<128>;
 export ledger totalRaisedCommitted: Uint<128>;
 
+// The same two figures, for purchases that really SETTLED on Cardano, kept as
+// running totals so the certificate can be sealed from them without walking
+// settledDvPurchases (Compact cannot iterate a map in circuit).
+//
+// These are what the Fair Launch Certificate publishes, and the distinction
+// from the committed totals above is the whole point: a reveal is a statement
+// of intent made on Midnight, while a settlement is a real Cardano
+// ClaimDarkVeilTokens transaction that moved tokens and ADA. A certificate
+// reporting intent would count a buyer who revealed and never paid. Both pairs
+// stay in public state, so anyone can compare them and see the difference.
+//
+// Only the token total is accumulated: revealBuyCommit pins pricePerToken to
+// dvPrice, so the amount raised is always tokens * dvPrice and is derived at
+// sealing rather than tracked separately.
+export ledger totalTokensSettled: Uint<128>;
+
+// Distinct buyers with a recorded settlement. Incremented only on a buyer's
+// FIRST record, so re-recording a corrected amount does not inflate it.
+export ledger settledParticipants: Counter;
+
 // DarkVeil allocation (how many tokens are available in this phase).
 // Exported so anyone can read it straight from the contract's public state,
 // which is what a registrant needs to check their own slot against the
@@ -892,6 +912,7 @@ constructor(
   dvState = DarkVeilState.Inactive;
   totalTokensCommitted = 0;
   totalRaisedCommitted = 0;
+  totalTokensSettled = 0;
   baseSlot = 0; // meaningless until closeDarkVeil sets it
   revealWindowSeconds = disclose(2592000); // 30 days — see ledger comment
   darkVeilExpirySeconds = disclose(604800); // 7 days — see ledger comment
@@ -1287,11 +1308,17 @@ export circuit revealBuyCommit(
   // DarkVeil must be closed
   assert(disclose(dvState == DarkVeilState.Closed), "DarkVeil not closed");
 
-  // Fix (2026-07-30): reveal window closes revealWindowSeconds after
-  // the real, on-chain-recorded close time (fairLaunchCert.closeTimestamp,
-  // set once by closeDarkVeil) — without this, an unrevealed Open
-  // commitment could sit in `commitments` forever with no expiry path.
-  const revealDeadline = (fairLaunchCert.closeTimestamp + revealWindowSeconds) as Uint<64>;
+  // The reveal window closes revealWindowSeconds after the scheduled close,
+  // which bounds how long an unrevealed Open commitment can sit in
+  // `commitments` waiting for an expiry path.
+  //
+  // Read from the sealed schedule rather than from the certificate. The
+  // certificate is sealed at finalizeDvSettlement, after every reveal has
+  // happened — it reports what the reveals produced, so nothing during the
+  // reveal window can depend on it. buyingCloseTime is fixed at deploy and is
+  // the same instant closeDarkVeil is gated on, so this deadline is knowable
+  // before anyone commits rather than only after the phase closes.
+  const revealDeadline = (buyingCloseTime + revealWindowSeconds) as Uint<64>;
   assert(disclose(currentTimestamp <= revealDeadline), "Reveal window has closed");
 
   // Verify commitment exists and is still Open
@@ -1456,25 +1483,15 @@ export circuit closeDarkVeil(baseSlot_: Uint<128>): [] {
   // Transition to Closed
   dvState = DarkVeilState.Closed;
 
-  // Generate certificate hash
-  const certHash = computeCertHash(
-    launchId,
-    dvTotalParticipants.read(),
-    totalTokensCommitted,
-    totalRaisedCommitted,
-    buyingCloseTime
-  );
-
-  // Store the certificate
-  fairLaunchCert = disclose(FairLaunchCert {
-    launchId: launchId,
-    totalParticipants: dvTotalParticipants.read(),
-    totalTokensAllocated: totalTokensCommitted,
-    totalRaised: totalRaisedCommitted,
-    participationRate: 0, // Computed off-chain from raw numbers
-    closeTimestamp: buyingCloseTime,
-    certHash: certHash
-  });
+  // The certificate is NOT sealed here. It reports what DarkVeil produced, and
+  // at this instant none of those figures exist yet: revealBuyCommit runs after
+  // the close by design — that is what a commit/reveal scheme is for — and the
+  // settlements it leads to are recorded later still. Sealing here would
+  // publish a certificate about a phase that had not happened.
+  //
+  // finalizeDvSettlement seals it, which is the first moment every figure is
+  // final. Until then `certHash` stays empty, and that is the tell: an empty
+  // hash means no certificate has been issued, not that one certifies nothing.
 }
 
 // The ZK Fair Launch Certificate is `fairLaunchCert` in this contract's
@@ -1513,6 +1530,24 @@ export circuit recordDarkVeilSettlement(
   // change after a sweep could have acted on it.
   assert(disclose(!settlementFinalized), "DarkVeil settlement is already finalized");
 
+  // Keep the running totals the certificate is sealed from in step with the
+  // map. The insert below is an idempotent OVERWRITE — a corrected figure for
+  // a buyer replaces their old one — so the old value is removed from the
+  // total before the new one is added, and a buyer already counted is not
+  // counted again. Without both, re-recording a settlement would inflate the
+  // certificate.
+  const alreadyRecorded = settledDvPurchases.member(disclose(buyerKey));
+  const previous = alreadyRecorded ? settledDvPurchases.lookup(disclose(buyerKey)) : 0;
+  // Every recorded amount was added to this total, so removing one can never
+  // take it below zero. Asserted rather than assumed, because the subtraction
+  // below would otherwise wrap silently.
+  assert(disclose(previous <= totalTokensSettled), "Settled total is inconsistent with the recorded settlement");
+  const withoutPrevious = (totalTokensSettled - previous) as Uint<128>;
+  totalTokensSettled = disclose((withoutPrevious + settledAmount) as Uint<128>);
+  if (disclose(!alreadyRecorded)) {
+    settledParticipants.increment(1);
+  }
+
   settledDvPurchases.insert(disclose(buyerKey), disclose(settledAmount));
 }
 
@@ -1540,6 +1575,53 @@ export circuit finalizeDvSettlement(): [] {
   assert(disclose(!settlementFinalized), "DarkVeil settlement is already finalized");
 
   settlementFinalized = disclose(true);
+
+  // Seal the ZK Fair Launch Certificate. This is the first moment every figure
+  // in it is final: the reveals are in, the settlements are recorded, and this
+  // circuit is one-shot on !settlementFinalized so it can never be re-sealed.
+  //
+  // The figures are the SETTLED ones — what really moved on Cardano — rather
+  // than what buyers revealed they intended on Midnight. See totalTokensSettled
+  // for why the certificate publishes one and not the other; both stay in
+  // public state for anyone who wants to compare them.
+  //
+  // revealBuyCommit pins pricePerToken to dvPrice, so the amount raised is
+  // exactly the settled tokens at that one price and is computed here rather
+  // than accumulated. Field multiplication, matching revealBuyCommit's own
+  // raisedF — a plain multiply would hit the non-Field result-width ceiling.
+  const raisedF = ((totalTokensSettled as Field) * (dvPrice as Field)) as Field;
+  const totalRaised = raisedF as Uint<128>;
+
+  const certHash = computeCertHash(
+    launchId,
+    settledParticipants.read(),
+    totalTokensSettled,
+    totalRaised,
+    buyingCloseTime
+  );
+
+  // The certificate does NOT carry the NIGHT returned/forfeited split, and that
+  // is a decision rather than an omission. Three reasons, in order of weight:
+  // the sum cannot be computed here at all, since it needs a walk of
+  // lockedBonds against settledDvPurchases and Compact cannot iterate a map in
+  // circuit; the figure keeps moving after this call, as registrants claim
+  // their ratio refunds and forfeited bonds are swept, so anything sealed now
+  // would be a forecast rather than a record; and it is already derivable by
+  // anyone from public state — lockedBonds, settledDvPurchases, baseSlot and
+  // bondAmount are all published. The only way to put it in the struct would be
+  // to accept it as an argument, which would make the certificate's most
+  // checkable number the one number the platform simply asserts.
+  fairLaunchCert = disclose(FairLaunchCert {
+    launchId: launchId,
+    totalParticipants: settledParticipants.read(),
+    totalTokensAllocated: totalTokensSettled,
+    totalRaised: totalRaised,
+    participationRate: 0, // Computed off-chain from raw numbers
+    // The scheduled close, sealed at deploy — the same instant closeDarkVeil
+    // is gated on, so the certificate names the time the phase really ended.
+    closeTimestamp: buyingCloseTime,
+    certHash: certHash
+  });
 }
 
 // Collect a bond that was forfeited in full, and pay it to the platform.

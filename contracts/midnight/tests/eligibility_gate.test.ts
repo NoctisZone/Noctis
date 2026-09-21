@@ -1009,12 +1009,16 @@ describe('eligibility_gate.compact — merged DarkVeil private buy (Phase 2)', (
     expect(ledger(r2.context.currentQueryContext.state).dvTotalParticipants).toBe(0n);
   });
 
-  it('closeDarkVeil generates a FairLaunchCert and transitions dvState to Closed', () => {
+  it('closeDarkVeil transitions dvState to Closed and issues NO certificate yet', () => {
+    // The certificate reports what DarkVeil produced, and at the close none of
+    // those figures exist: reveals happen after it by design, and settlements
+    // later still. An empty certHash is the tell that none has been issued.
     const d = deployAndStartDvBuying();
-    const r = d.contract.circuits.closeDarkVeil(d.ctx, 100n);
+    const r = d.contract.circuits.closeDarkVeil(d.ctx, DV_ALLOCATION);
     const state = ledger(r.context.currentQueryContext.state);
     expect(state.dvState).toBe(DarkVeilState.Closed);
-    expect(state.fairLaunchCert.closeTimestamp).toBe(BUYING_CLOSE_TIME);
+    expect(state.fairLaunchCert.certHash).toEqual(fakeBytes32(0));
+    expect(state.fairLaunchCert.totalTokensAllocated).toBe(0n);
   });
 
   describe('fix (2026-07-30): revealBuyCommit reveal deadline (30 days post-close)', () => {
@@ -1250,11 +1254,117 @@ describe('eligibility_gate.compact — merged DarkVeil private buy (Phase 2)', (
     expect(capAfter.lookup(buyerKey)).toBe(tokenAmount);
   });
 
-  it('publishes the certificate in public state after close', () => {
+  it('publishes a certificate matching the ledger once the settlement is finalized', () => {
+    // The regression this exists for: assert the certificate equals what really
+    // settled, not merely that it is non-zero. A certificate sealed before the
+    // figures exist is internally consistent and says nothing.
+    const purchased = 40n;
     const d = deployAndStartDvBuying();
-    const r = d.contract.circuits.closeDarkVeil(d.ctx, 100n);
-    const ctx = nextContext(d.contractAddress, r.context);
-    expect(ledger(ctx.currentQueryContext.state).fairLaunchCert.closeTimestamp).toBe(BUYING_CLOSE_TIME);
+    const commitment = computeBuyCommit({
+      buyerKey: REGISTRANT_KEY,
+      launchId: LAUNCH_ID,
+      tokenAmount: purchased,
+      pricePerToken: DV_PRICE,
+      nonce: BUY_NONCE,
+    });
+    const rS = d.contract.circuits.submitBuyCommit(d.ctx, commitment, 1n);
+    const cS = nextContext(d.contractAddress, rS.context);
+    const rC = d.contract.circuits.closeDarkVeil(cS, DV_ALLOCATION);
+    const cC = nextContext(d.contractAddress, rC.context);
+    const rR = d.contract.circuits.revealBuyCommit(
+      nextContextAtTime(d.contractAddress, cC, 3),
+      commitment,
+      purchased,
+      DV_PRICE,
+      3n,
+    );
+    const cR = nextContext(d.contractAddress, rR.context);
+
+    // Settled for the full revealed amount — the ordinary case.
+    const rRec = d.contract.circuits.recordDarkVeilSettlement(cR, REGISTRANT_KEY, purchased);
+    const cRec = nextContext(d.contractAddress, rRec.context);
+    // Still unissued right up to the moment it is sealed.
+    expect(ledger(cRec.currentQueryContext.state).fairLaunchCert.certHash).toEqual(fakeBytes32(0));
+
+    const rFin = d.contract.circuits.finalizeDvSettlement(cRec);
+    const state = ledger(rFin.context.currentQueryContext.state);
+
+    expect(state.fairLaunchCert.totalTokensAllocated).toBe(purchased);
+    expect(state.fairLaunchCert.totalRaised).toBe(purchased * DV_PRICE);
+    expect(state.fairLaunchCert.totalParticipants).toBe(1n);
+    expect(state.fairLaunchCert.closeTimestamp).toBe(BUYING_CLOSE_TIME);
+    expect(state.fairLaunchCert.certHash).not.toEqual(fakeBytes32(0));
+    // And it agrees with the ledger it was sealed from.
+    expect(state.fairLaunchCert.totalTokensAllocated).toBe(state.totalTokensSettled);
+  });
+
+  it('certifies what SETTLED, not what was merely revealed', () => {
+    // A buyer who reveals and then settles for less on Cardano must not have
+    // their full revealed figure published as distributed.
+    const revealed = 40n;
+    const settled = 25n;
+    const d = deployAndStartDvBuying();
+    const commitment = computeBuyCommit({
+      buyerKey: REGISTRANT_KEY,
+      launchId: LAUNCH_ID,
+      tokenAmount: revealed,
+      pricePerToken: DV_PRICE,
+      nonce: BUY_NONCE,
+    });
+    const rS = d.contract.circuits.submitBuyCommit(d.ctx, commitment, 1n);
+    const rC = d.contract.circuits.closeDarkVeil(nextContext(d.contractAddress, rS.context), DV_ALLOCATION);
+    const rR = d.contract.circuits.revealBuyCommit(
+      nextContextAtTime(d.contractAddress, nextContext(d.contractAddress, rC.context), 3),
+      commitment,
+      revealed,
+      DV_PRICE,
+      3n,
+    );
+    const rRec = d.contract.circuits.recordDarkVeilSettlement(
+      nextContext(d.contractAddress, rR.context),
+      REGISTRANT_KEY,
+      settled,
+    );
+    const rFin = d.contract.circuits.finalizeDvSettlement(nextContext(d.contractAddress, rRec.context));
+    const state = ledger(rFin.context.currentQueryContext.state);
+
+    expect(state.totalTokensCommitted).toBe(revealed);
+    expect(state.fairLaunchCert.totalTokensAllocated).toBe(settled);
+    expect(state.fairLaunchCert.totalRaised).toBe(settled * DV_PRICE);
+  });
+
+  it('a corrected settlement replaces the old figure rather than adding to it', () => {
+    // recordDarkVeilSettlement is an idempotent overwrite, so the running total
+    // it feeds has to be too — otherwise re-recording inflates the certificate.
+    const d = deployAndStartDvBuying();
+    const commitment = computeBuyCommit({
+      buyerKey: REGISTRANT_KEY,
+      launchId: LAUNCH_ID,
+      tokenAmount: 40n,
+      pricePerToken: DV_PRICE,
+      nonce: BUY_NONCE,
+    });
+    const rS = d.contract.circuits.submitBuyCommit(d.ctx, commitment, 1n);
+    const rC = d.contract.circuits.closeDarkVeil(nextContext(d.contractAddress, rS.context), DV_ALLOCATION);
+    const rR = d.contract.circuits.revealBuyCommit(
+      nextContextAtTime(d.contractAddress, nextContext(d.contractAddress, rC.context), 3),
+      commitment,
+      40n,
+      DV_PRICE,
+      3n,
+    );
+    let ctx = nextContext(d.contractAddress, rR.context);
+
+    const r1 = d.contract.circuits.recordDarkVeilSettlement(ctx, REGISTRANT_KEY, 40n);
+    ctx = nextContext(d.contractAddress, r1.context);
+    expect(ledger(ctx.currentQueryContext.state).totalTokensSettled).toBe(40n);
+
+    const r2 = d.contract.circuits.recordDarkVeilSettlement(ctx, REGISTRANT_KEY, 25n);
+    ctx = nextContext(d.contractAddress, r2.context);
+    const after = ledger(ctx.currentQueryContext.state);
+    expect(after.totalTokensSettled).toBe(25n);
+    // And the buyer is still one participant, not two.
+    expect(after.settledParticipants).toBe(1n);
   });
 });
 
@@ -2437,14 +2547,15 @@ describe('eligibility_gate.compact — permissionless lifecycle transitions', ()
       );
     });
 
-    it('accepts exactly one value — the floor — and the cert records the SCHEDULED close', () => {
+    it('accepts exactly one value — the floor', () => {
       const d = deployAndStartDvBuying();
       const r = d.contract.circuits.closeDarkVeil(d.ctx, DV_ALLOCATION);
       const state = ledger(r.context.currentQueryContext.state);
       expect(state.baseSlot).toBe(DV_ALLOCATION);
-      // Not a caller-supplied timestamp: a permissionless circuit must not
-      // take a time from whoever calls it.
-      expect(state.fairLaunchCert.closeTimestamp).toBe(BUYING_CLOSE_TIME);
+      // The close time the certificate will eventually carry is the sealed
+      // one, never a caller's — see the certificate tests for the sealing
+      // itself, which happens at finalizeDvSettlement.
+      expect(state.dvState).toBe(DarkVeilState.Closed);
     });
   });
 });
