@@ -55,10 +55,10 @@ const BUY_NONCE = fakeBytes32(8);
 
 // Fix (2026-07-30): submitBuyCommit now proves prior registration via
 // a real Merkle proof against registrantRoot (published by the governor at
-// startBuying) instead of a publicly-precomputable nullifier — see
+// publishRegistrantRoot) instead of a publicly-precomputable nullifier — see
 // verifyRegistrant's own comment in eligibility_gate.compact. This is the
 // default single-registrant tree (REGISTRANT_KEY only) most tests in this
-// file use — every `startBuying` call now needs a matching registrantRoot
+// file use — every window opened now needs a matching registrantRoot
 // argument.
 const REGISTRANT_TREE = buildRegistrantTree([hashRegistrantLeaf(REGISTRANT_KEY)]);
 
@@ -478,7 +478,7 @@ describe('eligibility_gate.compact — registration nullifier (disclose() placem
     // assume the registrant set is fixed once Buying starts).
     const { contract, contractAddress, ctx } = deployAndStartDarkVeil();
     // MIN_DV_PARTICIPANTS_TEST floor (1) needs a real registrant before
-    // startBuying will succeed.
+    // opening the window will succeed.
     const r1 = contract.circuits.registerForDarkVeil(ctx);
     const ctx1 = nextContext(contractAddress, r1.context);
     const rBuying = openBuyingWith(contract, contractAddress, ctx1, REGISTRANT_TREE.root);
@@ -654,7 +654,7 @@ describe('eligibility_gate.compact — DarkVeil failure refund gate (regression)
 
 // ============================================================================
 // Resolution (2026-07-13): minimum absolute registrant count required
-// before startBuying() opens the buying phase. Below the floor, the
+// before openBuying() opens the buying phase. Below the floor, the
 // governor must call cancelDarkVeil() (the existing, already-refundable
 // DarkVeil-failure path) instead.
 // ============================================================================
@@ -674,7 +674,7 @@ describe('eligibility_gate.compact — minimum DarkVeil participant floor', () =
   const FLOOR_TREE = buildAllowlistTree([hashAllowlistLeaf(KEY_A), hashAllowlistLeaf(KEY_B), hashAllowlistLeaf(KEY_C)]);
   // Fix: separate registrant tree (same 3 leaves, different domain —
   // see registrantRoot's own comment) — published by the governor at
-  // startBuying once all 3 have actually registered.
+  // the window opens once all 3 have actually registered.
   const FLOOR_REGISTRANT_TREE = buildRegistrantTree([
     hashRegistrantLeaf(KEY_A),
     hashRegistrantLeaf(KEY_B),
@@ -731,7 +731,7 @@ describe('eligibility_gate.compact — minimum DarkVeil participant floor', () =
     return { governorContract, contractAddress, ctx: ctx1 };
   }
 
-  it('rejects startBuying() below the floor, but cancelDarkVeil() still works as the escape hatch', () => {
+  it('rejects openBuying() below the floor, but cancelDarkVeil() still works as the escape hatch', () => {
     const { governorContract, contractAddress, ctx } = deployWithFloor(3n);
 
     // Only 2 of the 3 leaves register — below the floor of 3.
@@ -789,7 +789,7 @@ describe('eligibility_gate.compact — minimum DarkVeil participant floor', () =
     );
   });
 
-  it('allows startBuying() once registration count reaches the floor', () => {
+  it('allows openBuying() once registration count reaches the floor', () => {
     const { governorContract, contractAddress, ctx } = deployWithFloor(3n);
 
     const rA = registrantContract(SECRET_A, 0).circuits.registerForDarkVeil(ctx);
@@ -1212,7 +1212,7 @@ describe('eligibility_gate.compact — merged DarkVeil private buy (Phase 2)', (
     const ctxPhase = nextContext(contractAddress, rPhase.context);
     const r1 = contract.circuits.startRegistration(ctxPhase);
     const ctx1 = nextContext(contractAddress, r1.context);
-    // startBuying() now requires at least MIN_DV_PARTICIPANTS_TEST real
+    // openBuying() now requires at least MIN_DV_PARTICIPANTS_TEST real
     // registrants — a legitimate registrant (REGISTRANT_KEY, the shared
     // ALLOWLIST_TREE's leaf 0) registers first so the floor is met; the
     // creator themselves is never one of them, which is exactly this test's
@@ -1732,7 +1732,7 @@ describe('eligibility_gate.compact — registrant exclusion dispute', () => {
   const DISPUTE_ALLOWLIST = buildAllowlistTree([hashAllowlistLeaf(KEY_INCL), hashAllowlistLeaf(KEY_EXCL)]);
 
   // The honest tree holds both registrants. The truncated one drops the second
-  // — the same startBuying call, one leaf short.
+  // — the same window opened, one leaf short.
   const HONEST_TREE = buildRegistrantTree([hashRegistrantLeaf(KEY_INCL), hashRegistrantLeaf(KEY_EXCL)]);
   const TRUNCATED_TREE = buildRegistrantTree([hashRegistrantLeaf(KEY_INCL)]);
 
@@ -2205,7 +2205,7 @@ describe('eligibility_gate.compact — permissionless DarkVeil expiry', () => {
       /Must be in DarkVeil to start Public/,
     );
 
-    // `startBuying` is refused by the DarkVeil SUB-STATE, not by `phase` —
+    // opening the window is refused by the DarkVeil SUB-STATE, not by `phase` —
     // note the message names dvState despite reading "phase". So this asserts
     // a real and separate property, but it is NOT a guard on the write above
     // and never was: it passes with that write removed. Pinning the message
@@ -2268,7 +2268,7 @@ describe('eligibility_gate.compact — the allowlist is fixed outside the regist
   });
 
   it('rejects an update once registration has frozen and buying has begun', () => {
-    // The registrant set is fixed at the freeze and startBuying publishes
+    // The registrant set is fixed at the freeze and publishRegistrantRoot commits to
     // registrantRoot over it, so the allowlist decides nothing from here on.
     const { contract, ctx } = deployAndStartDvBuying();
     expect(() => contract.circuits.updateAllowlistRoot(ctx, fakeBytes32(123), ALLOWLIST_EVIDENCE, 0n)).toThrow(

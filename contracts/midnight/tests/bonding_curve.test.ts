@@ -1,3 +1,4 @@
+import type { CircuitContext } from '@midnight-ntwrk/compact-runtime';
 import { afterEach, describe, expect, it } from 'vitest';
 import { buyCost, grossRangeQuadratic } from '../../../integration/curve-pricing.js';
 import { computeBuyCommit } from '../../../packages/zk-proofs/src/darkveil.js';
@@ -67,7 +68,7 @@ const ALLOWLIST_TREE = buildAllowlistTree([ALLOWLIST_LEAF]);
 
 // Which registrant is BUYING must stay private, so submitBuyCommit proves
 // membership in this tree rather than checking a registration nullifier that
-// would name them. Published by startBuying once registration has closed.
+// would name them. Published by publishRegistrantRoot once registration has closed.
 const REGISTRANT_TREE = buildRegistrantTree([hashRegistrantLeaf(BUYER_KEY)]);
 const BUY_NONCE = fakeBytes32(8);
 
@@ -109,11 +110,24 @@ const BOND_COLOUR = fakeBytes32(144);
 
 const BOND_AMOUNT = 1000n;
 
-// DarkVeil-side constructor args
-const DV_ALLOCATION = 500n;
+// DarkVeil-side constructor args.
+//
+// 100 rather than 500 because closeDarkVeil no longer accepts any baseSlot at
+// or below the true one: two bounds now admit exactly the largest whole
+// allocation that fits. With one registrant that is dvAllocation itself, so
+// the allocation and the baseSlot these tests pass have to agree.
+const DV_ALLOCATION = 100n;
 const DV_PRICE = 90n;
 const ALLOWLIST_SIZE = 1n;
 const REGISTRATION_CLOSE_TIME = 1_000_000n;
+// The launch's own schedule. The three windows are the platform's real
+// figures; the rest of the timetable is derived from the close time at deploy
+// and is what every DarkVeil transition is now gated on.
+const REGISTRATION_WINDOW = 165_600n; // 46h
+const FREEZE_WINDOW = 7_200n; //  2h
+const BUYING_WINDOW = 86_400n; // 24h
+const BUYING_OPEN_TIME = REGISTRATION_CLOSE_TIME + FREEZE_WINDOW;
+const BUYING_CLOSE_TIME = BUYING_OPEN_TIME + BUYING_WINDOW;
 // Permissive by default (1n) so pre-existing tests aren't broken by
 // the new minimum-participant floor. Dedicated tests further down deploy
 // with a real threshold to exercise the floor itself.
@@ -140,7 +154,23 @@ const PLATFORM_ADDR = fakeBytes32(60);
 const CREATOR_ADDR = fakeBytes32(61);
 const LP_ESCROW_ADDR = fakeBytes32(62);
 
-function deploy() {
+/**
+ * Publish the registrant root and then open the window, which is what
+ * `startBuying` used to do in one signed call. The root is still published
+ * under the key — only whoever can enumerate the registrant set can compute it
+ * — and the window then opens on the sealed clock, callable by anyone.
+ */
+function openBuyingWith(
+  contract: Contract<PrivateState>,
+  contractAddress: Parameters<typeof nextContext<PrivateState>>[0],
+  ctx: CircuitContext<PrivateState>,
+  root: Uint8Array,
+) {
+  const rPub = contract.circuits.publishRegistrantRoot(ctx, root);
+  return contract.circuits.openBuying(nextContext(contractAddress, rPub.context));
+}
+
+function deploy(dvAllocation: bigint = DV_ALLOCATION) {
   const contract = new Contract<PrivateState>(witnesses);
   const { init, contractAddress, ctx } = deployForTest(
     contract,
@@ -155,10 +185,13 @@ function deploy() {
     BASE_PRICE,
     MAX_PRICE,
     CURVE_SUPPLY,
-    DV_ALLOCATION,
+    dvAllocation,
     DV_PRICE,
     ALLOWLIST_SIZE,
     REGISTRATION_CLOSE_TIME,
+    REGISTRATION_WINDOW,
+    FREEZE_WINDOW,
+    BUYING_WINDOW,
     MIN_DV_PARTICIPANTS_TEST,
     CREATOR_KEY,
     PLATFORM_ADDR,
@@ -192,6 +225,9 @@ function deployWithPrices(basePrice: bigint, maxPrice: bigint, curveSupply: bigi
     DV_PRICE,
     ALLOWLIST_SIZE,
     REGISTRATION_CLOSE_TIME,
+    REGISTRATION_WINDOW,
+    FREEZE_WINDOW,
+    BUYING_WINDOW,
     MIN_DV_PARTICIPANTS_TEST,
     CREATOR_KEY,
     PLATFORM_ADDR,
@@ -224,6 +260,9 @@ function deployWithRegistrationCloseTime(closeTime: bigint) {
     DV_PRICE,
     ALLOWLIST_SIZE,
     closeTime,
+    REGISTRATION_WINDOW,
+    FREEZE_WINDOW,
+    BUYING_WINDOW,
     MIN_DV_PARTICIPANTS_TEST,
     CREATOR_KEY,
     PLATFORM_ADDR,
@@ -742,6 +781,9 @@ describe('bonding_curve.compact — quadratic pricing', () => {
       DV_PRICE,
       ALLOWLIST_SIZE,
       REGISTRATION_CLOSE_TIME,
+      REGISTRATION_WINDOW,
+      FREEZE_WINDOW,
+      BUYING_WINDOW,
       MIN_DV_PARTICIPANTS_TEST,
       CREATOR_KEY,
       PLATFORM_ADDR,
@@ -837,6 +879,9 @@ describe('bonding_curve.compact — merged eligibility gate', () => {
       DV_PRICE,
       ALLOWLIST_SIZE,
       REGISTRATION_CLOSE_TIME,
+      REGISTRATION_WINDOW,
+      FREEZE_WINDOW,
+      BUYING_WINDOW,
       MIN_DV_PARTICIPANTS_TEST,
       CREATOR_KEY,
       PLATFORM_ADDR,
@@ -929,7 +974,7 @@ describe('bonding_curve.compact — merged eligibility gate', () => {
 
 // ============================================================================
 // Resolution (2026-07-13): minimum absolute registrant count required
-// before startBuying() opens the buying phase. Same fix as
+// before openBuying() opens the buying phase. Same fix as
 // eligibility_gate.compact (Cardano Launch) — below the floor, the governor must
 // call cancelDarkVeil() (the existing, already-refundable DarkVeil-failure
 // path) instead.
@@ -982,6 +1027,9 @@ describe('bonding_curve.compact — minimum DarkVeil participant floor', () => {
       DV_PRICE,
       3n, // allowlistSize — matches the 3-leaf FLOOR_TREE
       REGISTRATION_CLOSE_TIME,
+      REGISTRATION_WINDOW,
+      FREEZE_WINDOW,
+      BUYING_WINDOW,
       minDvParticipants,
       CREATOR_KEY,
       PLATFORM_ADDR,
@@ -999,7 +1047,7 @@ describe('bonding_curve.compact — minimum DarkVeil participant floor', () => {
     return { governorContract, contractAddress, ctx: ctx1 };
   }
 
-  it('rejects startBuying() below the floor, but cancelDarkVeil() still works as the escape hatch', () => {
+  it('rejects openBuying() below the floor, but cancelDarkVeil() still works as the escape hatch', () => {
     const { governorContract, contractAddress, ctx } = deployWithFloor(3n);
 
     // Only 2 of the 3 leaves register — below the floor of 3.
@@ -1009,8 +1057,8 @@ describe('bonding_curve.compact — minimum DarkVeil participant floor', () => {
     const ctxB = nextContext(contractAddress, rB.context);
 
     expect(ledger(ctxB.currentQueryContext.state).registrationCount).toBe(2n);
-    expect(() => governorContract.circuits.startBuying(ctxB, REGISTRANT_TREE.root)).toThrow(
-      'Below minimum DarkVeil participant threshold — cancel instead',
+    expect(() => openBuyingWith(governorContract, contractAddress, ctxB, REGISTRANT_TREE.root)).toThrow(
+      'Below minimum DarkVeil participant threshold',
     );
 
     // The governor's real escape hatch still works from here.
@@ -1050,7 +1098,7 @@ describe('bonding_curve.compact — minimum DarkVeil participant floor', () => {
     );
   });
 
-  it('allows startBuying() once registration count reaches the floor', () => {
+  it('allows openBuying() once registration count reaches the floor', () => {
     const { governorContract, contractAddress, ctx } = deployWithFloor(3n);
 
     const rA = registrantContract(SECRET_A, 0).circuits.registerForDarkVeil(ctx);
@@ -1061,7 +1109,7 @@ describe('bonding_curve.compact — minimum DarkVeil participant floor', () => {
     const ctxC = nextContext(contractAddress, rC.context);
 
     expect(ledger(ctxC.currentQueryContext.state).registrationCount).toBe(3n);
-    const rBuy = governorContract.circuits.startBuying(ctxC, REGISTRANT_TREE.root);
+    const rBuy = openBuyingWith(governorContract, contractAddress, ctxC, REGISTRANT_TREE.root);
     const ctxBuying = nextContext(contractAddress, rBuy.context);
     expect(ledger(ctxBuying.currentQueryContext.state).dvState).toBe(DarkVeilState.Buying);
   });
@@ -1085,6 +1133,9 @@ describe('bonding_curve.compact — minimum DarkVeil participant floor', () => {
         DV_PRICE,
         ALLOWLIST_SIZE,
         REGISTRATION_CLOSE_TIME,
+        REGISTRATION_WINDOW,
+        FREEZE_WINDOW,
+        BUYING_WINDOW,
         0n, // minDvParticipants — invalid
         CREATOR_KEY,
         PLATFORM_ADDR,
@@ -1112,8 +1163,8 @@ describe('bonding_curve.compact — merged DarkVeil private buy (follow-up)', ()
   // registers the default buyer (fakeBytes32(3), matching the shared
   // `witnesses` object) before opening buying — same fix as
   // eligibility_gate.test.ts's identical helper.
-  function deployAndStartDvBuying() {
-    const d = deploy();
+  function deployAndStartDvBuying(dvAllocation: bigint = DV_ALLOCATION) {
+    const d = deploy(dvAllocation);
     const r0 = d.contract.circuits.advancePhase(d.ctx, LaunchPhase.DarkVeil);
     const ctx0 = nextContext(d.contractAddress, r0.context);
     const r1 = d.contract.circuits.startRegistration(ctx0);
@@ -1122,7 +1173,7 @@ describe('bonding_curve.compact — merged DarkVeil private buy (follow-up)', ()
     // dvState == Registration, so this must happen after startRegistration.
     const rReg = d.contract.circuits.registerForDarkVeil(ctx1);
     const ctxReg = nextContext(d.contractAddress, rReg.context);
-    const r2 = d.contract.circuits.startBuying(ctxReg, REGISTRANT_TREE.root);
+    const r2 = openBuyingWith(d.contract, d.contractAddress, ctxReg, REGISTRANT_TREE.root);
     const ctx2 = nextContext(d.contractAddress, r2.context);
     return { ...d, ctx: ctx2 };
   }
@@ -1194,7 +1245,7 @@ describe('bonding_curve.compact — merged DarkVeil private buy (follow-up)', ()
     });
     const r1 = d.contract.circuits.submitBuyCommit(d.ctx, commitment, 1n);
     const ctx1 = nextContext(d.contractAddress, r1.context);
-    const r2 = d.contract.circuits.closeDarkVeil(ctx1, 2n, 100n);
+    const r2 = d.contract.circuits.closeDarkVeil(ctx1, 100n);
     const ctx2 = nextContext(d.contractAddress, r2.context);
 
     const grossPayment = tokenAmount * DV_PRICE;
@@ -1243,6 +1294,9 @@ describe('bonding_curve.compact — merged DarkVeil private buy (follow-up)', ()
       DV_PRICE,
       ALLOWLIST_SIZE,
       REGISTRATION_CLOSE_TIME,
+      REGISTRATION_WINDOW,
+      FREEZE_WINDOW,
+      BUYING_WINDOW,
       MIN_DV_PARTICIPANTS_TEST,
       CREATOR_KEY,
       PLATFORM_ADDR,
@@ -1262,7 +1316,7 @@ describe('bonding_curve.compact — merged DarkVeil private buy (follow-up)', ()
     // dvState == Registration, so this must happen after startRegistration.
     const rReg = contract.circuits.registerForDarkVeil(ctx1);
     const ctxReg = nextContext(contractAddress, rReg.context);
-    const r2 = contract.circuits.startBuying(ctxReg, REGISTRANT_TREE.root);
+    const r2 = openBuyingWith(contract, contractAddress, ctxReg, REGISTRANT_TREE.root);
     const ctx2 = nextContext(contractAddress, r2.context);
 
     const buyerKey = deriveUserPublicKey(fakeBytes32(3), LAUNCH_ID);
@@ -1276,7 +1330,7 @@ describe('bonding_curve.compact — merged DarkVeil private buy (follow-up)', ()
     });
     const r3 = contract.circuits.submitBuyCommit(ctx2, commitment, 1n);
     const ctx3 = nextContext(contractAddress, r3.context);
-    const r4 = contract.circuits.closeDarkVeil(ctx3, 2n, 100n);
+    const r4 = contract.circuits.closeDarkVeil(ctx3, 100n);
     const ctx4 = nextContext(contractAddress, r4.context);
 
     const { creator: tightCreator, platform: tightPlatform } = fees(tokenAmount * DV_PRICE);
@@ -1301,9 +1355,11 @@ describe('bonding_curve.compact — merged DarkVeil private buy (follow-up)', ()
     // Uses the default (non-tight) walletCap/deploy() so this rejection is
     // driven specifically by baseSlot, not incidentally by the wallet cap
     // (unlike the tightCap test above).
-    const d = deployAndStartDvBuying();
+    // One registrant against a 40-token allocation, so the only baseSlot that
+    // closes is 40 — below the 50 this buyer is about to reveal.
+    const d = deployAndStartDvBuying(40n);
     const buyerKey = deriveUserPublicKey(fakeBytes32(3), LAUNCH_ID);
-    const tokenAmount = 50n; // exceeds baseSlot (40) but well within dvAllocation (500) and WALLET_CAP (50,000,000)
+    const tokenAmount = 50n; // exceeds baseSlot (40) but within WALLET_CAP (50,000,000)
     const commitment = computeBuyCommit({
       buyerKey,
       launchId: LAUNCH_ID,
@@ -1313,7 +1369,7 @@ describe('bonding_curve.compact — merged DarkVeil private buy (follow-up)', ()
     });
     const r1 = d.contract.circuits.submitBuyCommit(d.ctx, commitment, 1n);
     const ctx1 = nextContext(d.contractAddress, r1.context);
-    const r2 = d.contract.circuits.closeDarkVeil(ctx1, 2n, 40n); // baseSlot=40, less than tokenAmount=50
+    const r2 = d.contract.circuits.closeDarkVeil(ctx1, 40n); // baseSlot=40, less than tokenAmount=50
     const ctx2 = nextContext(d.contractAddress, r2.context);
 
     const { creator: baseSlotCreator, platform: baseSlotPlatform } = fees(tokenAmount * DV_PRICE);
@@ -1347,7 +1403,7 @@ describe('bonding_curve.compact — merged DarkVeil private buy (follow-up)', ()
     });
     const r1 = d.contract.circuits.submitBuyCommit(d.ctx, commitment, 1n);
     const ctx1 = nextContext(d.contractAddress, r1.context);
-    const r2 = d.contract.circuits.closeDarkVeil(ctx1, 2n, 100n);
+    const r2 = d.contract.circuits.closeDarkVeil(ctx1, 100n);
     const ctx2 = nextContext(d.contractAddress, r2.context);
     const { creator: dvCreator, platform: dvPlatform } = fees(dvAmount * DV_PRICE);
     const r3 = d.contract.circuits.revealBuyCommit(
@@ -1405,18 +1461,20 @@ describe('bonding_curve.compact — merged DarkVeil private buy (follow-up)', ()
 
   it('closeDarkVeil generates a FairLaunchCert and transitions dvState to Closed', () => {
     const d = deployAndStartDvBuying();
-    const r = d.contract.circuits.closeDarkVeil(d.ctx, 12345n, 100n);
+    const r = d.contract.circuits.closeDarkVeil(d.ctx, 100n);
     const state = ledger(r.context.currentQueryContext.state);
     expect(state.dvState).toBe(DarkVeilState.Closed);
-    expect(state.fairLaunchCert.closeTimestamp).toBe(12345n);
+    // The scheduled close, sealed at deploy — not a time whoever submitted
+    // the close happened to name.
+    expect(state.fairLaunchCert.closeTimestamp).toBe(BUYING_CLOSE_TIME);
   });
 
   it('Fix (2026-07-21, Medium): rejects a baseSlot whose total (baseSlot * registrationCount) exceeds dvAllocation', () => {
     // deployAndStartDvBuying registers exactly 1 participant, so any
-    // baseSlot above DV_ALLOCATION (500) collectively promises more than
-    // the pool actually reserves. Same fix as eligibility_gate.compact.
+    // baseSlot above DV_ALLOCATION collectively promises more than the pool
+    // actually reserves. Same fix as eligibility_gate.compact.
     const d = deployAndStartDvBuying();
-    expect(() => d.contract.circuits.closeDarkVeil(d.ctx, 12345n, DV_ALLOCATION + 1n)).toThrow(/exceeds dvAllocation/i);
+    expect(() => d.contract.circuits.closeDarkVeil(d.ctx, DV_ALLOCATION + 1n)).toThrow(/exceeds dvAllocation/i);
   });
 
   it('Fix (2026-07-21, Medium): rejects registration once dvState has moved past Registration, even though phase is still DarkVeil', () => {
@@ -1427,7 +1485,7 @@ describe('bonding_curve.compact — merged DarkVeil private buy (follow-up)', ()
     const ctx1 = nextContext(d.contractAddress, r1.context);
     const rReg = d.contract.circuits.registerForDarkVeil(ctx1);
     const ctxReg = nextContext(d.contractAddress, rReg.context);
-    const rBuying = d.contract.circuits.startBuying(ctxReg, REGISTRANT_TREE.root);
+    const rBuying = openBuyingWith(d.contract, d.contractAddress, ctxReg, REGISTRANT_TREE.root);
     const ctxBuying = nextContext(d.contractAddress, rBuying.context);
 
     const lateRegistrant = new Contract<PrivateState>({
@@ -1480,7 +1538,7 @@ describe('bonding_curve.compact — merged DarkVeil private buy (follow-up)', ()
     });
     const r1 = d.contract.circuits.submitBuyCommit(d.ctx, commitment, 1n);
     const ctx1 = nextContext(d.contractAddress, r1.context);
-    const r2 = d.contract.circuits.closeDarkVeil(ctx1, 2n, 100n);
+    const r2 = d.contract.circuits.closeDarkVeil(ctx1, 100n);
     const ctx2 = nextContext(d.contractAddress, r2.context);
 
     const { creator: overCreator, platform: overPlatform } = fees(overAmount * DV_PRICE);
@@ -1506,7 +1564,10 @@ describe('bonding_curve.compact — merged DarkVeil private buy (follow-up)', ()
 describe('bonding_curve.compact — ratio-based NIGHT bond refund', () => {
   /** Registers, submits + reveals a DV buy for `purchased` tokens, closes DarkVeil with `baseSlot`. */
   function registerBuyAndClose(purchased: bigint, baseSlot: bigint) {
-    const d = deploy();
+    // One registrant, so the allocation IS the baseSlot: closeDarkVeil now
+    // admits exactly the largest whole allocation that fits, and these cases
+    // are about the refund ratio rather than about picking a slot.
+    const d = deploy(baseSlot);
     const r0 = d.contract.circuits.advancePhase(d.ctx, LaunchPhase.DarkVeil);
     const ctx0 = nextContext(d.contractAddress, r0.context);
     const r1 = d.contract.circuits.startRegistration(ctx0);
@@ -1515,7 +1576,7 @@ describe('bonding_curve.compact — ratio-based NIGHT bond refund', () => {
     // dvState == Registration, so this must happen after startRegistration.
     const rReg1 = d.contract.circuits.registerForDarkVeil(ctx1);
     const ctxReg1 = nextContext(d.contractAddress, rReg1.context);
-    const r3 = d.contract.circuits.startBuying(ctxReg1, REGISTRANT_TREE.root);
+    const r3 = openBuyingWith(d.contract, d.contractAddress, ctxReg1, REGISTRANT_TREE.root);
     let ctx = nextContext(d.contractAddress, r3.context);
 
     if (purchased > 0n) {
@@ -1529,7 +1590,7 @@ describe('bonding_curve.compact — ratio-based NIGHT bond refund', () => {
       });
       const r4 = d.contract.circuits.submitBuyCommit(ctx, commitment, 1n);
       ctx = nextContext(d.contractAddress, r4.context);
-      const r5 = d.contract.circuits.closeDarkVeil(ctx, 2n, baseSlot);
+      const r5 = d.contract.circuits.closeDarkVeil(ctx, baseSlot);
       ctx = nextContext(d.contractAddress, r5.context);
       const { creator: purchasedCreator, platform: purchasedPlatform } = fees(purchased * DV_PRICE);
       const r6 = d.contract.circuits.revealBuyCommit(
@@ -1544,7 +1605,7 @@ describe('bonding_curve.compact — ratio-based NIGHT bond refund', () => {
       ctx = nextContext(d.contractAddress, r6.context);
     } else {
       // Ghost registrant — never submits or reveals anything.
-      const r4 = d.contract.circuits.closeDarkVeil(ctx, 2n, baseSlot);
+      const r4 = d.contract.circuits.closeDarkVeil(ctx, baseSlot);
       ctx = nextContext(d.contractAddress, r4.context);
     }
 
@@ -1649,7 +1710,7 @@ describe('bonding_curve.compact — ratio-based NIGHT bond refund', () => {
     const ctx1 = nextContext(d.contractAddress, r1.context);
     const rReg = d.contract.circuits.registerForDarkVeil(ctx1);
     const ctxReg = nextContext(d.contractAddress, rReg.context);
-    const r3 = d.contract.circuits.startBuying(ctxReg, REGISTRANT_TREE.root);
+    const r3 = openBuyingWith(d.contract, d.contractAddress, ctxReg, REGISTRANT_TREE.root);
     const ctx3 = nextContext(d.contractAddress, r3.context);
 
     expect(() => d.contract.circuits.claimRatioBondRefund(ctx3, fakeBytes32(5), 0n)).toThrow(
@@ -1974,10 +2035,10 @@ describe('bonding_curve.compact — lifecycle and range guards', () => {
     const ctx1 = nextContext(d.contractAddress, r1.context);
     const rReg = d.contract.circuits.registerForDarkVeil(ctx1);
     const ctxReg = nextContext(d.contractAddress, rReg.context);
-    const r2 = d.contract.circuits.startBuying(ctxReg, REGISTRANT_TREE.root);
+    const r2 = openBuyingWith(d.contract, d.contractAddress, ctxReg, REGISTRANT_TREE.root);
     const ctx2 = nextContext(d.contractAddress, r2.context);
 
-    expect(() => d.contract.circuits.closeDarkVeil(ctx2, 1n, 1099511627776n)).toThrow(
+    expect(() => d.contract.circuits.closeDarkVeil(ctx2, 1099511627776n)).toThrow(
       "baseSlot exceeds verifyRatioRefund's safe range",
     );
   });
@@ -2003,7 +2064,7 @@ describe('bonding_curve.compact — revealing after cancellation', () => {
     const ctx1 = nextContext(d.contractAddress, r1.context);
     const rReg = d.contract.circuits.registerForDarkVeil(ctx1);
     const ctxReg = nextContext(d.contractAddress, rReg.context);
-    const r2 = d.contract.circuits.startBuying(ctxReg, REGISTRANT_TREE.root);
+    const r2 = openBuyingWith(d.contract, d.contractAddress, ctxReg, REGISTRANT_TREE.root);
     let ctx = nextContext(d.contractAddress, r2.context);
 
     const purchased = 100n;
@@ -2018,7 +2079,7 @@ describe('bonding_curve.compact — revealing after cancellation', () => {
     // Commit, and then simply do not reveal while the phase is open.
     const r3 = d.contract.circuits.submitBuyCommit(ctx, commitment, 1n);
     ctx = nextContext(d.contractAddress, r3.context);
-    const r4 = d.contract.circuits.closeDarkVeil(ctx, 2n, purchased);
+    const r4 = d.contract.circuits.closeDarkVeil(ctx, purchased);
     ctx = nextContext(d.contractAddress, r4.context);
 
     // The launch goes public, stalls, and anyone expires it after 90 days.
@@ -2089,7 +2150,7 @@ function registerBuyAndCloseForReveal(purchased: bigint) {
   const ctx1 = nextContext(d.contractAddress, r1.context);
   const rReg = d.contract.circuits.registerForDarkVeil(ctx1);
   const ctxReg = nextContext(d.contractAddress, rReg.context);
-  const r2 = d.contract.circuits.startBuying(ctxReg, REGISTRANT_TREE.root);
+  const r2 = openBuyingWith(d.contract, d.contractAddress, ctxReg, REGISTRANT_TREE.root);
   let ctx = nextContext(d.contractAddress, r2.context);
 
   const commitment = computeBuyCommit({
@@ -2101,7 +2162,7 @@ function registerBuyAndCloseForReveal(purchased: bigint) {
   });
   const r3 = d.contract.circuits.submitBuyCommit(ctx, commitment, 1n);
   ctx = nextContext(d.contractAddress, r3.context);
-  const r4 = d.contract.circuits.closeDarkVeil(ctx, 2n, purchased);
+  const r4 = d.contract.circuits.closeDarkVeil(ctx, purchased);
   ctx = nextContext(d.contractAddress, r4.context);
   return { ...d, ctx };
 }
@@ -2120,9 +2181,9 @@ describe('bonding_curve.compact — a closed DarkVeil cannot be marked failed', 
     const ctx1 = nextContext(d.contractAddress, r1.context);
     const rReg = d.contract.circuits.registerForDarkVeil(ctx1);
     const ctxReg = nextContext(d.contractAddress, rReg.context);
-    const r2 = d.contract.circuits.startBuying(ctxReg, REGISTRANT_TREE.root);
+    const r2 = openBuyingWith(d.contract, d.contractAddress, ctxReg, REGISTRANT_TREE.root);
     const ctx2 = nextContext(d.contractAddress, r2.context);
-    const r3 = d.contract.circuits.closeDarkVeil(ctx2, 2n, 100n);
+    const r3 = d.contract.circuits.closeDarkVeil(ctx2, 100n);
     const ctx3 = nextContext(d.contractAddress, r3.context);
 
     expect(() => d.contract.circuits.markDarkVeilFailed(ctx3)).toThrow('DarkVeil already closed normally');
@@ -2143,7 +2204,7 @@ describe('bonding_curve.compact — registrant membership proof', () => {
     const ctx2 = nextContext(contractAddress, r1.context);
     const rReg = contract.circuits.registerForDarkVeil(ctx2);
     const ctx3 = nextContext(contractAddress, rReg.context);
-    const r2 = contract.circuits.startBuying(ctx3, root);
+    const r2 = openBuyingWith(contract, contractAddress, ctx3, root);
     return { contract, contractAddress, ctx: nextContext(contractAddress, r2.context) };
   }
 
@@ -2191,7 +2252,10 @@ describe('bonding_curve.compact — registrant membership proof', () => {
 // These tests pin the difference: the evidence that can be produced.
 
 describe('bonding_curve.compact — registrant exclusion dispute', () => {
-  const CLOSE_TS = 2n;
+  // The cert's close timestamp, which is now the schedule's own close rather
+  // than a value the closing call named. The reveal deadline is measured from
+  // it, so every time below has to be derived from it too.
+  const CLOSE_TS = BUYING_CLOSE_TIME;
   const REVEAL_WINDOW = 2592000n; // 30 days
   const DISPUTE_WINDOW = 259200n; // 72 hours
 
@@ -2204,9 +2268,9 @@ describe('bonding_curve.compact — registrant exclusion dispute', () => {
     const c2 = nextContext(contractAddress, r1.context);
     const rReg = contract.circuits.registerForDarkVeil(c2);
     const c3 = nextContext(contractAddress, rReg.context);
-    const r2 = contract.circuits.startBuying(c3, root);
+    const r2 = openBuyingWith(contract, contractAddress, c3, root);
     const c4 = nextContext(contractAddress, r2.context);
-    const r3 = contract.circuits.closeDarkVeil(c4, CLOSE_TS, 100n);
+    const r3 = contract.circuits.closeDarkVeil(c4, 100n);
     return { contract, contractAddress, ctx: nextContext(contractAddress, r3.context) };
   }
 
@@ -2369,13 +2433,15 @@ describe('bonding_curve.compact — permissionless DarkVeil expiry', () => {
       /Must be in DarkVeil to start Public/,
     );
 
-    // `startBuying` is refused by the DarkVeil SUB-STATE, not by `phase` —
+    // opening the window is refused by the DarkVeil SUB-STATE, not by `phase` —
     // note the message names dvState despite reading "phase". So this asserts
     // a real and separate property, but it is NOT a guard on the write above
     // and never was: it passes with that write removed. Pinning the message
     // stops it also passing on an unrelated refusal, such as the governor
     // check, which is all a bare assertion here ever established.
-    expect(() => d.contract.circuits.startBuying(after, REGISTRANT_TREE.root)).toThrow(/Must be in registration phase/);
+    expect(() => openBuyingWith(d.contract, d.contractAddress, after, REGISTRANT_TREE.root)).toThrow(
+      /Must be in registration phase/,
+    );
   });
 
   it('refuses to deploy without a registration close time to measure from', () => {
@@ -2394,9 +2460,9 @@ describe('bonding_curve.compact — permissionless DarkVeil expiry', () => {
     const c2 = nextContext(d.contractAddress, r1.context);
     const rReg = d.contract.circuits.registerForDarkVeil(c2);
     const c3 = nextContext(d.contractAddress, rReg.context);
-    const r2 = d.contract.circuits.startBuying(c3, REGISTRANT_TREE.root);
+    const r2 = openBuyingWith(d.contract, d.contractAddress, c3, REGISTRANT_TREE.root);
     const c4 = nextContext(d.contractAddress, r2.context);
-    const r3 = d.contract.circuits.closeDarkVeil(c4, 2n, 100n);
+    const r3 = d.contract.circuits.closeDarkVeil(c4, 100n);
     const c5 = nextContext(d.contractAddress, r3.context);
 
     const late = nextContextAtTime(d.contractAddress, c5, PAST_DEADLINE);
@@ -2582,5 +2648,149 @@ describe('bonding_curve.compact — the bond and the trade are different currenc
     // and making the bond asset-agnostic must not have moved the trade with it.
     expect(inputColours(buy)).toEqual([CURVE_NATIVE_COLOUR_HEX]);
     expect(inputColours(buy)).not.toContain(Buffer.from(BOND_COLOUR).toString('hex'));
+  });
+});
+
+// ============================================================================
+// The DarkVeil schedule drives itself
+// ============================================================================
+// Every transition through the phase used to need the same key. Each is now
+// gated on a time sealed at deploy, and the tests below drive them from a
+// contract built with a DIFFERENT governor secret — so "anyone may" is
+// behaviour here rather than a comment. The one that stays gated is the one
+// that carries information: a root nobody but the publisher can compute.
+
+describe('bonding_curve.compact — the DarkVeil phase runs on its sealed clock', () => {
+  const STRANGER_SECRET = fakeBytes32(211);
+
+  /** A caller who holds no role key this contract has ever heard of. */
+  function stranger() {
+    return new Contract<PrivateState>({
+      getUserSecret: (_ctx) => [undefined, { bytes: STRANGER_SECRET }],
+      getGovernorSecret: (_ctx) => [undefined, { bytes: STRANGER_SECRET }],
+      getMerkleProof: (_ctx) => [undefined, ALLOWLIST_TREE.getProof(0)],
+      getRegistrantMerkleProof: (_ctx) => [undefined, REGISTRANT_TREE.getProof(0)],
+      getBuyNonce: (_ctx) => [undefined, BUY_NONCE],
+    });
+  }
+
+  /** Deployed, phase advanced, nothing else done. */
+  function atDarkVeil() {
+    const d = deploy();
+    const r = d.contract.circuits.advancePhase(d.ctx, LaunchPhase.DarkVeil);
+    return { ...d, ctx: nextContext(d.contractAddress, r.context) };
+  }
+
+  /** Registered and in Buying, ready for the close. */
+  function readyToClose() {
+    const d = deploy();
+    const r0 = d.contract.circuits.advancePhase(d.ctx, LaunchPhase.DarkVeil);
+    const c0 = nextContext(d.contractAddress, r0.context);
+    const r1 = d.contract.circuits.startRegistration(c0);
+    const c1 = nextContext(d.contractAddress, r1.context);
+    const rReg = d.contract.circuits.registerForDarkVeil(c1);
+    const cReg = nextContext(d.contractAddress, rReg.context);
+    const r2 = openBuyingWith(d.contract, d.contractAddress, cReg, REGISTRANT_TREE.root);
+    return { ...d, ctx: nextContext(d.contractAddress, r2.context) };
+  }
+
+  it('lets a stranger open registration once its scheduled time has passed', () => {
+    const d = atDarkVeil();
+    const r = stranger().circuits.startRegistration(d.ctx);
+    expect(ledger(r.context.currentQueryContext.state).dvState).toBe(DarkVeilState.Registration);
+  });
+
+  it('refuses to open registration before its scheduled time', () => {
+    const d = atDarkVeil();
+    // Pinned one second before the registration window opens.
+    const early = nextContextAtTime(
+      d.contractAddress,
+      d.ctx,
+      Number(REGISTRATION_CLOSE_TIME - REGISTRATION_WINDOW - 1n),
+    );
+    expect(() => stranger().circuits.startRegistration(early)).toThrow(/scheduled open time/i);
+  });
+
+  it('lets a stranger open buying, but only the governor publish the root it opens over', () => {
+    const d = atDarkVeil();
+    const r1 = d.contract.circuits.startRegistration(d.ctx);
+    const c1 = nextContext(d.contractAddress, r1.context);
+    const rReg = d.contract.circuits.registerForDarkVeil(c1);
+    const c2 = nextContext(d.contractAddress, rReg.context);
+
+    // The root commits to the registrant set, and only whoever can enumerate
+    // that set can compute it. That is the whole reason this half stays gated.
+    expect(() => stranger().circuits.publishRegistrantRoot(c2, REGISTRANT_TREE.root)).toThrow(
+      /Only governor can publish the registrant root/i,
+    );
+
+    const rPub = d.contract.circuits.publishRegistrantRoot(c2, REGISTRANT_TREE.root);
+    const c3 = nextContext(d.contractAddress, rPub.context);
+
+    // Opening it is a scheduled event, so it is nobody's to withhold.
+    const rOpen = stranger().circuits.openBuying(c3);
+    const state = ledger(rOpen.context.currentQueryContext.state);
+    expect(state.dvState).toBe(DarkVeilState.Buying);
+    expect(state.registrantRoot).toEqual(REGISTRANT_TREE.root);
+  });
+
+  it('refuses to open buying with no root published, however long anyone waits', () => {
+    const d = atDarkVeil();
+    const r1 = d.contract.circuits.startRegistration(d.ctx);
+    const c1 = nextContext(d.contractAddress, r1.context);
+    const rReg = d.contract.circuits.registerForDarkVeil(c1);
+    const c2 = nextContext(d.contractAddress, rReg.context);
+    expect(() => stranger().circuits.openBuying(c2)).toThrow(/No registrant root has been published/i);
+  });
+
+  it('refuses an empty root at the point it is supplied', () => {
+    const d = atDarkVeil();
+    const r1 = d.contract.circuits.startRegistration(d.ctx);
+    const c1 = nextContext(d.contractAddress, r1.context);
+    expect(() => d.contract.circuits.publishRegistrantRoot(c1, new Uint8Array(32))).toThrow(
+      /registrantRoot cannot be empty/i,
+    );
+  });
+
+  it('refuses to open buying before its scheduled time', () => {
+    const d = atDarkVeil();
+    const r1 = d.contract.circuits.startRegistration(d.ctx);
+    const c1 = nextContext(d.contractAddress, r1.context);
+    const rReg = d.contract.circuits.registerForDarkVeil(c1);
+    const c2 = nextContext(d.contractAddress, rReg.context);
+    const rPub = d.contract.circuits.publishRegistrantRoot(c2, REGISTRANT_TREE.root);
+    const c3 = nextContext(d.contractAddress, rPub.context);
+
+    const early = nextContextAtTime(d.contractAddress, c3, Number(BUYING_OPEN_TIME - 1n));
+    expect(() => stranger().circuits.openBuying(early)).toThrow(/scheduled open time/i);
+  });
+
+  it('lets a stranger close the window, with the one allocation that fits', () => {
+    const d = readyToClose();
+    const r = stranger().circuits.closeDarkVeil(d.ctx, DV_ALLOCATION);
+    const state = ledger(r.context.currentQueryContext.state);
+    expect(state.dvState).toBe(DarkVeilState.Closed);
+    expect(state.baseSlot).toBe(DV_ALLOCATION);
+    // The certificate records the scheduled close, so it says the same thing
+    // whoever submitted the closing transaction and whenever they got to it.
+    expect(state.fairLaunchCert.closeTimestamp).toBe(BUYING_CLOSE_TIME);
+  });
+
+  it('refuses to close before the scheduled close time', () => {
+    const d = readyToClose();
+    // Exactly at the close, which the gate requires to have passed.
+    const early = nextContextAtTime(d.contractAddress, d.ctx, Number(BUYING_CLOSE_TIME));
+    expect(() => stranger().circuits.closeDarkVeil(early, DV_ALLOCATION)).toThrow(/scheduled close time/i);
+  });
+
+  // The bound that makes opening the close up safe at all. The upper bound on
+  // its own accepted every allocation at or below the true one, which was fine
+  // while one key supplied it; the floor is what makes the value computed
+  // rather than chosen.
+  it('refuses any allocation but the largest that fits', () => {
+    const d = readyToClose();
+    expect(() => stranger().circuits.closeDarkVeil(d.ctx, DV_ALLOCATION - 1n)).toThrow(/not the largest that fits/i);
+    expect(() => stranger().circuits.closeDarkVeil(d.ctx, 1n)).toThrow(/not the largest that fits/i);
+    expect(() => stranger().circuits.closeDarkVeil(d.ctx, DV_ALLOCATION + 1n)).toThrow(/exceeds dvAllocation/i);
   });
 });

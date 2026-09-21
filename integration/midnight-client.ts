@@ -432,7 +432,7 @@ export class NoctisMidnightClient {
     buyNonce: Uint8Array,
     /**
      * Membership in the REGISTRANT tree, which `submitBuyCommit` verifies
-     * against the root published at `startBuying`. A different tree from the
+     * against the root published at `publishRegistrantRoot`. A different tree from the
      * allowlist, published at a different time — so a caller submitting a buy
      * commitment must supply it. Omitted, the witness falls back to the
      * allowlist proof, which verifies against the wrong root.
@@ -502,7 +502,20 @@ export class NoctisMidnightClient {
       dvPrice: bigint;
       allowlistSize: bigint;
       registrationCloseTime: bigint;
-      // Minimum absolute registrant count required before startBuying()
+      /**
+       * The three window durations the rest of the DarkVeil schedule is
+       * derived from at deploy, in seconds.
+       *
+       * They are what make the phase transitions permissionless — a circuit
+       * gated on a sealed time needs no key and accepts no caller-supplied
+       * timestamp. CLAUDE.md's DV_REGISTRATION_HRS / DV_FREEZE_HRS /
+       * DV_BUYING_HRS are the real-launch values; a rehearsal shortens them,
+       * which is a decision made once, in public, before anyone bonds.
+       */
+      registrationWindowSeconds: bigint;
+      freezeWindowSeconds: bigint;
+      buyingWindowSeconds: bigint;
+      // Minimum absolute registrant count required before openBuying()
       // will allow the Registration -> Buying transition. CLAUDE.md:
       // MIN_DV_PARTICIPANTS = 15.
       minDvParticipants: bigint;
@@ -557,6 +570,9 @@ export class NoctisMidnightClient {
         args.dvPrice,
         args.allowlistSize,
         args.registrationCloseTime,
+        args.registrationWindowSeconds,
+        args.freezeWindowSeconds,
+        args.buyingWindowSeconds,
         args.minDvParticipants,
         args.creatorPubKey,
         args.platformAddr,
@@ -1046,58 +1062,45 @@ export class NoctisLaunchManager {
   }
 
   /**
-   * Freezes registration and opens the buying window, publishing the
-   * registrant root in the same call.
-   *
-   * The root is computed off-chain over the registrant set as it stands at
-   * this exact moment, which is why publishing it and freezing the window are
-   * one circuit rather than two: the set the root commits to is final because
-   * nothing can join after the same call that published it.
-   *
-   * The circuit holds this to the minimum participant floor — below it, the
-   * launch has to be cancelled instead, which refunds every bond in full.
+   * Kept as a named method so a caller that asks for it is told where the path
+   * went, rather than reaching for a circuit neither contract carries any
+   * more. It was split in two: `publishRegistrantRoot`, which stays
+   * governor-only because only whoever can enumerate the registrant set can
+   * compute its root, and `openBuying`, which runs on the sealed clock and
+   * needs nobody's key.
    */
-  /**
-   * Midnight Launch only. Cardano Launch's eligibility_gate.compact no longer
-   * carries this circuit — it was split into publishRegistrantRoot (governor,
-   * because only the platform can compute the root) and openBuying
-   * (permissionless, on the sealed clock). Resolving to the gate here would
-   * reach for a circuit that is not there, so it deliberately does not.
-   */
-  async startBuying(registrantRoot: Uint8Array) {
-    if (this.client.eligibilityGate) {
-      throw new Error(
-        'startBuying was split for Cardano Launch: call publishRegistrantRoot (governor), then openBuying (permissionless, once the sealed buying time passes).',
-      );
-    }
-    const handle = this.client.bondingCurve;
-    if (!handle) throw new Error('bonding_curve not connected');
-    return handle.callTx.startBuying(registrantRoot);
+  async startBuying(_registrantRoot: Uint8Array): Promise<never> {
+    throw new Error(
+      'startBuying was split in two: call publishRegistrantRoot (governor), then openBuying (permissionless, once the sealed buying time passes).',
+    );
   }
 
   /**
-   * Publish the registrant root, ready for buying to open (Cardano Launch).
+   * Publish the registrant root, ready for buying to open.
    *
-   * `startBuying` above was split in two: this half stays governor-only,
-   * because only whoever can enumerate the registrant set off-chain can
-   * compute the root. The other half, `openBuying`, runs on the sealed clock
-   * and needs nobody's key. `startBuying` remains for Midnight Launch's
-   * merged bonding_curve.compact, which still carries the single circuit.
+   * The root is computed off chain over the registrant set as it stands once
+   * registration has closed, which is why this half stays governor-only —
+   * only whoever can enumerate that set can compute it. Publishing it moves
+   * no phase; the window opens on its own schedule afterwards.
    */
   async publishRegistrantRoot(registrantRoot: Uint8Array) {
-    const handle = this.client.eligibilityGate;
-    if (!handle) throw new Error('eligibility_gate not connected');
+    const handle = this.client.eligibilityGate ?? this.client.bondingCurve;
+    if (!handle) throw new Error('eligibility_gate not connected (checked both eligibilityGate and bondingCurve)');
     return handle.callTx.publishRegistrantRoot(registrantRoot);
   }
 
   /**
-   * Open the buying window (Cardano Launch). Permissionless — the sealed
-   * schedule is the whole authorization, so any funded wallet can submit it
-   * and the launch no longer waits on one key to reach its own window.
+   * Open the buying window. Permissionless — the sealed schedule is the whole
+   * authorization, so any funded wallet can submit it and the launch no longer
+   * waits on one key to reach its own window.
+   *
+   * The circuit holds it to the minimum participant floor and to a published
+   * root. A launch that reaches neither never opens, and every bond returns
+   * through the expiry path without anyone's permission.
    */
   async openBuying() {
-    const handle = this.client.eligibilityGate;
-    if (!handle) throw new Error('eligibility_gate not connected');
+    const handle = this.client.eligibilityGate ?? this.client.bondingCurve;
+    if (!handle) throw new Error('eligibility_gate not connected (checked both eligibilityGate and bondingCurve)');
     return handle.callTx.openBuying();
   }
 
@@ -1254,29 +1257,20 @@ export class NoctisLaunchManager {
    * (the final registrant count is only known once registration is over).
    * Required for claimRatioBondRefund below.
    *
-   * Phase 2 security-audit fix (2026-07-11): both tiers' merged
-   * `closeDarkVeil` now take `baseSlot` — Cardano Launch's eligibility_gate.compact
-   * gained the ratio-refund mechanism (and its own baseSlot requirement)
-   * in the same pass that retired the standalone darkveil.compact, so the
-   * old per-tier arity branch is no longer needed.
+   * Permissionless and clock-gated on both launch types, so the circuit takes
+   * no timestamp: it stamps the certificate with the scheduled close sealed at
+   * deploy. A caller-supplied time would be a value any caller could name,
+   * which is precisely what a permissionless circuit must not accept.
+   *
+   * `baseSlot` is supplied only because Compact cannot divide in circuit. It
+   * is not chosen — the circuit's two bounds admit exactly the largest whole
+   * allocation that fits, so a wrong figure fails to execute rather than
+   * settling a launch on the wrong split.
    */
-  async closeDarkVeil(closeTimestamp: bigint, baseSlot: bigint) {
-    const handle = this.client.eligibilityGate;
-    if (handle) {
-      // Cardano Launch: permissionless and clock-gated, so the circuit takes
-      // no timestamp at all — it stamps the certificate with the scheduled
-      // close time sealed at deploy. A caller-supplied time would be a value
-      // any caller could name, which is precisely what a permissionless
-      // circuit must not accept. The argument is kept on this wrapper so the
-      // Midnight Launch branch below still has it, and ignored here.
-      void closeTimestamp;
-      return handle.callTx.closeDarkVeil(baseSlot);
-    }
-    const cHandle = this.client.bondingCurve;
-    if (!cHandle) throw new Error('eligibility_gate not connected (checked both eligibilityGate and bondingCurve)');
-    // Midnight Launch's merged bonding_curve.compact still carries the
-    // governor-gated two-argument circuit.
-    return cHandle.callTx.closeDarkVeil(closeTimestamp, baseSlot);
+  async closeDarkVeil(baseSlot: bigint) {
+    const handle = this.client.eligibilityGate ?? this.client.bondingCurve;
+    if (!handle) throw new Error('eligibility_gate not connected (checked both eligibilityGate and bondingCurve)');
+    return handle.callTx.closeDarkVeil(baseSlot);
   }
 
   /**

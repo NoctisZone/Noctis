@@ -509,7 +509,7 @@ This prevents cross-PSM identity linking — a user's key in the bonding curve i
 ```
 Inactive ──(startRegistration)──▶ Registration
  │
- │ (startBuying)
+ │ (publishRegistrantRoot, then openBuying)
  ▼
  Buying
  │

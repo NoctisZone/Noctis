@@ -276,7 +276,7 @@ export const DOMAINS = {
 // Fix (2026-07-30): eligibility_gate.compact gained a second Merkle
 // witness, getRegistrantMerkleProof — submitBuyCommit now proves prior
 // DarkVeil registration via a real Merkle proof against registrantRoot
-// (published by the governor at startBuying, the registration freeze)
+// (published by the governor at publishRegistrantRoot, the registration freeze)
 // instead of a publicly-precomputable nullifier. See
 // packages/zk-proofs/src/eligibility-gate.ts's buildRegistrantTree for the
 // off-chain tree builder, and registrantRoot's own ledger comment in

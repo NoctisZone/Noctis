@@ -432,7 +432,7 @@ async function main() {
         // No closeTimestamp: the circuit stamps the certificate with the
         // scheduled close sealed at deploy, so there is nothing for a caller
         // to supply and nothing to get wrong.
-        result = await manager.closeDarkVeil(0n, requireBigint(input.baseSlot, 'baseSlot'));
+        result = await manager.closeDarkVeil(requireBigint(input.baseSlot, 'baseSlot'));
         break;
 
       case 'record-settlement':

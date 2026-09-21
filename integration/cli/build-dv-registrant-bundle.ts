@@ -2,7 +2,7 @@
 // Noctis Zone — registrant bundle for a DarkVeil launch
 // ============================================================================
 // Produces the two things the buying window needs: the `registrantRoot_` that
-// `startBuying` publishes, and one membership proof per registrant for
+// `publishRegistrantRoot` publishes, and one membership proof per registrant for
 // `submitBuyCommit` to present later.
 //
 // THE REGISTRANT SET COMES FROM THE CHAIN, not from a list kept alongside it.
@@ -23,7 +23,7 @@
 // commitment; being able to re-derive it independently is what makes it
 // checkable rather than merely asserted.
 //
-// WHEN TO RUN IT: at the freeze point, immediately before `startBuying`, and
+// WHEN TO RUN IT: at the freeze point, immediately before `publishRegistrantRoot`, and
 // not before. The set it commits to is final because nothing can join after
 // the same call that publishes it — run it earlier and any registration in
 // between is committed to nothing, leaving that registrant unable to buy.

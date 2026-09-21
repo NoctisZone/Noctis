@@ -8,6 +8,20 @@ Notable changes to the Noctis Zone, by release. Internal development history pre
 
 ### Changed
 
+- A Midnight Launch's DarkVeil phase now runs on the same sealed schedule a
+  Cardano Launch does. Registration opening, the buying window opening and the
+  DarkVeil close are each driven by a deadline fixed at deploy, before anyone
+  bonds, so any wallet may submit the transaction that moves the launch to its
+  own advertised window. None of them takes a timestamp from its caller.
+- Publishing the registrant set and opening the buying window are separate
+  actions here too: the root is published by the party that can compute it, and
+  the window opens on the clock afterwards.
+- Closing accepts exactly one per-registrant allocation, the largest whole
+  number of tokens that divides among the registrants within the DarkVeil
+  allocation, so the figure is determined by public ledger state. The Fair
+  Launch Certificate records the scheduled close, which is the same value
+  whoever submits the closing transaction and whenever they get to it.
+
 - The DarkVeil claim window on a Cardano Launch now opens on its own terms
   rather than on a signature. Everything that transaction relies on — the
   allocation root, the nullifier map it is claimed against, and the launch's own
