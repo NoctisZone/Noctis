@@ -36,6 +36,7 @@
 //     "walletSeedHex": "<64 hex chars>",
 //     "contractAddress": "<bech32m contract address>",
 //     "newRootHex": "<64 hex chars>",
+//     "evidenceRefHex": "<64 hex chars — what the root was built from>",
 //     "zkConfigBasePath": "<local fs path to compiled eligibility_gate ZK artifacts>",
 //     "proofServerUrl": "http://...",
 //     "relayUrl": "wss://...",        // optional, defaults per network
@@ -71,6 +72,17 @@ interface Input extends SnapshotCliInput {
   walletSeedHex: string;
   contractAddress: string;
   newRootHex: string;
+  /**
+   * The 32-byte commitment to what this root was built FROM, hex. Off chain it
+   * is a hash over the Cardano block the eligibility checks were evaluated at
+   * and the applicant set they ran over, so a published root can be recomputed
+   * and contradicted by anyone holding that evidence.
+   *
+   * Every attestor of one round must supply the SAME value: the contract pairs
+   * the root with its evidence, so approving one root over two different sets
+   * of facts starts two rounds rather than completing one.
+   */
+  evidenceRefHex: string;
   zkConfigBasePath: string;
   proofServerUrl: string;
   relayUrl?: string;
@@ -105,6 +117,7 @@ async function main() {
     'walletSeedHex',
     'contractAddress',
     'newRootHex',
+    'evidenceRefHex',
     'zkConfigBasePath',
     'proofServerUrl',
   ]);
@@ -124,6 +137,7 @@ async function main() {
   const governorSecret = fromHex(input.governorSecretHex, 'governorSecretHex');
   const walletSeed = fromHex(input.walletSeedHex, 'walletSeedHex');
   const newRoot = fromHex(input.newRootHex, 'newRootHex');
+  const evidenceRef = fromHex(input.evidenceRefHex, 'evidenceRefHex');
 
   const netDefaults =
     input.network === 'mainnet' ? undefined : defaultNetworkConfig(input.network, input.proofServerUrl);
@@ -201,7 +215,7 @@ async function main() {
     // distinct attestors inside the expiry window, so a single run of this CLI
     // is expected NOT to change it — run it again as the second attestor.
     const currentTimestampSeconds = BigInt(Math.floor(Date.now() / 1000));
-    const result = await manager.updateAllowlistRoot(newRoot, currentTimestampSeconds);
+    const result = await manager.updateAllowlistRoot(newRoot, currentTimestampSeconds, evidenceRef);
 
     process.stdout.write(
       JSON.stringify({

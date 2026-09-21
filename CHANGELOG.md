@@ -37,6 +37,19 @@ Notable changes to the Noctis Zone, by release. Internal development history pre
   what buyers stated they intended during the private phase. Both sets of totals
   remain in public state, so the two can be compared by anyone.
 
+- Anyone can now prove that a published DarkVeil registrant tree contains a key
+  that never registered, and doing so fails the phase and returns every bond in
+  full. The proof is the whole authorization: it needs a real Merkle path into
+  the published root for a key that holds no bond, and neither half can be
+  fabricated, so the check cannot be used against a healthy launch. This is the
+  counterpart to the existing path for a registrant the tree leaves out, so the
+  tree can now be held to the registrations in both directions.
+- A published allowlist root names the evidence it was built from. The
+  attestors approve the root and a commitment to that evidence together, so a
+  threshold cannot be assembled from parties who agreed on the root while
+  disagreeing about the facts behind it, and a root published this way can be
+  recomputed and contradicted by anyone holding the evidence.
+
 - A DarkVeil settlement can be closed only once it reflects a claim window that
   really ran: where buyers revealed purchases during the private phase, at least
   one of them must have settled. A launch in which nobody revealed anything is

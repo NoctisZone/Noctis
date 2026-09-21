@@ -71,8 +71,19 @@ function attestAllowlistAgain(contractAddress: string, ctx: never, root: Uint8Ar
     ...witnesses,
     getGovernorSecret: (_c) => [undefined, { bytes: fakeBytes32(ALLOWLIST_ATTESTOR_2_FILL) }],
   });
-  return second.circuits.updateAllowlistRoot(nextContextAtTime(contractAddress, ctx, Number(at)), root, at);
+  return second.circuits.updateAllowlistRoot(
+    nextContextAtTime(contractAddress, ctx, Number(at)),
+    root,
+    ALLOWLIST_EVIDENCE,
+    at,
+  );
 }
+
+// What the allowlist root was computed from, as the contract sees it: a
+// 32-byte commitment the attestors approve alongside the root. Off chain it is
+// a hash over the Cardano block the eligibility checks ran at and the applicant
+// set they ran over; in circuit it only has to be non-empty and agreed on.
+const ALLOWLIST_EVIDENCE = fakeBytes32(171);
 
 const witnesses: Witnesses<PrivateState> = {
   getUserSecret: (_ctx) => [undefined, { bytes: fakeBytes32(3) }],
@@ -2235,7 +2246,12 @@ describe('eligibility_gate.compact — the allowlist is fixed outside the regist
   it('accepts a late addition while registration is open, which is what the circuit is for', () => {
     const { contract, contractAddress, ctx } = deployAndStartDarkVeil();
     // Two attestors: the root only changes once the threshold is met.
-    const r1 = contract.circuits.updateAllowlistRoot(nextContextAtTime(contractAddress, ctx, 0), fakeBytes32(123), 0n);
+    const r1 = contract.circuits.updateAllowlistRoot(
+      nextContextAtTime(contractAddress, ctx, 0),
+      fakeBytes32(123),
+      ALLOWLIST_EVIDENCE,
+      0n,
+    );
     const r = attestAllowlistAgain(
       contractAddress,
       nextContext(contractAddress, r1.context) as never,
@@ -2246,7 +2262,7 @@ describe('eligibility_gate.compact — the allowlist is fixed outside the regist
 
   it('rejects an update before registration has opened', () => {
     const { contract, ctx } = deploy();
-    expect(() => contract.circuits.updateAllowlistRoot(ctx, fakeBytes32(123), 0n)).toThrow(
+    expect(() => contract.circuits.updateAllowlistRoot(ctx, fakeBytes32(123), ALLOWLIST_EVIDENCE, 0n)).toThrow(
       'Allowlist is fixed outside the DarkVeil phase',
     );
   });
@@ -2255,7 +2271,7 @@ describe('eligibility_gate.compact — the allowlist is fixed outside the regist
     // The registrant set is fixed at the freeze and startBuying publishes
     // registrantRoot over it, so the allowlist decides nothing from here on.
     const { contract, ctx } = deployAndStartDvBuying();
-    expect(() => contract.circuits.updateAllowlistRoot(ctx, fakeBytes32(123), 0n)).toThrow(
+    expect(() => contract.circuits.updateAllowlistRoot(ctx, fakeBytes32(123), ALLOWLIST_EVIDENCE, 0n)).toThrow(
       'Allowlist is fixed once registration freezes',
     );
   });
@@ -2282,7 +2298,12 @@ describe('eligibility_gate.compact — threshold attestation on the allowlist ro
             ...witnesses,
             getGovernorSecret: (_c) => [undefined, { bytes: fakeBytes32(fill) }],
           });
-    const r = c.circuits.updateAllowlistRoot(nextContextAtTime(d.contractAddress, ctx, Number(at)), root, at);
+    const r = c.circuits.updateAllowlistRoot(
+      nextContextAtTime(d.contractAddress, ctx, Number(at)),
+      root,
+      ALLOWLIST_EVIDENCE,
+      at,
+    );
     return nextContext(d.contractAddress, r.context);
   }
 
@@ -2685,5 +2706,270 @@ describe('eligibility_gate.compact — a claim window that never ran must fail, 
     // And the certificate honestly records that nothing was distributed.
     expect(state.fairLaunchCert.totalTokensAllocated).toBe(0n);
     expect(state.fairLaunchCert.totalParticipants).toBe(0n);
+  });
+});
+
+// ============================================================================
+// The other direction: a published tree containing a registrant it should not
+// ============================================================================
+// The exclusion dispute answers a registrant the tree leaves out. This answers
+// a leaf the registrations do not support — which matters for a different
+// reason, since buying is gated on membership in the tree and not on holding a
+// bond, so a fabricated leaf is an allocation nobody posted a bond for.
+
+describe('eligibility_gate.compact — challenging a registrant the tree should not contain', () => {
+  const SECRET_A = fakeBytes32(121);
+  const SECRET_B = fakeBytes32(122);
+  const SECRET_GHOST = fakeBytes32(123);
+  const KEY_A = deriveUserPublicKey(SECRET_A, LAUNCH_ID);
+  const KEY_B = deriveUserPublicKey(SECRET_B, LAUNCH_ID);
+  // Never registers, never bonds — the leaf the challenge is about.
+  const KEY_GHOST = deriveUserPublicKey(SECRET_GHOST, LAUNCH_ID);
+  // Never appears in any tree, used to prove a challenge needs a REAL path.
+  const KEY_STRANGER = deriveUserPublicKey(fakeBytes32(124), LAUNCH_ID);
+
+  const INCL_ALLOWLIST = buildAllowlistTree([
+    hashAllowlistLeaf(KEY_A),
+    hashAllowlistLeaf(KEY_B),
+    hashAllowlistLeaf(KEY_GHOST),
+  ]);
+  // Three leaves, two registrations. The third is the one nobody bonded for.
+  const INFLATED_TREE = buildRegistrantTree([
+    hashRegistrantLeaf(KEY_A),
+    hashRegistrantLeaf(KEY_B),
+    hashRegistrantLeaf(KEY_GHOST),
+  ]);
+  const HONEST_TREE = buildRegistrantTree([hashRegistrantLeaf(KEY_A), hashRegistrantLeaf(KEY_B)]);
+
+  const BASE_SLOT = 100n;
+  const ALLOCATION = BASE_SLOT * 2n; // two real registrants
+
+  function party(
+    secretBytes: Uint8Array,
+    allowlistIndex: number,
+    proofTree: ReturnType<typeof buildRegistrantTree>,
+    proofIndex: number,
+  ) {
+    return new Contract<PrivateState>({
+      getUserSecret: (_ctx) => [undefined, { bytes: secretBytes }],
+      getMerkleProof: (_ctx) => [undefined, INCL_ALLOWLIST.getProof(allowlistIndex)],
+      getRegistrantMerkleProof: (_ctx) => [undefined, proofTree.getProof(proofIndex)],
+      getGovernorSecret: (_ctx) => [undefined, { bytes: fakeBytes32(2) }],
+      getBuyNonce: (_ctx) => [undefined, BUY_NONCE],
+    });
+  }
+
+  /** Two registrants bond; `publishedTree` is what the root commits to. */
+  function bondTwoAndClose(publishedTree: ReturnType<typeof buildRegistrantTree>) {
+    const governor = party(SECRET_A, 0, publishedTree, 0);
+    const { contractAddress, ctx } = deployForTest(
+      governor,
+      undefined,
+      LAUNCH_ID,
+      INCL_ALLOWLIST.root,
+      TOTAL_SUPPLY,
+      MAX_WALLET_PERCENT,
+      1000n,
+      BOND_COLOUR,
+      CORRECT_WALLET_CAP,
+      ALLOCATION,
+      DV_PRICE,
+      3n, // allowlistSize
+      REGISTRATION_CLOSE_TIME,
+      REGISTRATION_WINDOW,
+      FREEZE_WINDOW,
+      BUYING_WINDOW,
+      1n, // minDvParticipants
+      CREATOR_KEY,
+      PLATFORM_ADDR,
+      ALLOWLIST_ATTESTOR_1_KEY,
+      ALLOWLIST_ATTESTOR_2_KEY,
+      ALLOWLIST_ATTESTOR_3_KEY,
+      ALLOWLIST_THRESHOLD,
+    );
+
+    const r0 = governor.circuits.advancePhase(ctx, LaunchPhase.DarkVeil);
+    const c0 = nextContext(contractAddress, r0.context);
+    const r1 = governor.circuits.startRegistration(c0);
+    const c1 = nextContext(contractAddress, r1.context);
+    const rA = party(SECRET_A, 0, publishedTree, 0).circuits.registerForDarkVeil(c1);
+    const cA = nextContext(contractAddress, rA.context);
+    const rB = party(SECRET_B, 1, publishedTree, 1).circuits.registerForDarkVeil(cA);
+    const cB = nextContext(contractAddress, rB.context);
+    const rOpen = openBuyingWith(governor, contractAddress, cB, publishedTree.root);
+    return { governor, contractAddress, ctx: nextContext(contractAddress, rOpen.context) };
+  }
+
+  it('the ghost really is in the published tree and really has no bond', () => {
+    // Both halves of the disagreement, stated as facts before anything is
+    // argued from them.
+    const d = bondTwoAndClose(INFLATED_TREE);
+    const st = ledger(d.ctx.currentQueryContext.state);
+    expect(st.registrationCount).toBe(2n);
+    expect(st.lockedBonds.member(KEY_A)).toBe(true);
+    expect(st.lockedBonds.member(KEY_GHOST)).toBe(false);
+    expect(st.registrantRoot).toEqual(INFLATED_TREE.root);
+  });
+
+  it('lets ANYONE prove the leaf and fail the phase, and the bonds come back in full', () => {
+    const d = bondTwoAndClose(INFLATED_TREE);
+    // A challenger with no stake in the launch at all: someone else's secret,
+    // carrying only the public path to the ghost's leaf.
+    const challenger = party(fakeBytes32(199), 0, INFLATED_TREE, 2);
+    const r = challenger.circuits.challengeRegistrantInclusion(d.ctx, KEY_GHOST);
+    const after = nextContext(d.contractAddress, r.context);
+
+    const st = ledger(after.currentQueryContext.state);
+    expect(st.dvFailed).toBe(true);
+    expect(st.phase).toBe(LaunchPhase.Cancelled);
+
+    // The honest registrants are made whole, not merely unblocked.
+    const refund = party(SECRET_A, 0, INFLATED_TREE, 0).circuits.claimBondRefund(after, fakeBytes32(5));
+    expect(ledger(refund.context.currentQueryContext.state).lockedBonds.lookup(KEY_A)).toBe(0n);
+  });
+
+  it('refuses to challenge a registrant who really did bond', () => {
+    // The tree is entitled to contain them, so there is no disagreement to
+    // prove — and this is what stops the circuit being a way to cancel a
+    // healthy launch.
+    const d = bondTwoAndClose(INFLATED_TREE);
+    const challenger = party(fakeBytes32(199), 0, INFLATED_TREE, 0);
+    expect(() => challenger.circuits.challengeRegistrantInclusion(d.ctx, KEY_A)).toThrow(
+      'This registrant holds a bond, so the tree is entitled to contain them',
+    );
+  });
+
+  it('refuses a challenge against an honest tree, because no path to the ghost exists', () => {
+    // The same ghost key, the same challenger, a root that does not contain
+    // it. The proof is the whole authorization, so it cannot be made falsely.
+    const d = bondTwoAndClose(HONEST_TREE);
+    const challenger = party(fakeBytes32(199), 0, INFLATED_TREE, 2);
+    expect(() => challenger.circuits.challengeRegistrantInclusion(d.ctx, KEY_GHOST)).toThrow(
+      'Invalid registrant proof',
+    );
+  });
+
+  it('refuses a challenge naming a key that is in no tree at all', () => {
+    const d = bondTwoAndClose(INFLATED_TREE);
+    const challenger = party(fakeBytes32(199), 0, INFLATED_TREE, 2);
+    expect(() => challenger.circuits.challengeRegistrantInclusion(d.ctx, KEY_STRANGER)).toThrow(
+      'Invalid registrant proof',
+    );
+  });
+
+  it('refuses once the settlement is finalized, when Cardano has already paid out against the set', () => {
+    const d = bondTwoAndClose(INFLATED_TREE);
+    const rC = d.governor.circuits.closeDarkVeil(d.ctx, BASE_SLOT);
+    const cC = nextContext(d.contractAddress, rC.context);
+    const rF = d.governor.circuits.finalizeDvSettlement(cC);
+    const cF = nextContext(d.contractAddress, rF.context);
+
+    const challenger = party(fakeBytes32(199), 0, INFLATED_TREE, 2);
+    expect(() => challenger.circuits.challengeRegistrantInclusion(cF, KEY_GHOST)).toThrow(
+      'DarkVeil settlement is already finalized',
+    );
+  });
+
+  it('is still available after the close, while the claim window is running', () => {
+    // The root stays in force through the Cardano claim window, so the
+    // challenge has to outlive the close rather than expiring with it.
+    const d = bondTwoAndClose(INFLATED_TREE);
+    const rC = d.governor.circuits.closeDarkVeil(d.ctx, BASE_SLOT);
+    const cC = nextContext(d.contractAddress, rC.context);
+
+    const challenger = party(fakeBytes32(199), 0, INFLATED_TREE, 2);
+    const r = challenger.circuits.challengeRegistrantInclusion(cC, KEY_GHOST);
+    expect(ledger(r.context.currentQueryContext.state).dvFailed).toBe(true);
+  });
+});
+
+describe('eligibility_gate.compact — the allowlist root names the evidence it was built from', () => {
+  // The allowlist is the one root this chain cannot check: its inputs are
+  // Cardano facts and no bridge lets a circuit read them. What it can do is
+  // make the answer name its own evidence, so a published root is a claim
+  // anyone holding that evidence can recompute and contradict.
+  const OTHER_EVIDENCE = fakeBytes32(172);
+  const NEW_ROOT = fakeBytes32(123);
+
+  /** Attests with a named attestor fill, returning the next context. */
+  function attest(
+    contractAddress: Parameters<typeof nextContext<PrivateState>>[0],
+    ctx: CircuitContext<PrivateState>,
+    fill: number,
+    root: Uint8Array,
+    evidence: Uint8Array,
+  ) {
+    const c = new Contract<PrivateState>({
+      ...witnesses,
+      getGovernorSecret: (_w) => [undefined, { bytes: fakeBytes32(fill) }],
+    });
+    return c.circuits.updateAllowlistRoot(nextContextAtTime(contractAddress, ctx, 0), root, evidence, 0n);
+  }
+
+  it('refuses a root with no evidence behind it', () => {
+    const { contract, contractAddress, ctx } = deployAndStartDarkVeil();
+    // Pinned to the declared timestamp, or the one-hour band refuses the call
+    // before the evidence check is ever reached.
+    const pinned = nextContextAtTime(contractAddress, ctx, 0);
+    expect(() => contract.circuits.updateAllowlistRoot(pinned, NEW_ROOT, fakeBytes32(0), 0n)).toThrow(
+      'allowlist evidence reference cannot be empty',
+    );
+  });
+
+  it('publishes the root and its evidence together, once the threshold is met', () => {
+    const { contractAddress, ctx } = deployAndStartDarkVeil();
+    const r1 = attest(contractAddress, ctx, ALLOWLIST_ATTESTOR_1_FILL, NEW_ROOT, ALLOWLIST_EVIDENCE);
+    const mid = ledger(r1.context.currentQueryContext.state);
+    // One attestation moves neither.
+    expect(mid.allowlistRoot).not.toEqual(NEW_ROOT);
+    expect(mid.allowlistEvidenceRef).toEqual(fakeBytes32(0));
+
+    const r2 = attest(
+      contractAddress,
+      nextContext(contractAddress, r1.context),
+      ALLOWLIST_ATTESTOR_2_FILL,
+      NEW_ROOT,
+      ALLOWLIST_EVIDENCE,
+    );
+    const after = ledger(r2.context.currentQueryContext.state);
+    expect(after.allowlistRoot).toEqual(NEW_ROOT);
+    expect(after.allowlistEvidenceRef).toEqual(ALLOWLIST_EVIDENCE);
+  });
+
+  it('will not assemble a threshold from attestors who signed the same root over DIFFERENT evidence', () => {
+    // The property the pairing exists for. Approving a root while disagreeing
+    // about the facts behind it is not agreement, and counting it as one would
+    // make the evidence decorative.
+    const { contractAddress, ctx } = deployAndStartDarkVeil();
+    const r1 = attest(contractAddress, ctx, ALLOWLIST_ATTESTOR_1_FILL, NEW_ROOT, ALLOWLIST_EVIDENCE);
+    const r2 = attest(
+      contractAddress,
+      nextContext(contractAddress, r1.context),
+      ALLOWLIST_ATTESTOR_2_FILL,
+      NEW_ROOT,
+      OTHER_EVIDENCE,
+    );
+    const after = ledger(r2.context.currentQueryContext.state);
+    expect(after.allowlistRoot).not.toEqual(NEW_ROOT);
+    // The second attestor started a fresh round over their own evidence
+    // rather than completing the first.
+    expect(after.pendingAllowlistEvidenceRef).toEqual(OTHER_EVIDENCE);
+  });
+
+  it('completes when the second attestor agrees on the evidence after all', () => {
+    // The mirror of the case above, so the refusal is shown to be about the
+    // disagreement and not about the second attestation being ignored.
+    const { contractAddress, ctx } = deployAndStartDarkVeil();
+    const r1 = attest(contractAddress, ctx, ALLOWLIST_ATTESTOR_1_FILL, NEW_ROOT, OTHER_EVIDENCE);
+    const r2 = attest(
+      contractAddress,
+      nextContext(contractAddress, r1.context),
+      ALLOWLIST_ATTESTOR_2_FILL,
+      NEW_ROOT,
+      OTHER_EVIDENCE,
+    );
+    const after = ledger(r2.context.currentQueryContext.state);
+    expect(after.allowlistRoot).toEqual(NEW_ROOT);
+    expect(after.allowlistEvidenceRef).toEqual(OTHER_EVIDENCE);
   });
 });

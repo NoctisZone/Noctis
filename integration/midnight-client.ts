@@ -1132,10 +1132,46 @@ export class NoctisLaunchManager {
    * `currentTimestampSeconds` is bound to real chain time by the circuit and
    * dates the attestation round.
    */
-  async updateAllowlistRoot(newRoot: Uint8Array, currentTimestampSeconds: bigint) {
-    const handle = this.client.eligibilityGate ?? this.client.bondingCurve;
-    if (!handle) throw new Error('eligibility_gate not connected (checked both eligibilityGate and bondingCurve)');
-    return handle.callTx.updateAllowlistRoot(newRoot, currentTimestampSeconds);
+  async updateAllowlistRoot(newRoot: Uint8Array, currentTimestampSeconds: bigint, evidenceRef?: Uint8Array) {
+    const handle = this.client.eligibilityGate;
+    if (handle) {
+      // Cardano Launch: the root has to name the evidence it was built from,
+      // and the attestors approve the two together. The commitment covers the
+      // Cardano block the eligibility checks were evaluated at and the
+      // applicant set they ran over, so a published root can be recomputed and
+      // contradicted by anyone holding that evidence. Required, and refused
+      // rather than defaulted: a zero commitment would make the field
+      // decorative, which is the thing it exists to prevent.
+      if (evidenceRef?.length !== 32) {
+        throw new Error(
+          'Publishing an allowlist root needs the 32-byte evidence commitment it was built from: ' +
+            `got ${evidenceRef ? `${evidenceRef.length} bytes` : 'nothing'}. It binds the Cardano block ` +
+            'the checks ran at and the applicant set they ran over.',
+        );
+      }
+      return handle.callTx.updateAllowlistRoot(newRoot, evidenceRef, currentTimestampSeconds);
+    }
+    const cHandle = this.client.bondingCurve;
+    if (!cHandle) throw new Error('eligibility_gate not connected (checked both eligibilityGate and bondingCurve)');
+    // Midnight Launch's merged contract still carries the two-argument circuit.
+    return cHandle.callTx.updateAllowlistRoot(newRoot, currentTimestampSeconds);
+  }
+
+  /**
+   * Prove the published registrant tree contains a key that never registered,
+   * and fail the phase for it (Cardano Launch).
+   *
+   * Permissionless, and it is a proof rather than a claim: it needs a real
+   * Merkle path into the published root for a key with no row in lockedBonds,
+   * and neither half can be fabricated. Buying is gated on membership in that
+   * tree and not on holding a bond, so a leaf nobody bonded for would
+   * otherwise be an allocation nobody paid to take. The bonds come back in
+   * full through claimBondRefund.
+   */
+  async challengeRegistrantInclusion(registrantKey: Uint8Array) {
+    const handle = this.client.eligibilityGate;
+    if (!handle) throw new Error('eligibility_gate not connected');
+    return handle.callTx.challengeRegistrantInclusion(registrantKey);
   }
 
   /**

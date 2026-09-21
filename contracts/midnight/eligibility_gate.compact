@@ -266,6 +266,31 @@ sealed ledger allowlistThreshold: Uint<8>;
 
 sealed ledger allowlistExpirySeconds: Uint<64>;
 
+// What the allowlist root was built FROM, as a 32-byte commitment the
+// attestors sign off alongside the root itself.
+//
+// The allowlist is the one root this chain genuinely cannot check. Its inputs —
+// wallet age, NIGHT balance, stake key, 90-day ADA flow — are Cardano facts,
+// and no bridge lets a Compact circuit read them, so somebody computes
+// eligibility off chain and publishes the result. That is infrastructure
+// rather than a shortcut, and it is not what this field changes.
+//
+// What it changes is that the answer now names its own evidence. The
+// commitment binds the Cardano block the checks were evaluated at and the
+// applicant set they were evaluated over, so a published root stops being an
+// assertion and becomes a claim anyone holding that evidence can recompute and
+// contradict. Two of three attestors have to approve the root and the evidence
+// TOGETHER, so they cannot be split into signing the same root over different
+// facts.
+//
+// Stated honestly: this does not make the choice of snapshot unimpeachable —
+// an attestor set could still agree on a moment that suits them. It makes the
+// moment public and the arithmetic checkable, which is the achievable bar
+// while the facts live on another chain.
+export ledger allowlistEvidenceRef: Bytes<32>;
+
+export ledger pendingAllowlistEvidenceRef: Bytes<32>;
+
 export ledger pendingAllowlistRoot: Bytes<32>;
 
 // The registrant root the governor has published but that has not yet taken
@@ -842,6 +867,10 @@ constructor(
   allowlistThreshold = disclose(allowlistThreshold_);
   allowlistExpirySeconds = disclose(86400); // 24 hours
   pendingAllowlistRoot = disclose(pad(32, ""));
+  // The deploy-time root is supplied directly and carries no attested
+  // evidence; it gains one the first time updateAllowlistRoot publishes.
+  allowlistEvidenceRef = disclose(pad(32, ""));
+  pendingAllowlistEvidenceRef = disclose(pad(32, ""));
   pendingAllowlistOpenedAt = disclose(0);
   registrantRoot = disclose(pad(32, "")); // meaningless until openBuying sets it
   pendingRegistrantRoot = disclose(pad(32, ""));
@@ -1738,6 +1767,12 @@ export circuit sweepForfeitedBond(registrantKey: Bytes<32>): [] {
 //   - A bond is only ever collected against a real published path
 //     (sweepForfeitedBond above), so a row in lockedBonds with no leaf in the
 //     tree is worth nothing to anyone.
+//   - A leaf in the tree with no row in lockedBonds is worth nothing either,
+//     because anyone can prove it and proving it fails the phase
+//     (challengeRegistrantInclusion below). That is the other direction, and
+//     it matters for a different reason: buying is gated on membership in the
+//     tree and not on holding a bond, so a leaf nobody bonded for would
+//     otherwise be a purchase nobody paid to make.
 //   - A registrant holding a real bond may dispute, which starts a fixed
 //     window.
 //   - Anyone at all may end that window by producing the disputant's path.
@@ -1809,6 +1844,74 @@ export circuit rebutRegistrantExclusion(registrantKey: Bytes<32>): [] {
   verifyRegistrant(registrantKey);
 
   rebuttedExclusions.insert(disclose(registrantKey));
+}
+
+// Prove the published tree contains a registrant it should not, and fail the
+// phase for it.
+//
+// This is the exclusion dispute's mirror, and it needs no window, no bond and
+// no answer period because it is not a claim — it is a proof, checked here in
+// full. Two public records have to disagree in a specific direction: a real
+// Merkle path into registrantRoot for a key, and no row at all for that key in
+// lockedBonds.
+//
+// Neither half can be faked. A path only verifies against the published root,
+// so a key the tree does not contain cannot produce one. And a row in
+// lockedBonds is written by the registrant's own registerForDarkVeil call,
+// which takes real custody of the bond — so a key that bonded cannot be made
+// to look unbonded.
+//
+// The test is MEMBERSHIP, never the amount. Nothing removes a row from
+// lockedBonds: a refund or a sweep writes zero and leaves the key in place, so
+// membership is the permanent record of having registered while the amount is
+// only the current balance. Today the distinction is defensive rather than
+// load-bearing, because every path that zeroes a bond needs the phase to have
+// failed or the settlement to have finalized, and both are refused above. It
+// is written this way so that it stays correct if a refund ever becomes
+// reachable earlier — a registrant who has taken their bond back must not
+// become challengeable by having done so.
+//
+// Why failing the whole phase is the proportionate answer rather than dropping
+// one leaf. Buying is gated on membership in this tree and NOT on holding a
+// bond — submitBuyCommit proves membership in zero knowledge precisely so a
+// buyer is not named at commit time, which is the privacy the whole
+// commit/reveal design exists for. So a fabricated leaf is an allocation
+// nobody posted a bond for, drawn from the same dvAllocation every honest
+// registrant is sharing, and the tree cannot be repaired without republishing
+// a root that buyers have already proved against. A root that provably
+// commits to a set the registrations do not support is not a tree with one bad
+// leaf; it is not the registrant set.
+//
+// The bonds come back in full, through the path cancelDarkVeil already uses.
+// Gated before settlement finalization because no ADA has moved on Cardano
+// until then — the claim window pays out against the settlement record, so up
+// to that point failing the phase costs nobody anything they have already paid.
+export circuit challengeRegistrantInclusion(registrantKey: Bytes<32>): [] {
+  // Only while the root is live and nothing has settled against it. Before
+  // buying there is no root to challenge, and after finalization the Cardano
+  // side has already paid out against this set.
+  assert(
+    disclose(dvState == DarkVeilState.Buying || dvState == DarkVeilState.Closed),
+    "Only challengeable while the registrant root is in force"
+  );
+  assert(disclose(!settlementFinalized), "DarkVeil settlement is already finalized");
+  assert(disclose(!dvFailed), "DarkVeil has already failed");
+
+  // The key must have no registration of its own. Membership, not amount —
+  // see the note above on refunded bonds.
+  assert(
+    !lockedBonds.member(disclose(registrantKey)),
+    "This registrant holds a bond, so the tree is entitled to contain them"
+  );
+
+  // ...and the tree must nonetheless contain it. The proof is the entire
+  // authorization: it recomputes the published root or the call fails, so a
+  // challenge confers nothing on whoever makes it and cannot be made falsely.
+  verifyRegistrant(registrantKey);
+
+  dvFailed = disclose(true);
+  // Terminal, matching every other failure path here.
+  phase = LaunchPhase.Cancelled;
 }
 
 // Take back a bond behind a dispute that stood unanswered for the full window.
@@ -1905,7 +2008,11 @@ export circuit claimDisputedBond(
 // they are bounded by, so a phase gate alone would leave a half-approval live
 // for the whole window. Bound to real chain time the same way every other
 // timestamp-taking circuit here is.
-export circuit updateAllowlistRoot(newRoot: Bytes<32>, currentTimestamp: Uint<64>): [] {
+export circuit updateAllowlistRoot(
+  newRoot: Bytes<32>,
+  newEvidenceRef: Bytes<32>,
+  currentTimestamp: Uint<64>
+): [] {
   const attestorSecret = getGovernorSecret();
   const attestorKey = deriveGovernorKey(attestorSecret);
   const isAllowlistAttestor1 = disclose(attestorKey.bytes == allowlistAttestor1);
@@ -1926,12 +2033,27 @@ export circuit updateAllowlistRoot(newRoot: Bytes<32>, currentTimestamp: Uint<64
     "currentTimestamp too far in the past"
   );
 
+  // A root with no evidence behind it is the thing this field exists to stop,
+  // so an empty commitment is refused rather than stored as a placeholder.
+  assert(disclose(newEvidenceRef != pad(32, "")), "allowlist evidence reference cannot be empty");
+
   const allowlistExpired =
     currentTimestamp > (pendingAllowlistOpenedAt + allowlistExpirySeconds) as Uint<64>;
-  const sameAllowlistPending = disclose(pendingAllowlistRoot == newRoot);
+  // Both halves must match for an approval to join the round. Approving the
+  // same root over different evidence is a different proposal, and treating it
+  // as the same one would let a threshold be assembled from attestors who
+  // never agreed on the same facts.
+  // Disclosed one comparison at a time. The analysis does not carry a
+  // disclosure through `&&`, so combining them inside a single disclose() is
+  // rejected as a potential witness disclosure even though both halves are
+  // disclosed either way.
+  const sameAllowlistRoot = disclose(pendingAllowlistRoot == newRoot);
+  const sameAllowlistEvidence = disclose(pendingAllowlistEvidenceRef == newEvidenceRef);
+  const sameAllowlistPending = sameAllowlistRoot && sameAllowlistEvidence;
   if (disclose(!sameAllowlistPending || allowlistExpired)) {
     allowlistRound.increment(1);
     pendingAllowlistRoot = disclose(newRoot);
+    pendingAllowlistEvidenceRef = disclose(newEvidenceRef);
     pendingAllowlistOpenedAt = disclose(currentTimestamp);
   }
 
@@ -1951,6 +2073,9 @@ export circuit updateAllowlistRoot(newRoot: Bytes<32>, currentTimestamp: Uint<64
 
   if (disclose(allowlistApprovalCount >= allowlistThreshold)) {
     allowlistRoot = disclose(newRoot);
+    // Published together, so the root on chain always names the evidence the
+    // attestors approved it against.
+    allowlistEvidenceRef = disclose(newEvidenceRef);
   }
 }
 

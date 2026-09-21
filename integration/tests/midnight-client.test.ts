@@ -760,12 +760,6 @@ const FALLBACK_METHODS: Array<{
   { method: 'startRegistration', circuit: 'startRegistration', args: [] },
   { method: 'registerForDarkVeil', circuit: 'registerForDarkVeil', args: [] },
   {
-    method: 'updateAllowlistRoot',
-    circuit: 'updateAllowlistRoot',
-    // One attestor's call, dated for the attestation round.
-    args: [fakeBytes32(101), 1_700_000_000n],
-  },
-  {
     method: 'submitDarkVeilBuyCommit',
     circuit: 'submitBuyCommit',
     args: [fakeBytes32(102), 1_000n],
@@ -1456,5 +1450,51 @@ describe('NoctisLaunchManager — the startBuying split (Cardano Launch)', () =>
 
     await manager.expireDvSettlement();
     expect(expireFn).toHaveBeenCalledWith();
+  });
+});
+
+describe('NoctisLaunchManager.updateAllowlistRoot — the root names its evidence', () => {
+  const ROOT = fakeBytes32(101);
+  const EVIDENCE = fakeBytes32(171);
+  const AT = 1_700_000_000n;
+
+  it('passes the evidence commitment through to the gate, alongside the root', async () => {
+    const circuitFn = vi.fn().mockResolvedValue({ ok: true });
+    const client = new NoctisMidnightClient(USER_SK);
+    client.eligibilityGate = fakeHandle({ updateAllowlistRoot: circuitFn });
+    const manager = new NoctisLaunchManager(client);
+
+    await manager.updateAllowlistRoot(ROOT, AT, EVIDENCE);
+    expect(circuitFn).toHaveBeenCalledWith(ROOT, EVIDENCE, AT);
+  });
+
+  it('refuses to publish a root with no evidence behind it', async () => {
+    // Refused rather than defaulted: a zero commitment would make the field
+    // decorative, which is the thing it exists to prevent.
+    const client = new NoctisMidnightClient(USER_SK);
+    client.eligibilityGate = fakeHandle({ updateAllowlistRoot: vi.fn() });
+    const manager = new NoctisLaunchManager(client);
+
+    await expect(manager.updateAllowlistRoot(ROOT, AT)).rejects.toThrow(/evidence commitment/);
+  });
+
+  it('still drives Midnight Launch, whose merged contract takes no evidence', async () => {
+    const circuitFn = vi.fn().mockResolvedValue({ ok: true });
+    const client = new NoctisMidnightClient(USER_SK);
+    client.bondingCurve = fakeHandle({ updateAllowlistRoot: circuitFn });
+    const manager = new NoctisLaunchManager(client);
+
+    await manager.updateAllowlistRoot(ROOT, AT);
+    expect(circuitFn).toHaveBeenCalledWith(ROOT, AT);
+  });
+
+  it('exposes the registrant-inclusion challenge', async () => {
+    const circuitFn = vi.fn().mockResolvedValue({ ok: true });
+    const client = new NoctisMidnightClient(USER_SK);
+    client.eligibilityGate = fakeHandle({ challengeRegistrantInclusion: circuitFn });
+    const manager = new NoctisLaunchManager(client);
+
+    await manager.challengeRegistrantInclusion(fakeBytes32(66));
+    expect(circuitFn).toHaveBeenCalledWith(fakeBytes32(66));
   });
 });
