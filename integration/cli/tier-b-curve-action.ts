@@ -56,12 +56,6 @@ interface Input {
   // activate / open-dv-claim
   currentTimestampMs?: number;
 
-  /** open-dv-claim: how many registrants the DarkVeil allocation tree holds.
-   *  It sizes `claimed_bits`, one bit each, so it must cover the highest
-   *  leaf_index that tree hands out — too small and those registrants have no
-   *  bit to claim against. Take it from the tree, never from a guess. */
-  registrantCount?: number;
-
   // buy / claim-buyback
   buyerMnemonic?: string;
   tokenAmount?: string; // stringified bigint
@@ -89,7 +83,7 @@ interface Input {
     merkleProof: Array<{ siblingHex: string; goesLeft: boolean }>;
   };
 
-  // claim-creator-fees — same extended-key signing shape as
+  // claim-creator-fees / open-dv-claim — same extended-key signing shape as
   // governorPrivateKeyExtendedHex/governorAddress above (see
   // tier-b-curve-submitter().ts's claimCreatorFees() doc comment for why:
   // the platform wallet custody scheme never persists a mnemonic).
@@ -163,16 +157,21 @@ async function main() {
       result = await submitter().activateCurve(key, addr, ts);
       break;
     }
-    // Opens the 24-hour window in which DarkVeil registrants, and only they,
-    // settle their allocations. Public trading cannot start until it and the
-    // dead window after it have both elapsed, which is what keeps claims and
-    // trades off the same UTXO entirely.
+    // Opens the window in which DarkVeil registrants, and only they, settle
+    // their allocations. Public trading cannot start until it and the dead
+    // window after it have both elapsed, which is what keeps claims and trades
+    // off the same UTXO entirely.
+    //
+    // The validator reads no signature here, so the key named below pays the
+    // fee and nothing more. Either pair is accepted for that, and the signer
+    // pair is preferred, because a registrant waiting on their own claim
+    // window should not have to hold the governor's key to start it.
     case 'open-dv-claim': {
-      const key = requireField(input, 'governorPrivateKeyExtendedHex', input.action);
-      const addr = requireField(input, 'governorAddress', input.action);
-      const count = requireField(input, 'registrantCount', input.action);
+      const key =
+        input.signerPrivateKeyExtendedHex ?? requireField(input, 'governorPrivateKeyExtendedHex', input.action);
+      const addr = input.signerAddress ?? requireField(input, 'governorAddress', input.action);
       const ts = requireTimestampMs(requireField(input, 'currentTimestampMs', input.action), 'currentTimestampMs');
-      result = await submitter().openDvClaim(key, addr, count, ts);
+      result = await submitter().openDvClaim(key, addr, ts);
       break;
     }
     // 'buy' and 'sell' are kept as named actions so a caller that asks for one

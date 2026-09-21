@@ -25,6 +25,7 @@ import { CML, credentialToAddress, Lucid } from '@lucid-evolution/lucid';
 import { CardanoDvAllocationAnchorSubmitter, fromHex } from '../cardano-dv-allocation-anchor-submitter.js';
 import { BONDING_CURVE_TIER_B_REDEEMER } from '../redeemer-indices.js';
 import { threadNftAssetName } from '../tier-a-schemas.js';
+import { MAX_CLAIMED_BITS_BYTES } from '../tier-b-curve-submitter.js';
 
 function toHex(bytes: Uint8Array): string {
   return Buffer.from(bytes).toString('hex');
@@ -104,6 +105,10 @@ function baseDatum(overrides: Record<string, unknown> = {}) {
     governor_pub_key_hash: GOVERNOR_KEY_HASH,
     dv_allocation_root: toHex(new Uint8Array(32)),
     dv_settled: false,
+    // A real DarkVeil launch, so the anchor is on the path that also sizes the
+    // nullifier map. A launch with no DarkVeil phase overrides this to 0n.
+    dv_reserve_tokens: 150n,
+    claimed_bits: '',
     ...overrides,
   };
 }
@@ -141,9 +146,9 @@ describe('extended-key conversion (via CML, kept real)', () => {
     const { builder } = makeFakeTxBuilder();
     const { submitter } = makeSubmitter(builder, [{ datum: baseDatum(), assets: {} }]);
 
-    await expect(submitter.anchorDvAllocationRoot('aabb', GOVERNOR_ADDRESS, toHex(new Uint8Array(32)))).rejects.toThrow(
-      /Expected a 64-byte extended private key/,
-    );
+    await expect(
+      submitter.anchorDvAllocationRoot('aabb', GOVERNOR_ADDRESS, toHex(new Uint8Array(32)), REGISTRANTS),
+    ).rejects.toThrow(/Expected a 64-byte extended private key/);
   });
 });
 
@@ -172,13 +177,16 @@ describe('CardanoDvAllocationAnchorSubmitter.readCurveDatum', () => {
   });
 });
 
+/** 20 registrants: three whole bytes of map, and not a round number of them. */
+const REGISTRANTS = 20;
+
 describe('CardanoDvAllocationAnchorSubmitter.anchorDvAllocationRoot', () => {
   it('rejects anchoring once the curve is no longer Inactive', async () => {
     const { builder } = makeFakeTxBuilder();
     const { submitter } = makeSubmitter(builder, [{ datum: baseDatum({ curve_state: 'Active' }), assets: {} }]);
 
     await expect(
-      submitter.anchorDvAllocationRoot(REAL_EXTENDED_KEY_HEX, GOVERNOR_ADDRESS, toHex(new Uint8Array(32))),
+      submitter.anchorDvAllocationRoot(REAL_EXTENDED_KEY_HEX, GOVERNOR_ADDRESS, toHex(new Uint8Array(32)), REGISTRANTS),
     ).rejects.toThrow(/Curve is not Inactive/);
   });
 
@@ -192,7 +200,7 @@ describe('CardanoDvAllocationAnchorSubmitter.anchorDvAllocationRoot', () => {
     const { submitter } = makeSubmitter(builder, [{ datum: baseDatum(), assets: {} }]);
 
     await expect(
-      submitter.anchorDvAllocationRoot(REAL_EXTENDED_KEY_HEX, STRANGER_ADDRESS, toHex(new Uint8Array(32))),
+      submitter.anchorDvAllocationRoot(REAL_EXTENDED_KEY_HEX, STRANGER_ADDRESS, toHex(new Uint8Array(32)), REGISTRANTS),
     ).rejects.toThrow(new RegExp(`${GOVERNOR_KEY_HASH}[\\s\\S]*${'cd'.repeat(28)}`));
   });
 
@@ -202,13 +210,13 @@ describe('CardanoDvAllocationAnchorSubmitter.anchorDvAllocationRoot', () => {
 
     const rootA = toHex(new Uint8Array(32).fill(1));
     const rootB = toHex(new Uint8Array(32).fill(2));
-    await submitter.anchorDvAllocationRoot(REAL_EXTENDED_KEY_HEX, GOVERNOR_ADDRESS, rootA);
+    await submitter.anchorDvAllocationRoot(REAL_EXTENDED_KEY_HEX, GOVERNOR_ADDRESS, rootA, REGISTRANTS);
     const firstPayload = calls.payToContract![1] as {
       value: Record<string, unknown>;
     };
     expect(firstPayload.value.dv_allocation_root).toBe(rootA);
 
-    await submitter.anchorDvAllocationRoot(REAL_EXTENDED_KEY_HEX, GOVERNOR_ADDRESS, rootB);
+    await submitter.anchorDvAllocationRoot(REAL_EXTENDED_KEY_HEX, GOVERNOR_ADDRESS, rootB, REGISTRANTS);
     const secondPayload = calls.payToContract![1] as {
       value: Record<string, unknown>;
     };
@@ -219,7 +227,12 @@ describe('CardanoDvAllocationAnchorSubmitter.anchorDvAllocationRoot', () => {
     const { builder, calls } = makeFakeTxBuilder();
     const { submitter } = makeSubmitter(builder, [{ datum: baseDatum({ dv_settled: false }), assets: {} }]);
 
-    await submitter.anchorDvAllocationRoot(REAL_EXTENDED_KEY_HEX, GOVERNOR_ADDRESS, toHex(new Uint8Array(32).fill(9)));
+    await submitter.anchorDvAllocationRoot(
+      REAL_EXTENDED_KEY_HEX,
+      GOVERNOR_ADDRESS,
+      toHex(new Uint8Array(32).fill(9)),
+      REGISTRANTS,
+    );
 
     const payload = calls.payToContract![1] as {
       value: Record<string, unknown>;
@@ -236,7 +249,12 @@ describe('CardanoDvAllocationAnchorSubmitter.anchorDvAllocationRoot', () => {
     const existingAssets = { lovelace: 4_000_000n, [THREAD_UNIT]: 1n };
     const { submitter } = makeSubmitter(builder, [{ datum: baseDatum(), assets: existingAssets }]);
 
-    await submitter.anchorDvAllocationRoot(REAL_EXTENDED_KEY_HEX, GOVERNOR_ADDRESS, toHex(new Uint8Array(32)));
+    await submitter.anchorDvAllocationRoot(
+      REAL_EXTENDED_KEY_HEX,
+      GOVERNOR_ADDRESS,
+      toHex(new Uint8Array(32)),
+      REGISTRANTS,
+    );
 
     const assetsArg = calls.payToContract![2] as Record<string, bigint>;
     expect(assetsArg).toEqual(existingAssets);
@@ -246,7 +264,12 @@ describe('CardanoDvAllocationAnchorSubmitter.anchorDvAllocationRoot', () => {
     const { builder } = makeFakeTxBuilder();
     const { submitter, fakeLucid } = makeSubmitter(builder, [{ datum: baseDatum(), assets: {} }]);
 
-    await submitter.anchorDvAllocationRoot(REAL_EXTENDED_KEY_HEX, GOVERNOR_ADDRESS, toHex(new Uint8Array(32)));
+    await submitter.anchorDvAllocationRoot(
+      REAL_EXTENDED_KEY_HEX,
+      GOVERNOR_ADDRESS,
+      toHex(new Uint8Array(32)),
+      REGISTRANTS,
+    );
 
     expect(fakeLucid.utxosAt).toHaveBeenCalledWith(GOVERNOR_ADDRESS);
     const governorUtxos = await fakeLucid.utxosAt.mock.results[fakeLucid.utxosAt.mock.results.length - 1].value;
@@ -257,7 +280,12 @@ describe('CardanoDvAllocationAnchorSubmitter.anchorDvAllocationRoot', () => {
     const { builder, calls } = makeFakeTxBuilder();
     const { submitter } = makeSubmitter(builder, [{ datum: baseDatum(), assets: {} }]);
 
-    await submitter.anchorDvAllocationRoot(REAL_EXTENDED_KEY_HEX, GOVERNOR_ADDRESS, toHex(new Uint8Array(32)));
+    await submitter.anchorDvAllocationRoot(
+      REAL_EXTENDED_KEY_HEX,
+      GOVERNOR_ADDRESS,
+      toHex(new Uint8Array(32)),
+      REGISTRANTS,
+    );
     expect(calls.addSigner).toEqual([GOVERNOR_ADDRESS]);
   });
 
@@ -272,10 +300,77 @@ describe('CardanoDvAllocationAnchorSubmitter.anchorDvAllocationRoot', () => {
     const { submitter } = makeSubmitter(builder, [{ datum: baseDatum(), assets: {} }]);
     const root = toHex(new Uint8Array(32).fill(42));
 
-    await submitter.anchorDvAllocationRoot(REAL_EXTENDED_KEY_HEX, GOVERNOR_ADDRESS, root);
+    await submitter.anchorDvAllocationRoot(REAL_EXTENDED_KEY_HEX, GOVERNOR_ADDRESS, root, REGISTRANTS);
     const redeemer = calls.collectFrom![1] as { index: number; fields: unknown[] };
     expect(redeemer.index).toBe(BONDING_CURVE_TIER_B_REDEEMER.AnchorDvAllocationRoot);
-    expect(redeemer.fields).toEqual([root]);
+    expect(redeemer.fields).toEqual([root, '000000']);
+  });
+
+  // The nullifier map is sized in this transaction, and nothing after it can
+  // resize one: the window opens over whatever is anchored here. So these are
+  // the cases that have to be refused while there is still something to do
+  // about them.
+  it('sizes the map to one bit per registrant, rounded up to whole bytes', async () => {
+    const { builder, calls } = makeFakeTxBuilder();
+    const { submitter } = makeSubmitter(builder, [{ datum: baseDatum(), assets: {} }]);
+
+    // 20 registrants need 3 bytes (24 bits); 16 would need exactly 2.
+    await submitter.anchorDvAllocationRoot(REAL_EXTENDED_KEY_HEX, GOVERNOR_ADDRESS, toHex(new Uint8Array(32)), 20);
+
+    const payload = calls.payToContract![1] as { value: Record<string, unknown> };
+    expect(payload.value.claimed_bits).toBe('000000');
+  });
+
+  it('anchors every bit clear, so no registrant can be pre-burned', async () => {
+    const { builder, calls } = makeFakeTxBuilder();
+    const { submitter } = makeSubmitter(builder, [{ datum: baseDatum(), assets: {} }]);
+
+    await submitter.anchorDvAllocationRoot(REAL_EXTENDED_KEY_HEX, GOVERNOR_ADDRESS, toHex(new Uint8Array(32)), 64);
+
+    const payload = calls.payToContract![1] as { value: Record<string, unknown> };
+    expect(payload.value.claimed_bits).toMatch(/^0+$/);
+  });
+
+  it('refuses to anchor a DarkVeil launch with no registrants to map', async () => {
+    const { builder } = makeFakeTxBuilder();
+    const { submitter } = makeSubmitter(builder, [{ datum: baseDatum(), assets: {} }]);
+
+    await expect(
+      submitter.anchorDvAllocationRoot(REAL_EXTENDED_KEY_HEX, GOVERNOR_ADDRESS, toHex(new Uint8Array(32)), 0),
+    ).rejects.toThrow(/registrant count/i);
+  });
+
+  it('refuses a map past the ceiling the validator holds it to', async () => {
+    const { builder } = makeFakeTxBuilder();
+    const { submitter } = makeSubmitter(builder, [{ datum: baseDatum(), assets: {} }]);
+
+    await expect(
+      submitter.anchorDvAllocationRoot(
+        REAL_EXTENDED_KEY_HEX,
+        GOVERNOR_ADDRESS,
+        toHex(new Uint8Array(32)),
+        MAX_CLAIMED_BITS_BYTES * 8 + 1,
+      ),
+    ).rejects.toThrow(/ceiling/i);
+  });
+
+  it('anchors no map at all for a launch with no DarkVeil phase', async () => {
+    const { builder, calls } = makeFakeTxBuilder();
+    const { submitter } = makeSubmitter(builder, [{ datum: baseDatum({ dv_reserve_tokens: 0n }), assets: {} }]);
+
+    await submitter.anchorDvAllocationRoot(REAL_EXTENDED_KEY_HEX, GOVERNOR_ADDRESS, toHex(new Uint8Array(32)), 0);
+
+    const payload = calls.payToContract![1] as { value: Record<string, unknown> };
+    expect(payload.value.claimed_bits).toBe('');
+  });
+
+  it('refuses to map registrants a launch with no DarkVeil phase cannot have', async () => {
+    const { builder } = makeFakeTxBuilder();
+    const { submitter } = makeSubmitter(builder, [{ datum: baseDatum({ dv_reserve_tokens: 0n }), assets: {} }]);
+
+    await expect(
+      submitter.anchorDvAllocationRoot(REAL_EXTENDED_KEY_HEX, GOVERNOR_ADDRESS, toHex(new Uint8Array(32)), 20),
+    ).rejects.toThrow(/no DarkVeil allocation/i);
   });
 });
 

@@ -33,6 +33,17 @@ interface AnchorDvAllocationRootInput {
   governorAddress: string;
   governorPrivateKeyExtendedHex: string;
   dvAllocationRootHex: string;
+  /**
+   * How many registrants that same tree holds. It sizes the nullifier map
+   * anchored alongside the root, one bit each, so it must cover the highest
+   * leaf index the tree hands out — a map short of that leaves those
+   * registrants no bit to claim against, and nothing after this transaction
+   * can resize it. Take it from the tree, never from a guess;
+   * `build-dv-allocation-tree` prints it.
+   *
+   * 0 for a launch with no DarkVeil phase, which anchors no map at all.
+   */
+  registrantCount: number;
   blockfrostProjectId: string;
   blockfrostUrl: string;
   /**
@@ -64,6 +75,11 @@ async function main() {
     'blockfrostProjectId',
     'blockfrostUrl',
   ]);
+  // Checked separately from the list above, which refuses anything falsy: 0 is
+  // the real answer for a launch with no DarkVeil phase.
+  if (!Number.isInteger(input.registrantCount) || input.registrantCount < 0) {
+    throw new Error('registrantCount is required, as a whole number of registrants (0 for no DarkVeil phase).');
+  }
 
   const blueprint = loadPlutusBlueprint(__dirname);
   const compiledScriptCbor = loadValidatorCbor(blueprint, 'bonding_curve_tier_b.bonding_curve_tier_b.spend');
@@ -83,6 +99,7 @@ async function main() {
     input.governorPrivateKeyExtendedHex,
     input.governorAddress,
     input.dvAllocationRootHex,
+    input.registrantCount,
   );
   process.stdout.write(JSON.stringify(result));
 }

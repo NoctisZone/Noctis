@@ -324,9 +324,26 @@ for (const v of blueprint.validators) {
  * same constant in the same position, one CBOR width wider. The ten validators
  * that did not change are byte-for-byte identical, which is what makes these
  * two readable as the cause.
+ *
+ * bonding_curve_tier_b +75, moving the DarkVeil nullifier map's sizing into
+ * the signed transaction that anchors the allocation root the map is sized
+ * from, so the transaction that opens the claim window needs nothing but a
+ * clock and can be built by anyone. Most of the cost is that arm's new length
+ * and cleared-bits checks, plus the value pin the opening arm now carries for
+ * being permissionless; the opening arm gives a little back by taking one
+ * argument fewer.
+ *
+ * curve_order's HASH moved with it while its SIZE did not — 4,544 on both
+ * sides, with 169 bytes different in a single span. This is the case the hash
+ * register below exists for, arriving for real. curve_order reads the curve's
+ * own redeemer off the same transaction, and an `expect` against a union
+ * decodes EVERY variant, so changing two variants' field lists rewrites the
+ * decoder inlined here — and the two changes happened to net to the same
+ * length. A register of sizes alone would have called this file untouched and
+ * left its address to be discovered at deployment.
  */
 const RECORDED: Record<string, number> = {
-  bonding_curve_tier_b: 15_816,
+  bonding_curve_tier_b: 15_891,
   cto_governance: 8_157,
   cto_sybil_challenge: 3_383,
   curve_order: 4_544,
@@ -359,10 +376,10 @@ const RECORDED: Record<string, number> = {
  * old one has to be considered before the change ships.
  */
 const RECORDED_HASHES: Record<string, string> = {
-  bonding_curve_tier_b: 'cacf42199fa107916db59de6b635da51258b5bf499f0c6e479b8cc86',
+  bonding_curve_tier_b: '711658bba102698beaf6b9451a51bb8ad8387fa31a35a4732f21ab36',
   cto_governance: '2acc12d791956e7da4c72c2cf1c4a8ceee74b9d7e33973cc973fa022',
   cto_sybil_challenge: 'f08befe8c02028948af4d01dfc27121bfdd7dd6582e582fd5a216441',
-  curve_order: 'bc9e33b3e17caa01d36c16a776f3c7527236de13911519abf19d5740',
+  curve_order: 'db34df4b2be92eea1458fc11248255f1ef3ecad93d47196f934d7397',
   launch_token_policy: 'd77d785500b7bb5a80bdf8104651b13e59d546d222ce7ab22bb60965',
   lp_escrow: '0c93febe5966945efac06debcc4b6acab376c3c3cda6836cf12db687',
   nhop_challenge: '0d70cb4bcea572833ea9367f569e71042ada1e34f218c1677ad245fb',

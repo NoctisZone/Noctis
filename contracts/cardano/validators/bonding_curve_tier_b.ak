@@ -460,7 +460,14 @@ pub type BondingCurveTierBRedeemer {
   /// requires curve_state == Active, so no claim could ever have processed
   /// against a not-yet-final root. See file header and
   /// internal tracking.
-  AnchorDvAllocationRoot { dv_allocation_root: ByteArray }
+  ///
+  /// Carries `claimed_bits` because the nullifier map and the root are read
+  /// off the same off-chain computation: one bit per allocation leaf, sized
+  /// to cover the highest `leaf_index` that root can hand out. Sizing it in
+  /// this signed transaction is what lets `OpenDvClaim` be permissionless —
+  /// a length is the one value in the DarkVeil lifecycle that only the party
+  /// holding the registrant set can supply.
+  AnchorDvAllocationRoot { dv_allocation_root: ByteArray, claimed_bits: ByteArray }
   QueryState
   /// Public sell — the reverse of BuyTokens. Same mechanism as the linear curve's
   /// bonding_curve.ak SellTokens — see that file's own doc comment
@@ -496,14 +503,16 @@ pub type BondingCurveTierBRedeemer {
     cap_committed_before: Int,
     cap_proof: List<CapProofStep>,
   }
-  /// Opens the 24-hour DarkVeil claim window: `Inactive -> DvClaim`.
-  /// Governor-signed, and only once the allocation root is anchored, since
-  /// the relayer must know the real registrant count to size `claimed_bits`.
+  /// Opens the DarkVeil claim window: `Inactive -> DvClaim`.
+  ///
+  /// Permissionless, once the allocation root and its nullifier map have been
+  /// anchored. Everything this transaction needs is public and already fixed
+  /// by then, so it carries a timestamp and nothing else.
   ///
   /// Appended LAST for the constructor-index reason documented on
   /// `SellTokens` above — this is the newest variant, so it takes the newest
   /// index and shifts nothing already deployed.
-  OpenDvClaim { claimed_bits: ByteArray, current_timestamp: Int }
+  OpenDvClaim { current_timestamp: Int }
   /// Applies N orders against the curve in one transaction. Every order on a
   /// side pays that side's batch average: one `gross_range` per side, split
   /// pro-rata, so a position inside the batch is worth nothing. The curve
@@ -543,6 +552,15 @@ const bps_denominator = 10_000
 /// transaction budget the orders themselves need. Eight is far more batchers
 /// than a launch has any use for and costs a couple of hundred bytes at worst.
 const max_batcher_allowlist = 8
+
+/// The most bytes of nullifier map `AnchorDvAllocationRoot` will size.
+///
+/// One bit per allocation leaf, so this is 2,048 registrants — well clear of
+/// what a DarkVeil phase holding a 15-registrant floor and a per-wallet cap
+/// has any use for. The bound exists because the map rides in the datum of
+/// every claim transaction, alongside that claim's own Merkle proof, and the
+/// two compete for the same transaction budget.
+const max_claimed_bits = 256
 
 /// The platform's charge on a creator-fee claim, paid INTO the curve.
 ///
@@ -1704,18 +1722,31 @@ validator bonding_curve_tier_b {
           }
         }
 
-        OpenDvClaim { claimed_bits, current_timestamp } -> {
+        OpenDvClaim { current_timestamp } -> {
           let new_datum = own_continuing_datum(self, own_ref)
           and {
-            list.has(self.extra_signatories, datum.governor_pub_key_hash),
+            // Permissionless — the same "the condition is the authorization"
+            // idiom as ActivateCurve, ExpireCurve and Graduate, and for the
+            // reason ActivateCurve gives one arm above. This is the
+            // transaction that starts the window registrants settle their
+            // allocations in, and by the time it can run, every input it needs
+            // is public and already fixed: the root, the map that sizes it,
+            // and the launch's own declared windows. A signature here would
+            // mean a launch could be held between "your allocation is final"
+            // and "you may claim it" for as long as one key stayed quiet —
+            // and a registrant's NIGHT bond is returned in proportion to what
+            // they actually bought, so the cost of that silence lands on them
+            // rather than on the launch.
             datum.curve_state == Inactive,
             // The root has to be final before the window opens: it is what
             // every claim proves against, and AnchorDvAllocationRoot can only
             // run while Inactive, so this is the point of no return for it.
             datum.dv_settled,
             datum.dv_reserve_tokens > 0,
-            // A window with no bits is a window nobody could claim in.
-            bytearray.length(claimed_bits) > 0,
+            // A window with no bits is a window nobody could claim in. The map
+            // was sized and cleared when the root was anchored — see that arm
+            // for why the length is settled there and not here.
+            bytearray.length(datum.claimed_bits) > 0,
             // Bound the launch's declared windows HERE, at the one transaction
             // that starts the clock they are measured from. Paying to a script
             // address runs no code, so a genesis datum holds whatever its author
@@ -1729,12 +1760,6 @@ validator bonding_curve_tier_b {
             datum.dv_claim_window <= max_dv_claim_window,
             datum.dv_settlement_window >= min_dv_settlement_window,
             datum.dv_settlement_window <= max_dv_settlement_window,
-            // Every bit starts clear — the governor cannot pre-burn a
-            // registrant's claim by opening the window with their bit set.
-            claimed_bits == bytearray.from_int_big_endian(
-              0,
-              bytearray.length(claimed_bits),
-            ),
             interval.contains(self.validity_range, current_timestamp),
             validity_range_is_narrow(
               self.validity_range,
@@ -1744,9 +1769,14 @@ validator bonding_curve_tier_b {
               ..datum,
               curve_state: DvClaim,
               dv_claim_opened_at: current_timestamp,
-              claimed_bits,
             },
             curve_own_output_clean(self, own_ref),
+            // curve_own_output_clean bounds how MANY assets the output
+            // carries; this bounds their amounts. Permissionless by design, so
+            // "anyone may start the claim window" must not also mean "anyone
+            // may empty the curve while doing it" — the same pairing
+            // ExpireCurve makes, for the same reason.
+            curve_value_unchanged(self, own_ref),
           }
         }
 
@@ -1983,6 +2013,19 @@ validator bonding_curve_tier_b {
           and {
             list.has(self.extra_signatories, datum.governor_pub_key_hash),
             datum.curve_state != Graduated,
+            // Not DvClaim either, which is the one state ExpireCurve also
+            // refuses — and for the reason stated there: registrants inside
+            // the claim window hold allocations they can still settle, and a
+            // bond returned in proportion to what was bought is a bond
+            // forfeited in proportion to what a cancellation prevented. A
+            // signature does not change who pays for that, so both the signed
+            // and the permissionless failure path stop at the same edge.
+            //
+            // Nothing is stranded by it. ActivateCurve leaves DvClaim without
+            // anyone's permission once the claim and settlement windows have
+            // run, and a launch that must be abandoned is cancellable from
+            // Active the moment it gets there.
+            datum.curve_state != DvClaim,
             new_datum == BondingCurveTierBDatum {
               ..datum,
               curve_state: Cancelled,
@@ -2135,15 +2178,47 @@ validator bonding_curve_tier_b {
         // Fix (2026-07-19, Cardano Launch cross-chain audit): see
         // AnchorDvAllocationRoot's own doc comment in
         // BondingCurveTierBRedeemer above for the full reasoning.
-        AnchorDvAllocationRoot { dv_allocation_root } -> {
+        AnchorDvAllocationRoot { dv_allocation_root, claimed_bits } -> {
           let new_datum = own_continuing_datum(self, own_ref)
+          // The nullifier map is sized here, in the same signed transaction
+          // that fixes the root, because the two are read off one off-chain
+          // computation: a bit per allocation leaf, covering the highest
+          // `leaf_index` this root can hand out. A map short of that is an
+          // allocation a registrant can prove and cannot claim.
+          //
+          // A launch with no DarkVeil phase has no leaf to nullify, so its map
+          // stays empty — the same state `ActivateCurve` returns every curve to
+          // once the window is over.
+          //
+          // Written as a branch rather than as `has_map == has_phase` plus a
+          // ceiling, which reads more neatly and compiles 11 bytes LARGER. At
+          // this validator's size that is not a free choice.
+          let bits_sized_for_the_phase =
+            if datum.dv_reserve_tokens > 0 {
+              and {
+                bytearray.length(claimed_bits) > 0,
+                bytearray.length(claimed_bits) <= max_claimed_bits,
+              }
+            } else {
+              claimed_bits == #""
+            }
           and {
             list.has(self.extra_signatories, datum.governor_pub_key_hash),
             datum.curve_state == Inactive,
+            bits_sized_for_the_phase,
+            // Every bit starts clear, whatever the length: a map anchored with
+            // a bit already set would burn that registrant's claim before they
+            // ever made it. Stated over the map's own length so it holds for
+            // the empty map too.
+            claimed_bits == bytearray.from_int_big_endian(
+              0,
+              bytearray.length(claimed_bits),
+            ),
             new_datum == BondingCurveTierBDatum {
               ..datum,
               dv_allocation_root,
               dv_settled: True,
+              claimed_bits,
             },
             // Recording the allocation root moves no value.
             curve_value_unchanged(self, own_ref),
@@ -2772,10 +2847,13 @@ test hash_dv_leaf_differs_for_different_salts() {
   hash_dv_leaf(#"aa", 100, 0, #"01") != hash_dv_leaf(#"aa", 100, 0, #"02")
 }
 
-/// Drives OpenDvClaim against `datum` with `bits`, signed by `signer`.
+/// Drives OpenDvClaim against `datum`, signed by `signer`.
+///
+/// `signer` stays a parameter although the arm no longer reads one: the test
+/// that anyone may start the window is the one that drives it with a key the
+/// datum has never heard of.
 fn run_open_dv_claim(
   datum: BondingCurveTierBDatum,
-  bits: ByteArray,
   signer: VerificationKeyHash,
 ) -> Bool {
   let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
@@ -2793,7 +2871,6 @@ fn run_open_dv_claim(
     ..datum,
     curve_state: DvClaim,
     dv_claim_opened_at: 500,
-    claimed_bits: bits,
   }
   let self = Transaction {
     ..transaction.placeholder,
@@ -2811,36 +2888,41 @@ fn run_open_dv_claim(
   }
   bonding_curve_tier_b.spend(
     Some(datum),
-    OpenDvClaim { claimed_bits: bits, current_timestamp: 500 },
+    OpenDvClaim { current_timestamp: 500 },
     own_ref,
     self,
   )
 }
 
+/// The curve as it rests after the root and its nullifier map are anchored:
+/// everything the claim window needs, and nobody's signature left to wait on.
 fn pre_claim_datum() -> BondingCurveTierBDatum {
-  BondingCurveTierBDatum { ..mock_datum(Inactive, 0), dv_settled: True }
-}
-
-test open_dv_claim_succeeds_for_governor_with_a_cleared_bitmap() {
-  run_open_dv_claim(pre_claim_datum(), #"0000", #"22")
-}
-
-test open_dv_claim_rejects_non_governor() {
-  !run_open_dv_claim(pre_claim_datum(), #"0000", #"ff")
-}
-
-// The governor sizes the bitmap but must not be able to burn a registrant's
-// claim by opening the window with their bit already set.
-test open_dv_claim_rejects_a_pre_set_bit() {
-  and {
-    !run_open_dv_claim(pre_claim_datum(), #"8000", #"22"),
-    !run_open_dv_claim(pre_claim_datum(), #"0001", #"22"),
+  BondingCurveTierBDatum {
+    ..mock_datum(Inactive, 0),
+    dv_settled: True,
+    claimed_bits: mock_claim_map(),
   }
 }
 
-// A window nobody can claim in.
+test open_dv_claim_succeeds_for_governor() {
+  run_open_dv_claim(pre_claim_datum(), #"22")
+}
+
+// The point of the change: a registrant should not be left holding a final
+// allocation they cannot settle because one key went quiet. Driven by a key
+// that appears nowhere in the datum, so "anyone may" is behaviour here rather
+// than a comment.
+test open_dv_claim_succeeds_for_a_stranger() {
+  run_open_dv_claim(pre_claim_datum(), #"ff")
+}
+
+// Sized when the root was anchored, so a curve that somehow reached this
+// point without a map still has no window to open.
 test open_dv_claim_rejects_an_empty_bitmap() {
-  !run_open_dv_claim(pre_claim_datum(), #"", #"22")
+  !run_open_dv_claim(
+    BondingCurveTierBDatum { ..pre_claim_datum(), claimed_bits: #"" },
+    #"22",
+  )
 }
 
 // The launch declares its own windows, so this is the transaction that has to
@@ -2856,7 +2938,6 @@ test open_dv_claim_rejects_a_claim_window_below_the_floor() {
       ..pre_claim_datum(),
       dv_claim_window: min_dv_claim_window - 1,
     },
-    #"0000",
     #"22",
   )
 }
@@ -2867,7 +2948,6 @@ test open_dv_claim_rejects_a_claim_window_above_the_ceiling() {
       ..pre_claim_datum(),
       dv_claim_window: max_dv_claim_window + 1,
     },
-    #"0000",
     #"22",
   )
 }
@@ -2878,7 +2958,6 @@ test open_dv_claim_rejects_a_settlement_window_below_the_floor() {
       ..pre_claim_datum(),
       dv_settlement_window: min_dv_settlement_window - 1,
     },
-    #"0000",
     #"22",
   )
 }
@@ -2889,7 +2968,6 @@ test open_dv_claim_rejects_a_settlement_window_above_the_ceiling() {
       ..pre_claim_datum(),
       dv_settlement_window: max_dv_settlement_window + 1,
     },
-    #"0000",
     #"22",
   )
 }
@@ -2904,7 +2982,6 @@ test open_dv_claim_accepts_the_windows_at_their_floors() {
       dv_claim_window: min_dv_claim_window,
       dv_settlement_window: min_dv_settlement_window,
     },
-    #"0000",
     #"22",
   )
 }
@@ -2912,7 +2989,6 @@ test open_dv_claim_accepts_the_windows_at_their_floors() {
 test open_dv_claim_rejects_before_the_root_is_anchored() {
   !run_open_dv_claim(
     BondingCurveTierBDatum { ..pre_claim_datum(), dv_settled: False },
-    #"0000",
     #"22",
   )
 }
@@ -2920,7 +2996,6 @@ test open_dv_claim_rejects_before_the_root_is_anchored() {
 test open_dv_claim_rejects_a_launch_with_no_darkveil() {
   !run_open_dv_claim(
     BondingCurveTierBDatum { ..pre_claim_datum(), dv_reserve_tokens: 0 },
-    #"0000",
     #"22",
   )
 }
@@ -2928,8 +3003,51 @@ test open_dv_claim_rejects_a_launch_with_no_darkveil() {
 test open_dv_claim_rejects_reopening_the_window() {
   !run_open_dv_claim(
     BondingCurveTierBDatum { ..pre_claim_datum(), curve_state: DvClaim },
-    #"0000",
     #"22",
+  )
+}
+
+// Permissionless, so this is the pairing that matters most: starting the
+// window must not be a way to walk off with what the curve is holding.
+test open_dv_claim_rejects_draining_the_curve() {
+  let datum = pre_claim_datum()
+  let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
+  let own_address = from_verification_key(#"cc")
+  let own_input = Input {
+    output_reference: own_ref,
+    output: Output {
+      address: own_address,
+      value: mock_curve_funded(),
+      datum: InlineDatum(datum),
+      reference_script: None,
+    },
+  }
+  let new_datum = BondingCurveTierBDatum {
+    ..datum,
+    curve_state: DvClaim,
+    dv_claim_opened_at: 500,
+  }
+  let self = Transaction {
+    ..transaction.placeholder,
+    inputs: [own_input],
+    outputs: [
+      Output {
+        address: own_address,
+        // The thread NFT stays put, so the output still looks like the curve
+        // — it is only the lovelace that has gone.
+        value: mock_curve_nft(),
+        datum: InlineDatum(new_datum),
+        reference_script: None,
+      },
+    ],
+    extra_signatories: [#"ff"],
+    validity_range: interval.between(400, 600),
+  }
+  !bonding_curve_tier_b.spend(
+    Some(datum),
+    OpenDvClaim { current_timestamp: 500 },
+    own_ref,
+    self,
   )
 }
 
@@ -4502,10 +4620,14 @@ test activate_curve_rejects_when_dv_not_settled_from_inactive() {
   )
 }
 
-// The core fix — governor anchors the real, off-chain-computed
-// allocation root while the curve is still Inactive.
-test anchor_dv_allocation_root_succeeds_for_governor() {
-  let datum = mock_datum(Inactive, 0)
+/// Drives AnchorDvAllocationRoot against `datum` with `root` and `bits`,
+/// signed by `signer`.
+fn run_anchor_dv_allocation_root(
+  datum: BondingCurveTierBDatum,
+  root: ByteArray,
+  bits: ByteArray,
+  signer: VerificationKeyHash,
+) -> Bool {
   let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
   let own_address = from_verification_key(#"cc")
   let own_input = Input {
@@ -4517,71 +4639,58 @@ test anchor_dv_allocation_root_succeeds_for_governor() {
       reference_script: None,
     },
   }
-  let real_root = #"deadbeef"
   let new_datum = BondingCurveTierBDatum {
     ..datum,
-    dv_allocation_root: real_root,
+    dv_allocation_root: root,
     dv_settled: True,
-  }
-  let continuing_output = Output {
-    address: own_address,
-    value: mock_curve_funded(),
-    datum: InlineDatum(new_datum),
-    reference_script: None,
+    claimed_bits: bits,
   }
   let self = Transaction {
     ..transaction.placeholder,
     inputs: [own_input],
-    outputs: [continuing_output],
-    extra_signatories: [#"22"],
+    outputs: [
+      Output {
+        address: own_address,
+        value: mock_curve_funded(),
+        datum: InlineDatum(new_datum),
+        reference_script: None,
+      },
+    ],
+    extra_signatories: [signer],
   }
 
   bonding_curve_tier_b.spend(
     Some(datum),
-    AnchorDvAllocationRoot { dv_allocation_root: real_root },
+    AnchorDvAllocationRoot { dv_allocation_root: root, claimed_bits: bits },
     own_ref,
     self,
   )
 }
 
-test anchor_dv_allocation_root_rejects_non_governor() {
-  let datum = mock_datum(Inactive, 0)
-  let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
-  let own_address = from_verification_key(#"cc")
-  let own_input = Input {
-    output_reference: own_ref,
-    output: Output {
-      address: own_address,
-      value: mock_curve_funded(),
-      datum: InlineDatum(datum),
-      reference_script: None,
-    },
-  }
-  let real_root = #"deadbeef"
-  let new_datum = BondingCurveTierBDatum {
-    ..datum,
-    dv_allocation_root: real_root,
-    dv_settled: True,
-  }
-  let continuing_output = Output {
-    address: own_address,
-    value: mock_curve_funded(),
-    datum: InlineDatum(new_datum),
-    reference_script: None,
-  }
-  let self = Transaction {
-    ..transaction.placeholder,
-    inputs: [own_input],
-    outputs: [continuing_output],
-    // stranger, not the governor
-    extra_signatories: [#"99"],
-  }
+/// A two-byte cleared map — sixteen leaves, one more than the participation
+/// floor a DarkVeil phase is allowed to open at.
+fn mock_claim_map() -> ByteArray {
+  #"0000"
+}
 
-  !bonding_curve_tier_b.spend(
-    Some(datum),
-    AnchorDvAllocationRoot { dv_allocation_root: real_root },
-    own_ref,
-    self,
+// The core fix — governor anchors the real, off-chain-computed
+// allocation root while the curve is still Inactive.
+test anchor_dv_allocation_root_succeeds_for_governor() {
+  run_anchor_dv_allocation_root(
+    mock_datum(Inactive, 0),
+    #"deadbeef",
+    mock_claim_map(),
+    #"22",
+  )
+}
+
+test anchor_dv_allocation_root_rejects_non_governor() {
+  !run_anchor_dv_allocation_root(
+    mock_datum(Inactive, 0),
+    #"deadbeef",
+    mock_claim_map(),
+    // stranger, not the governor
+    #"99",
   )
 }
 
@@ -4592,46 +4701,87 @@ test anchor_dv_allocation_root_rejects_non_governor() {
 // an already-settled claim's proof retroactively become invalid, or a new
 // forged tree validate claims that were never real.
 test anchor_dv_allocation_root_rejects_after_curve_active() {
-  let datum = BondingCurveTierBDatum {
-    ..mock_datum(Active, 0),
-    dv_settled: True,
-  }
-  let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
-  let own_address = from_verification_key(#"cc")
-  let own_input = Input {
-    output_reference: own_ref,
-    output: Output {
-      address: own_address,
-      value: mock_curve_funded(),
-      datum: InlineDatum(datum),
-      reference_script: None,
-    },
-  }
-  let forged_root = #"cafebabe"
-  let new_datum = BondingCurveTierBDatum {
-    ..datum,
-    dv_allocation_root: forged_root,
-    dv_settled: True,
-  }
-  let continuing_output = Output {
-    address: own_address,
-    value: mock_curve_funded(),
-    datum: InlineDatum(new_datum),
-    reference_script: None,
-  }
-  let self = Transaction {
-    ..transaction.placeholder,
-    inputs: [own_input],
-    outputs: [continuing_output],
-    extra_signatories: [#"22"],
-  }
-
-  !bonding_curve_tier_b.spend(
-    Some(datum),
-    AnchorDvAllocationRoot { dv_allocation_root: forged_root },
-    own_ref,
-    self,
+  !run_anchor_dv_allocation_root(
+    BondingCurveTierBDatum { ..mock_datum(Active, 0), dv_settled: True },
+    #"cafebabe",
+    mock_claim_map(),
+    #"22",
   )
+}
+
+// The nullifier map is sized in THIS transaction, which is what lets
+// OpenDvClaim be permissionless. The cases below are what that sizing has to
+// be held to, since nothing after this point can correct it.
+
+// A map with no bits is a claim window nobody could claim in.
+test anchor_dv_allocation_root_rejects_an_empty_map_for_a_darkveil_launch() {
+  !run_anchor_dv_allocation_root(
+    mock_datum(Inactive, 0),
+    #"deadbeef",
+    #"",
+    #"22",
+  )
+}
+
+// This map rides in the datum of every claim transaction, next to that
+// claim's own Merkle proof.
+test anchor_dv_allocation_root_rejects_a_map_past_the_ceiling() {
+  !run_anchor_dv_allocation_root(
+    mock_datum(Inactive, 0),
+    #"deadbeef",
+    bytearray.from_int_big_endian(0, max_claimed_bits + 1),
+    #"22",
+  )
+}
+
+// The ceiling itself, so the rejection above is not equally satisfied by an
+// arm that refuses every long map.
+test anchor_dv_allocation_root_accepts_a_map_at_the_ceiling() {
+  run_anchor_dv_allocation_root(
+    mock_datum(Inactive, 0),
+    #"deadbeef",
+    bytearray.from_int_big_endian(0, max_claimed_bits),
+    #"22",
+  )
+}
+
+// Every bit starts clear. Whoever sizes the map must not be able to burn a
+// registrant's claim by anchoring one with their bit already set — at either
+// end of it, since the map is read MSB-first.
+test anchor_dv_allocation_root_rejects_a_pre_set_bit() {
+  and {
+    !run_anchor_dv_allocation_root(
+      mock_datum(Inactive, 0),
+      #"deadbeef",
+      #"8000",
+      #"22",
+    ),
+    !run_anchor_dv_allocation_root(
+      mock_datum(Inactive, 0),
+      #"deadbeef",
+      #"0001",
+      #"22",
+    ),
+  }
+}
+
+// A launch with no DarkVeil phase has no leaf to nullify, so it anchors no
+// map at all — the same empty state ActivateCurve returns every curve to.
+test anchor_dv_allocation_root_wants_no_map_without_a_darkveil_phase() {
+  and {
+    run_anchor_dv_allocation_root(
+      BondingCurveTierBDatum { ..mock_datum(Inactive, 0), dv_reserve_tokens: 0 },
+      #"deadbeef",
+      #"",
+      #"22",
+    ),
+    !run_anchor_dv_allocation_root(
+      BondingCurveTierBDatum { ..mock_datum(Inactive, 0), dv_reserve_tokens: 0 },
+      #"deadbeef",
+      mock_claim_map(),
+      #"22",
+    ),
+  }
 }
 
 test expire_curve_succeeds_after_deadline_with_no_signature() {
@@ -4839,6 +4989,55 @@ test cancel_curve_fails_after_graduation() {
   }
 
   !bonding_curve_tier_b.spend(Some(datum), CancelCurve, own_ref, self)
+}
+
+/// Drives CancelCurve against a curve resting in `state`, governor-signed.
+fn run_cancel_curve(state: CurveState) -> Bool {
+  let datum = mock_datum(state, 1000)
+  let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
+  let own_address = from_verification_key(#"cc")
+  let own_input = Input {
+    output_reference: own_ref,
+    output: Output {
+      address: own_address,
+      value: mock_curve_funded(),
+      datum: InlineDatum(datum),
+      reference_script: None,
+    },
+  }
+  let new_datum = BondingCurveTierBDatum { ..datum, curve_state: Cancelled }
+  let self = Transaction {
+    ..transaction.placeholder,
+    inputs: [own_input],
+    outputs: [
+      Output {
+        address: own_address,
+        value: mock_curve_funded(),
+        datum: InlineDatum(new_datum),
+        reference_script: None,
+      },
+    ],
+    extra_signatories: [#"22"],
+  }
+
+  bonding_curve_tier_b.spend(Some(datum), CancelCurve, own_ref, self)
+}
+
+// The signed failure path stops at the same edge the permissionless one does.
+// Inside the claim window a registrant is holding an allocation they can still
+// settle, and a bond returned in proportion to what was bought is a bond
+// forfeited in proportion to what a cancellation prevented.
+test cancel_curve_rejects_inside_the_claim_window() {
+  !run_cancel_curve(DvClaim)
+}
+
+// The states it still reaches, so the rejection above is not equally satisfied
+// by an arm that refuses everything.
+test cancel_curve_still_reaches_the_states_either_side_of_it() {
+  and {
+    run_cancel_curve(Inactive),
+    run_cancel_curve(Active),
+  }
 }
 
 // ----------------------------------------------------------------------------

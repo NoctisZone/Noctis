@@ -78,6 +78,13 @@ function deployWithRoot(root: Uint8Array, witnesses: Witnesses<PrivateState>) {
     90n, // dvPrice
     1n, // allowlistSize
     1_000_000n, // registrationCloseTime
+    // The launch's own schedule, the same 46h/2h/24h a real one carries.
+    // The gate derives its open, buying-open and buying-close times from
+    // these at deploy, so a registration close of 1,000,000 has to leave
+    // room for the registration window behind it.
+    165_600n, // registrationWindowSeconds
+    7_200n, // freezeWindowSeconds
+    86_400n, // buyingWindowSeconds
     1n, // minDvParticipants — permissive, this file's tests don't exercise the floor
     fakeBytes32(88), // creatorPubKey — distinct from any registrant fill used below
     fakeBytes32(60), // platformAddr — one wallet, no treasury/ops split

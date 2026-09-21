@@ -82,12 +82,25 @@ export class CardanoDvAllocationAnchorSubmitter {
     return this.curve.readCurveDatum();
   }
 
+  /**
+   * @param registrantCount sizes the nullifier map anchored alongside the root
+   *   — one bit per allocation leaf. Take it from the same tree the root was
+   *   built from, never from a guess: a map that does not cover the highest
+   *   leaf index that tree hands out leaves those registrants no bit to claim
+   *   against. 0 for a launch with no DarkVeil phase.
+   */
   async anchorDvAllocationRoot(
     governorPrivateKeyExtendedHex: string,
     governorAddress: string,
     dvAllocationRootHex: string,
+    registrantCount: number,
   ): Promise<{ txHash: string }> {
-    return this.curve.anchorDvAllocationRoot(governorPrivateKeyExtendedHex, governorAddress, dvAllocationRootHex);
+    return this.curve.anchorDvAllocationRoot(
+      governorPrivateKeyExtendedHex,
+      governorAddress,
+      dvAllocationRootHex,
+      registrantCount,
+    );
   }
 }
 

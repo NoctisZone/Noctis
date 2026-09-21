@@ -8,6 +8,31 @@ Notable changes to the Noctis Zone, by release. Internal development history pre
 
 ### Changed
 
+- The DarkVeil claim window on a Cardano Launch now opens on its own terms
+  rather than on a signature. Everything that transaction relies on — the
+  allocation root, the nullifier map it is claimed against, and the launch's own
+  declared claim and settlement windows — is public and fixed before it can run,
+  so any wallet may submit it. It reads real chain time against a validity range
+  the validator bounds, and starting the window is held to moving none of the
+  curve's value, which is the pairing every permissionless action on this
+  contract makes.
+- The nullifier map that records which allocations have been claimed is now
+  sized in the same transaction that anchors the allocation root, which is the
+  one place the registrant set is known. It is held to one bit per allocation
+  leaf, to a ceiling that keeps it inside the transaction budget every claim
+  shares with its own Merkle proof, and to starting with every bit clear. A
+  launch with no DarkVeil phase carries no map at all.
+- Cancelling a Cardano Launch curve now stops at the DarkVeil claim window, the
+  same state the permissionless expiry already refuses, so a registrant holding
+  an allocation they can still settle keeps the chance to settle it. That window
+  ends on the clock without anyone's permission, and a launch can be cancelled
+  once it has.
+- The Cardano Launch curve is published as a reference script and named by every
+  spend. It serialises whole into one publishing transaction with room to spare,
+  and because the script is public, a wallet that finds no published copy can
+  publish one and then act — which is what keeps the permissionless paths open
+  to anyone.
+
 - A Cardano Launch's DarkVeil phase now runs on a schedule sealed at deploy
   rather than on a signature. Registration opening, the buying window opening,
   and the DarkVeil close are each driven by a deadline fixed before anyone

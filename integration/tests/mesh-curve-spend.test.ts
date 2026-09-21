@@ -28,7 +28,13 @@ import {
   type GraduationSpendPlan,
   MeshCurveSpender,
 } from '../mesh-curve-spend.js';
-import { MAX_TX_BYTES, rawScriptSize, scriptAddressOf, scriptHashOf } from '../reference-script.js';
+import {
+  MAX_PUBLISHABLE_SCRIPT_BYTES,
+  MAX_TX_BYTES,
+  rawScriptSize,
+  scriptAddressOf,
+  scriptHashOf,
+} from '../reference-script.js';
 import { capProofToPlutus } from '../tier-a-schemas.js';
 
 interface Blueprint {
@@ -266,23 +272,35 @@ describe('MeshCurveSpender', () => {
   // The comparison the whole module exists for, stated as a measurement
   // rather than left implicit.
   //
-  // This claim has moved three times with the validator's size, and the
-  // history is the point. It began as "an embedded Cardano Launch trade cannot
-  // be built at ANY size". Reordering the curve datum so the fields a redeemer
+  // This claim has moved four times with the validator's size, and the history
+  // is the point. It began as "an embedded Cardano Launch trade cannot be
+  // built at ANY size". Reordering the curve datum so the fields a redeemer
   // rewrites sit at the front took the validator from 15,952 bytes to 13,699,
   // and a single embedded spend fitted again, so the claim was weakened to a
   // headroom one. The batcher allowlist took it back over at 16,006. Closing
-  // the direct-trade arms then took 1,038 bytes off, and it fits once more.
+  // the direct-trade arms then took 1,038 bytes off, and it fitted once more,
+  // by 49 bytes. Sizing the DarkVeil nullifier map at the anchor — which is
+  // what lets the claim window be opened by anyone — spent 75 of those, and
+  // the embedded path is over again.
   //
   // What has never changed is why the reference script exists. A batch spends
   // the same curve once but carries a proof PER ORDER, and an embedded script
-  // is charged against the same 16,384 bytes those proofs need. The second
-  // assertion is the one that matters and is the one that has held throughout.
+  // is charged against the same 16,384 bytes those proofs need. The last
+  // assertion is the one that matters and is the one that has held throughout;
+  // the 49 bytes the embedded path briefly had were never enough to carry a
+  // single cap proof, so nothing real was ever built that way.
   //
-  // Both bounds are asserted rather than only the one that currently binds, so
+  // The headroom that DOES bind now is the publishing transaction's, which
+  // reference-script.test.ts measures: a script has to serialise whole into
+  // one output, and at 15,891 bytes this one does, with 161 bytes to spare.
+  // That is what keeps the permissionless arms — ExpireCurve, ActivateCurve,
+  // OpenDvClaim — reachable by anyone: the script is public, so a stranger who
+  // finds no published reference can publish one and then act.
+  //
+  // Every bound is asserted rather than only the one that currently binds, so
   // the next size move corrects this comment rather than passing quietly. It
-  // has now done that three times.
-  it('leaves room for a batch of proofs only when the script is referenced', async () => {
+  // has now done that four times.
+  it('needs the reference script for a Cardano Launch spend to fit at all', async () => {
     const s = spender(TIER_B);
     const referenced = (await s.build(buyPlan(s.scriptAddress), fakeWallet())).length / 2;
     const embedded = referenced + rawScriptSize(TIER_B.compiledCode);
@@ -294,9 +312,18 @@ describe('MeshCurveSpender', () => {
     const batchProofs = proofBytes * MAX_ORDERS_PER_BATCH;
 
     expect(referenced).toBeLessThan(MAX_TX_BYTES);
-    expect(embedded).toBeLessThan(MAX_TX_BYTES);
+    expect(embedded).toBeGreaterThan(MAX_TX_BYTES);
     expect(referenced + batchProofs).toBeLessThan(MAX_TX_BYTES);
     expect(embedded + batchProofs).toBeGreaterThan(MAX_TX_BYTES);
+  });
+
+  // The bound that replaced it. Stated here rather than left to
+  // reference-script.test.ts's own limit check because this is the module that
+  // knows why it matters: with the embedded path gone, publishing is the only
+  // way this validator reaches a transaction at all.
+  it('still serialises whole into one publishing transaction', () => {
+    const size = rawScriptSize(TIER_B.compiledCode);
+    expect(size).toBeLessThanOrEqual(MAX_PUBLISHABLE_SCRIPT_BYTES);
   });
 
   it('delivers tokens with the settlement tag the validator reads', async () => {

@@ -178,6 +178,16 @@ export function claimedBitsBytes(registrantCount: number): number {
   return Math.ceil(registrantCount / 8);
 }
 
+/**
+ * The ceiling the validator holds that map to, mirrored from its own
+ * `max_claimed_bits`. One bit per allocation leaf, so 2,048 registrants.
+ *
+ * Mirrored rather than read because it is a compiled-in constant with no datum
+ * field to read it from. The cost of being wrong here is a refused transaction,
+ * not a wrong one — the validator is what binds.
+ */
+export const MAX_CLAIMED_BITS_BYTES = 256;
+
 // ============================================================================
 // SUBMITTER
 // ============================================================================
@@ -591,23 +601,22 @@ export class LucidTierBCurveSubmitter {
   }
 
   // --------------------------------------------------------------------------
-  // OpenDvClaim — governor-signed. Inactive -> DvClaim.
+  // OpenDvClaim — permissionless. Inactive -> DvClaim.
   //
-  // Starts the 24-hour window in which DarkVeil registrants, and only they, can
-  // settle their allocations. Public trading cannot begin until it and the dead
-  // window after it have both elapsed, which is what keeps claims and trades
-  // from competing for the curve at all.
+  // Starts the window in which DarkVeil registrants, and only they, can settle
+  // their allocations. Public trading cannot begin until it and the dead window
+  // after it have both elapsed, which is what keeps claims and trades from
+  // competing for the curve at all.
+  //
+  // Anyone may build this transaction once the allocation root and its
+  // nullifier map are anchored: by then the launch's terms are all public and
+  // already fixed, so nothing here is a decision. `signerAddress` pays the fee
+  // and nothing else — the validator reads no signature.
   // --------------------------------------------------------------------------
 
-  /**
-   * @param registrantCount how many registrants the allocation tree holds. It
-   *   sizes `claimed_bits`, so it must cover the highest `leaf_index` that tree
-   *   can hand out — a map too small makes those registrants unable to claim.
-   */
   async openDvClaim(
-    governorPrivateKeyExtendedHex: string,
-    governorAddress: string,
-    registrantCount: number,
+    callerPrivateKeyExtendedHex: string,
+    callerAddress: string,
     currentTimestampMs: number,
   ): Promise<{ txHash: string }> {
     const lucid = await this.lucidPromise;
@@ -629,26 +638,23 @@ export class LucidTierBCurveSubmitter {
           'it is what every claim proves against, and it cannot be changed afterwards.',
       );
     }
-    if (!Number.isInteger(registrantCount) || registrantCount <= 0) {
-      throw new Error(`registrantCount must be a positive whole number, got ${registrantCount}.`);
+    if (currentDatum.claimed_bits.length === 0) {
+      throw new Error(
+        'This curve carries no DarkVeil nullifier map, so there is no window to open. ' +
+          'The map is sized when the allocation root is anchored.',
+      );
     }
-    this.requireSigner(currentDatum.governor_pub_key_hash, governorAddress, 'governor');
 
-    // Every bit clear. The validator checks this too: a window opened with a
-    // bit already set would burn that registrant's claim before they made it.
-    const claimedBits = '00'.repeat(claimedBitsBytes(registrantCount));
-
-    const bech32Key = extendedHexToBech32PrivateKey(governorPrivateKeyExtendedHex);
-    const governorUtxos = await lucid.utxosAt(governorAddress);
-    lucid.selectWallet.fromAddress(governorAddress, governorUtxos);
-    await this.prepareReferencedFromKey(governorAddress, governorPrivateKeyExtendedHex);
+    const bech32Key = extendedHexToBech32PrivateKey(callerPrivateKeyExtendedHex);
+    const callerUtxos = await lucid.utxosAt(callerAddress);
+    lucid.selectWallet.fromAddress(callerAddress, callerUtxos);
+    await this.prepareReferencedFromKey(callerAddress, callerPrivateKeyExtendedHex);
 
     const currentTimestamp = BigInt(currentTimestampMs);
     const newDatum: BondingCurveTierBDatumData = {
       ...currentDatum,
       curve_state: 'DvClaim',
       dv_claim_opened_at: currentTimestamp,
-      claimed_bits: claimedBits,
     };
 
     const realNowMs = Date.now();
@@ -656,11 +662,11 @@ export class LucidTierBCurveSubmitter {
       lucid,
       curveUtxo,
       {
-        redeemerCbor: Data.to(new Constr(BONDING_CURVE_TIER_B_REDEEMER.OpenDvClaim, [claimedBits, currentTimestamp])),
+        redeemerCbor: Data.to(new Constr(BONDING_CURVE_TIER_B_REDEEMER.OpenDvClaim, [currentTimestamp])),
         newDatumCbor: Data.to<BondingCurveTierBDatumData>(newDatum, BondingCurveTierBDatumSchema),
         continuingAssets: curveUtxo.assets,
         payouts: [],
-        signerAddress: governorAddress,
+        signerAddress: callerAddress,
         validity: {
           fromMs: Math.min(currentTimestampMs, realNowMs) - 60_000,
           toMs: Math.max(currentTimestampMs, realNowMs) + 60_000,
@@ -676,16 +682,23 @@ export class LucidTierBCurveSubmitter {
   // --------------------------------------------------------------------------
 
   /**
-   * Fixes the root every DarkVeil claim will be proved against.
+   * Fixes the root every DarkVeil claim will be proved against, and sizes the
+   * nullifier map that goes with it.
    *
    * Freely re-callable while the curve is still Inactive — the redeemer's own
    * gate — so a mistaken root can be corrected any number of times before
    * public trading opens, and not once after.
+   *
+   * @param registrantCount how many registrants the allocation tree holds. It
+   *   sizes `claimed_bits`, so it must cover the highest `leaf_index` that tree
+   *   can hand out — a map too small makes those registrants unable to claim.
+   *   Pass 0 for a launch with no DarkVeil phase, which anchors no map.
    */
   async anchorDvAllocationRoot(
     governorPrivateKeyExtendedHex: string,
     governorAddress: string,
     dvAllocationRootHex: string,
+    registrantCount: number,
   ): Promise<{ txHash: string }> {
     const lucid = await this.lucidPromise;
     const curveUtxo = await this.findCurveUtxo(lucid);
@@ -701,6 +714,33 @@ export class LucidTierBCurveSubmitter {
     }
     this.requireSigner(currentDatum.governor_pub_key_hash, governorAddress, 'governor');
 
+    const hasDarkVeil = currentDatum.dv_reserve_tokens > 0n;
+    if (!Number.isInteger(registrantCount) || registrantCount < 0) {
+      throw new Error(`registrantCount must be a whole number of registrants, got ${registrantCount}.`);
+    }
+    if (hasDarkVeil && registrantCount === 0) {
+      throw new Error(
+        'This launch has a DarkVeil allocation, so it needs a nullifier map: pass the real ' +
+          'registrant count. A window opened over an empty map is a window nobody could claim in.',
+      );
+    }
+    if (!hasDarkVeil && registrantCount > 0) {
+      throw new Error(
+        'This launch has no DarkVeil allocation, so no leaf can ever be claimed and it anchors ' +
+          'no nullifier map. Pass 0.',
+      );
+    }
+    if (claimedBitsBytes(registrantCount) > MAX_CLAIMED_BITS_BYTES) {
+      throw new Error(
+        `A nullifier map for ${registrantCount} registrants exceeds the ${MAX_CLAIMED_BITS_BYTES}-byte ` +
+          'ceiling the validator holds it to. The map rides in the datum of every claim transaction.',
+      );
+    }
+
+    // Every bit clear. The validator checks this too: a map anchored with a bit
+    // already set would burn that registrant's claim before they made it.
+    const claimedBits = '00'.repeat(claimedBitsBytes(registrantCount));
+
     const bech32Key = extendedHexToBech32PrivateKey(governorPrivateKeyExtendedHex);
     const governorUtxos = await lucid.utxosAt(governorAddress);
     lucid.selectWallet.fromAddress(governorAddress, governorUtxos);
@@ -710,13 +750,16 @@ export class LucidTierBCurveSubmitter {
       ...currentDatum,
       dv_allocation_root: dvAllocationRootHex,
       dv_settled: true,
+      claimed_bits: claimedBits,
     };
 
     const txHash = await this.executeSpend(
       lucid,
       curveUtxo,
       {
-        redeemerCbor: Data.to(new Constr(BONDING_CURVE_TIER_B_REDEEMER.AnchorDvAllocationRoot, [dvAllocationRootHex])),
+        redeemerCbor: Data.to(
+          new Constr(BONDING_CURVE_TIER_B_REDEEMER.AnchorDvAllocationRoot, [dvAllocationRootHex, claimedBits]),
+        ),
         newDatumCbor: Data.to<BondingCurveTierBDatumData>(newDatum, BondingCurveTierBDatumSchema),
         continuingAssets: curveUtxo.assets,
         payouts: [],

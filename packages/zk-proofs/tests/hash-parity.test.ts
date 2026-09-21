@@ -74,6 +74,13 @@ describe('eligibility-gate.ts — parity with the compiled circuit', () => {
       90n, // dvPrice
       1n, // allowlistSize
       1_000_000n, // registrationCloseTime
+      // The launch's own schedule, the same 46h/2h/24h a real one carries.
+      // The gate derives its open, buying-open and buying-close times from
+      // these at deploy, so a registration close of 1,000,000 has to leave
+      // room for the registration window behind it.
+      165_600n, // registrationWindowSeconds
+      7_200n, // freezeWindowSeconds
+      86_400n, // buyingWindowSeconds
       1n, // minDvParticipants — permissive, this test doesn't exercise the floor
       fakeBytes32(88), // creatorPubKey — distinct from myKey so this registrant isn't rejected as the creator
       fakeBytes32(60), // platformAddr — one wallet, no treasury/ops split
@@ -147,6 +154,8 @@ describe('eligibility-gate.ts — the DarkVeil buy commitment', () => {
     };
     const contract = new EligibilityGateContract<PrivateState>(witnesses);
     const dvPrice = 3n;
+    // The schedule this deployment seals, restated where the reveal reads it.
+    const BUYING_CLOSE_TIME = 1_000_000n + 7_200n + 86_400n;
     const { contractAddress, ctx } = deployForTest(
       contract,
       undefined,
@@ -161,6 +170,13 @@ describe('eligibility-gate.ts — the DarkVeil buy commitment', () => {
       dvPrice,
       1n, // allowlistSize
       1_000_000n, // registrationCloseTime
+      // The launch's own schedule, the same 46h/2h/24h a real one carries.
+      // The gate derives its open, buying-open and buying-close times from
+      // these at deploy, so a registration close of 1,000,000 has to leave
+      // room for the registration window behind it.
+      165_600n, // registrationWindowSeconds
+      7_200n, // freezeWindowSeconds
+      86_400n, // buyingWindowSeconds
       1n, // minDvParticipants
       fakeBytes32(88), // creatorPubKey — distinct from myKey
       fakeBytes32(60), // platformAddr
@@ -171,12 +187,15 @@ describe('eligibility-gate.ts — the DarkVeil buy commitment', () => {
     );
 
     // Drive the real DarkVeil sequence: DarkVeil phase -> registration ->
-    // register -> buying (publishing the registrant root) -> commit -> close
-    // -> reveal.
+    // register -> publish the registrant root -> buying -> commit -> close ->
+    // reveal. Every forward move is gated on the schedule sealed at deploy
+    // rather than on a caller-named time, so the wall-clock context these
+    // helpers build is already past all of them.
     let c = nextContext(contractAddress, contract.circuits.advancePhase(ctx, LaunchPhase.DarkVeil).context);
     c = nextContext(contractAddress, contract.circuits.startRegistration(c).context);
     c = nextContext(contractAddress, contract.circuits.registerForDarkVeil(c).context);
-    c = nextContext(contractAddress, contract.circuits.startBuying(c, registrants.root).context);
+    c = nextContext(contractAddress, contract.circuits.publishRegistrantRoot(c, registrants.root).context);
+    c = nextContext(contractAddress, contract.circuits.openBuying(c).context);
 
     const tokenAmount = 250n;
     const commitment = eligibilityGate.computeBuyCommit({
@@ -188,11 +207,16 @@ describe('eligibility-gate.ts — the DarkVeil buy commitment', () => {
     });
 
     c = nextContext(contractAddress, contract.circuits.submitBuyCommit(c, commitment, 100n).context);
-    // baseSlot must cover tokenAmount, or the reveal fails the per-registrant
-    // cap rather than the ownership check this test is about.
-    c = nextContextAtTime(contractAddress, contract.circuits.closeDarkVeil(c, 200n, 500n).context, 300);
+    // baseSlot is determined by the ledger, not chosen: one registrant against
+    // a 500-token allocation admits exactly 500.
+    c = nextContext(contractAddress, contract.circuits.closeDarkVeil(c, 500n).context);
 
-    const revealed = contract.circuits.revealBuyCommit(c, commitment, tokenAmount, dvPrice, 300n);
+    // The reveal binds its stamped time to the block's, so pin the context to
+    // the moment being claimed rather than naming one the chain is nowhere
+    // near.
+    const revealAt = BUYING_CLOSE_TIME;
+    const pinned = nextContextAtTime(contractAddress, c, Number(revealAt));
+    const revealed = contract.circuits.revealBuyCommit(pinned, commitment, tokenAmount, dvPrice, revealAt);
 
     // The reveal succeeding IS the parity assertion: the circuit recomputed
     // this commitment from its own caller identity and nonce and got the same

@@ -367,6 +367,9 @@ describe('LucidTierBCurveSubmitter.activateCurve', () => {
 
 describe('LucidTierBCurveSubmitter.openDvClaim', () => {
   const OPENED_AT = 1_700_000_000_000;
+  // The map is already in the datum by the time this window can open — it was
+  // sized when the allocation root was anchored. 20 registrants, 3 bytes.
+  const ANCHORED_MAP = '000000';
 
   function settledDatum(overrides: Record<string, unknown> = {}) {
     return baseDatum({
@@ -374,6 +377,7 @@ describe('LucidTierBCurveSubmitter.openDvClaim', () => {
       dv_reserve_tokens: 150n,
       dv_settled: true,
       dv_allocation_root: 'aa'.repeat(32),
+      claimed_bits: ANCHORED_MAP,
       ...overrides,
     });
   }
@@ -382,75 +386,76 @@ describe('LucidTierBCurveSubmitter.openDvClaim', () => {
     const { builder, calls } = makeFakeTxBuilder();
     const submitter = makeSubmitter(builder, [{ datum: settledDatum(), assets: {} }]);
 
-    await submitter.openDvClaim(REAL_EXTENDED_KEY_HEX, addrFor(fakeKeyHash(0x22)), 20, OPENED_AT);
+    await submitter.openDvClaim(REAL_EXTENDED_KEY_HEX, addrFor(fakeKeyHash(0x22)), OPENED_AT);
 
     const payload = calls.payToContract![1] as { value: Record<string, unknown> };
     expect(payload.value.curve_state).toBe('DvClaim');
     expect(payload.value.dv_claim_opened_at).toBe(BigInt(OPENED_AT));
   });
 
-  it('sizes the bitmap to hold one bit per registrant, rounded up to whole bytes', async () => {
+  it('carries the anchored map forward untouched rather than writing a new one', async () => {
     const { builder, calls } = makeFakeTxBuilder();
     const submitter = makeSubmitter(builder, [{ datum: settledDatum(), assets: {} }]);
 
-    // 20 registrants need 3 bytes (24 bits); 16 would need exactly 2.
-    await submitter.openDvClaim(REAL_EXTENDED_KEY_HEX, addrFor(fakeKeyHash(0x22)), 20, OPENED_AT);
+    await submitter.openDvClaim(REAL_EXTENDED_KEY_HEX, addrFor(fakeKeyHash(0x22)), OPENED_AT);
 
     const payload = calls.payToContract![1] as { value: Record<string, unknown> };
-    expect(payload.value.claimed_bits).toBe('000000');
+    expect(payload.value.claimed_bits).toBe(ANCHORED_MAP);
   });
 
-  it('opens every bit clear, so no registrant can be pre-burned', async () => {
+  it('is buildable by a key the curve has never heard of', async () => {
+    // The whole point of the change: a registrant holding a final allocation
+    // should not need the governor's key to start the window they claim in.
     const { builder, calls } = makeFakeTxBuilder();
     const submitter = makeSubmitter(builder, [{ datum: settledDatum(), assets: {} }]);
 
-    await submitter.openDvClaim(REAL_EXTENDED_KEY_HEX, addrFor(fakeKeyHash(0x22)), 64, OPENED_AT);
+    await submitter.openDvClaim(REAL_EXTENDED_KEY_HEX, addrFor(fakeKeyHash(0x99)), OPENED_AT);
 
     const payload = calls.payToContract![1] as { value: Record<string, unknown> };
-    expect(payload.value.claimed_bits).toMatch(/^0+$/);
+    expect(payload.value.curve_state).toBe('DvClaim');
   });
 
   it('builds the redeemer at the constructor index the validator declares', async () => {
     const { builder, calls } = makeFakeTxBuilder();
     const submitter = makeSubmitter(builder, [{ datum: settledDatum(), assets: {} }]);
 
-    await submitter.openDvClaim(REAL_EXTENDED_KEY_HEX, addrFor(fakeKeyHash(0x22)), 20, OPENED_AT);
+    await submitter.openDvClaim(REAL_EXTENDED_KEY_HEX, addrFor(fakeKeyHash(0x22)), OPENED_AT);
 
     const redeemer = calls.collectFrom![1] as { index: number; fields: unknown[] };
     expect(redeemer.index).toBe(14);
-    expect(redeemer.fields).toEqual(['000000', BigInt(OPENED_AT)]);
+    expect(redeemer.fields).toEqual([BigInt(OPENED_AT)]);
   });
 
   it('refuses to open a window for a launch with no DarkVeil allocation', async () => {
     const { builder } = makeFakeTxBuilder();
     const submitter = makeSubmitter(builder, [{ datum: settledDatum({ dv_reserve_tokens: 0n }), assets: {} }]);
-    await expect(
-      submitter.openDvClaim(REAL_EXTENDED_KEY_HEX, addrFor(fakeKeyHash(0x22)), 20, OPENED_AT),
-    ).rejects.toThrow(/DarkVeil/i);
+    await expect(submitter.openDvClaim(REAL_EXTENDED_KEY_HEX, addrFor(fakeKeyHash(0x22)), OPENED_AT)).rejects.toThrow(
+      /DarkVeil/i,
+    );
   });
 
   it('refuses to open a window before the allocation root is final', async () => {
     const { builder } = makeFakeTxBuilder();
     const submitter = makeSubmitter(builder, [{ datum: settledDatum({ dv_settled: false }), assets: {} }]);
-    await expect(
-      submitter.openDvClaim(REAL_EXTENDED_KEY_HEX, addrFor(fakeKeyHash(0x22)), 20, OPENED_AT),
-    ).rejects.toThrow(/root|settled/i);
+    await expect(submitter.openDvClaim(REAL_EXTENDED_KEY_HEX, addrFor(fakeKeyHash(0x22)), OPENED_AT)).rejects.toThrow(
+      /root|settled/i,
+    );
   });
 
   it('refuses a window nobody could claim in', async () => {
     const { builder } = makeFakeTxBuilder();
-    const submitter = makeSubmitter(builder, [{ datum: settledDatum(), assets: {} }]);
-    await expect(
-      submitter.openDvClaim(REAL_EXTENDED_KEY_HEX, addrFor(fakeKeyHash(0x22)), 0, OPENED_AT),
-    ).rejects.toThrow(/registrant/i);
+    const submitter = makeSubmitter(builder, [{ datum: settledDatum({ claimed_bits: '' }), assets: {} }]);
+    await expect(submitter.openDvClaim(REAL_EXTENDED_KEY_HEX, addrFor(fakeKeyHash(0x22)), OPENED_AT)).rejects.toThrow(
+      /nullifier map/i,
+    );
   });
 
   it('refuses to reopen a window that is already open', async () => {
     const { builder } = makeFakeTxBuilder();
     const submitter = makeSubmitter(builder, [{ datum: settledDatum({ curve_state: 'DvClaim' }), assets: {} }]);
-    await expect(
-      submitter.openDvClaim(REAL_EXTENDED_KEY_HEX, addrFor(fakeKeyHash(0x22)), 20, OPENED_AT),
-    ).rejects.toThrow(/Inactive/i);
+    await expect(submitter.openDvClaim(REAL_EXTENDED_KEY_HEX, addrFor(fakeKeyHash(0x22)), OPENED_AT)).rejects.toThrow(
+      /Inactive/i,
+    );
   });
 });
 
