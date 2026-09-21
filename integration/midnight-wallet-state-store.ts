@@ -355,32 +355,88 @@ export class WalletStateStore {
 }
 
 /**
- * Serialize whichever sub-wallets will serialize, without letting one failure
- * lose the others.
+ * Reads a sub-wallet's applied cursor as of right now.
  *
- * Serialization can be slow or reject while a sub-wallet is still catching up,
- * and the dust sub-wallet — the one this is all for — is the likeliest to do so.
- * A per-wallet rejection therefore drops that one blob for this round rather
- * than failing the round.
+ * Supplied by the caller rather than taken off the facade, because the cursor
+ * lives on a state EMISSION (`FacadeState.dust.progress`) while serialization
+ * lives on the facade's sub-wallet API — the two are different objects and this
+ * module deliberately knows only the second. Returning `undefined` means "the
+ * cursor could not be read", which is treated as "cannot prove the arm was
+ * still", not as "it was".
  */
-export async function collectWalletStateBlobs(facade: {
-  shielded: { serializeState(): Promise<string> };
-  unshielded: { serializeState(): Promise<string> };
-  dust: { serializeState(): Promise<string> };
-}): Promise<WalletStateBlobs> {
+export type SubWalletCursorReader = (kind: SubWalletKind) => bigint | undefined;
+
+/** Why a round declined to bank a sub-wallet, for a caller that reports it. */
+export type SkipReason = 'serialize-failed' | 'cursor-unreadable' | 'cursor-moved' | 'empty';
+
+export interface CollectedWalletState {
+  blobs: WalletStateBlobs;
+  /** Populated for every kind NOT in `blobs`. Never silently empty. */
+  skipped: Partial<Record<SubWalletKind, SkipReason>>;
+}
+
+/**
+ * Serialize whichever sub-wallets can be serialized WITHOUT TEARING, without
+ * letting one failure lose the others.
+ *
+ * A SNAPSHOT IS ONLY BANKED FROM AN ARM WHOSE CURSOR DID NOT MOVE ACROSS ITS
+ * OWN SERIALIZE, and that rule is the whole point of this function.
+ *
+ * A dust snapshot is two coupled fields: the ledger blob carrying the
+ * generation tree, and the applied cursor. `serializeState()` is a read of
+ * whatever the state observable is currently emitting — there is no fence, no
+ * pause, and the only teardown the SDK offers is a full scope close — so an arm
+ * that applies an update part-way through can hand back a tree and a cursor
+ * captured at different instants. On restore the cursor alone decides which
+ * events are ever applied, so a cursor ahead of its tree filters out the gap
+ * FOREVER: the wallet is frozen rather than slow, and nothing re-requests the
+ * missing entries. Reading the cursor either side of the serialize is what
+ * closes that window — if it never moved, there was no interval to tear in,
+ * which is also why the two idle arms always restored cleanly while the busy
+ * one did not.
+ *
+ * Nothing here is swallowed. Every kind that is not banked is reported with a
+ * reason, because the previous version's silent catch was the reason six
+ * corrupt generations accumulated unnoticed: the window in which tearing
+ * happens was exactly the window in which failures were designed to be ignored.
+ */
+export async function collectWalletStateBlobs(
+  facade: {
+    shielded: { serializeState(): Promise<string> };
+    unshielded: { serializeState(): Promise<string> };
+    dust: { serializeState(): Promise<string> };
+  },
+  readCursor: SubWalletCursorReader,
+): Promise<CollectedWalletState> {
   const blobs: WalletStateBlobs = {};
+  const skipped: Partial<Record<SubWalletKind, SkipReason>> = {};
   await Promise.all(
     SUB_WALLET_KINDS.map(async (kind) => {
+      const before = readCursor(kind);
+      let blob: string;
       try {
-        const blob = await facade[kind].serializeState();
-        if (typeof blob === 'string' && blob.length > 0) blobs[kind] = blob;
+        blob = await facade[kind].serializeState();
       } catch {
-        // Deliberately silent: an unserializable sub-wallet is expected during
-        // catch-up, and the caller logs what it actually banked.
+        skipped[kind] = 'serialize-failed';
+        return;
       }
+      if (typeof blob !== 'string' || blob.length === 0) {
+        skipped[kind] = 'empty';
+        return;
+      }
+      const after = readCursor(kind);
+      if (before === undefined || after === undefined) {
+        skipped[kind] = 'cursor-unreadable';
+        return;
+      }
+      if (before !== after) {
+        skipped[kind] = 'cursor-moved';
+        return;
+      }
+      blobs[kind] = blob;
     }),
   );
-  return blobs;
+  return { blobs, skipped };
 }
 
 /** Sub-wallet snapshots that differ from the last confirmed save. */
@@ -397,6 +453,87 @@ export function hasAnyBlob(blobs: WalletStateBlobs): boolean {
   return SUB_WALLET_KINDS.some((kind) => blobs[kind] !== undefined);
 }
 
+/**
+ * The ledger's own complaint when a restored dust cursor sits ahead of the tree
+ * it was banked with.
+ *
+ * Matched on the ledger's wording rather than on a code, because it arrives as
+ * a plain throw with no code attached. The two real occurrences differed only
+ * in their indices — `expected to insert index 393044, but received 393050`
+ * and `1128734 … 1128751` — so the gap size is not part of the identity.
+ */
+const NON_LINEAR_DUST_INSERT = /inserted non-linearly into dust generation tree/i;
+
+/**
+ * True for the one error that means the snapshot is unusable FOREVER.
+ *
+ * This is not a transient the caller should sit out. The restored cursor
+ * decides which updates are ever applied, so every subsequent update filters
+ * out exactly the entries the tree is waiting for — retrying re-runs the same
+ * arithmetic and throws in the same place. The only exit is to discard the
+ * dust snapshot and replay that arm from genesis, which is what
+ * `dustColdStart` does.
+ */
+export function isTornDustSnapshotError(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err);
+  return NON_LINEAR_DUST_INSERT.test(message);
+}
+
+/** What to tell a human who has just hit a torn snapshot. Named once, used everywhere. */
+export const TORN_DUST_SNAPSHOT_REMEDY =
+  'The banked dust snapshot is torn: its cursor was saved ahead of its generation tree, so the ' +
+  'entries in between are filtered out of every future update and can never arrive. This does not ' +
+  'heal and must not be retried — re-run with dustColdStart to discard the dust snapshot and ' +
+  'replay that arm from genesis. The shielded and unshielded snapshots are unaffected.';
+
+/**
+ * How long a freshly restored dust arm may sit without moving before the
+ * snapshot behind it is treated as torn.
+ *
+ * A healthy restored arm applies continuously; the measured broken one advanced
+ * by 2 in three days. Anything in between is comfortably separated by a window
+ * of a few blocks, and erring long only delays the diagnosis — it never turns a
+ * healthy wallet into a failed one, because a healthy wallet passes the moment
+ * it moves.
+ */
+export const RESTORED_CURSOR_PROOF_MS = 90_000;
+
+export interface CursorAdvanceResult {
+  advanced: boolean;
+  from: bigint;
+  to: bigint;
+  waitedMs: number;
+}
+
+/**
+ * Wait until a restored cursor actually MOVES, and report if it never does.
+ *
+ * A successful `restore()` is not health. The torn snapshots all restored
+ * without complaint and reported a plausible index; what separated them from
+ * the good ones was that the index then stopped advancing. Reads do not need a
+ * synced wallet, so nothing notices until something has to pay a fee — which,
+ * in the run this came from, was six days later.
+ *
+ * Returns rather than throws, so the caller decides whether a stalled arm is
+ * fatal or merely worth reporting.
+ */
+export async function waitForCursorToAdvance(
+  readCursor: () => bigint | undefined,
+  timeoutMs: number = RESTORED_CURSOR_PROOF_MS,
+  pollMs = 2_000,
+): Promise<CursorAdvanceResult> {
+  const started = Date.now();
+  const from = readCursor() ?? 0n;
+  for (;;) {
+    const now = readCursor() ?? from;
+    if (now !== from) return { advanced: true, from, to: now, waitedMs: Date.now() - started };
+    if (Date.now() - started >= timeoutMs) {
+      return { advanced: false, from, to: now, waitedMs: Date.now() - started };
+    }
+    await new Promise((resolve) => setTimeout(resolve, pollMs));
+  }
+}
+
 export interface PeriodicSaveHandle {
   /** Final serialize + save, then stop. Safe to call more than once. */
   stop(): Promise<void>;
@@ -407,6 +544,14 @@ export interface PeriodicSaveOptions {
   /** Called after each successful save with what was banked, for progress logging. */
   onSave?: (saved: WalletStateBlobs, sizes: Record<string, number>) => void;
   onError?: (err: unknown) => void;
+  /**
+   * Called once per round with every sub-wallet the round declined to bank.
+   *
+   * Not optional in spirit, whatever the `?` says: an arm that is silently
+   * never banked looks exactly like an arm that is healthy and unchanging, and
+   * telling those two apart after the fact costs a chain replay.
+   */
+  onSkip?: (skipped: Partial<Record<SubWalletKind, SkipReason>>) => void;
 }
 
 /**
@@ -415,12 +560,18 @@ export interface PeriodicSaveOptions {
  * The interval is what makes an OOM survivable rather than fatal: progress is
  * durable to within one interval, so a killed process loses at most that much
  * and the next one resumes from the rest.
+ *
+ * `readCursor` is positional and required rather than an option, for the same
+ * reason the blueprint fingerprint is stamped on every bundle centrally: the
+ * anti-tearing rule is only worth having if a new caller cannot leave it out by
+ * accident. A caller with no cursor to read banks nothing, loudly.
  */
 export function startPeriodicSave(
   facade: Parameters<typeof collectWalletStateBlobs>[0],
   store: WalletStateStore,
   accountId: string,
   guards: SnapshotGuards,
+  readCursor: SubWalletCursorReader,
   options: PeriodicSaveOptions = {},
 ): PeriodicSaveHandle {
   const intervalMs = options.intervalMs ?? 30_000;
@@ -429,7 +580,8 @@ export function startPeriodicSave(
   let stopped = false;
 
   const runSave = async () => {
-    const current = await collectWalletStateBlobs(facade);
+    const { blobs: current, skipped } = await collectWalletStateBlobs(facade, readCursor);
+    if (Object.keys(skipped).length > 0) options.onSkip?.(skipped);
     const changed = changedBlobs(current, lastSaved);
     if (!hasAnyBlob(changed)) return;
 

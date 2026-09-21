@@ -53,7 +53,13 @@ import {
   type MidnightNetwork,
   waitForWalletState,
 } from '../midnight-server-wallet.js';
-import { startPeriodicSave, WalletStateStore } from '../midnight-wallet-state-store.js';
+import {
+  type SubWalletKind,
+  startPeriodicSave,
+  TORN_DUST_SNAPSHOT_REMEDY,
+  WalletStateStore,
+  waitForCursorToAdvance,
+} from '../midnight-wallet-state-store.js';
 
 interface WalletInput {
   role: string;
@@ -232,13 +238,59 @@ async function runWorker(): Promise<never> {
   });
   if (wallet.restoredFrom.length === 0) log(`${role}: no usable snapshot — replaying from chain`);
 
-  const saver = startPeriodicSave(wallet.facade, store, role, wallet.snapshotGuards, {
+  // The latest emission, tracked from the moment the wallet exists rather than
+  // from the moment something starts waiting on it. Two things need it and both
+  // need it early: the save loop reads a cursor either side of every serialize,
+  // and the restored-cursor proof below has to watch an arm that has only just
+  // come up.
+  let last: FacadeState | undefined;
+  const stateSubscription = wallet.facade.state().subscribe({
+    next: (state) => {
+      last = state;
+    },
+    error: () => {},
+  });
+
+  // Cursors, read the same way `armsOf` reads them — `appliedIndex` on the two
+  // zswap arms, `appliedId` on the unshielded one. `undefined` before the first
+  // emission, which the save loop correctly refuses to bank against.
+  const readCursor = (kind: SubWalletKind): bigint | undefined => {
+    if (!last) return undefined;
+    const progress = last[kind].progress as { appliedIndex?: bigint; appliedId?: bigint };
+    return progress.appliedIndex ?? progress.appliedId;
+  };
+
+  const saver = startPeriodicSave(wallet.facade, store, role, wallet.snapshotGuards, readCursor, {
     onSave: (_saved, sizes) => {
       const parts = Object.entries(sizes).map(([kind, size]) => `${kind} ${(size / 1024).toFixed(0)}KB`);
       log(`${role}: banked ${parts.join(', ')}`);
     },
     onError: (err) => log(`${role}: snapshot failed — ${err instanceof Error ? err.message : String(err)}`),
+    // A round that banks nothing used to look exactly like a round with nothing
+    // to bank. `cursor-moved` is the expected and healthy reason during
+    // catch-up: the arm was mid-flight, so its blob was declined rather than
+    // torn. Seeing that reason repeatedly is the system working.
+    onSkip: (skipped) => {
+      const parts = Object.entries(skipped).map(([kind, reason]) => `${kind}: ${reason}`);
+      log(`${role}: not banked — ${parts.join(', ')}`);
+    },
   });
+
+  // A RESTORE THAT RETURNS IS NOT A RESTORE THAT WORKS. A torn dust snapshot
+  // restores without complaint and reports a plausible index; what gives it
+  // away is that the index then never moves, because the restored cursor
+  // filters out the very entries its tree is waiting for. Catching that here
+  // costs a minute and a half; not catching it cost six days last time,
+  // because reads never need a synced wallet and only a fee does.
+  if (wallet.restoredFrom.includes('dust')) {
+    const proof = await waitForCursorToAdvance(() => readCursor('dust'));
+    if (proof.advanced) {
+      log(`${role}: restored dust cursor advanced ${proof.from} → ${proof.to} in ${proof.waitedMs}ms`);
+    } else {
+      log(`${role}: restored dust cursor STALLED at ${proof.from} for ${proof.waitedMs}ms`);
+      log(`${role}: ${TORN_DUST_SNAPSHOT_REMEDY}`);
+    }
+  }
 
   // Report progress and heap on a slower cadence than the snapshot loop. Heap is
   // here because the attempt log is meant to answer "is this converging or is the
@@ -264,7 +316,6 @@ async function runWorker(): Promise<never> {
       `${ready ? '' : ` held-by=${blocking}`}, heap ${heapMb}MB`
     );
   };
-  let last: FacadeState | undefined;
   const ticker = setInterval(() => {
     if (last) log(describe(last));
   }, 30_000);
@@ -285,6 +336,7 @@ async function runWorker(): Promise<never> {
     log(describe(synced));
 
     clearInterval(ticker);
+    stateSubscription.unsubscribe();
     await saver.stop();
     await wallet.shutdown();
 
@@ -308,6 +360,7 @@ async function runWorker(): Promise<never> {
     // snapshot below is the whole point, and the next attempt continues from it.
     clearInterval(ticker);
     if (last) log(describe(last));
+    stateSubscription.unsubscribe();
     await saver.stop();
     await wallet.shutdown().catch(() => {});
 

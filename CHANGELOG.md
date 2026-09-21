@@ -103,6 +103,19 @@ Notable changes to the Noctis Zone, by release. Internal development history pre
   before reading it, so a refund is computed only against a complete record.
   This matches the two other circuits that already read that record.
 
+### Fixed
+
+- A server-side Midnight wallet now only banks a checkpoint of a sub-wallet
+  that was standing still while the checkpoint was taken. A checkpoint records
+  two things that have to describe the same moment, and taking one while the
+  wallet was mid-catch-up could capture them a fraction apart — after which the
+  restored wallet could never move forward again, while continuing to look
+  healthy until it was asked to pay a fee. A checkpoint is now declined unless
+  the wallet's position is unchanged across it, and a restored wallet has to be
+  seen advancing before it is trusted.
+- Every checkpoint a round declines is reported with the reason. The previous
+  silence covered exactly the case that mattered.
+
 ### Removed
 
 - The linear-curve launch path's two browser widgets: the live-curve buy widget

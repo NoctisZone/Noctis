@@ -29,11 +29,15 @@ vi.mock('node:fs/promises', async (importOriginal) => {
 
 import {
   changedBlobs,
+  collectWalletStateBlobs,
   hasAnyBlob,
+  isTornDustSnapshotError,
   type SnapshotGuards,
+  type SubWalletKind,
   seedFingerprintOf,
   startPeriodicSave,
   WalletStateStore,
+  waitForCursorToAdvance,
   walletSdkVersion,
 } from '../midnight-wallet-state-store.js';
 
@@ -224,6 +228,9 @@ describe('the periodic save loop', () => {
     return { shielded: sub('shielded'), unshielded: sub('unshielded'), dust: sub('dust') } as never;
   };
 
+  /** A cursor that never moves, i.e. every arm is idle and safe to bank. */
+  const stillCursor = () => 1n;
+
   const waitFor = async (predicate: () => boolean, timeoutMs = 4000) => {
     const deadline = Date.now() + timeoutMs;
     while (!predicate()) {
@@ -242,6 +249,7 @@ describe('the periodic save loop', () => {
       store,
       'periodic',
       GUARDS,
+      stillCursor,
       { intervalMs: 20, onSave: (saved) => saves.push(saved.dust ?? '') },
     );
 
@@ -263,6 +271,7 @@ describe('the periodic save loop', () => {
       store,
       'idle',
       GUARDS,
+      stillCursor,
       { intervalMs: 10, onSave: () => saveCount++ },
     );
 
@@ -298,6 +307,7 @@ describe('the periodic save loop', () => {
       failing,
       'retry',
       GUARDS,
+      stillCursor,
       {
         intervalMs: 15,
         onSave: (blobs) => saved.push(blobs.dust ?? ''),
@@ -323,6 +333,7 @@ describe('the periodic save loop', () => {
       store,
       'final',
       GUARDS,
+      stillCursor,
       { intervalMs: 10_000, onSave: (blobs) => saves.push(blobs.dust ?? '') },
     );
 
@@ -333,6 +344,186 @@ describe('the periodic save loop', () => {
 
     expect(saves).toEqual(['latest']);
     expect((await store.load('final', GUARDS))?.dust).toBe('latest');
+  });
+});
+
+// ============================================================================
+// A snapshot is only banked from an arm that was standing still
+// ============================================================================
+// The failure these guard against is not "the snapshot was lost" — it is "the
+// snapshot restored fine and then froze forever". A dust blob is a tree and a
+// cursor captured by one unfenced read; if the cursor moves between them, the
+// restored wallet filters out the entries its own tree is waiting for and
+// nothing re-requests them. So the rule is: no proof the arm was still, no
+// blob. Every case below asserts what is NOT banked, because banking a torn
+// blob is indistinguishable from banking a good one until something has to pay
+// a fee.
+
+describe('tear-proofing the snapshot', () => {
+  /** A facade whose serialize takes a turn, so a cursor can move underneath it. */
+  const facadeWithSlowSerialize = (blobs: Record<string, string>, onSerialize?: (kind: string) => void) => {
+    const sub = (kind: string) => ({
+      serializeState: async () => {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        onSerialize?.(kind);
+        return blobs[kind] ?? '';
+      },
+    });
+    return { shielded: sub('shielded'), unshielded: sub('unshielded'), dust: sub('dust') } as never;
+  };
+
+  const waitForSkips = async (predicate: () => boolean, timeoutMs = 4000) => {
+    const deadline = Date.now() + timeoutMs;
+    while (!predicate()) {
+      if (Date.now() > deadline) throw new Error('condition was never reached');
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+  };
+
+  it('banks every arm whose cursor did not move', async () => {
+    const { blobs, skipped } = await collectWalletStateBlobs(
+      facadeWithSlowSerialize({ shielded: 's', unshielded: 'u', dust: 'd' }),
+      () => 100n,
+    );
+    expect(blobs).toEqual({ shielded: 's', unshielded: 'u', dust: 'd' });
+    expect(skipped).toEqual({});
+  });
+
+  it('refuses the one arm whose cursor moved across its own serialize', async () => {
+    const cursors: Record<string, bigint> = { shielded: 10n, unshielded: 20n, dust: 30n };
+    // Only dust advances, exactly as it does during catch-up while the other
+    // two sit idle — which is why the real corruption only ever hit dust.
+    const { blobs, skipped } = await collectWalletStateBlobs(
+      facadeWithSlowSerialize({ shielded: 's', unshielded: 'u', dust: 'd' }, (kind) => {
+        if (kind === 'dust') cursors.dust += 6n;
+      }),
+      (kind: SubWalletKind) => cursors[kind],
+    );
+    expect(blobs).toEqual({ shielded: 's', unshielded: 'u' });
+    expect(blobs.dust).toBeUndefined();
+    expect(skipped).toEqual({ dust: 'cursor-moved' });
+  });
+
+  it('refuses an arm whose cursor cannot be read at all', async () => {
+    // Before the first state emission there is no cursor. "Cannot prove it was
+    // still" is not "it was still", so nothing is banked.
+    const { blobs, skipped } = await collectWalletStateBlobs(
+      facadeWithSlowSerialize({ shielded: 's', unshielded: 'u', dust: 'd' }),
+      () => undefined,
+    );
+    expect(blobs).toEqual({});
+    expect(skipped).toEqual({
+      shielded: 'cursor-unreadable',
+      unshielded: 'cursor-unreadable',
+      dust: 'cursor-unreadable',
+    });
+  });
+
+  it('reports a serialize rejection instead of swallowing it', async () => {
+    const facade = {
+      shielded: { serializeState: async () => 's' },
+      unshielded: { serializeState: async () => 'u' },
+      dust: {
+        serializeState: async () => {
+          throw new Error('still catching up');
+        },
+      },
+    } as never;
+    const { blobs, skipped } = await collectWalletStateBlobs(facade, () => 5n);
+    expect(blobs).toEqual({ shielded: 's', unshielded: 'u' });
+    // The silent catch here is what let six corrupt generations accumulate
+    // unnoticed, so the reason has to reach the caller.
+    expect(skipped).toEqual({ dust: 'serialize-failed' });
+  });
+
+  it('never writes a blob the save loop was not allowed to bank', async () => {
+    const store = newStore();
+    const cursors: Record<string, bigint> = { shielded: 1n, unshielded: 1n, dust: 1n };
+    const skips: string[] = [];
+    const handle = startPeriodicSave(
+      {
+        shielded: { serializeState: async () => 'shielded-ok' },
+        unshielded: { serializeState: async () => 'unshielded-ok' },
+        dust: {
+          serializeState: async () => {
+            cursors.dust += 1n;
+            return 'dust-torn';
+          },
+        },
+      } as never,
+      store,
+      'tearing',
+      GUARDS,
+      (kind: SubWalletKind) => cursors[kind],
+      {
+        intervalMs: 10,
+        onSkip: (skipped) =>
+          skips.push(
+            Object.entries(skipped)
+              .map(([kind, reason]) => `${kind}:${reason}`)
+              .join(','),
+          ),
+      },
+    );
+
+    await waitForSkips(() => skips.length >= 2);
+    await handle.stop();
+
+    const stored = await store.load('tearing', GUARDS);
+    expect(stored?.shielded).toBe('shielded-ok');
+    expect(stored?.unshielded).toBe('unshielded-ok');
+    expect(stored?.dust).toBeUndefined();
+    expect(skips.every((entry) => entry === 'dust:cursor-moved')).toBe(true);
+  });
+});
+
+describe('a restore that returns is not a restore that works', () => {
+  it('recognises the ledger complaint that means the snapshot is dead', () => {
+    // Both real occurrences, which differed only in their indices — so the gap
+    // size must not be part of the identity.
+    expect(
+      isTornDustSnapshotError(
+        new Error(
+          'values inserted non-linearly into dust generation tree; expected to insert index 393044, but received 393050',
+        ),
+      ),
+    ).toBe(true);
+    expect(
+      isTornDustSnapshotError(
+        new Error(
+          'values inserted non-linearly into dust generation tree; expected to insert index 1128734, but received 1128751',
+        ),
+      ),
+    ).toBe(true);
+  });
+
+  it('does not mistake an ordinary sync failure for a torn snapshot', () => {
+    // A false positive here throws away a good snapshot and buys a ~90 minute
+    // replay, so the pattern must not be loose.
+    expect(isTornDustSnapshotError(new Error('Zswap.Invalid.UnknownMerkleRoot'))).toBe(false);
+    expect(isTornDustSnapshotError(new Error('NotNormalized'))).toBe(false);
+    expect(isTornDustSnapshotError('connection reset')).toBe(false);
+  });
+
+  it('passes as soon as a restored cursor moves', async () => {
+    let cursor = 1_531_629n;
+    setTimeout(() => {
+      cursor += 1n;
+    }, 20);
+    const result = await waitForCursorToAdvance(() => cursor, 2_000, 5);
+    expect(result.advanced).toBe(true);
+    expect(result.from).toBe(1_531_629n);
+    expect(result.to).toBe(1_531_630n);
+  });
+
+  it('reports a cursor that never moves rather than waiting forever', async () => {
+    // The measured broken wallet advanced by 2 in three days. Standing still
+    // for the whole window is the signal, and it has to be reported rather
+    // than blocked on.
+    const result = await waitForCursorToAdvance(() => 1_531_629n, 60, 5);
+    expect(result.advanced).toBe(false);
+    expect(result.from).toBe(result.to);
+    expect(result.waitedMs).toBeGreaterThanOrEqual(60);
   });
 });
 
