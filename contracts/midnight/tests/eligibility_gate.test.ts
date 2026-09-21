@@ -1617,10 +1617,15 @@ describe('eligibility_gate.compact — Phase 2: claimRatioBondRefund (previously
     const pinnedRevealCtx = nextContextAtTime(d.contractAddress, ctx, 3);
     const r6 = d.contract.circuits.revealBuyCommit(pinnedRevealCtx, commitment, 100n, DV_PRICE, 3n);
     ctx = nextContext(d.contractAddress, r6.context);
-    // Deliberately no recordDarkVeilSettlement call here — but the record is
-    // closed, which is what makes "never settled" final rather than pending.
-    // claimRatioBondRefund refuses to read an open record at all (2026-09-21),
-    // so without this the test would pass on the wrong refusal.
+    // Deliberately no recordDarkVeilSettlement call for THIS buyer. Another
+    // buyer settles, which is what a real launch looks like when one person
+    // walks away — and it is also what lets the record be finalized at all,
+    // since a launch where purchases were revealed and NOTHING settled is
+    // refused outright (see the finalize test below). Without a settlement
+    // from someone, this test would pass on the wrong refusal.
+    const OTHER_BUYER = fakeBytes32(201);
+    const rOther = d.contract.circuits.recordDarkVeilSettlement(ctx, OTHER_BUYER, 100n);
+    ctx = nextContext(d.contractAddress, rOther.context);
     const rFin = d.contract.circuits.finalizeDvSettlement(ctx);
     ctx = nextContext(d.contractAddress, rFin.context);
 
@@ -2615,5 +2620,70 @@ describe('eligibility_gate.compact — the settlement window cannot strand a bon
     const after = nextContext(d.contractAddress, rFin.context);
     const late = nextContextAtTime(d.contractAddress, after, Number(SETTLEMENT_DEADLINE + 1n));
     expect(() => d.contract.circuits.expireDvSettlement(late)).toThrow('DarkVeil settlement is already finalized');
+  });
+});
+
+describe('eligibility_gate.compact — a claim window that never ran must fail, not finalize', () => {
+  /**
+   * Finalizing decides permanently that everyone without a settlement bought
+   * nothing, and routes their whole bond to the platform. That is right when
+   * they chose not to claim and wrong when they were never given the chance,
+   * and this contract cannot see Cardano to tell the two apart. What it CAN
+   * see is whether anyone revealed a purchase here.
+   */
+  function revealedButUnsettled() {
+    const d = deployAndStartDvBuying();
+    const commitment = computeBuyCommit({
+      buyerKey: REGISTRANT_KEY,
+      launchId: LAUNCH_ID,
+      tokenAmount: 40n,
+      pricePerToken: DV_PRICE,
+      nonce: BUY_NONCE,
+    });
+    const rS = d.contract.circuits.submitBuyCommit(d.ctx, commitment, 1n);
+    const rC = d.contract.circuits.closeDarkVeil(nextContext(d.contractAddress, rS.context), DV_ALLOCATION);
+    const rR = d.contract.circuits.revealBuyCommit(
+      nextContextAtTime(d.contractAddress, nextContext(d.contractAddress, rC.context), 3),
+      commitment,
+      40n,
+      DV_PRICE,
+      3n,
+    );
+    return { ...d, ctx: nextContext(d.contractAddress, rR.context) };
+  }
+
+  it('refuses to finalize when purchases were revealed and nothing settled', () => {
+    const d = revealedButUnsettled();
+    expect(() => d.contract.circuits.finalizeDvSettlement(d.ctx)).toThrow('Purchases were revealed but none settled');
+  });
+
+  it('and the bond then comes back IN FULL once the deadline passes', () => {
+    // The refusal is only worth having because it leads somewhere. Blocking
+    // finalization hands the launch to expireDvSettlement, which refunds
+    // rather than forfeits.
+    const d = revealedButUnsettled();
+    const late = nextContextAtTime(
+      d.contractAddress,
+      d.ctx,
+      Number(BUYING_CLOSE_TIME + SETTLEMENT_DEADLINE_SECONDS + 1n),
+    );
+    const r = d.contract.circuits.expireDvSettlement(late);
+    const after = nextContext(d.contractAddress, r.context);
+    const rc = d.contract.circuits.claimBondRefund(after, fakeBytes32(5));
+    expect(ledger(rc.context.currentQueryContext.state).lockedBonds.lookup(REGISTRANT_KEY)).toBe(0n);
+  });
+
+  it('still finalizes a launch where nobody revealed anything at all', () => {
+    // Every registrant bonded and bought nothing. That is the ghost case the
+    // forfeiture rules exist for, and it must stay reachable.
+    const d = deployAndStartDvBuying();
+    const rC = d.contract.circuits.closeDarkVeil(d.ctx, DV_ALLOCATION);
+    const rFin = d.contract.circuits.finalizeDvSettlement(nextContext(d.contractAddress, rC.context));
+    const state = ledger(rFin.context.currentQueryContext.state);
+    expect(state.settlementFinalized).toBe(true);
+    expect(state.totalTokensCommitted).toBe(0n);
+    // And the certificate honestly records that nothing was distributed.
+    expect(state.fairLaunchCert.totalTokensAllocated).toBe(0n);
+    expect(state.fairLaunchCert.totalParticipants).toBe(0n);
   });
 });

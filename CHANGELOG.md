@@ -37,6 +37,12 @@ Notable changes to the Noctis Zone, by release. Internal development history pre
   what buyers stated they intended during the private phase. Both sets of totals
   remain in public state, so the two can be compared by anyone.
 
+- A DarkVeil settlement can be closed only once it reflects a claim window that
+  really ran: where buyers revealed purchases during the private phase, at least
+  one of them must have settled. A launch in which nobody revealed anything is
+  unaffected and still closes normally. Where the check does apply, the launch
+  reaches the refund path instead, which returns every bond in full.
+
 - A DarkVeil that closes and whose settlement record is not closed within its
   sealed deadline can be ended by anyone, returning every NIGHT bond in full
   through the existing refund. A bond's route home therefore never depends on a

@@ -1574,6 +1574,40 @@ export circuit finalizeDvSettlement(): [] {
   );
   assert(disclose(!settlementFinalized), "DarkVeil settlement is already finalized");
 
+  // A launch where the Cardano claim window never ran must not be finalized.
+  // Finalizing decides, permanently, that everyone who did not settle bought
+  // nothing: the ratio refund then computes zero for every one of them and
+  // their whole bond routes to the platform. That is the right answer when
+  // registrants chose not to claim, and the wrong one when they were never
+  // given the chance — and the two are indistinguishable from this contract,
+  // which cannot see Cardano.
+  //
+  // The signal that separates them is whether anyone REVEALED a purchase here.
+  // A reveal is made on this chain, enforced by this contract, and needs no
+  // attestation to believe. So:
+  //
+  //   - Nobody revealed. Every registrant bonded and bought nothing, which is
+  //     the ghost case the forfeiture rules are written for. Finalizing is
+  //     correct and this assert does not stand in the way.
+  //   - Somebody revealed, and nothing settled. Real buyers stated real
+  //     purchases and not one of them completed on Cardano. Either the claim
+  //     window never ran, or every buyer walked away — and finalizing would
+  //     charge all of them for the first case as if it were the second.
+  //
+  // Refuse the second. markDarkVeilFailed and cancelDarkVeil are the paths for
+  // a launch that did not happen, and both refund in full; expireDvSettlement
+  // reaches the same place without anyone's key once the deadline passes.
+  //
+  // This does not make the record trustworthy — a PARTIALLY recorded settlement
+  // still finalizes, and that remains an attested figure this chain cannot
+  // check. It closes the total case, where the difference between "nobody
+  // claimed" and "nobody could claim" is the difference between a forfeiture
+  // and a confiscation. The exclusion dispute path answers the partial case.
+  assert(
+    disclose(totalTokensCommitted == 0 || settledParticipants.read() > 0),
+    "Purchases were revealed but none settled — a claim window that never ran must fail, not finalize"
+  );
+
   settlementFinalized = disclose(true);
 
   // Seal the ZK Fair Launch Certificate. This is the first moment every figure
