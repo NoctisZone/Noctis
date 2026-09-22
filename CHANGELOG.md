@@ -8,6 +8,44 @@ Notable changes to the Noctis Zone, by release. Internal development history pre
 
 ### Changed
 
+- **A launch's phase changes are now driven by one decision, taken from the
+  chain and the launch's own published schedule.** What is due is worked out
+  from a reading of the contract and the clock, so two runs cannot disagree
+  about it and a run that stops leaves nothing to reconcile — the next one
+  works it out again from the chain. Each turn does at most one thing, because
+  each step changes what the next reading says.
+- **Acting on a launch requires a rehearsal of that step first.** A rehearsal
+  performs the reading and the decision for real and stops before submitting,
+  and it is matched to the launch and the step it was taken for, so a rehearsal
+  of one step never clears another. A rehearsal may be taken against a clock
+  that has not arrived yet, which is how a window is checked before it opens;
+  acting always uses the real one.
+- **A launch that has run out of time is always owed its refund first.** The
+  deadline after which every bond returns outranks every other step in the
+  phase, including closing a settlement record that has been reported complete.
+- **The settlement record is closed only when the chain agrees it is
+  complete.** Every buyer the contract shows as having revealed must appear in
+  the account of what settled, and every settlement in that account must
+  already be on the chain at the figure it names. Where completeness is
+  unknown, the record stays open — a record closed early would show a buyer as
+  having settled nothing.
+- **Publishing the set of registrants is refused unless it covers the set the
+  contract holds.** Publishing is what freezes who is in the phase, so a set
+  built before registration finished would freeze the wrong one permanently.
+- **Every deployment now states who holds the key behind each identity it
+  fixes.** Where the platform holds one, it is re-derived and checked against
+  the value being fixed, so the claim is demonstrated rather than asserted;
+  where a separate party holds one, that is recorded as something this cannot
+  check. Two arrangements that look correct are refused: an attestor key that
+  is really the governor's under another name, and two attestor slots holding
+  one key, which would leave a threshold that counts a party twice.
+- **A launch can record the creator's own private-phase identity**, which is
+  what lets the contract refuse a registration from the person who created the
+  launch. It is produced in the creator's own browser, submitted with a
+  signature tied to that launch and that identity together, and can be
+  corrected until the contract is deployed and not after.
+
+
 - A Midnight Launch's DarkVeil phase now runs on the same sealed schedule a
   Cardano Launch does. Registration opening, the buying window opening and the
   DarkVeil close are each driven by a deadline fixed at deploy, before anyone
