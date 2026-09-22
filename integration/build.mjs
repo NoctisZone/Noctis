@@ -247,6 +247,21 @@ const usdToAdaCliConfig = {
 	logLevel: "info",
 };
 
+// (2026-09-22): the eligibility gate's record-held deploy fields — schedule,
+// launch id, creator identity — read off the launch record the site serves,
+// so a deploy is sealed with the schedule the page already shows. Pure
+// fetch-and-derive, no wallet, no WASM: plain ESM like usd-to-ada above.
+const gateDeployFieldsCliConfig = {
+	entryPoints: [join(__dirname, "cli/gate-deploy-fields-from-launch.ts")],
+	outfile: join(__dirname, "cli/dist/gate-deploy-fields-from-launch.mjs"),
+	bundle: true,
+	platform: "node",
+	format: "esm",
+	target: "node20",
+	sourcemap,
+	logLevel: "info",
+};
+
 
 // (2026-07-21): one consolidated action-dispatched CLI for Cardano Launch's
 // public curve (activate/buy/claim-*-fees/expire/claim-buyback) — same
@@ -1012,6 +1027,7 @@ async function run() {
 		readTierALaunchStateCliConfig,
 		buildGenesisDatumsCliConfig,
 		usdToAdaCliConfig,
+		gateDeployFieldsCliConfig,
 		mintLaunchCliConfig,
 		graduateTierBLaunchCliConfig,
 		startVestingCliConfig,

@@ -137,6 +137,14 @@ Notable changes to the Noctis Zone, by release. Internal development history pre
 
 ### Added
 
+- **A launch's private-phase contract is prepared from the launch's own
+  record.** The schedule the launch page shows, the launch id its mint
+  produced and the identity its creator bound are read from the record when
+  the contract's inputs are assembled, so the contract enforces the schedule
+  the site displays rather than one typed from a calendar. A record whose
+  steps are out of order, or that has no creator identity yet, is refused
+  before anything is spent; a compressed rehearsal schedule is accepted and
+  named as one.
 - The ZK Fair Launch Certificate is issued when the DarkVeil settlement record
   closes, which is the first moment every figure in it is final, and it can be
   issued only once. Until then its hash is empty, which is how a reader tells an
