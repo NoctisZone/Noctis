@@ -269,3 +269,19 @@ module.exports.push({
 	entry: path.resolve(__dirname, "widget/cto-widget-entry.ts"),
 	output: { ...module.exports[0].output, filename: "cto-widget.bundle.js" },
 });
+
+// The creator-identity widget (2026-09-22) runs on the create page, after a
+// mint. It shares the DarkVeil widget's whole build story — the same private
+// state store, the same Midnight SDK, the same wasm — because it derives the
+// same identity under the same domain, which is the only reason the value it
+// collects means anything to the gate. So it is that configuration with a
+// different entry and filename.
+module.exports.push({
+	...module.exports[0],
+	name: "creator-identity-widget",
+	entry: path.resolve(__dirname, "widget/creator-identity-widget-entry.ts"),
+	output: {
+		...module.exports[0].output,
+		filename: "creator-identity-widget.bundle.js",
+	},
+});
