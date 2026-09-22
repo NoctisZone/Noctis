@@ -40,6 +40,7 @@ import { DOMAINS, deriveRoleKey } from '../../contracts/midnight/witnesses.js';
 import { resolveDarkVeilBond } from '../darkveil-bond-pricing.js';
 import { fromHex32, resolveEligibilityGateDeployArgs } from '../eligibility-gate-deploy-args.js';
 import { describeError, safeShow, unwrapForDiagnosis } from '../error-detail.js';
+import { checkIdentityCustody, formatCustodyVerdict, type IdentityCustody } from '../identity-custody.js';
 import { NoctisMidnightClient } from '../midnight-client.js';
 import {
   assertProofServerReachable,
@@ -84,6 +85,15 @@ interface Input extends SnapshotCliInput {
    * and what it costs — so supply keys only when each came from its holder.
    */
   allowlistAttestorSecretsHex?: [string, string, string];
+  /**
+   * Who holds the secret behind each identity this deploy seals.
+   *
+   * Required on mainnet, because the one moment the answer can still be
+   * changed is before the constructor runs. Optional elsewhere so a rehearsal
+   * is not made tedious — but if it is supplied at all it is held to, on every
+   * network: a manifest worth writing is one worth being true.
+   */
+  custody?: IdentityCustody;
   allowlistAttestorKeysHex?: [string, string, string];
   allowlistThreshold: number;
 
@@ -246,9 +256,48 @@ async function main() {
     bondAmount: bond.bondAmount.toString(),
   });
 
+  // Who holds what, before the wallet and before anything is sealed. A key is
+  // a hash, so every structural check an identity slot can carry passes for
+  // 32 bytes nobody holds a secret for — and the circuit that reads it is then
+  // unsatisfiable by anyone, for the life of the launch, on a contract that
+  // deployed cleanly and reported success.
+  const governorSecretBytes = fromHex32(input.governorSecretHex, 'governorSecretHex');
+  if (input.custody) {
+    const verdict = checkIdentityCustody(
+      input.custody,
+      {
+        governorKey: deriveRoleKey({ bytes: governorSecretBytes }, DOMAINS.ELIGIBILITY_GOVERNOR).bytes,
+        attestorKeys: args.allowlistAttestorKeys,
+        creatorPubKey: args.creatorPubKey,
+        platformAddr: args.platformAddr,
+      },
+      {
+        governorSecret: governorSecretBytes,
+        attestorSecrets: input.allowlistAttestorSecretsHex?.map((hex, i) =>
+          fromHex32(hex, `allowlistAttestorSecretsHex[${i}]`),
+        ) as [Uint8Array, Uint8Array, Uint8Array] | undefined,
+      },
+    );
+    for (const line of formatCustodyVerdict(verdict, Number(args.allowlistThreshold))) {
+      process.stderr.write(`${line}\n`);
+    }
+    if (verdict.refusals.length > 0) {
+      throw new Error(
+        `${verdict.refusals.length} identity slot(s) are not accounted for — see the manifest above. These ` +
+          'are sealed by the constructor and cannot be changed afterwards.',
+      );
+    }
+  } else if (input.network === 'mainnet') {
+    throw new Error(
+      'custody is required on mainnet. Every identity this deploy seals has to name who holds the secret ' +
+        'behind it, and the platform-held ones are re-derived here and checked against what is about to be ' +
+        'sealed — because a key is a hash, and 32 bytes nobody holds satisfies every other check there is.',
+    );
+  }
+
   // --- providers ----------------------------------------------------------
 
-  const governorSecret = fromHex32(input.governorSecretHex, 'governorSecretHex');
+  const governorSecret = governorSecretBytes;
   const walletSeed = fromHex32(input.walletSeedHex, 'walletSeedHex');
 
   const netDefaults = defaultNetworkConfig(input.network, input.proofServerUrl);
