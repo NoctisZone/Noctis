@@ -44,6 +44,13 @@ Notable changes to the Noctis Zone, by release. Internal development history pre
   launch. It is produced in the creator's own browser, submitted with a
   signature tied to that launch and that identity together, and can be
   corrected until the contract is deployed and not after.
+- **Creating a launch now asks for it**, as the last step after the token is
+  minted and the launch page exists — which is also the first point at which
+  there is a launch for the identity to belong to. It takes two wallet
+  approvals, one to produce the identity and one to show the wallet asking is
+  the launch's own creator, and the step says which is which. Declining, or a
+  browser that cannot complete it, costs nothing: the token and the launch page
+  are already made, and the identity can be supplied later.
 
 
 - A Midnight Launch's DarkVeil phase now runs on the same sealed schedule a
