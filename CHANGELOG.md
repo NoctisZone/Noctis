@@ -44,6 +44,14 @@ Notable changes to the Noctis Zone, by release. Internal development history pre
   launch. It is produced in the creator's own browser, submitted with a
   signature tied to that launch and that identity together, and can be
   corrected until the contract is deployed and not after.
+- **The three approvers a private phase is sealed with are real, separately
+  generated keys the platform holds.** Two of them must agree before a launch
+  will accept a list of who may register. They are drawn as a set and the set is
+  refused outright if two came out alike or if one is the governor's own key,
+  because either would leave a threshold that one holder satisfies alone;
+  nothing is stored until all three pass. What is held can be inspected — each
+  slot, whether the three differ, and whether any is the governor's — without
+  revealing any of them.
 - **Creating a launch now asks for it**, as the last step after the token is
   minted and the launch page exists — which is also the first point at which
   there is a launch for the identity to belong to. It takes two wallet
