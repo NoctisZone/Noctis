@@ -45,6 +45,19 @@ function bytesToHex(bytes: Uint8Array): string {
 /** Minimal shape this needs from a decoded Ledger — kept narrow so tests can construct fakes without touching real Midnight runtime types. */
 export interface DecodedEligibilityGateLedger {
   dvTokensPurchased: Iterable<[Uint8Array, bigint]>;
+  /**
+   * What the governor has RECORDED as settled on Cardano, per buyer.
+   *
+   * A different question from `dvTokensPurchased`, which is what each buyer
+   * revealed on Midnight. The gap between the two is the work still owed
+   * before the settlement record can be closed, and it is the only place the
+   * answer exists — so anything deciding whether that record is complete has
+   * to read this rather than infer it.
+   *
+   * Optional so a caller constructing a fake ledger for a test need not supply
+   * it, matching the rest of this shape.
+   */
+  settledDvPurchases?: Iterable<[Uint8Array, bigint]>;
   fairLaunchCert?: {
     launchId: Uint8Array;
     totalParticipants: bigint;
@@ -146,6 +159,23 @@ export function extractDvPurchases(decoded: DecodedEligibilityGateLedger): DvPur
   return out;
 }
 
+/**
+ * Settlements as the chain holds them, keyed by buyer.
+ *
+ * Zero entries are KEPT, unlike the revealed purchases above. There they
+ * cannot legitimately occur; here one is a real observation — a buyer the
+ * relayer looked at and found had claimed nothing — and it is a different
+ * thing from a buyer nobody has looked at yet. The forfeiture sweep treats
+ * those two differently, so nothing upstream of it may flatten them together.
+ */
+export function extractSettledPurchases(decoded: DecodedEligibilityGateLedger): DvPurchase[] {
+  const out: DvPurchase[] = [];
+  for (const [userPubKey, settled] of decoded.settledDvPurchases ?? []) {
+    out.push({ userPubKeyHex: bytesToHex(userPubKey), dvAmount: settled.toString() });
+  }
+  return out;
+}
+
 /** Real I/O wrapper — queries the indexer's current contract state and decodes it via the compiled contract's own generated ledger() function. */
 export async function readDvPurchases(
   publicDataProvider: PublicDataProvider,
@@ -153,6 +183,8 @@ export async function readDvPurchases(
 ): Promise<{
   deployed: boolean;
   purchases: DvPurchase[];
+  /** What has been recorded as settled on Cardano — see extractSettledPurchases. */
+  settled: DvPurchase[];
   certificate: FairLaunchCertificate | null;
   /** Named rather than numeric: a caller comparing against 3 has to know the enum. */
   phase?: string;
@@ -166,7 +198,7 @@ export async function readDvPurchases(
 }> {
   const contractState = await publicDataProvider.queryContractState(contractAddress);
   if (!contractState) {
-    return { deployed: false, purchases: [], certificate: null };
+    return { deployed: false, purchases: [], settled: [], certificate: null };
   }
   const decoded = ledger(contractState.data);
   // Returned alongside the purchases rather than from a second CLI: both come
@@ -175,6 +207,7 @@ export async function readDvPurchases(
   return {
     deployed: true,
     purchases: extractDvPurchases(decoded),
+    settled: extractSettledPurchases(decoded),
     certificate: extractFairLaunchCert(decoded),
     phase: LAUNCH_PHASES[Number(decoded.phase ?? 0)],
     dvState: DV_STATES[Number(decoded.dvState ?? 0)],

@@ -22,8 +22,12 @@ import {
   type DecodedEligibilityGateLedger,
   extractDvPurchases,
   extractFairLaunchCert,
+  extractSettledPurchases,
   readDvPurchases,
 } from '../read-dv-purchases.js';
+
+/** The hex of the key() below, whose first byte is the one given. */
+const keyHex = (firstByte: number) => firstByte.toString(16).padStart(2, '0') + '00'.repeat(30) + 'ff';
 
 /** A 32-byte Midnight user public key whose first byte is the one given. */
 function key(firstByte: number): Uint8Array {
@@ -107,6 +111,31 @@ describe('extractDvPurchases', () => {
   });
 });
 
+describe('extractSettledPurchases', () => {
+  it('keeps a recorded zero, unlike the revealed purchases', () => {
+    // There a zero cannot legitimately occur. Here one is a real observation —
+    // a buyer the relayer looked at and found had claimed nothing — and it is
+    // a different thing from a buyer nobody has looked at yet. The forfeiture
+    // sweep treats those two differently, so nothing upstream may flatten
+    // them together.
+    const out = extractSettledPurchases({
+      dvTokensPurchased: [],
+      settledDvPurchases: [
+        [key(0x01), 0n],
+        [key(0x02), 400n],
+      ],
+    });
+    expect(out).toEqual([
+      { userPubKeyHex: keyHex(0x01), dvAmount: '0' },
+      { userPubKeyHex: keyHex(0x02), dvAmount: '400' },
+    ]);
+  });
+
+  it('reads an absent map as nothing recorded', () => {
+    expect(extractSettledPurchases({ dvTokensPurchased: [] })).toEqual([]);
+  });
+});
+
 describe('readDvPurchases', () => {
   const mockedLedger = vi.mocked(ledger);
 
@@ -123,7 +152,7 @@ describe('readDvPurchases', () => {
     const result = await readDvPurchases(provider(null), 'addr_contract');
     // certificate is null rather than absent: a caller checking for one must
     // get the same answer shape whether or not the contract exists.
-    expect(result).toEqual({ deployed: false, purchases: [], certificate: null });
+    expect(result).toEqual({ deployed: false, purchases: [], settled: [], certificate: null });
     expect(mockedLedger).not.toHaveBeenCalled();
   });
 

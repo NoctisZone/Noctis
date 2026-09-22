@@ -13,10 +13,11 @@
 //   against the governorKey sealed at deploy.
 //
 //   The phase TRANSITIONS are no longer among them. start-registration,
-//   open-buying, close and expire-dv-settlement run on the schedule sealed at
-//   deploy and consult no key at all, so a launch cannot stall on one wallet
-//   being available. They still need a funded wallet to pay the fee, which is
-//   why they take the governor secret here by default rather than by rule.
+//   open-buying, close, expire-darkveil and expire-dv-settlement run on the
+//   schedule sealed at deploy and consult no key at all, so a launch cannot
+//   stall on one wallet being available. They still need a funded wallet to
+//   pay the fee, which is why they take the governor secret here by default
+//   rather than by rule.
 //
 //   OPENING A LAUNCH TAKES TWO OF THEM, not one. `phase` is the launch's
 //   lifecycle and `dvState` is DarkVeil's sub-phase within it; registration
@@ -76,6 +77,7 @@ type Action =
   | 'start-registration'
   | 'publish-registrant-root'
   | 'open-buying'
+  | 'expire-darkveil'
   | 'expire-dv-settlement'
   | 'register'
   | 'buy-commit'
@@ -105,6 +107,10 @@ const IDENTITYLESS_ACTIONS = new Set<Action>([
   'start-registration',
   'open-buying',
   'close',
+  // The two refund hatches. Both derive no caller and check no key, which is
+  // the point of them: a registrant's way out of a phase that stopped moving
+  // cannot be something only the party who stopped answering may call.
+  'expire-darkveil',
   'expire-dv-settlement',
 ]);
 
@@ -377,6 +383,14 @@ async function main() {
 
       case 'open-buying':
         result = await manager.openBuying();
+        break;
+
+      // The hatch for a phase that stalled BEFORE it closed: every bond goes
+      // back in full. Gated on real chain time having passed the deadline
+      // sealed at deploy, so calling it early is refused and calling it late
+      // confers nothing on whoever calls.
+      case 'expire-darkveil':
+        result = await manager.expireDarkVeil();
         break;
 
       case 'expire-dv-settlement':

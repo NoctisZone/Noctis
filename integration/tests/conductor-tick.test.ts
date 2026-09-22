@@ -2,6 +2,13 @@ import { describe, expect, it } from 'vitest';
 import { DarkVeilState, LaunchPhase } from '../../contracts/midnight/compiled/eligibility_gate/contract/index.js';
 import { type ConductorTickInput, describeTick, runConductorTick } from '../conductor-tick.js';
 import type { DarkVeilSnapshot } from '../midnight-public-state.js';
+import {
+  DEFAULT_REHEARSAL_TTL_MS,
+  type RehearsalEntry,
+  type RehearsalLog,
+  recallFrom,
+  rehearsalNotRequired,
+} from '../rehearsal-log.js';
 import { SubmissionGate } from '../submission-gate.js';
 import type { BankedJobResult } from '../submission-outcome.js';
 
@@ -10,6 +17,27 @@ const REG_CLOSE = REG_OPEN + 165_600n;
 const BUY_OPEN = REG_CLOSE + 7_200n;
 const BUY_CLOSE = BUY_OPEN + 86_400n;
 const ZERO = '00'.repeat(32);
+const GATE = '0200deadbeef';
+
+/**
+ * A rehearsal log held in memory, for the tests that are about the
+ * precondition.
+ *
+ * Deliberately not shipped alongside the file-backed one: a rehearsal that
+ * lives only inside the process about to act is not a rehearsal, because the
+ * whole point is that somebody took one earlier and the code that is about to
+ * run was the code that took it.
+ */
+function memoryLog(seed: RehearsalEntry[] = []): RehearsalLog & { entries: RehearsalEntry[] } {
+  const entries = [...seed];
+  return {
+    entries,
+    record: (e) => {
+      entries.push(e);
+    },
+    recall: (q) => recallFrom(entries, q, DEFAULT_REHEARSAL_TTL_MS),
+  };
+}
 
 function snapshot(over: Partial<DarkVeilSnapshot> = {}): DarkVeilSnapshot {
   return {
@@ -43,11 +71,16 @@ function snapshot(over: Partial<DarkVeilSnapshot> = {}): DarkVeilSnapshot {
 function tickInput(over: Partial<ConductorTickInput> = {}, snap: Partial<DarkVeilSnapshot> = {}): ConductorTickInput {
   return {
     launchId: 'JINX',
+    contractAddress: GATE,
     readSnapshot: async () => snapshot(snap),
     now: () => REG_OPEN + 1n,
     submit: async () => ({ stdout: '{"ok":true}', exitCode: 0 }),
     gate: new SubmissionGate(),
     fundingWalletKey: 'payer',
+    // These cases are about what a turn does, not about the precondition,
+    // which has its own block below. Waiving it here is the named call rather
+    // than an omission, which is the whole reason the field is required.
+    rehearsal: rehearsalNotRequired(),
     ...over,
   };
 }
@@ -203,6 +236,97 @@ describe('one turn of the conductor', () => {
       );
     await Promise.all([run(), run(), run()]);
     expect(peak).toBe(1);
+  });
+
+  it('does not submit a transition nobody has rehearsed', async () => {
+    // The failure this exists for is a runner that is wrong in a way only a
+    // real read and a real plan would show, discovered inside a one-way
+    // window on a published schedule.
+    let submitted = 0;
+    const tick = await runConductorTick(
+      tickInput({
+        rehearsal: memoryLog(),
+        submit: async () => {
+          submitted += 1;
+          return { exitCode: 0 };
+        },
+      }),
+    );
+    expect(tick.did).toBe('unrehearsed');
+    expect(submitted).toBe(0);
+    expect(describeTick('JINX', tick)).toMatch(/NOT REHEARSED.*dry run of startRegistration/);
+  });
+
+  it('submits once the same transition has been rehearsed from the same state', async () => {
+    const rehearsal = memoryLog();
+    const dry = await runConductorTick(tickInput({ rehearsal, dryRun: true }));
+    expect(dry.did).toBe('planned');
+
+    const live = await runConductorTick(tickInput({ rehearsal }));
+    expect(live.did).toBe('submitted');
+  });
+
+  it('banks the state the plan was made FROM, not the one it leads to', async () => {
+    // A live tick matches on it, so a rehearsal taken from one lifecycle
+    // position never clears the same transition reached from another.
+    const rehearsal = memoryLog();
+    await runConductorTick(tickInput({ rehearsal, dryRun: true }));
+    expect(rehearsal.entries[0]).toMatchObject({
+      contractAddress: GATE,
+      action: 'startRegistration',
+      dvState: DarkVeilState.Inactive,
+    });
+  });
+
+  it('does not let a rehearsal of one launch clear a transition on another', async () => {
+    const rehearsal = memoryLog();
+    await runConductorTick(tickInput({ rehearsal, dryRun: true }));
+    const live = await runConductorTick(tickInput({ rehearsal, contractAddress: '0200somewhereelse' }));
+    expect(live.did).toBe('unrehearsed');
+  });
+
+  it('records the clock a dry run planned against separately from when it ran', async () => {
+    // Moving the clock forward against a real read is the only way to
+    // rehearse a window before reaching it. Dating the receipt by the moved
+    // clock would let it clear itself for as long as the move was large.
+    const rehearsal = memoryLog();
+    await runConductorTick(
+      tickInput({ rehearsal, dryRun: true, now: () => 9_000_000n, nowMs: () => 1_700_000_000_000 }),
+    );
+    expect(rehearsal.entries[0].plannedForSeconds).toBe('9000000');
+    expect(rehearsal.entries[0].rehearsedAtMs).toBe(1_700_000_000_000);
+  });
+
+  it('fails a dry run whose receipt did not land, rather than reporting it clear', async () => {
+    // A dry run that quietly banked nothing is worse than no dry run: the
+    // operator believes they are cleared for a window they are not.
+    await expect(
+      runConductorTick(
+        tickInput({
+          dryRun: true,
+          rehearsal: {
+            record: () => {
+              throw new Error('read-only filesystem');
+            },
+            recall: () => ({ rehearsed: false, why: 'nothing banked' }),
+          },
+        }),
+      ),
+    ).rejects.toThrow('read-only filesystem');
+  });
+
+  it('banks nothing for a transition it could not build in the first place', async () => {
+    // Rehearsing without the inputs a live run would use proves nothing about
+    // the live run, so a blocked dry run must not clear anything.
+    const rehearsal = memoryLog();
+    const tick = await runConductorTick(
+      tickInput(
+        { rehearsal, dryRun: true, now: () => REG_CLOSE + 1n, canSupplyOffChainInput: () => false },
+        { dvState: DarkVeilState.Registration, registrationCount: 20n },
+      ),
+    );
+    expect(tick.did).toBe('blocked');
+    expect(rehearsal.entries).toHaveLength(0);
   });
 
   it('lets a read failure through, because a turn cannot proceed past it', async () => {

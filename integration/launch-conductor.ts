@@ -39,6 +39,7 @@ import type { DarkVeilSnapshot } from './midnight-public-state.js';
 
 /** Everything the conductor may decide to do, in lifecycle order. */
 export type ConductorActionKind =
+  | 'advanceToDarkVeil'
   | 'startRegistration'
   | 'publishRegistrantRoot'
   | 'openBuying'
@@ -93,6 +94,27 @@ export function baseSlotFor(dvAllocation: bigint, registrationCount: bigint): bi
 
 const ZERO_ROOT = '00'.repeat(32);
 
+/**
+ * Advancing the launch into its DarkVeil phase, which everything else needs.
+ *
+ * Two separate fields carry a launch's position — `phase` is the launch's own
+ * lifecycle and `dvState` is DarkVeil's sub-phase within it — and they gate
+ * different circuits. `startRegistration` reads only `dvState`, so it succeeds
+ * while `phase` is still Pending and leaves a launch whose registration window
+ * is open and whose every registration is refused, because
+ * `registerForDarkVeil` reads `phase`. Publishing an allowlist root reads
+ * `phase` too, and a registrant cannot prove membership in a root nobody could
+ * publish.
+ *
+ * So this is owed as soon as the launch is in Pending, with no clock of its
+ * own: it starts nothing, opens nothing to anyone, and is the precondition of
+ * the two things that must both be in place before the window arrives. Holding
+ * it back until the window can only cost the window.
+ */
+function advanceToDarkVeil(because: string): ConductorVerdict {
+  return { status: 'due', action: { kind: 'advanceToDarkVeil', because } };
+}
+
 function isPublished(rootHex: string): boolean {
   return rootHex !== '' && rootHex !== ZERO_ROOT;
 }
@@ -136,6 +158,11 @@ export function nextAction(input: ConductorInput): ConductorVerdict {
 
   switch (s.dvState) {
     case DarkVeilState.Inactive:
+      if (s.phase === LaunchPhase.Pending) {
+        return advanceToDarkVeil(
+          'the launch is still in its Pending phase, so nobody could register or be allowlisted',
+        );
+      }
       if (now > sched.registrationOpenTime) {
         return {
           status: 'due',
@@ -165,6 +192,16 @@ export function nextAction(input: ConductorInput): ConductorVerdict {
             because: `the phase passed its ${expiresAt} deadline without opening buying; every bond returns in full`,
           },
         };
+      }
+
+      // After the expiry, deliberately: a launch that has run out of time is
+      // owed its refund, not another step forward. Before the rest, equally
+      // deliberately: registration is open on the clock and refusing everyone
+      // until this lands, so it is the most urgent thing that is not a refund.
+      if (s.phase === LaunchPhase.Pending) {
+        return advanceToDarkVeil(
+          'registration is open but the launch is still in its Pending phase, so every registration is refused',
+        );
       }
 
       if (!isPublished(s.pendingRegistrantRootHex) && now > sched.registrationCloseTime) {

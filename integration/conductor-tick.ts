@@ -24,6 +24,14 @@
 // ever been performed. A dry mode that skipped the read would have missed it
 // too.
 //
+// AND A DRY RUN IS A PRECONDITION, NOT A HABIT. Taking one is enforced here
+// rather than left to whoever is running the window: a dry run banks a receipt
+// for the transition it planned, and a live tick will not submit a transition
+// that has no receipt. The requirement sits in the tick for the same reason
+// everything else does — a runner cannot be written without it, because the
+// input it needs is not optional. Waiving it is a named call that shows up in
+// a diff.
+//
 // NOTHING HERE DECIDES WHETHER AN ACTION SUCCEEDED. The chain does, on the next
 // tick. A submission that lands and a submission whose result is lost look the
 // same from here, and asking the chain next time is both simpler and correct —
@@ -33,6 +41,7 @@
 
 import { type ConductorAction, type ConductorVerdict, nextAction } from './launch-conductor.js';
 import type { DarkVeilSnapshot } from './midnight-public-state.js';
+import type { RehearsalEntry, RehearsalLog } from './rehearsal-log.js';
 import type { SubmissionGate } from './submission-gate.js';
 import {
   type BankedJobResult,
@@ -46,13 +55,33 @@ export interface ConductorTickInput {
   /** Identifies the launch in every reported line. */
   launchId: string;
   /**
+   * The deployed gate this tick acts on.
+   *
+   * Carried separately from `launchId` because a rehearsal is matched on it: a
+   * name can be reused across a redeploy, and an address cannot.
+   */
+  contractAddress: string;
+  /**
    * Reads the gate's public state. Wallet-free by construction — a read needs
    * no wallet, and a second wallet process beside a running one is the exact
    * shape that tears a snapshot.
    */
   readSnapshot: () => Promise<DarkVeilSnapshot>;
-  /** Seconds since the epoch. Midnight's unit. */
+  /**
+   * Seconds since the epoch. Midnight's unit.
+   *
+   * A dry run may move this ahead of the real clock — that is the only way to
+   * rehearse a window before reaching it, and the read stays real either way.
+   */
   now: () => bigint;
+  /**
+   * Real wall clock in milliseconds, for the rehearsal's own age.
+   *
+   * Separate from `now` precisely because `now` may be moved: a receipt dated
+   * by a clock that had been pushed forward would clear itself for as long as
+   * the push was large.
+   */
+  nowMs?: () => number;
   /**
    * Performs the action, returning the banked CLI result.
    *
@@ -60,6 +89,19 @@ export interface ConductorTickInput {
    * only in the subprocess's stderr and a thrown error has already lost it.
    */
   submit: (action: ConductorAction) => Promise<BankedJobResult>;
+  /**
+   * Whether every buyer who revealed has had their Cardano settlement recorded.
+   *
+   * A function of the snapshot just read, rather than a value, so it is
+   * answered from the same read the plan is made from — the answer depends on
+   * what the chain currently holds, and a value computed before the read would
+   * be deciding about a block that is no longer the one being planned against.
+   *
+   * Left out, the conductor will not close the settlement record. That is the
+   * safe direction: a record closed early marks a buyer as having settled
+   * nothing, and the forfeiture sweep then takes their whole bond.
+   */
+  settlementsComplete?: (snapshot: DarkVeilSnapshot) => boolean | undefined;
   /** Serializes submissions that share a funding wallet. */
   gate: SubmissionGate;
   /** The funding wallet this launch's actions are paid from. */
@@ -73,8 +115,19 @@ export interface ConductorTickInput {
    * that is simply early.
    */
   canSupplyOffChainInput?: (action: ConductorAction) => boolean;
+  /**
+   * Where rehearsals are banked and looked up.
+   *
+   * Required, not optional. A tick either records a rehearsal or checks for
+   * one, and there is no third thing it could do with an absent log except
+   * quietly skip the check — which is the failure this exists to prevent.
+   * `rehearsalNotRequired()` is how a caller says so out loud.
+   */
+  rehearsal: RehearsalLog;
   /** Read and plan for real; submit nothing. */
   dryRun?: boolean;
+  /** Recorded on a dry run, for whoever reads the receipt later. */
+  rehearsalNote?: string;
   /** How many times this action has already been tried, for the backoff. */
   attempt?: number;
 }
@@ -84,19 +137,27 @@ export type ConductorTickResult =
   | { did: 'planned'; action: ConductorAction; note: string }
   | { did: 'submitted'; action: ConductorAction; result: BankedJobResult }
   | { did: 'failed'; action: ConductorAction; outcome: SubmissionOutcome; retryInMs: number | null }
-  | { did: 'blocked'; action: ConductorAction; note: string };
+  | { did: 'blocked'; action: ConductorAction; note: string }
+  | { did: 'unrehearsed'; action: ConductorAction; why: string };
 
 /**
  * Run one turn for one launch.
  *
  * Never throws for an ordinary outcome — a refused submission, a launch that
- * is early, an action nothing can build — because those are states to report
- * and tick again from, not faults. A throw from here means the READ failed,
- * which is the one thing a tick genuinely cannot proceed past.
+ * is early, an action nothing can build, a transition nobody has rehearsed —
+ * because those are states to report and tick again from, not faults. A throw
+ * from here means the READ failed, or a dry run could not BANK its rehearsal:
+ * the first is the one thing a tick cannot proceed past, and the second would
+ * otherwise leave an operator believing they are cleared for a window they
+ * are not.
  */
 export async function runConductorTick(input: ConductorTickInput): Promise<ConductorTickResult> {
   const snapshot = await input.readSnapshot();
-  const verdict = nextAction({ snapshot, nowSeconds: input.now() });
+  const verdict = nextAction({
+    snapshot,
+    nowSeconds: input.now(),
+    settlementsComplete: input.settlementsComplete?.(snapshot),
+  });
 
   if (verdict.status !== 'due') {
     return { did: 'nothing', verdict };
@@ -115,11 +176,37 @@ export async function runConductorTick(input: ConductorTickInput): Promise<Condu
   }
 
   if (input.dryRun) {
+    const entry: RehearsalEntry = {
+      contractAddress: input.contractAddress,
+      action: action.kind,
+      // The state it was planned FROM. A live tick matches on this, so a
+      // rehearsal taken from one lifecycle position never clears the same
+      // transition reached from another.
+      dvState: Number(snapshot.dvState),
+      rehearsedAtMs: input.nowMs?.() ?? Date.now(),
+      plannedForSeconds: input.now().toString(),
+      because: action.because,
+      note: input.rehearsalNote,
+    };
+    // Deliberately not caught. A dry run whose receipt did not land has not
+    // cleared anything, and reporting success here is how an operator reaches
+    // a live window believing otherwise.
+    await input.rehearsal.record(entry);
     return {
       did: 'planned',
       action,
       note: `would ${action.kind}: ${action.because}`,
     };
+  }
+
+  const cleared = await input.rehearsal.recall({
+    contractAddress: input.contractAddress,
+    action: action.kind,
+    dvState: Number(snapshot.dvState),
+    nowMs: input.nowMs?.() ?? Date.now(),
+  });
+  if (!cleared.rehearsed) {
+    return { did: 'unrehearsed', action, why: cleared.why };
   }
 
   const result = await input.gate.submit(input.fundingWalletKey, () => input.submit(action));
@@ -172,6 +259,8 @@ export function describeTick(launchId: string, tick: ConductorTickResult): strin
       return `${launchId}: submitted ${tick.action.kind} — ${tick.action.because}`;
     case 'blocked':
       return `${launchId}: BLOCKED — ${tick.note}`;
+    case 'unrehearsed':
+      return `${launchId}: NOT REHEARSED — ${tick.action.kind} was not submitted: ${tick.why}`;
     case 'failed':
       return (
         `${launchId}: ${tick.action.kind} was refused — ${tick.outcome.reason} ` +

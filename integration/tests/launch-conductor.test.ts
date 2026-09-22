@@ -222,3 +222,50 @@ describe('the allocation the close is given', () => {
     expect(baseSlotFor(150_000_000n, 0n)).toBe(0n);
   });
 });
+
+describe('a launch that could not take anyone', () => {
+  it('advances the launch phase before opening a registration window', () => {
+    // Two fields carry a launch's position and they gate different circuits.
+    // Opening registration reads only dvState, so it succeeds while the launch
+    // is still Pending and leaves a window that is open on the clock and
+    // refuses every registration, because registering reads phase. Publishing
+    // an allowlist root reads phase too, so nobody could even be allowlisted.
+    expect(at(REG_OPEN + 1n, { phase: LaunchPhase.Pending })).toMatchObject({
+      status: 'due',
+      action: { kind: 'advanceToDarkVeil' },
+    });
+  });
+
+  it('does not wait for the window to do it, because holding it back can only cost the window', () => {
+    // It starts nothing and opens nothing to anyone — registering still needs
+    // dvState to reach Registration, which is clock-gated — and it is the
+    // precondition of the root that has to be published before the window.
+    expect(at(REG_OPEN - 100_000n, { phase: LaunchPhase.Pending })).toMatchObject({
+      status: 'due',
+      action: { kind: 'advanceToDarkVeil' },
+    });
+  });
+
+  it('rescues a launch already stranded with registration open and its phase behind', () => {
+    expect(at(REG_OPEN + 1n, { phase: LaunchPhase.Pending, dvState: DarkVeilState.Registration })).toMatchObject({
+      status: 'due',
+      action: { kind: 'advanceToDarkVeil' },
+    });
+  });
+
+  it('still lets an expired launch reach its refund rather than pushing it forward', () => {
+    // The hatch outranks everything in the phase. A launch that has run out of
+    // time is owed its bonds back, not another step along a road it will not
+    // finish.
+    expect(
+      at(REG_CLOSE + EXPIRY + 1n, { phase: LaunchPhase.Pending, dvState: DarkVeilState.Registration }),
+    ).toMatchObject({ status: 'due', action: { kind: 'expireDarkVeil' } });
+  });
+
+  it('leaves a launch alone once its phase has moved on', () => {
+    expect(at(REG_OPEN + 1n, { phase: LaunchPhase.DarkVeil })).toMatchObject({
+      status: 'due',
+      action: { kind: 'startRegistration' },
+    });
+  });
+});

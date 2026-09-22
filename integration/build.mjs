@@ -559,6 +559,22 @@ const darkVeilActionCliConfig = {
 	logLevel: "info",
 };
 
+// Runs the conductor against a real launch: reads the gate, works out what it
+// is owed, and spawns darkveil-action.mjs for the one thing that is due. Same
+// packages:external treatment as the CLI it spawns — it reads the same decoded
+// ledger, so it pulls the identical Midnight dependency tree.
+const conductLaunchCliConfig = {
+	entryPoints: [join(__dirname, "cli/conduct-launch.ts")],
+	outfile: join(__dirname, "cli/dist/conduct-launch.mjs"),
+	bundle: true,
+	platform: "node",
+	packages: "external",
+	format: "esm",
+	target: "node20",
+	sourcemap,
+	logLevel: "info",
+};
+
 const deliverDeferredCircuitsCliConfig = {
 	entryPoints: [join(__dirname, "cli/deliver-deferred-circuits.ts")],
 	outfile: join(__dirname, "cli/dist/deliver-deferred-circuits.mjs"),
@@ -1015,6 +1031,7 @@ async function run() {
 		deployEligibilityGateCliConfig,
 		deliverDeferredCircuitsCliConfig,
 		darkVeilActionCliConfig,
+		conductLaunchCliConfig,
 		deployCtoGovernanceCliConfig,
 		ctoGovernanceActionCliConfig,
 		buildCtoSnapshotBundleCliConfig,
