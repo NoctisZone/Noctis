@@ -481,14 +481,24 @@ sealed ledger revealWindowSeconds: Uint<64>;
 // revealWindowSeconds' convention for a platform-wide policy constant — and
 // deliberately not governor-chosen, since this is the one deadline a governor
 // should not be able to push out.
-sealed ledger darkVeilExpirySeconds: Uint<64>;
+export sealed ledger darkVeilExpirySeconds: Uint<64>;
 
+// EXPORTED, and that is the point rather than a convenience. A sealed field
+// that is not exported is immovable but INVISIBLE: the generated reader does
+// not carry it, so the indexer never serves it and nothing off chain can see
+// it. The schedule below is what every permissionless transition is gated on,
+// and the guarantee it is supposed to give a registrant is "you were told this
+// before you bonded, and it cannot move". The second half was already true.
+// The first was not checkable by anyone: a registrant could only take the
+// website's word for the times, with no way to hold the chain to them.
+// Exporting costs no on-chain state — the field is already there either way —
+// and it is what turns "immovable" into "immovable and public".
 // Registration close timestamp, and the anchor the whole DarkVeil schedule is
 // derived from. Read in circuit by expireDarkVeil (its deadline is measured
 // from here) and by publishRegistrantRoot (the root may only be published once
 // the registrant set has stopped growing). The three derived times below come
 // from it at deploy.
-sealed ledger registrationCloseTime: Uint<64>;
+export sealed ledger registrationCloseTime: Uint<64>;
 
 // The rest of the DarkVeil schedule, derived at deploy from
 // registrationCloseTime and the three window durations, and sealed with it.
@@ -498,11 +508,11 @@ sealed ledger registrationCloseTime: Uint<64>;
 // afterwards, which is the property that makes a permissionless transition
 // safe: the caller supplies no timestamp, so there is nothing to name a
 // favourable value for. See startRegistration/openBuying/closeDarkVeil.
-sealed ledger registrationOpenTime: Uint<64>;
+export sealed ledger registrationOpenTime: Uint<64>;
 
-sealed ledger buyingOpenTime: Uint<64>;
+export sealed ledger buyingOpenTime: Uint<64>;
 
-sealed ledger buyingCloseTime: Uint<64>;
+export sealed ledger buyingCloseTime: Uint<64>;
 
 // How long after buyingCloseTime the settlement record may stay open before
 // anyone may give up on it. The Cardano claim window plus its settlement
@@ -511,7 +521,7 @@ sealed ledger buyingCloseTime: Uint<64>;
 // convention for a platform-wide policy constant, and for the same reason
 // darkVeilExpirySeconds is: this is a deadline a governor should not be able
 // to push out. See expireDvSettlement.
-sealed ledger settlementDeadlineSeconds: Uint<64>;
+export sealed ledger settlementDeadlineSeconds: Uint<64>;
 
 // Resolution (2026-07-13): minimum absolute registrant count required
 // before buying can open. Below this, openBuying() refuses and the bonds go
@@ -523,7 +533,7 @@ sealed ledger settlementDeadlineSeconds: Uint<64>;
 // tiny launch's participants purely to force DV to fail (bonds are
 // refunded on failure, so the only real cost is gas). CLAUDE.md:
 // MIN_DV_PARTICIPANTS = 15.
-sealed ledger minDvParticipants: Uint<64>;
+export sealed ledger minDvParticipants: Uint<64>;
 
 // Equivalent fix: per-registrant DarkVeil token allocation —
 // CLAUDE.md's `base_slot = dv_supply / registered_count`. This is a FLAT

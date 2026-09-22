@@ -2973,3 +2973,335 @@ describe('eligibility_gate.compact — the allowlist root names the evidence it 
     expect(after.allowlistEvidenceRef).toEqual(OTHER_EVIDENCE);
   });
 });
+
+// ============================================================================
+// EVERY LIFECYCLE CIRCUIT, SUBMITTED TWICE
+// ============================================================================
+// The conductor that will drive a launch unattended is built on blind retry:
+// the chain is the state store, so a tick that crashes, double-fires, or runs
+// beside another one re-derives the same answer and simply submits again. That
+// is only safe if a second submission of the same call cannot do damage — and
+// "cannot" has to be a property the suite guarantees, not an audit someone did
+// once and that goes stale the next time a circuit is edited.
+//
+// Two acceptable outcomes, and the distinction matters to the caller:
+//
+//   REFUSED    the second call throws. The conductor treats this as success
+//              already achieved, not as a failure to retry.
+//   NO-OP      the second call succeeds and changes nothing that matters.
+//              Only for circuits deliberately written that way, each of which
+//              says so in its own comment — re-recording a corrected
+//              settlement, re-publishing a root before it takes effect,
+//              re-attesting as the same attestor.
+//
+// Anything that is neither is a defect: it would mean an unattended retry
+// could inflate a total, pay twice, or advance a phase that had already moved.
+// ============================================================================
+
+describe('every lifecycle circuit, submitted twice', () => {
+  /** Deployed and advanced to DarkVeil, nothing else done. */
+  function atDarkVeil() {
+    const d = deploy();
+    const r = d.contract.circuits.advancePhase(d.ctx, LaunchPhase.DarkVeil);
+    return { ...d, ctx: nextContext(d.contractAddress, r.context) };
+  }
+
+  /** Registered, root published, buying open. */
+  function atBuying() {
+    const d = atDarkVeil();
+    const r1 = d.contract.circuits.startRegistration(d.ctx);
+    const c1 = nextContext(d.contractAddress, r1.context);
+    const rReg = d.contract.circuits.registerForDarkVeil(c1);
+    const cReg = nextContext(d.contractAddress, rReg.context);
+    const rPub = d.contract.circuits.publishRegistrantRoot(cReg, REGISTRANT_TREE.root);
+    const cPub = nextContext(d.contractAddress, rPub.context);
+    const rOpen = d.contract.circuits.openBuying(cPub);
+    return { ...d, ctx: nextContext(d.contractAddress, rOpen.context), ctxBeforeOpen: cPub };
+  }
+
+  // --- phase transitions ----------------------------------------------------
+  // Each asserts the state it is leaving, so the second call finds that state
+  // already gone. This is the whole reason a conductor may retry a transition
+  // without first reading back whether it landed.
+
+  it('REFUSES a second advancePhase', () => {
+    const d = atDarkVeil();
+    expect(() => d.contract.circuits.advancePhase(d.ctx, LaunchPhase.DarkVeil)).toThrow();
+  });
+
+  it('REFUSES a second startRegistration', () => {
+    const d = atDarkVeil();
+    const r = d.contract.circuits.startRegistration(d.ctx);
+    const c = nextContext(d.contractAddress, r.context);
+    expect(() => d.contract.circuits.startRegistration(c)).toThrow(/already started/i);
+  });
+
+  it('REFUSES a second openBuying', () => {
+    const d = atBuying();
+    expect(() => d.contract.circuits.openBuying(d.ctx)).toThrow(/registration phase/i);
+  });
+
+  it('REFUSES a second closeDarkVeil', () => {
+    const d = atBuying();
+    const r = d.contract.circuits.closeDarkVeil(d.ctx, DV_ALLOCATION);
+    const c = nextContext(d.contractAddress, r.context);
+    expect(() => d.contract.circuits.closeDarkVeil(c, DV_ALLOCATION)).toThrow(/buying/i);
+  });
+
+  it('REFUSES a second finalizeDvSettlement', () => {
+    const d = atBuying();
+    const rClose = d.contract.circuits.closeDarkVeil(d.ctx, DV_ALLOCATION);
+    const cClose = nextContext(d.contractAddress, rClose.context);
+    const rFin = d.contract.circuits.finalizeDvSettlement(cClose);
+    const cFin = nextContext(d.contractAddress, rFin.context);
+    expect(() => d.contract.circuits.finalizeDvSettlement(cFin)).toThrow(/already finalized/i);
+  });
+
+  it('REFUSES a second cancelDarkVeil', () => {
+    const d = atDarkVeil();
+    const r = d.contract.circuits.cancelDarkVeil(d.ctx);
+    const c = nextContext(d.contractAddress, r.context);
+    expect(() => d.contract.circuits.cancelDarkVeil(c)).toThrow();
+  });
+
+  it('REFUSES a second markDarkVeilFailed', () => {
+    const d = atDarkVeil();
+    const r = d.contract.circuits.markDarkVeilFailed(d.ctx);
+    const c = nextContext(d.contractAddress, r.context);
+    expect(() => d.contract.circuits.markDarkVeilFailed(c)).toThrow(/already marked failed/i);
+  });
+
+  // --- the two permissionless hatches --------------------------------------
+  // These are the ones a STRANGER may retry, so "anybody may call it twice"
+  // is the case, not a hypothetical.
+
+  it('REFUSES a second expireDarkVeil, even from a different caller', () => {
+    const d = atDarkVeil();
+    const r1 = d.contract.circuits.startRegistration(d.ctx);
+    const c1 = nextContext(d.contractAddress, r1.context);
+    const late = Number(REGISTRATION_CLOSE_TIME + 2_000_000n);
+    const r = d.contract.circuits.expireDarkVeil(nextContextAtTime(d.contractAddress, c1, late));
+    const c = nextContextAtTime(d.contractAddress, r.context, late);
+    expect(() => d.contract.circuits.expireDarkVeil(c)).toThrow();
+  });
+
+  it('REFUSES a second expireDvSettlement', () => {
+    const d = atBuying();
+    const rClose = d.contract.circuits.closeDarkVeil(d.ctx, DV_ALLOCATION);
+    const cClose = nextContext(d.contractAddress, rClose.context);
+    const late = Number(BUYING_CLOSE_TIME + SETTLEMENT_DEADLINE_SECONDS + 1n);
+    const r = d.contract.circuits.expireDvSettlement(nextContextAtTime(d.contractAddress, cClose, late));
+    const c = nextContextAtTime(d.contractAddress, r.context, late);
+    // Refused by the terminal state it created rather than by the finalized
+    // flag: it sets dvFailed and cancels the phase, so the second call cannot
+    // even reach the deadline check. Worth pinning, because the obvious guess
+    // is the wrong one and a looser matcher would hide it.
+    expect(() => d.contract.circuits.expireDvSettlement(c)).toThrow(/normally-closed/i);
+  });
+
+  // --- the per-caller circuits ---------------------------------------------
+
+  it('REFUSES a second registerForDarkVeil from the same registrant', () => {
+    const d = atDarkVeil();
+    const r1 = d.contract.circuits.startRegistration(d.ctx);
+    const c1 = nextContext(d.contractAddress, r1.context);
+    const rReg = d.contract.circuits.registerForDarkVeil(c1);
+    const c2 = nextContext(d.contractAddress, rReg.context);
+    expect(() => d.contract.circuits.registerForDarkVeil(c2)).toThrow(/already registered/i);
+  });
+
+  it('REFUSES a second submitBuyCommit of the same commitment', () => {
+    const d = atBuying();
+    const commitment = computeBuyCommit({
+      buyerKey: REGISTRANT_KEY,
+      launchId: LAUNCH_ID,
+      tokenAmount: 1n,
+      pricePerToken: DV_PRICE,
+      nonce: BUY_NONCE,
+    });
+    const r = d.contract.circuits.submitBuyCommit(d.ctx, commitment, 1n);
+    const c = nextContext(d.contractAddress, r.context);
+    expect(() => d.contract.circuits.submitBuyCommit(c, commitment, 1n)).toThrow();
+  });
+
+  it('REFUSES a second revealBuyCommit of the same commitment', () => {
+    const d = atBuying();
+    const commitment = computeBuyCommit({
+      buyerKey: REGISTRANT_KEY,
+      launchId: LAUNCH_ID,
+      tokenAmount: 1n,
+      pricePerToken: DV_PRICE,
+      nonce: BUY_NONCE,
+    });
+    const rSub = d.contract.circuits.submitBuyCommit(d.ctx, commitment, 1n);
+    const cSub = nextContext(d.contractAddress, rSub.context);
+    const rClose = d.contract.circuits.closeDarkVeil(cSub, DV_ALLOCATION);
+    const cClose = nextContext(d.contractAddress, rClose.context);
+    const at = Number(BUYING_CLOSE_TIME);
+    const rRev = d.contract.circuits.revealBuyCommit(
+      nextContextAtTime(d.contractAddress, cClose, at),
+      commitment,
+      1n,
+      DV_PRICE,
+      BigInt(at),
+    );
+    const cRev = nextContextAtTime(d.contractAddress, rRev.context, at);
+    expect(() => d.contract.circuits.revealBuyCommit(cRev, commitment, 1n, DV_PRICE, BigInt(at))).toThrow();
+  });
+
+  it('REFUSES a second cancelBuyCommit of the same commitment', () => {
+    const d = atBuying();
+    const commitment = computeBuyCommit({
+      buyerKey: REGISTRANT_KEY,
+      launchId: LAUNCH_ID,
+      tokenAmount: 1n,
+      pricePerToken: DV_PRICE,
+      nonce: BUY_NONCE,
+    });
+    const rSub = d.contract.circuits.submitBuyCommit(d.ctx, commitment, 1n);
+    const cSub = nextContext(d.contractAddress, rSub.context);
+    const rCan = d.contract.circuits.cancelBuyCommit(cSub, commitment);
+    const cCan = nextContext(d.contractAddress, rCan.context);
+    expect(() => d.contract.circuits.cancelBuyCommit(cCan, commitment)).toThrow();
+  });
+
+  // --- the circuits that MOVE MONEY ----------------------------------------
+  // The three that pay out are the ones where a successful retry would be a
+  // double payment rather than a wasted transaction, so each is driven twice
+  // against the same bond.
+
+  it('REFUSES a second claimBondRefund, so a bond cannot be paid twice', () => {
+    const d = atDarkVeil();
+    const r1 = d.contract.circuits.startRegistration(d.ctx);
+    const c1 = nextContext(d.contractAddress, r1.context);
+    const rReg = d.contract.circuits.registerForDarkVeil(c1);
+    const cReg = nextContext(d.contractAddress, rReg.context);
+    const rCancel = d.contract.circuits.cancelDarkVeil(cReg);
+    const cCancel = nextContext(d.contractAddress, rCancel.context);
+    const rClaim = d.contract.circuits.claimBondRefund(cCancel, fakeBytes32(5));
+    const cClaim = nextContext(d.contractAddress, rClaim.context);
+    expect(() => d.contract.circuits.claimBondRefund(cClaim, fakeBytes32(5))).toThrow(/already claimed/i);
+  });
+
+  it('REFUSES a second sweepForfeitedBond, so a forfeit cannot be swept twice', () => {
+    const d = atBuying();
+    const rClose = d.contract.circuits.closeDarkVeil(d.ctx, DV_ALLOCATION);
+    const cClose = nextContext(d.contractAddress, rClose.context);
+    const rFin = d.contract.circuits.finalizeDvSettlement(cClose);
+    const cFin = nextContext(d.contractAddress, rFin.context);
+    const rSweep = d.contract.circuits.sweepForfeitedBond(cFin, REGISTRANT_KEY);
+    const cSweep = nextContext(d.contractAddress, rSweep.context);
+    expect(() => d.contract.circuits.sweepForfeitedBond(cSweep, REGISTRANT_KEY)).toThrow(/already/i);
+  });
+
+  it('REFUSES a second claimRatioBondRefund, so a partial refund cannot be paid twice', () => {
+    const d = atBuying();
+    const commitment = computeBuyCommit({
+      buyerKey: REGISTRANT_KEY,
+      launchId: LAUNCH_ID,
+      tokenAmount: 50n,
+      pricePerToken: DV_PRICE,
+      nonce: BUY_NONCE,
+    });
+    const rSub = d.contract.circuits.submitBuyCommit(d.ctx, commitment, 1n);
+    const cSub = nextContext(d.contractAddress, rSub.context);
+    const rClose = d.contract.circuits.closeDarkVeil(cSub, DV_ALLOCATION);
+    const cClose = nextContext(d.contractAddress, rClose.context);
+    const at = Number(BUYING_CLOSE_TIME);
+    const rRev = d.contract.circuits.revealBuyCommit(
+      nextContextAtTime(d.contractAddress, cClose, at),
+      commitment,
+      50n,
+      DV_PRICE,
+      BigInt(at),
+    );
+    const cRev = nextContextAtTime(d.contractAddress, rRev.context, at);
+    const rRec = d.contract.circuits.recordDarkVeilSettlement(cRev, REGISTRANT_KEY, 50n);
+    const cRec = nextContext(d.contractAddress, rRec.context);
+    const rFin = d.contract.circuits.finalizeDvSettlement(cRec);
+    const cFin = nextContext(d.contractAddress, rFin.context);
+    const refund = (1000n * 50n) / DV_ALLOCATION;
+    const rClaim = d.contract.circuits.claimRatioBondRefund(cFin, fakeBytes32(5), refund);
+    const cClaim = nextContext(d.contractAddress, rClaim.context);
+    expect(() => d.contract.circuits.claimRatioBondRefund(cClaim, fakeBytes32(5), refund)).toThrow(/already claimed/i);
+  });
+
+  // --- the three deliberate NO-OPS -----------------------------------------
+  // Each is written to be re-callable on purpose, so the test is not "it
+  // throws" but "it changes nothing that matters". That is the stronger claim
+  // and the one a retrying conductor actually relies on.
+
+  it('NO-OPS a re-recorded settlement, rather than inflating the totals it seals the certificate from', () => {
+    const d = atBuying();
+    const rClose = d.contract.circuits.closeDarkVeil(d.ctx, DV_ALLOCATION);
+    let ctx = nextContext(d.contractAddress, rClose.context);
+
+    const r1 = d.contract.circuits.recordDarkVeilSettlement(ctx, REGISTRANT_KEY, 40n);
+    ctx = nextContext(d.contractAddress, r1.context);
+    const once = ledger(r1.context.currentQueryContext.state);
+    expect(once.totalTokensSettled).toBe(40n);
+    expect(once.settledParticipants).toBe(1n);
+
+    // The same figure again. A naive implementation would add it twice and
+    // count the buyer twice, and the certificate sealed from these would then
+    // claim a distribution that never happened.
+    const r2 = d.contract.circuits.recordDarkVeilSettlement(ctx, REGISTRANT_KEY, 40n);
+    ctx = nextContext(d.contractAddress, r2.context);
+    const twice = ledger(r2.context.currentQueryContext.state);
+    expect(twice.totalTokensSettled).toBe(40n);
+    expect(twice.settledParticipants).toBe(1n);
+
+    // And a CORRECTED figure replaces rather than accumulates, which is the
+    // reason it is an overwrite instead of a refusal.
+    const r3 = d.contract.circuits.recordDarkVeilSettlement(ctx, REGISTRANT_KEY, 60n);
+    const corrected = ledger(r3.context.currentQueryContext.state);
+    expect(corrected.totalTokensSettled).toBe(60n);
+    expect(corrected.settledParticipants).toBe(1n);
+  });
+
+  it('NO-OPS a re-published registrant root, and still refuses one after buying opens', () => {
+    const d = atDarkVeil();
+    const r1 = d.contract.circuits.startRegistration(d.ctx);
+    const c1 = nextContext(d.contractAddress, r1.context);
+    const rReg = d.contract.circuits.registerForDarkVeil(c1);
+    const cReg = nextContext(d.contractAddress, rReg.context);
+
+    const rPub1 = d.contract.circuits.publishRegistrantRoot(cReg, REGISTRANT_TREE.root);
+    const cPub1 = nextContext(d.contractAddress, rPub1.context);
+    const rPub2 = d.contract.circuits.publishRegistrantRoot(cPub1, REGISTRANT_TREE.root);
+    const cPub2 = nextContext(d.contractAddress, rPub2.context);
+    expect(ledger(rPub2.context.currentQueryContext.state).pendingRegistrantRoot).toEqual(REGISTRANT_TREE.root);
+
+    // The window it is re-callable in closes when buying opens, which is what
+    // stops the root moving under a set that has already been bought against.
+    const rOpen = d.contract.circuits.openBuying(cPub2);
+    const cOpen = nextContext(d.contractAddress, rOpen.context);
+    expect(() => d.contract.circuits.publishRegistrantRoot(cOpen, REGISTRANT_TREE.root)).toThrow(/registration phase/i);
+  });
+
+  it('NO-OPS a repeated attestation, so one attestor cannot reach the threshold alone', () => {
+    const d = atDarkVeil();
+    const r1 = d.contract.circuits.startRegistration(d.ctx);
+    let ctx = nextContext(d.contractAddress, r1.context);
+    const newRoot = fakeBytes32(77);
+    const at = 10n;
+
+    // The same attestor, three times over. Approvals are keyed by attestor, so
+    // three calls are one approval — the difference between a threshold and a
+    // counter.
+    for (let i = 0; i < 3; i++) {
+      const r = d.contract.circuits.updateAllowlistRoot(
+        nextContextAtTime(d.contractAddress, ctx, Number(at)),
+        newRoot,
+        ALLOWLIST_EVIDENCE,
+        at,
+      );
+      ctx = nextContext(d.contractAddress, r.context);
+      expect(ledger(r.context.currentQueryContext.state).allowlistRoot).toEqual(ALLOWLIST_TREE.root);
+    }
+
+    // A second, distinct attestor is what moves it.
+    const rSecond = attestAllowlistAgain(d.contractAddress, ctx as never, newRoot, at);
+    expect(ledger(rSecond.context.currentQueryContext.state).allowlistRoot).toEqual(newRoot);
+  });
+});

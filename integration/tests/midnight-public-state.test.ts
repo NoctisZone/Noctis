@@ -37,7 +37,18 @@ function fakeLedger(overrides: Partial<EligibilityGateLedger> = {}): Eligibility
     totalRaisedCommitted: 126n,
     allowlistRoot: bytes(0xab),
     registrantRoot: bytes(0xcd),
+    pendingRegistrantRoot: bytes(0xce),
     settlementFinalized: false,
+    // The sealed schedule. Exported so anything off chain can read it — which
+    // is what lets a registrant check the times they were shown, and lets a
+    // scheduled job work out what is due without being told.
+    registrationOpenTime: 1_000_000n,
+    registrationCloseTime: 1_165_600n,
+    buyingOpenTime: 1_172_800n,
+    buyingCloseTime: 1_259_200n,
+    settlementDeadlineSeconds: 604_800n,
+    minDvParticipants: 15n,
+    darkVeilExpirySeconds: 604_800n,
     fairLaunchCert: {
       launchId: bytes(0x01),
       totalParticipants: 15n,

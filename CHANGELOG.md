@@ -63,6 +63,24 @@ Notable changes to the Noctis Zone, by release. Internal development history pre
   actions. The platform publishes the root, because computing it needs the
   registrant set; the window then opens on the clock. This mirrors how the
   allowlist root is already published before it takes effect.
+- **A DarkVeil launch now publishes its whole schedule, and anyone can read it
+  off the chain.** The times a launch runs to were already fixed before anyone
+  could bond and could not be moved afterwards. They are now also readable by
+  anybody, so a registrant can check the dates they were shown against the
+  contract itself rather than taking the site's word for them. The same is true
+  of the participant floor and of the deadline after which a stalled launch
+  returns every bond — the terms are public, in the place they are enforced.
+- Every step of a DarkVeil launch either refuses a repeat outright or does
+  nothing the second time, whichever is right for that step. Recording a
+  settlement twice cannot inflate the figures the Fair Launch Certificate is
+  sealed from, and a corrected figure replaces the old one rather than being
+  added to it. One party approving an allowlist root repeatedly still counts
+  once, so a threshold means what it says.
+- A launch cannot be deployed with role identities nobody holds. Where the
+  allowlist attestors and the creator were once allowed to be placeholders
+  derived from a single secret, a real deployment now refuses them — a
+  threshold assembled from one secret is satisfied by one person, and these
+  values are fixed at deployment and cannot be corrected afterwards.
 
 ### Added
 

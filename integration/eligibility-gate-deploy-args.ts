@@ -15,6 +15,9 @@
 // the caller typed, for the life of the launch.
 // ============================================================================
 
+import { createHash } from 'node:crypto';
+import { DOMAINS, deriveRoleKey, deriveUserPublicKey } from '../contracts/midnight/witnesses.js';
+
 /** 2^44 - 1 — verifyRatioRefund's ceiling, asserted by the constructor. */
 export const MAX_BOND_AMOUNT = 17_592_186_044_415n;
 
@@ -57,6 +60,16 @@ export interface EligibilityGateDeployInput {
   minDvParticipants: string | number;
   /** Optional. If given it must equal the derived value. */
   walletCap?: string | number;
+  /**
+   * The governor secret this launch will be deployed under, 32 bytes hex.
+   *
+   * Used for one thing: proving the other role identities are not merely
+   * derived from it. Never stored, never sent anywhere, and not a
+   * constructor argument — see assertIdentitiesAreNotStandIns.
+   */
+  governorSecretHex?: string;
+  /** Which network this is bound for. Only 'mainnet' changes any behaviour. */
+  network?: string;
 }
 
 export interface EligibilityGateDeployArgs {
@@ -162,6 +175,7 @@ export function resolveEligibilityGateDeployArgs(input: EligibilityGateDeployInp
   if (isZero(platformAddr)) {
     throw new Error('platformAddrHex cannot be all zero — it receives forfeited DarkVeil bonds.');
   }
+  assertIdentitiesAreNotStandIns(input, { creatorPubKey, attestors });
 
   const totalSupply = toBigInt(input.totalSupply, 'totalSupply');
   const maxWalletPercent = toBigInt(input.maxWalletPercent, 'maxWalletPercent');
@@ -260,4 +274,112 @@ export function resolveEligibilityGateDeployArgs(input: EligibilityGateDeployInp
     allowlistAttestorKeys: attestors,
     allowlistThreshold: BigInt(input.allowlistThreshold),
   };
+}
+
+/**
+ * The scheme the harness used to invent role identities nobody holds.
+ *
+ * Every stand-in is `sha256("noctis:jinx:role:v1|<label>|" || governorSecret)`,
+ * so all of them are a pure function of ONE secret. That is the whole defect:
+ * the attestor keys look like three holders and are three derivations, and
+ * whoever holds the governor secret can produce all three — a 2-of-3 threshold
+ * that one party satisfies alone.
+ *
+ * Reproduced here so the check can recognise them. Recognising the scheme is
+ * far stronger than asking the caller to promise the keys are real: a promise
+ * is exactly what was already being made, silently, by defaulting.
+ */
+const STAND_IN_PREFIX = 'noctis:jinx:role:v1|';
+
+function standInSecret(label: string, governorSecret: Uint8Array): Uint8Array {
+  return new Uint8Array(
+    createHash('sha256').update(`${STAND_IN_PREFIX}${label}|`).update(Buffer.from(governorSecret)).digest(),
+  );
+}
+
+/**
+ * Refuse identities that the governor's own secret can produce.
+ *
+ * WHY THIS IS THE CHECK, rather than a network flag or a manual sign-off. The
+ * threshold's entire value is that three separate people have to agree; three
+ * keys derived from one secret satisfy every assertion the contract makes and
+ * none of the promise it exists for. Nothing on chain can tell the difference
+ * — the contract sees three distinct 32-byte values, which is all it can see
+ * — so the only place this is catchable is here, at the moment of deploy,
+ * where the governor secret and the keys are both in hand.
+ *
+ * And it is catchable ONLY here: these are constructor arguments, sealed at
+ * deploy. Discovering it afterwards means a redeploy, not a correction.
+ *
+ * `governorSecretHex` is optional so existing rehearsal callers keep working,
+ * and REQUIRED on mainnet — where deploying identities nobody holds would
+ * send forfeited bonds to an address with no key and check registrants
+ * against a creator who cannot present themselves.
+ */
+export function assertIdentitiesAreNotStandIns(
+  input: Pick<EligibilityGateDeployInput, 'governorSecretHex' | 'network' | 'launchIdHex'>,
+  resolved: { creatorPubKey: Uint8Array; attestors: [Uint8Array, Uint8Array, Uint8Array] },
+): void {
+  const isMainnet = (input.network ?? '').toLowerCase() === 'mainnet';
+
+  if (!input.governorSecretHex) {
+    if (isMainnet) {
+      throw new Error(
+        'governorSecretHex is required on mainnet. Without it this cannot tell a real attestor key from one ' +
+          'derived from the governor secret, and a threshold assembled from derivations is satisfied by one ' +
+          'party alone. These are sealed constructor arguments, so a deploy that gets this wrong is corrected ' +
+          'only by deploying again.',
+      );
+    }
+    return;
+  }
+
+  const governorSecret = fromHex32(input.governorSecretHex, 'governorSecretHex');
+  const launchId = fromHex32(input.launchIdHex, 'launchIdHex');
+
+  const derivedAttestors = ['attestor-1', 'attestor-2', 'attestor-3'].map(
+    (label) => deriveRoleKey({ bytes: standInSecret(label, governorSecret) }, DOMAINS.ELIGIBILITY_GOVERNOR).bytes,
+  );
+
+  const standIns: string[] = [];
+  resolved.attestors.forEach((key, i) => {
+    if (derivedAttestors.some((d) => sameBytes(d, key))) {
+      standIns.push(`allowlistAttestorKeysHex[${i}]`);
+    }
+  });
+
+  const derivedCreator = deriveUserPublicKey(
+    { bytes: standInSecret('creator', governorSecret) },
+    DOMAINS.ELIGIBILITY_USER,
+    launchId,
+  ).bytes;
+  if (sameBytes(derivedCreator, resolved.creatorPubKey)) {
+    standIns.push('creatorPubKeyHex');
+  }
+
+  if (standIns.length === 0) {
+    return;
+  }
+
+  const detail =
+    `${standIns.join(', ')} ${standIns.length === 1 ? 'is a stand-in' : 'are stand-ins'} derived from the ` +
+    'governor secret, so nobody separate holds them.';
+
+  if (isMainnet) {
+    throw new Error(
+      `${detail} Refused on mainnet: a forfeited bond would pay an address with no key behind it, the ` +
+        'creator check would compare against a key that can never present itself, and the allowlist threshold ' +
+        'would be satisfied by whoever holds the governor secret. Provision real identities first — these are ' +
+        'sealed at deploy and cannot be changed afterwards.',
+    );
+  }
+
+  // Off mainnet this is a legitimate rehearsal shape — no real value is
+  // forfeited and the creator is us — so it warns rather than refuses. It
+  // still says so out loud, because the thing that made this survive to a
+  // deploy was that defaulting was silent.
+  process.emitWarning(
+    `${detail} Fine for a rehearsal on ${input.network ?? 'this network'}; it would be refused on mainnet.`,
+    'NoctisStandInIdentity',
+  );
 }

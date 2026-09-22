@@ -866,6 +866,16 @@ const SNAPSHOT: DarkVeilSnapshot = {
   totalRaisedCommitted: 126n,
   allowlistRootHex: 'ab'.repeat(32),
   registrantRootHex: 'cd'.repeat(32),
+  pendingRegistrantRootHex: 'cd'.repeat(32),
+  schedule: {
+    registrationOpenTime: 1_000_000n,
+    registrationCloseTime: 1_165_600n,
+    buyingOpenTime: 1_172_800n,
+    buyingCloseTime: 1_259_200n,
+    settlementDeadlineSeconds: 604_800n,
+    minDvParticipants: 15n,
+    darkVeilExpirySeconds: 604_800n,
+  },
   settlementFinalized: false,
   fairLaunchCert: {
     launchId: fakeBytes32(1),

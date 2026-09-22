@@ -244,10 +244,58 @@ export interface DarkVeilSnapshot {
   allowlistRootHex: string;
   /** The registrant root published when buying opens. Zero before that. */
   registrantRootHex: string;
+  /**
+   * The root the governor published, waiting for buying to open.
+   *
+   * Distinct from the field above and both are needed: publishing writes
+   * THIS one, and opening buying promotes it to the other. Anything deciding
+   * whether the root has been published has to read this, or it sees an
+   * unpublished root for the whole window between the two and never gets
+   * past it.
+   */
+  pendingRegistrantRootHex: string;
   /** Whether the settlement record has been closed. */
   settlementFinalized: boolean;
   /** The ZK Fair Launch Certificate, filled in when the phase closes. */
   fairLaunchCert: FairLaunchCert;
+  /**
+   * The whole DarkVeil schedule, sealed at deploy and readable by anyone.
+   *
+   * Every permissionless transition is gated on one of these, and none of them
+   * takes a timestamp from its caller — so this is the complete answer to
+   * "when is this launch allowed to move, and who decides". A registrant can
+   * check the times they were shown against the chain, and anything driving
+   * the launch forward can work out what is due without being told.
+   *
+   * All in SECONDS since the epoch, which is Midnight's unit. Cardano's side
+   * of the same launch counts milliseconds; the crossing is the classic place
+   * for a schedule to be wrong by a factor of a thousand.
+   */
+  schedule: DarkVeilSchedule;
+}
+
+export interface DarkVeilSchedule {
+  /** Registration may be opened by anyone from here. */
+  registrationOpenTime: bigint;
+  /** Registration stops growing here; the registrant root commits to it afterwards. */
+  registrationCloseTime: bigint;
+  /** Buying may be opened by anyone from here, once a root is published. */
+  buyingOpenTime: bigint;
+  /** Buying may be closed by anyone from here. */
+  buyingCloseTime: bigint;
+  /** How long past the close the settlement record may stay open before anyone may give up on it. */
+  settlementDeadlineSeconds: bigint;
+  /** Registrants required before buying may open at all. */
+  minDvParticipants: bigint;
+  /**
+   * How long past the registration close a stalled launch may sit before
+   * anyone may expire it into a full refund.
+   *
+   * Exported with the rest so the deadline is readable rather than mirrored:
+   * a copy of it in off-chain code is a number that can drift from the one the
+   * contract actually enforces.
+   */
+  darkVeilExpirySeconds: bigint;
 }
 
 function toHex(bytes: Uint8Array): string {
@@ -268,8 +316,18 @@ export function summarizeDarkVeil(ledger: EligibilityGateLedger): DarkVeilSnapsh
     totalRaisedCommitted: ledger.totalRaisedCommitted,
     allowlistRootHex: toHex(ledger.allowlistRoot),
     registrantRootHex: toHex(ledger.registrantRoot),
+    pendingRegistrantRootHex: toHex(ledger.pendingRegistrantRoot),
     settlementFinalized: ledger.settlementFinalized,
     fairLaunchCert: ledger.fairLaunchCert,
+    schedule: {
+      registrationOpenTime: ledger.registrationOpenTime,
+      registrationCloseTime: ledger.registrationCloseTime,
+      buyingOpenTime: ledger.buyingOpenTime,
+      buyingCloseTime: ledger.buyingCloseTime,
+      settlementDeadlineSeconds: ledger.settlementDeadlineSeconds,
+      minDvParticipants: ledger.minDvParticipants,
+      darkVeilExpirySeconds: ledger.darkVeilExpirySeconds,
+    },
   };
 }
 
