@@ -45,7 +45,7 @@
 // ============================================================================
 
 import type { Assets, LucidEvolution, Network as LucidNetwork, UTxO, WalletApi } from '@lucid-evolution/lucid';
-import { Blockfrost, Data, getAddressDetails, Lucid, validatorToAddress } from '@lucid-evolution/lucid';
+import { Blockfrost, calculateMinLovelaceFromUTxO, Data, getAddressDetails, Lucid, validatorToAddress } from '@lucid-evolution/lucid';
 import {
   type ProviderTxPosition,
   type ProviderUtxo,
@@ -146,6 +146,36 @@ export interface VenueBrowserQuote {
 }
 
 /** The placer's side of the venue, from a browser. */
+/**
+ * The ledger's `coinsPerUtxoByte`, 4310 since Babbage on every Cardano
+ * network. Held here rather than fetched: a quote must not depend on a
+ * parameters request through the site's proxy, and the margin below covers a
+ * small future change while the placer gets the ADA back in any case.
+ */
+const COINS_PER_UTXO_BYTE = 4310n;
+
+/**
+ * The least ADA the ledger lets a reward output carry when it holds `unit`.
+ *
+ * An order that buys a token is settled by an output holding that token, and
+ * the ledger prices an output by its size, so the ADA the order carries for it
+ * has to clear that figure or the fill is refused at submission — which is
+ * how every ADA-to-token order once failed against a one-ADA carry (2026-09-23).
+ * Sized for the largest amount the unit could hold, so the answer stands
+ * whatever the fill delivers; the placer receives the ADA back in that same
+ * output, so erring high costs nothing.
+ */
+export function minimumForRewardOutput(coinsPerUtxoByte: bigint, address: string, unit: string): bigint {
+  if (unit === 'lovelace') return 0n;
+  const minimum = calculateMinLovelaceFromUTxO(coinsPerUtxoByte, {
+    txHash: '0'.repeat(64),
+    outputIndex: 0,
+    address,
+    assets: { lovelace: 5_000_000n, [unit]: 2n ** 63n },
+  });
+  return minimum + 50_000n;
+}
+
 export class VenueBrowserSubmitter {
   readonly orderAddress: string;
   readonly poolAddress: string;
@@ -238,6 +268,12 @@ export class VenueBrowserSubmitter {
     const pool = await this.poolFor(args.poolNftUnit);
     const details = getAddressDetails(args.walletAddress);
     const rewardPkh = venuePlacerKeyHash(args.walletAddress);
+    // The output that settles a token purchase has a ledger minimum of its
+    // own; the order carries whichever is larger, the caller's figure or that.
+    const market = venuePoolMarket(pool);
+    const outputUnit = args.inputUnit === market.unitX ? market.unitY : market.unitX;
+    const ledgerMinimum = minimumForRewardOutput(COINS_PER_UTXO_BYTE, args.walletAddress, outputUnit);
+    const minOutputLovelace = args.minOutputLovelace > ledgerMinimum ? args.minOutputLovelace : ledgerMinimum;
 
     const draft = draftVenueSwapOrder({
       pool,
@@ -247,13 +283,13 @@ export class VenueBrowserSubmitter {
       rewardPkh,
       ...(details.stakeCredential?.hash ? { stakePkh: details.stakeCredential.hash } : {}),
       ...(args.permittedExecutors ? { permittedExecutors: args.permittedExecutors } : {}),
-      minOutputLovelace: args.minOutputLovelace,
+      minOutputLovelace,
       ...(args.exFee !== undefined ? { exFee: args.exFee } : {}),
       ...(this.config.fillCostLovelace !== undefined ? { fillCostLovelace: this.config.fillCostLovelace } : {}),
     });
 
     return {
-      market: venuePoolMarket(pool),
+      market,
       quote: draft.quote,
       draft,
     };

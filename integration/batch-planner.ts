@@ -147,6 +147,25 @@ export interface BatchPlan {
  */
 export const MAX_ORDERS_PER_BATCH = 7;
 
+/**
+ * When a submitted batch is refused for carrying too many inputs, the next
+ * size to try — or null when the refusal is something else, or the batch is
+ * already a single order and cannot shrink.
+ *
+ * The transaction builder's input selection bounds the number of inputs one
+ * transaction may carry, and every order is an input beside the curve and the
+ * batcher's own fee and collateral inputs. That bound moves with the wallet's
+ * UTXO shape, so it cannot be a constant here: a batch that does not fit is
+ * re-planned at half the size and tried again, down to one order, and a
+ * single order that still does not fit is a real failure.
+ */
+export function shrinkBatchAfter(err: unknown, fills: number): number | null {
+  const message = err instanceof Error ? err.message : String(err);
+  if (!/Maximum Input Count Exceeded/i.test(message)) return null;
+  if (fills <= 1) return null;
+  return Math.max(1, Math.floor(fills / 2));
+}
+
 export interface PlanBatchOptions {
   shape: CurveShape;
   curve: PlannerCurve;

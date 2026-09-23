@@ -34,7 +34,7 @@ vi.mock('@lucid-evolution/lucid', async (importOriginal) => {
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { credentialToAddress, Data, Lucid } from '@lucid-evolution/lucid';
-import { VenueBrowserSubmitter, venueProviderUtxo } from '../venue-browser-submitter.js';
+import { VenueBrowserSubmitter, venueProviderUtxo, minimumForRewardOutput} from '../venue-browser-submitter.js';
 import { type VenuePoolConfigData, VenuePoolConfigSchema } from '../venue-pool.js';
 import {
   type VenueSwapConfigData,
@@ -465,5 +465,21 @@ describe('the placer’s own book', () => {
     const worth = await submitter.ordersWorthCancelling(walletApi);
     expect(worth).toHaveLength(1);
     expect(worth[0]?.state).toBe('orphaned');
+  });
+});
+
+describe('the ADA an order carries for a token reward output', () => {
+  const placer =
+    'addr_test1qz7pgfuh7nfjaps7ywqcd2ajjftuygr2h8h8v63pqp089ncqh4ycvc329t9aspu2lcad7kt9mglxs0g6uyy44gvnl9dsk9jc6z';
+  const tokenUnit = `${'33'.repeat(28)}0014df10445245535332`;
+
+  it('clears the ledger minimum for an output holding the token, above the old one-ADA carry', () => {
+    const minimum = minimumForRewardOutput(4310n, placer, tokenUnit);
+    expect(minimum).toBeGreaterThan(1_000_000n);
+    expect(minimum).toBeLessThan(2_000_000n);
+  });
+
+  it('asks nothing extra of an order paid out in ADA', () => {
+    expect(minimumForRewardOutput(4310n, placer, 'lovelace')).toBe(0n);
   });
 });

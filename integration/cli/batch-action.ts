@@ -15,7 +15,7 @@
 // ============================================================================
 
 import { Blockfrost, Lucid } from '@lucid-evolution/lucid';
-import { type CandidateOrder, planBatch } from '../batch-planner.js';
+import { type BatchPlan, type CandidateOrder, planBatch, shrinkBatchAfter } from '../batch-planner.js';
 import { BatcherSubmitter } from '../batcher-submitter.js';
 import { capAccumulatorFromHex } from '../cap-accumulator-tree.js';
 import { selectLaunchUtxo } from '../launch-utxo-lookup.js';
@@ -144,16 +144,16 @@ async function main() {
     heldTokens: utxo.assets[tokenUnit] ?? 0n,
   }));
 
-  const plan = planBatch({
-    shape: 'quadratic',
-    curve: found.datum,
-    capState: capAccumulatorFromHex(input.capState ?? []),
-    orders: candidates,
-    nowMs: BigInt(input.nowMs ?? Date.now()),
-    ...(input.maxOrders ? { maxOrders: input.maxOrders } : {}),
-  });
-
-  const summary = {
+  const planWith = (maxOrders?: number) =>
+    planBatch({
+      shape: 'quadratic',
+      curve: found.datum,
+      capState: capAccumulatorFromHex(input.capState ?? []),
+      orders: candidates,
+      nowMs: BigInt(input.nowMs ?? Date.now()),
+      ...(maxOrders ? { maxOrders } : {}),
+    });
+  const summarise = (plan: BatchPlan) => ({
     curveUtxo: `${found.utxo.txHash}#${found.utxo.outputIndex}`,
     openOrders: candidates.length,
     fills: plan.fills.map((f) => ({
@@ -173,32 +173,48 @@ async function main() {
     next: plan.next,
     curveLovelaceDelta: plan.curveLovelaceDelta,
     curveTokensSoldDelta: plan.curveTokensSoldDelta,
-  };
-
+  });
+  let plan = planWith(input.maxOrders);
   if (input.action === 'plan') {
-    process.stdout.write(JSON.stringify(jsonSafe(summary)));
+    process.stdout.write(JSON.stringify(jsonSafe(summarise(plan))));
     return;
   }
-
-  const submitParams = {
-    curveUtxo: found.utxo,
-    orderUtxos: open.map((o) => o.utxo),
-    plan,
-    ...(input.batcherFeeLovelace ? { batcherFeeLovelace: BigInt(input.batcherFeeLovelace) } : {}),
-  };
-  // Two ways to sign, one batch. The key pair is how the platform's scheduled
-  // batcher runs (custody stores extended keys, not mnemonics); the mnemonic
-  // stays for harness and hand-driven use.
-  const result =
-    input.batcherSkeyExtendedHex || input.batcherAddress
-      ? await batcher.submitBatchWithKey(
+  const submitPlan = (p: BatchPlan) => {
+    const submitParams = {
+      curveUtxo: found.utxo,
+      orderUtxos: open.map((o) => o.utxo),
+      plan: p,
+      ...(input.batcherFeeLovelace ? { batcherFeeLovelace: BigInt(input.batcherFeeLovelace) } : {}),
+    };
+    return input.batcherSkeyExtendedHex || input.batcherAddress
+      ? batcher.submitBatchWithKey(
           requireField(input, 'batcherSkeyExtendedHex', 'submit'),
           requireField(input, 'batcherAddress', 'submit'),
           submitParams,
         )
-      : await batcher.submitBatch(requireField(input, 'batcherMnemonic', 'submit'), submitParams);
+      : batcher.submitBatch(requireField(input, 'batcherMnemonic', 'submit'), submitParams);
+  };
+  // A batch the builder cannot fit in one transaction is re-planned at half
+  // the size and tried again, down to a single order, so a tick fills what
+  // fits instead of failing whole while orders rest (shrinkBatchAfter).
+  const shrunkFrom: number[] = [];
+  let result: Awaited<ReturnType<typeof submitPlan>>;
+  for (;;) {
+    try {
+      result = await submitPlan(plan);
+      break;
+    } catch (err) {
+      const smaller = shrinkBatchAfter(err, plan.fills.length);
+      if (smaller === null) throw err;
+      shrunkFrom.push(plan.fills.length);
+      plan = planWith(smaller);
+      if (plan.fills.length === 0) throw err;
+    }
+  }
 
-  process.stdout.write(JSON.stringify(jsonSafe({ ...summary, ...result })));
+  process.stdout.write(
+    JSON.stringify(jsonSafe({ ...summarise(plan), ...result, ...(shrunkFrom.length ? { shrunkFrom } : {}) })),
+  );
 }
 
 main().catch((err) => {

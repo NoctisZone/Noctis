@@ -20,6 +20,7 @@ import {
   MAX_ORDERS_PER_BATCH,
   type PlannerCurve,
   planBatch,
+  shrinkBatchAfter,
 } from '../batch-planner.js';
 import { bytesToHex, CAP_EMPTY_ROOT, CapAccumulator, hexToBytes } from '../cap-accumulator-tree.js';
 import { buyCost, CREATOR_BPS, feeSlice, PLATFORM_BPS, sellProceeds } from '../curve-pricing.js';
@@ -450,5 +451,25 @@ describe('planBatch — Cardano Launch is a different curve, not a different fol
     expect(result.fills[1]?.gross).toBe((batch * 300n + 699n) / 700n);
     // The shape changes the range's value, not how a batch is split over it.
     expect(result.fills[1]?.gross).not.toBe(buyCost('quadratic', c, 400n, 300n));
+  });
+});
+
+describe('a batch that does not fit one transaction is re-planned smaller', () => {
+  const refused = new Error('Maximum Input Count Exceeded');
+
+  it('halves the fill count after the builder refuses the inputs', () => {
+    expect(shrinkBatchAfter(refused, 7)).toBe(3);
+    expect(shrinkBatchAfter(refused, 3)).toBe(1);
+    expect(shrinkBatchAfter(refused, 2)).toBe(1);
+  });
+
+  it('is a real failure once a single order does not fit', () => {
+    expect(shrinkBatchAfter(refused, 1)).toBeNull();
+    expect(shrinkBatchAfter(refused, 0)).toBeNull();
+  });
+
+  it('never shrinks for any other refusal', () => {
+    expect(shrinkBatchAfter(new Error('Insufficient input in transaction'), 7)).toBeNull();
+    expect(shrinkBatchAfter('script execution failed', 7)).toBeNull();
   });
 });

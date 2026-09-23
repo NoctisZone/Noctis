@@ -191,6 +191,25 @@ function orderKey(order: VenueSwapOrderUtxo): string {
  * `runRound` is the unit and holds all of the behaviour; `run` is a loop
  * around it that survives a provider outage rather than exiting on one.
  */
+/**
+ * A failed fill's reason, whatever was thrown: an Error's message, or its
+ * name when the message is empty; a string as itself; anything else
+ * serialised, so a refusal from a builder or a provider never reaches the
+ * operator as an empty string.
+ */
+export function describeThrown(error: unknown): string {
+  if (error instanceof Error) {
+    const cause = error.cause instanceof Error ? ` (cause: ${error.cause.message})` : '';
+    return `${error.message || error.name}${cause}`;
+  }
+  if (typeof error === 'string') return error;
+  try {
+    return JSON.stringify(error).slice(0, 600);
+  } catch {
+    return String(error);
+  }
+}
+
 export class VenueBatcher {
   /**
    * Where each transaction sits in the chain, kept between rounds.
@@ -312,7 +331,7 @@ export class VenueBatcher {
         outcomes.set(key, {
           status: 'failed',
           order: candidate.order,
-          reason: (error as Error).message,
+          reason: describeThrown(error),
         });
       }
     }

@@ -8,6 +8,10 @@ Notable changes to the Noctis Zone, by release. Internal development history pre
 
 ### Changed
 
+- A batch of curve orders that does not fit in one transaction is re-planned at half the size and tried again, down to a single order, so a batcher tick fills what fits instead of failing while orders rest.
+- A venue buy order carries at least the ledger's minimum ADA for the token output that settles it, sized from the placer's address and the token, so its fill is accepted at submission.
+- A failed venue fill reports the reason it failed, whatever was thrown.
+
 - **A launch step whose receipt was lost is confirmed from the chain rather than
   repeated or abandoned.** The node reports a transaction in a block before its
   reply is decoded, so a reply that cannot be decoded describes a transaction
