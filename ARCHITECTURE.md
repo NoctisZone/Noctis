@@ -299,7 +299,9 @@ notes in `CLAUDE.md` for the same off-chain-computed, on-chain-verified shape.
 │                                                              │
 │ Moves, in ONE transaction:                                   │
 │ total_raised ADA (Option A, all net-of-fee principal)        │
-│ + lp_reserve_tokens (20% of TOTAL_SUPPLY, held in the        │
+│ + lp_reserve_tokens (sized at mint so the pool opens at      │
+│   1.2× the graduation price, whatever the allocations;       │
+│   held in the                                                │
 │ curve's own UTXO since deploy, untouched by BuyTokens)       │
 │ → into the venue POOL output: the one carrying the launch's  │
 │ pool NFT, minted by the venue's factory policy (named in     │

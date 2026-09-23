@@ -8,6 +8,7 @@ Notable changes to the Noctis Zone, by release. Internal development history pre
 
 ### Changed
 
+- **The pool a graduation opens is priced at 1.2× the graduation price on every launch.** The LP reserve is sized at mint from the ADA the curve will raise, net of fees and with the DarkVeil reserve at its flat price, so the opening price no longer depends on the creator share or the staking pool. It was a fixed 20% of supply, which opened a staking launch's pool below its graduation price. No validator changed, and launches already minted keep their datums. The wizard's supply bar and review show the sized reserve.
 - A batch of curve orders that does not fit in one transaction is re-planned at half the size and tried again, down to a single order, so a batcher tick fills what fits instead of failing while orders rest.
 - A venue buy order carries at least the ledger's minimum ADA for the token output that settles it, sized from the placer's address and the token, so its fill is accepted at submission.
 - A failed venue fill reports the reason it failed, whatever was thrown.

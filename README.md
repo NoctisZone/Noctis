@@ -122,7 +122,7 @@ See [ROADMAP.md](ROADMAP.md) for the full current status — this is a snapshot,
 |---|---|---|
 | Total supply | 1,000,000,000 | Hard cap, fixed by a one-shot minting policy |
 | Launch fee | **$10 USD** | The same on every launch type, paid in ADA or NIGHT at the market rate |
-| LP reserve | **20%** | Locked at graduation, never withdrawable |
+| LP reserve | **Sized so the pool opens at 1.2× the graduation price** | Roughly 14–23% of supply depending on the other allocations; locked at graduation, never withdrawable |
 | Graduation | **75,000 ADA** market cap | Default; the creator sets the curve prices that determine it |
 | DV allocation | 10–20% (default 15%) | Creator-adjustable |
 | Wallet cap | 5% | Cumulative across DV + public |

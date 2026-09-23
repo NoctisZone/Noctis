@@ -87,36 +87,62 @@ describe('tier-a-genesis-datums.ts — the stall clock starts at the mint', () =
 // Each is the passing fixture plus ONE delta, so a failure can only be the
 // delta. The positive case above them is what stops all three passing for the
 // wrong reason.
-describe('tier-a-genesis-datums.ts — the pool always gets a token side', () => {
-  it('builds normally on the platform-fixed reserve, which is the control', async () => {
+describe('tier-a-genesis-datums.ts — the pool opens at the target price whatever the allocations', () => {
+  it('sizes the reserve from the raise: the wizard defaults open at 1.2× graduation', async () => {
     const g = await buildGenesisDatums(input({ tier: 'B' }));
     const datum = Data.from(g.datums.bondingCurve, BondingCurveTierBDatumSchema);
-    expect(datum.lp_reserve_tokens).toBe(200_000_000n); // 20% of 1B
-    expect(g.supplySplit.lpReserveTokens).toBe(200_000_000);
+    // creator 0, DarkVeil 15%, no staking, 3 → 75 lovelace: pinned in
+    // launch-allocation.test.ts from the same arithmetic.
+    expect(datum.lp_reserve_tokens).toBe(226_952_198n);
+    expect(datum.curve_supply).toBe(773_047_802n);
+    expect(datum.dv_reserve_tokens).toBe(150_000_000n);
+    expect(g.supplySplit).toMatchObject({
+      lpReserveTokens: 226_952_198,
+      curveSupply: 773_047_802,
+      dvReserveTokens: 150_000_000,
+      netRaiseLovelace: '20425697872',
+      poolOpenPricePct: 120,
+    });
+    // The net raise against the reserve is the opening price: 90 lovelace.
+    expect((20_425_697_872n * 100n) / 226_952_198n).toBe(9_000n);
   });
 
-  it('refuses a zero reserve rather than minting a launch that cannot seed a pool', async () => {
-    await expect(buildGenesisDatums(input({ tier: 'B', lpReservePct: 0 }))).rejects.toThrow(
-      /lpReservePct must be a positive integer/,
+  it('opens at the same price with a creator share and the staking pool carved out', async () => {
+    const g = await buildGenesisDatums(
+      input({
+        tier: 'B',
+        creatorAllocPct: 5,
+        vestDays: 180,
+        dvAllocPct: 10,
+        stakingEnabled: true,
+        stakingDurationDays: 1095,
+      }),
     );
+    const datum = Data.from(g.datums.bondingCurve, BondingCurveTierBDatumSchema);
+    expect(datum.lp_reserve_tokens).toBe(158_975_400n);
+    expect(datum.curve_supply).toBe(541_024_600n);
+    expect(datum.staking_reserve_tokens).toBe(250_000_000n);
+    expect(g.supplySplit.netRaiseLovelace).toBe('14307786016');
+    expect((14_307_786_016n * 100n) / 158_975_400n).toBe(9_000n);
+    // The four parts still make the whole supply; the reserve is inside the curve.
+    expect(
+      g.supplySplit.curveSupply +
+        g.supplySplit.lpReserveTokens +
+        g.supplySplit.creatorAllocTokens +
+        g.supplySplit.stakingReserveTokens,
+    ).toBe(1_000_000_000);
   });
 
-  it('refuses a negative or fractional percentage', async () => {
-    await expect(buildGenesisDatums(input({ lpReservePct: -20 }))).rejects.toThrow(/positive integer/);
-    await expect(buildGenesisDatums(input({ lpReservePct: 20.5 }))).rejects.toThrow(/positive integer/);
-  });
-
-  it('refuses more than the whole supply', async () => {
-    await expect(buildGenesisDatums(input({ lpReservePct: 101 }))).rejects.toThrow(/positive integer/);
-  });
-
-  // The percentage can be perfectly legitimate and still floor to nothing on a
-  // small enough supply, which is why the derived figure is checked too and not
-  // only the input.
-  it('refuses a reserve that floors to zero on a small supply, though the percentage is valid', async () => {
-    await expect(buildGenesisDatums(input({ totalSupply: 4, lpReservePct: 20 }))).rejects.toThrow(
-      /lp_reserve_tokens <= 0/,
+  it('refuses an input that names an LP percentage, so no caller can reopen the gap', async () => {
+    await expect(buildGenesisDatums(input({ tier: 'B', lpReservePct: 20 }))).rejects.toThrow(
+      /lpReservePct is not an input/,
     );
+    // A wrapper that passes the key with no value is not naming one.
+    await expect(buildGenesisDatums(input({ tier: 'B', lpReservePct: null }))).resolves.toBeTruthy();
+  });
+
+  it('refuses a supply too small to carry a curve and a pool that opens at the target', async () => {
+    await expect(buildGenesisDatums(input({ tier: 'B', totalSupply: 4 }))).rejects.toThrow(/cannot carry a curve/);
   });
 });
 

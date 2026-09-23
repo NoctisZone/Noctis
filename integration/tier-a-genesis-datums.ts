@@ -84,7 +84,13 @@ import { calculateMinLovelaceFromUTxO, PROTOCOL_PARAMETERS_DEFAULT } from '@luci
 import { blake2b } from '@noble/hashes/blake2.js';
 import { CAP_EMPTY_ROOT, bytesToHex as capBytesToHex } from './cap-accumulator-tree.js';
 import { CARDANO_NETWORK_MAP, loadPlutusBlueprint, type PlutusBlueprint, requireFieldsStrict } from './cli/cli-io.js';
-import { creatorVestingRequirement, LP_RESERVE_PCT, VESTING_MAX_DAYS, VESTING_MIN_DAYS } from './launch-allocation.js';
+import {
+  creatorVestingRequirement,
+  POOL_OPEN_PRICE_PCT,
+  sizeLpReserve,
+  VESTING_MAX_DAYS,
+  VESTING_MIN_DAYS,
+} from './launch-allocation.js';
 import {
   assertValidCip68BaseName,
   type BondingCurveDatumData,
@@ -180,14 +186,10 @@ export interface BuildGenesisDatumsInput {
   genesisTimestampMs?: number;
 
   totalSupply?: number; // default 1_000_000_000 (CLAUDE.md TOTAL_SUPPLY)
-  /** Default 20 (LP_RESERVE_PCT, platform-fixed). Raised from 15 on 2026-08-04:
-   *  the LP receives 20% of supply plus the whole net-of-fee raise, and because
-   *  a curve's average price is below its final price, the pool opens ABOVE the
-   *  graduation price. 20% narrows that step to ~1.8x (the linear curve) / ~1.2x (Cardano Launch)
-   *  and, unlike a higher figure, never inverts it in any allocation the wizard
-   *  permits — a pool opening BELOW the graduation price would put late curve
-   *  buyers underwater at the moment trading starts. */
-  lpReservePct?: number;
+  // There is no LP percentage to give. The LP reserve is SIZED from the raise
+  // the curve will produce, so that the pool opens at POOL_OPEN_PRICE_PCT of
+  // the graduation price whatever the creator and staking shares are — see
+  // launch-allocation.ts's sizeLpReserve. An input that names one is refused.
   /**
    * Whole percent, 0..CREATOR_ALLOC_MAX_PCT. Defaults to 0 -- a launch whose
    * creator did not ask for a share does not get one. (This comment read
@@ -364,7 +366,12 @@ export async function buildGenesisDatums(input: BuildGenesisDatumsInput) {
     throw new Error(`tier must be "B" - the linear-curve path is retired (got "${String(input.tier)}")`);
   }
   const totalSupply = input.totalSupply ?? 1_000_000_000;
-  const lpReservePct = input.lpReservePct ?? Number(LP_RESERVE_PCT);
+  if ((input as unknown as Record<string, unknown>).lpReservePct != null) {
+    throw new Error(
+      'lpReservePct is not an input: the LP reserve is sized from the raise so the pool opens at ' +
+        `${POOL_OPEN_PRICE_PCT}% of the graduation price. Remove it.`,
+    );
+  }
   // Taking nothing is the default; a creator raises it deliberately or not at
   // all. `??` rather than `||` matters here — 0 is a real, chosen value.
   const creatorAllocPct = input.creatorAllocPct ?? 0;
@@ -476,6 +483,12 @@ export async function buildGenesisDatums(input: BuildGenesisDatumsInput) {
       `lpLockDurationMs must be >= 31,536,000,000 (lp_escrow.ak's own min_lock_duration), got ${lpLockDurationMs}`,
     );
   }
+  const creatorAllocTokens = Math.floor((totalSupply * creatorAllocPct) / 100);
+  const stakingReserveTokens = stakingEnabled ? Math.floor((totalSupply * stakingAllocPct) / 100) : 0;
+  const walletCap = Math.floor((totalSupply * walletCapPct) / 100);
+  // The DarkVeil share of curve_supply — see dv_reserve_tokens in the datum.
+  const dvReserveTokens = Math.floor((totalSupply * dvAllocPct) / 100);
+
   // The pool's token side is decided here and nowhere else.
   //
   // `lp_reserve_tokens` is a datum field the curve only ever READS: graduation
@@ -486,34 +499,21 @@ export async function buildGenesisDatums(input: BuildGenesisDatumsInput) {
   //
   // That is not an attacker's path: a genesis record exists only because the
   // governor signed its thread-NFT mint, so this datum is authored under
-  // platform control. Which is exactly why the bound belongs HERE, beside the
-  // three above it, rather than costing a validator edit — the author is the
-  // one that has to be held to it.
-  if (!Number.isInteger(lpReservePct) || lpReservePct <= 0 || lpReservePct > 100) {
-    throw new Error(
-      `lpReservePct must be a positive integer percentage (LP_RESERVE_PCT is ${LP_RESERVE_PCT}), got ${lpReservePct}`,
-    );
-  }
-
-  const lpReserveTokens = Math.floor((totalSupply * lpReservePct) / 100);
-  // Checked on the DERIVED figure too, not just the percentage: this is the
-  // number the datum carries, and a small enough supply floors a legitimate
-  // percentage to zero without the percentage ever looking wrong.
-  if (lpReserveTokens <= 0) {
-    throw new Error(
-      `Supply split leaves lp_reserve_tokens <= 0 (total=${totalSupply}, lpReservePct=${lpReservePct}) — ` +
-        'the pool would open with no token side.',
-    );
-  }
-  const creatorAllocTokens = Math.floor((totalSupply * creatorAllocPct) / 100);
-  const stakingReserveTokens = stakingEnabled ? Math.floor((totalSupply * stakingAllocPct) / 100) : 0;
-  const walletCap = Math.floor((totalSupply * walletCapPct) / 100);
-  const curveSupply = totalSupply - lpReserveTokens - creatorAllocTokens - stakingReserveTokens;
-  if (curveSupply <= 0) {
-    throw new Error(
-      `Supply split leaves curve_supply <= 0 (total=${totalSupply}, lp=${lpReserveTokens}, creator=${creatorAllocTokens}, staking=${stakingReserveTokens}) — allocations too large.`,
-    );
-  }
+  // platform control. Which is exactly why the figure is derived HERE, beside
+  // the three above it, rather than costing a validator edit — the author is
+  // the one that has to be held to it.
+  //
+  // What the creator and the staking pool leave is divided between the curve
+  // and the reserve so that the pool opens at POOL_OPEN_PRICE_PCT of the
+  // graduation price: the reserve is whatever the curve's own net raise
+  // supports at that price, and a supply too small to carry one is refused.
+  const lpSizing = sizeLpReserve(
+    { basePrice: BigInt(input.basePrice), maxPrice: BigInt(input.maxPrice) },
+    BigInt(totalSupply - creatorAllocTokens - stakingReserveTokens),
+    BigInt(dvReserveTokens),
+  );
+  const lpReserveTokens = Number(lpSizing.lpReserve);
+  const curveSupply = Number(lpSizing.curveSupply);
 
   // The on-chain names. Everything downstream uses the LABELLED name — it is
   // what the policy mints, what the curve holds, and what launch_id hashes.
@@ -644,7 +644,7 @@ export async function buildGenesisDatums(input: BuildGenesisDatumsInput) {
           // carve-out — the reserve is enforced by the claim window, which is
           // the only time claims are possible, so anything unclaimed when it
           // closes is simply still sellable on the public curve.
-          dv_reserve_tokens: BigInt(Math.floor((totalSupply * dvAllocPct) / 100)),
+          dv_reserve_tokens: BigInt(dvReserveTokens),
           // Both set by OpenDvClaim, once the registrant count is known.
           dv_claim_opened_at: 0n,
           claimed_bits: '',
@@ -910,7 +910,13 @@ export async function buildGenesisDatums(input: BuildGenesisDatumsInput) {
       lpReserveTokens,
       creatorAllocTokens,
       stakingReserveTokens,
+      dvReserveTokens,
       walletCap,
+      // What sized the reserve: the floor of the net raise the curve produces
+      // at full sell-through, and the share of the graduation price the pool
+      // opens at when that raise meets the reserve.
+      netRaiseLovelace: lpSizing.netRaise.toString(),
+      poolOpenPricePct: Number(POOL_OPEN_PRICE_PCT),
     },
     addresses: {
       bondingCurve: bondingCurveAddress,

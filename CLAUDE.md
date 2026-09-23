@@ -102,7 +102,13 @@ These values are confirmed and should be treated as constants throughout the cod
 
 ```
 TOTAL_SUPPLY = 1_000_000_000 // 1B tokens, hard cap
-LP_RESERVE_PCT = 20 // % of total supply, platform-fixed (raised from 15 on 2026-08-04 — see LP SEEDING)
+POOL_OPEN_PRICE_PCT = 120 // The NoctisSwap pool a graduation opens is priced at this % of the
+                          // graduation price, whatever the allocations. The LP reserve is
+                          // SIZED at mint to make that true (2026-09-23, replacing the fixed
+                          // LP_RESERVE_PCT = 20 of total supply, which opened a staking
+                          // launch's pool below its graduation price) — see LP SEEDING. Under
+                          // the permitted allocations the reserve comes to roughly 14–23% of
+                          // supply
 CURVE_BASE_PRICE_LOVELACE = 3 // Price of the first token, so this sets the STARTING market cap:
                               // 3 × TOTAL_SUPPLY = 3,000 ADA, a 25× ride to graduation. snek.fun runs
                               // 2,550 → 69,000 = 26×, so the two are aligned. Never 0 — a zero base
@@ -736,22 +742,34 @@ Twitter/X, Discord, LinkedIn, Telegram, Instagram, TikTok — displayed on launc
 - The creator's DEX selection is a forced choice at launch configuration with **no pre-selected value** — see the wizard's own note; "default" above names the platform's reference DEX, not a pre-filled field
 
 ### LP Seeding (at graduation)
-- Tokens: 20% of total supply (200M for a 1B token launch)
+- Tokens: the LP reserve, **sized at mint so the pool opens at `POOL_OPEN_PRICE_PCT`
+  (1.2×) of the graduation price** — see below. Under the permitted allocations it
+  comes to roughly 14–23% of supply: about 227M for the wizard's defaults, 159M for a
+  staking launch with a 5% creator share
 - ADA: all net-of-fee ADA the curve raised (see the Option A resolution below)
-- **The pool opens ABOVE the graduation price, deliberately.** A bonding curve's
-  average price is below its final price, so the raise paired against a fixed token
-  count prices the pool higher than the last curve trade — roughly 1.8× on the
-  linear curve and 1.2× on the quadratic one, whose shape does more of the work.
-- **Why 20% rather than a figure that hits parity.** Parity would need ~31% on the
-  linear curve, but allocations are creator-adjustable (creator 5-10%, DarkVeil 10-20%, staking
-  on/off), so curve supply varies while LP is fixed — a constant tuned for parity in
-  one configuration drives others BELOW 1.0×, which would put late curve buyers
-  underwater the moment DEX trading opens. 20% keeps every permitted configuration
-  on the safe side of that line while roughly halving the step-up from the previous
-  15%. It is also the same LP share pump.fun uses.
-- Opening above the last curve price means every curve buyer is in profit at open.
-  This is the FDV distinction the UI already renders as two separate panels — see the
-  Graduation FDV vs DEX FDV entry under OPEN ISSUES.
+- **The pool opens ABOVE the graduation price, deliberately, and by the same margin on
+  every launch (2026-09-23).** A bonding curve's average price is below its final price,
+  so the raise paired against the reserve prices the pool higher than the last curve
+  trade. The reserve used to be a fixed 20% of TOTAL supply, and a fixed count does not
+  scale with the curve: every allocation that shortens the curve (a creator share, the
+  staking pool) lowered the raise and with it the opening price, and a staking launch
+  opened BELOW its graduation price, with the last curve buyers under water the moment
+  trading started. The 20% had only ever been checked against the allocations that
+  existed before the staking carve-out.
+- **The rule (`integration/launch-allocation.ts`, `sizeLpReserve`):** what the creator
+  and staking shares leave is divided between the curve and the reserve so that the
+  curve's net raise at full sell-through, with the DarkVeil reserve settled at the flat
+  base price, divided by the reserve is 1.2× the max price. The largest reserve that
+  does is taken (a deeper pool), found by bisection over the exact discrete raise, so
+  the target is a floor the pool never opens under: unclaimed DarkVeil tokens sell on
+  the curve and only push it up, and per-trade fee flooring moves it by lovelace. No
+  validator changed — the curve reads `lp_reserve_tokens` from its own datum and moves
+  exactly that at graduation — and launches minted before the rule keep their datums.
+  The wizard mirrors the arithmetic so its supply bar shows the reserve the datum
+  will carry.
+- Opening above the last curve price means every curve buyer is in profit at open,
+  after the round-trip fees. This is the FDV distinction the UI already renders as two
+  separate panels — see the Graduation FDV vs DEX FDV entry under OPEN ISSUES.
 - Immediately enters 1-year LP escrow lock
 
 > **Resolution (2026-07-10):** LP ADA source — **Option A confirmed**: all net-of-fee ADA remaining in the bonding curve contract at graduation flows into the LP (`LP ADA = total raised × 0.985`, after the 1.5% running fee). Simplest option, matches the whitepaper's worked examples, and avoids needing a separate routing decision for "surplus" ADA the way Option B would have.
@@ -768,7 +786,7 @@ Twitter/X, Discord, LinkedIn, Telegram, Instagram, TikTok — displayed on launc
 
 ## STAKING REWARDS (OPTIONAL) — confirmed 2026-07-14
 
-An optional, per-launch feature available on every launch type. At launch creation, a creator may opt to allocate a **fixed 25% of total supply** (`STAKING_ALLOC_PCT`) into a Staking Rewards Pool — in addition to the existing 20% LP reserve, up-to-10% creator allocation, and 10-20% DarkVeil allocation. Supply math is safe at every allocation's maximum simultaneously: 20 + 10 + 20 + 25 = 75%, leaving ≥25% for the public bonding curve — no overflow risk. If declined, the 25% simply isn't carved out and the public curve absorbs it instead, same as any other unused allocation headroom.
+An optional, per-launch feature available on every launch type. At launch creation, a creator may opt to allocate a **fixed 25% of total supply** (`STAKING_ALLOC_PCT`) into a Staking Rewards Pool — in addition to the LP reserve (sized at mint, roughly 14–23% of supply — see LP SEEDING), the up-to-10% creator allocation, and the 10-20% DarkVeil reserve, which sits inside the curve. Supply math is safe at every allocation's maximum simultaneously: with 10% creator and 25% staking taken, the rule leaves the curve about 51% of supply (20% of it the DarkVeil reserve) and the LP reserve about 14% — no overflow risk. If declined, the 25% simply isn't carved out and the curve and the reserve absorb it instead, with the pool still opening at 1.2× the graduation price.
 
 This is a narrower, different thing from the platform-wide Community Yield Mechanism (still deferred) — see that open issue's entry above for the distinction.
 
@@ -1148,11 +1166,11 @@ noctis/
 The complete Noctis whitepaper (Version 1) is the authoritative reference for all protocol decisions. It has been audited for mathematical correctness. Key verified figures:
 
 - Curve fee split: 0.5 creator + 1.0 platform = **1.5% total** ✓
-- Supply: 5 creator + 20 LP + 15 DarkVeil + 60 curve = **100%** ✓ *(LP raised from 15 to 20 on 2026-08-04)*
+- Supply: 5 creator + 21.5 LP + 73.5 curve (the 15 DarkVeil reserve inside it) = **100%** ✓ *(the LP reserve is sized at mint since 2026-09-23 so the pool opens at 1.2× the graduation price; it was a fixed 20 before)*
 - Launch fee, every launch type: **$10 USD** (ADA or NIGHT equiv.) — whole to the platform wallet ✓
 - Vesting: 50M ÷ 180 days = **277,778/day** = **~8,333,333/month** ✓
-- LP seeding: the pool receives **200M tokens + the whole net-of-fee raise**, so it opens
-  above the graduation price rather than balanced at it — see LP SEEDING. The whitepaper's
+- LP seeding: the pool receives **the LP reserve + the whole net-of-fee raise**, and the
+  reserve is sized so it opens at 1.2× the graduation price rather than balanced at it — see LP SEEDING. The whitepaper's
   `15,000 ADA = 150M × 0.0001` line states what a *balanced* pool would need, which is not
   what the curve produces; the arithmetic is right, the reading was wrong.
 - Curve raise, discrete-sum pricing, verified against the whitepaper's own figures:

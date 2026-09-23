@@ -22,10 +22,28 @@
 // the documented maximum, or a DarkVeil share outside its band, or a
 // DarkVeil phase on a tier that has none.
 
+import { BPS_DENOMINATOR, CREATOR_BPS, grossRangeQuadratic, PLATFORM_BPS } from './curve-pricing.js';
+
 /** CLAUDE.md: TOTAL_SUPPLY. The hard cap a launch may not exceed. */
 export const TOTAL_SUPPLY_CAP = 1_000_000_000n;
-/** CLAUDE.md: LP_RESERVE_PCT — platform-fixed, not creator-adjustable. */
-export const LP_RESERVE_PCT = 20n;
+/**
+ * CLAUDE.md: POOL_OPEN_PRICE_PCT. The pool a graduation opens is priced at
+ * this percentage of the curve's final price, whatever the allocations.
+ *
+ * WHY THE LP RESERVE IS SIZED RATHER THAN FIXED
+ * The pool opens with the whole net raise against the LP reserve, so its
+ * opening price is raise ÷ reserve. The raise scales with the curve — a
+ * curve always runs from its base price to its max price, so it raises
+ * about the same average price per token however long it is — while a
+ * reserve fixed as a share of TOTAL supply does not scale with anything.
+ * Every allocation that shortens the curve (a creator share, the staking
+ * pool) then lowers the opening price, and a large enough combination
+ * takes it below the graduation price, where the last curve buyers hold
+ * tokens the pool values under what they paid. Sizing the reserve from
+ * the curve's own raise removes that dependence: the opening price is one
+ * chosen figure, and the reserve is whatever share of supply produces it.
+ */
+export const POOL_OPEN_PRICE_PCT = 120n;
 /** CLAUDE.md: CREATOR_ALLOC_MAX. */
 export const CREATOR_ALLOC_MAX_PCT = 10n;
 /** CLAUDE.md: DV_ALLOC_MIN / DV_ALLOC_MAX. */
@@ -111,17 +129,26 @@ export interface LaunchAllocationRequest {
   darkVeilPercent?: bigint;
   /** The staking pool is per-launch optional; enabling it carves out a fixed share. */
   stakingEnabled: boolean;
+  /** Lovelace per token at the start of the curve (CLAUDE.md: CURVE_BASE_PRICE_LOVELACE). */
+  basePrice: bigint;
+  /** Lovelace per token at full sell-through, the graduation price (CLAUDE.md: CURVE_MAX_PRICE_LOVELACE). */
+  maxPrice: bigint;
 }
 
 export interface LaunchAllocation {
   totalSupply: bigint;
+  /** Sized so the pool opens at POOL_OPEN_PRICE_PCT of the graduation price — see sizeLpReserve. */
   lpReserve: bigint;
   creatorAllocation: bigint;
-  /** Zero on tier A. */
+  /**
+   * The DarkVeil reserve. A share OF curveSupply rather than a pocket beside
+   * it: a claim advances the curve's tokens_sold the way a buy does, and
+   * whatever goes unclaimed sells on the curve. Zero on tier A.
+   */
   dvAllocation: bigint;
   /** Zero when staking is not enabled. */
   stakingAllocation: bigint;
-  /** Whatever the others leave. This is what makes the split a partition. */
+  /** What the creator, staking and LP shares leave. This is what makes the split a partition. */
   curveSupply: bigint;
 }
 
@@ -153,23 +180,114 @@ export function planLaunchAllocations(request: LaunchAllocationRequest): LaunchA
   const darkVeilPercent = resolveDarkVeilPercent(tier, request.darkVeilPercent);
   const stakingPercent = stakingEnabled ? STAKING_ALLOC_PCT : 0n;
 
-  const lpReserve = share(totalSupply, LP_RESERVE_PCT);
   const creatorAllocation = share(totalSupply, creatorPercent);
   const dvAllocation = share(totalSupply, darkVeilPercent);
   const stakingAllocation = share(totalSupply, stakingPercent);
 
-  // The curve is the remainder, so the five always sum to exactly
-  // totalSupply — including whatever the four floors above rounded away.
-  const curveSupply = totalSupply - lpReserve - creatorAllocation - dvAllocation - stakingAllocation;
-  if (curveSupply <= 0n) {
-    throw new Error(
-      'Allocations leave nothing for the bonding curve: ' +
-        `${LP_RESERVE_PCT}% LP + ${creatorPercent}% creator + ${darkVeilPercent}% DarkVeil + ` +
-        `${stakingPercent}% staking of ${totalSupply}`,
-    );
-  }
+  // What the creator and the staking pool leave is divided between the curve
+  // and the LP reserve, and the reserve is sized last, from the raise the
+  // curve it leaves will produce — so the four parts sum to exactly
+  // totalSupply, including whatever the floors above rounded away, and the
+  // pool opens at the same price whatever the other shares were.
+  const { lpReserve, curveSupply } = sizeLpReserve(
+    { basePrice: request.basePrice, maxPrice: request.maxPrice },
+    totalSupply - creatorAllocation - stakingAllocation,
+    dvAllocation,
+  );
 
   return { totalSupply, lpReserve, creatorAllocation, dvAllocation, stakingAllocation, curveSupply };
+}
+
+export interface CurvePrices {
+  /** Lovelace per token at the start of the curve. */
+  basePrice: bigint;
+  /** Lovelace per token at full sell-through: the graduation price. */
+  maxPrice: bigint;
+}
+
+/**
+ * The ADA a curve holds at full sell-through, net of the running fee, when
+ * its DarkVeil reserve settles at the flat base price and every other token
+ * sells on the curve. This is the floor of what graduation moves into the
+ * pool: a DarkVeil token that goes unclaimed sells on the curve instead, at
+ * no less than the base price, and a sell during the phase gives back what
+ * its buy took, less the fee both legs pay. Each trade floors its two fee
+ * slices on its own, which moves the real figure by lovelace, never more.
+ */
+export function netRaiseAtSellThrough(prices: CurvePrices, curveSupply: bigint, dvReserve: bigint): bigint {
+  if (curveSupply <= 0n) {
+    throw new Error('A curve with no tokens raises nothing');
+  }
+  if (dvReserve < 0n || dvReserve > curveSupply) {
+    throw new Error(`The DarkVeil reserve (${dvReserve}) must fit inside the curve (${curveSupply})`);
+  }
+  const datum = { base_price: prices.basePrice, max_price: prices.maxPrice, curve_supply: curveSupply };
+  const [numerator, denominator] = grossRangeQuadratic(datum, dvReserve, curveSupply - dvReserve);
+  const grossNumerator = dvReserve * prices.basePrice * denominator + numerator;
+  const netBps = BPS_DENOMINATOR - CREATOR_BPS - PLATFORM_BPS;
+  return (grossNumerator * netBps) / (denominator * BPS_DENOMINATOR);
+}
+
+export interface LpReserveSizing {
+  lpReserve: bigint;
+  curveSupply: bigint;
+  /** The floor of the ADA the pool opens with, in lovelace. */
+  netRaise: bigint;
+}
+
+/**
+ * Divides `poolAndCurve` tokens — the supply left once the creator and
+ * staking shares are taken — between the curve and the LP reserve so that
+ * the pool opens at `openPricePct` of the graduation price. Returns the
+ * LARGEST reserve that does: more tokens against the same raise is a deeper
+ * pool, and the target is a floor the opening price never goes under.
+ *
+ * The opening price falls as the reserve grows (the curve shortens, so the
+ * raise falls, while the divisor rises), so the largest passing reserve is
+ * found by bisection over the exact discrete raise rather than from a
+ * formula that would be off by rounding a datum cannot carry.
+ */
+export function sizeLpReserve(
+  prices: CurvePrices,
+  poolAndCurve: bigint,
+  dvReserve: bigint,
+  openPricePct: bigint = POOL_OPEN_PRICE_PCT,
+): LpReserveSizing {
+  if (prices.basePrice < 0n || prices.maxPrice <= prices.basePrice) {
+    throw new Error(`Curve prices must rise: base ${prices.basePrice}, max ${prices.maxPrice}`);
+  }
+  if (openPricePct <= 0n) {
+    throw new Error(
+      `The pool's opening price must be a positive percentage of the graduation price, got ${openPricePct}`,
+    );
+  }
+  if (dvReserve < 0n) {
+    throw new Error(`The DarkVeil reserve cannot be negative, got ${dvReserve}`);
+  }
+  const opensAtTarget = (lpReserve: bigint): boolean =>
+    netRaiseAtSellThrough(prices, poolAndCurve - lpReserve, dvReserve) * 100n >=
+    openPricePct * prices.maxPrice * lpReserve;
+
+  // The curve must run past its DarkVeil reserve, and the reserve must exist.
+  const largestReserve = poolAndCurve - dvReserve - 1n;
+  if (largestReserve < 1n || !opensAtTarget(1n)) {
+    throw new Error(
+      `${poolAndCurve} tokens cannot carry a curve past a DarkVeil reserve of ${dvReserve} ` +
+        `and a pool that opens at ${openPricePct}% of the graduation price`,
+    );
+  }
+  let passing = 1n;
+  let candidate = largestReserve;
+  while (passing < candidate) {
+    const middle = (passing + candidate + 1n) / 2n;
+    if (opensAtTarget(middle)) {
+      passing = middle;
+    } else {
+      candidate = middle - 1n;
+    }
+  }
+  const curveSupply = poolAndCurve - passing;
+  return { lpReserve: passing, curveSupply, netRaise: netRaiseAtSellThrough(prices, curveSupply, dvReserve) };
 }
 
 function resolveDarkVeilPercent(tier: Tier, requested: bigint | undefined): bigint {
@@ -197,8 +315,9 @@ function resolveDarkVeilPercent(tier: Tier, requested: bigint | undefined): bigi
  */
 export function assertSupplyConserved(allocation: LaunchAllocation): void {
   const { totalSupply, lpReserve, creatorAllocation, dvAllocation, stakingAllocation, curveSupply } = allocation;
-  const parts = [lpReserve, creatorAllocation, dvAllocation, stakingAllocation, curveSupply];
-  if (parts.some((part) => part < 0n)) {
+  // The DarkVeil reserve is counted inside the curve, so it is not a part.
+  const parts = [lpReserve, creatorAllocation, stakingAllocation, curveSupply];
+  if (parts.some((part) => part < 0n) || dvAllocation < 0n) {
     throw new Error('No allocation may be negative');
   }
   const sum = parts.reduce((a, b) => a + b, 0n);
@@ -209,5 +328,11 @@ export function assertSupplyConserved(allocation: LaunchAllocation): void {
   }
   if (curveSupply <= 0n) {
     throw new Error('A launch with nothing on its bonding curve can never graduate');
+  }
+  if (dvAllocation >= curveSupply) {
+    throw new Error('The DarkVeil reserve is a share of the curve and must leave it tokens to sell publicly');
+  }
+  if (lpReserve <= 0n) {
+    throw new Error('A pool with no token side cannot open');
   }
 }
