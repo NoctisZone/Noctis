@@ -34,7 +34,7 @@ vi.mock('@lucid-evolution/lucid', async (importOriginal) => {
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { credentialToAddress, Data, Lucid } from '@lucid-evolution/lucid';
-import { VenueBrowserSubmitter, venueProviderUtxo, minimumForRewardOutput} from '../venue-browser-submitter.js';
+import { minimumForRewardOutput, VenueBrowserSubmitter, venueProviderUtxo } from '../venue-browser-submitter.js';
 import { type VenuePoolConfigData, VenuePoolConfigSchema } from '../venue-pool.js';
 import {
   type VenueSwapConfigData,

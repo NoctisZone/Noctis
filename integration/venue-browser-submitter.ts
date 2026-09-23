@@ -45,7 +45,14 @@
 // ============================================================================
 
 import type { Assets, LucidEvolution, Network as LucidNetwork, UTxO, WalletApi } from '@lucid-evolution/lucid';
-import { Blockfrost, calculateMinLovelaceFromUTxO, Data, getAddressDetails, Lucid, validatorToAddress } from '@lucid-evolution/lucid';
+import {
+  Blockfrost,
+  calculateMinLovelaceFromUTxO,
+  Data,
+  getAddressDetails,
+  Lucid,
+  validatorToAddress,
+} from '@lucid-evolution/lucid';
 import {
   type ProviderTxPosition,
   type ProviderUtxo,
