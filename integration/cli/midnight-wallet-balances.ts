@@ -27,6 +27,8 @@ import { HDWallet, Roles } from '@midnight-ntwrk/wallet-sdk-hd';
 import { createKeystore, PublicKey } from '@midnight-ntwrk/wallet-sdk-unshielded-wallet';
 import { getUnshieldedNightBalances } from '../indexer-client.js';
 
+import { claimStdoutForResult } from './cli-io.js';
+
 interface WalletInput {
   role: string;
   seedHex: string;
@@ -61,6 +63,8 @@ function addressFromSeed(seedHex: string, network: Input['network']): string {
 }
 
 async function main(): Promise<void> {
+  // Stdout carries the result and nothing else; what the SDK logs goes with the rest of the diagnostics.
+  claimStdoutForResult();
   const input: Input = JSON.parse(await readStdin());
   if (!input.indexerWsUrl) throw new Error('indexerWsUrl is required.');
   if (!Array.isArray(input.wallets) || input.wallets.length === 0) {

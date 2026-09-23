@@ -15,6 +15,8 @@
 import { HDWallet, Roles } from '@midnight-ntwrk/wallet-sdk-hd';
 import { createKeystore, PublicKey } from '@midnight-ntwrk/wallet-sdk-unshielded-wallet';
 
+import { claimStdoutForResult } from './cli-io.js';
+
 interface Input {
   seedHex: string;
   network: 'undeployed' | 'preprod' | 'preview' | 'mainnet';
@@ -27,6 +29,8 @@ async function readStdin(): Promise<string> {
 }
 
 async function main(): Promise<void> {
+  // Stdout carries the result and nothing else; what the SDK logs goes with the rest of the diagnostics.
+  claimStdoutForResult();
   const input: Input = JSON.parse(await readStdin());
   if (!input.seedHex || !/^[0-9a-fA-F]{64}$/.test(input.seedHex)) {
     throw new Error('seedHex must be 32 bytes (64 hex chars).');

@@ -124,6 +124,73 @@ describe('deliverCircuits', () => {
     expect(submitInsertVerifierKeyTx).toHaveBeenCalledTimes(2);
   });
 
+  it('reads the chain and moves on when a landed update’s receipt was lost', async () => {
+    // The failure measured three times in one night on Preprod: the node put
+    // the update in a block, the SDK could not decode the reply, and the run
+    // stopped after one circuit although that circuit was on chain.
+    vi.mocked(submitInsertVerifierKeyTx)
+      .mockResolvedValueOnce({ txId: 'tx-alpha', txHash: 'h', blockHeight: 1 } as never)
+      .mockRejectedValueOnce(
+        new Error(
+          'Transaction submission error <- Failed to parse result provided by node <- { readonly blockNumber: BN }',
+        ),
+      )
+      .mockResolvedValueOnce({ txId: 'tx-gamma', txHash: 'h', blockHeight: 3 } as never);
+    const providers = fakeProviders(fakeContractState(['alpha', 'beta']));
+    const sleep = vi.fn(async (_ms: number) => {});
+
+    const delivered = await deliverCircuits(providers, {}, ADDRESS, ['alpha', 'beta', 'gamma'], { sleep });
+
+    expect(delivered.map((d) => d.circuitId)).toEqual(['alpha', 'beta', 'gamma']);
+    expect(delivered[1]).toEqual({ circuitId: 'beta', confirmedByChain: true });
+    // Beta was not sent again: the read answered for it.
+    expect(submitInsertVerifierKeyTx).toHaveBeenCalledTimes(3);
+    // And the read waited for the indexer to show the block, rather than
+    // asking straight away and seeing the state from before the update.
+    expect(sleep.mock.calls[0][0]).toBeGreaterThanOrEqual(20_000);
+  });
+
+  it('retries a ctime race, and delivers on the next attempt', async () => {
+    vi.mocked(submitInsertVerifierKeyTx)
+      .mockRejectedValueOnce(new Error('1010: Invalid Transaction: Custom error: 170'))
+      .mockResolvedValueOnce({ txId: 'tx-beta', txHash: 'h', blockHeight: 2 } as never);
+
+    const delivered = await deliverCircuits(fakeProviders(fakeContractState([])), {}, ADDRESS, ['beta'], {
+      sleep: async () => {},
+    });
+
+    expect(delivered).toEqual([{ circuitId: 'beta', txId: 'tx-beta', txHash: 'h', blockHeight: 2 }]);
+    expect(submitInsertVerifierKeyTx).toHaveBeenCalledTimes(2);
+  });
+
+  it('waits for the indexer, then reads, when the indexer died under an update', async () => {
+    vi.mocked(submitInsertVerifierKeyTx).mockRejectedValueOnce(
+      new Error("Wallet.Sync: [object ErrorEvent] {\n  _tag: 'Wallet.Sync'\n}"),
+    );
+    const awaitIndexer = vi.fn(async () => {});
+
+    const delivered = await deliverCircuits(fakeProviders(fakeContractState(['beta'])), {}, ADDRESS, ['beta'], {
+      awaitIndexer,
+      sleep: async () => {},
+    });
+
+    expect(awaitIndexer).toHaveBeenCalledTimes(1);
+    expect(delivered).toEqual([{ circuitId: 'beta', confirmedByChain: true }]);
+    expect(submitInsertVerifierKeyTx).toHaveBeenCalledTimes(1);
+  });
+
+  it('gives up on a circuit that will not land within the allowed attempts', async () => {
+    vi.mocked(submitInsertVerifierKeyTx).mockRejectedValue(new Error('Custom error: 170'));
+
+    await expect(
+      deliverCircuits(fakeProviders(fakeContractState([])), {}, ADDRESS, ['beta'], {
+        sleep: async () => {},
+        maxAttempts: 2,
+      }),
+    ).rejects.toThrow(/submitted 2 times/);
+    expect(submitInsertVerifierKeyTx).toHaveBeenCalledTimes(2);
+  });
+
   it('does nothing at all when there is nothing to deliver', async () => {
     const delivered = await deliverCircuits(fakeProviders(fakeContractState(ALL)), {}, ADDRESS, []);
 

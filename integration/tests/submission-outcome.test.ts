@@ -1,11 +1,34 @@
 import { describe, expect, it } from 'vitest';
 import {
   classifySubmission,
+  indexerOutageIn,
   isAutomaticallyRecoverable,
   LEDGER_CODES,
   ledgerCodesIn,
+  nodeReplyUnreadableIn,
   retryDelayMs,
 } from '../submission-outcome.js';
+
+// Three codeless shapes, again copied from banked output rather than written
+// from memory. The first is what a CLI's stdout holds when the node put the
+// transaction in a block and the SDK could not decode the reply; the second
+// is the stderr of a step whose wallet sync died when the indexer went away;
+// the third is the ordinary retry warning the wallet prints on the way past,
+// which appears in SUCCESSFUL runs too and must classify as nothing.
+const REAL_NODE_REPLY_UNREADABLE =
+  '{"ok":false,"error":"Transaction submission error <- Failed to parse result provided by node <- ' +
+  '{ readonly blockNumber: BN }\\n└─ [\\"blockNumber\\"]\\n   └─ Expected BN, actual undefined"}';
+const REAL_INDEXER_OUTAGE =
+  'Wallet.Sync: [object ErrorEvent]\n' +
+  '    at file:///C:/Users/.../node_modules/@midnight-ntwrk/wallet-sdk-unshielded-wallet/dist/v1/Sync.js:39:245\n' +
+  '    at file:///C:/Users/.../node_modules/effect/dist/esm/internal/cause.js:279:78 {\n' +
+  "  _tag: 'Wallet.Sync'\n" +
+  '}';
+const ROUTINE_WARNING =
+  'timestamp=2026-09-23T02:11:00.308Z level=WARN fiber=#26 message="{\n' +
+  '  \\"message\\": \\"An unknown error occurred\\",\n' +
+  '  \\"_tag\\": \\"ServerError\\"\n' +
+  '}" message="Observed error in PendingTransactionsService, retrying"';
 
 // The real shapes, copied from banked run output rather than invented. The
 // wrapper text matters: a classifier that only recognises a bare "Custom
@@ -110,6 +133,93 @@ describe('deciding what to do about it', () => {
   it('stops on silence', () => {
     expect(classifySubmission({ stderr: '', exitCode: 1 }).disposition).toBe('operator');
     expect(classifySubmission({}).disposition).toBe('operator');
+  });
+});
+
+describe('the two failures that carry no code', () => {
+  it('recognises the node reply the SDK could not decode, and nothing else, as one', () => {
+    expect(nodeReplyUnreadableIn(REAL_NODE_REPLY_UNREADABLE)).toBe(true);
+    expect(nodeReplyUnreadableIn(REAL_INDEXER_OUTAGE)).toBe(false);
+    expect(nodeReplyUnreadableIn(ROUTINE_WARNING)).toBe(false);
+  });
+
+  it('recognises an indexer outage, and not the wallet’s routine retry warning', () => {
+    // The warning is printed by successful runs as a matter of course. A
+    // matcher that caught it would read every failed run as an outage.
+    expect(indexerOutageIn(REAL_INDEXER_OUTAGE)).toBe(true);
+    expect(indexerOutageIn('Error: Unexpected server response: 503')).toBe(true);
+    expect(indexerOutageIn('The indexer at https://indexer.example/api answered 503 from its load balancer.')).toBe(
+      true,
+    );
+    expect(indexerOutageIn(ROUTINE_WARNING)).toBe(false);
+    expect(indexerOutageIn(REAL_170)).toBe(false);
+  });
+
+  it('re-plans, rather than stopping or resubmitting, when the node’s reply could not be read', () => {
+    // The reply is only decoded once the node reports the transaction in a
+    // block, so the failure is a lost receipt. Resubmitting duplicates it;
+    // stopping abandons a launch over a transaction that landed.
+    const outcome = classifySubmission({ stdout: REAL_NODE_REPLY_UNREADABLE, stderr: ROUTINE_WARNING, exitCode: 1 });
+    expect(outcome.disposition).toBe('replan');
+    expect(outcome.codes).toEqual([]);
+    expect(isAutomaticallyRecoverable(outcome)).toBe(true);
+    expect(outcome.reason).toMatch(/read the chain/i);
+  });
+
+  it('waits for the indexer, then reads, when the indexer died under the step', async () => {
+    const outcome = classifySubmission({ stderr: REAL_INDEXER_OUTAGE, exitCode: 1 });
+    expect(outcome.disposition).toBe('wait-indexer');
+    expect(isAutomaticallyRecoverable(outcome)).toBe(true);
+    expect(outcome.reason).toMatch(/read the chain/i);
+  });
+
+  it('lets the node’s reply decide when an outage follows a landed submission', () => {
+    // Both texts can appear in one run. The reply says the transaction is in
+    // a block; the outage only says the indexer went away. The stronger
+    // evidence wins.
+    const outcome = classifySubmission({
+      stdout: REAL_NODE_REPLY_UNREADABLE,
+      stderr: `${ROUTINE_WARNING}\n${REAL_INDEXER_OUTAGE}`,
+      exitCode: 1,
+    });
+    expect(outcome.disposition).toBe('replan');
+  });
+
+  it('still lets a real ledger code win over either text', () => {
+    // A refusal beside an outage warning is a refusal. Reading the outage
+    // instead would retry something the node has already said no to.
+    const outcome = classifySubmission({ stderr: `${REAL_INDEXER_OUTAGE}\nCustom error: 117`, exitCode: 1 });
+    expect(outcome.disposition).toBe('operator');
+    expect(outcome.decidedBy).toBe(117);
+  });
+
+  it('re-plans on a stale-view refusal (104) instead of asking for an operator', () => {
+    // Seen live: the previous submission had landed, the indexer still
+    // showed the old state, and the next plan was built against it. The same
+    // bytes are never valid again, so the answer is a fresh read, not a stop.
+    const outcome = classifySubmission({ stderr: '1010: Invalid Transaction: Custom error: 104', exitCode: 1 });
+    expect(outcome.disposition).toBe('replan');
+    expect(outcome.decidedBy).toBe(104);
+    expect(isAutomaticallyRecoverable(outcome)).toBe(true);
+  });
+
+  it('re-plans when a delivered key turns out to be already present (107)', () => {
+    const outcome = classifySubmission({ stderr: 'Custom error: 107', exitCode: 1 });
+    expect(outcome.disposition).toBe('replan');
+  });
+
+  it('ranks a re-plan above a plain retry, so a landed-then-raced pair reads as landed', () => {
+    const outcome = classifySubmission({ stderr: `${REAL_170}\nCustom error: 104`, exitCode: 1 });
+    expect(outcome.disposition).toBe('replan');
+    expect(outcome.decidedBy).toBe(104);
+  });
+
+  it('gives a re-plan time for the indexer to show the block first', () => {
+    const outcome = classifySubmission({ stdout: REAL_NODE_REPLY_UNREADABLE, exitCode: 1 });
+    expect(retryDelayMs(outcome, 1)).toBeGreaterThanOrEqual(20_000);
+    expect(retryDelayMs(outcome, 1)).toBeLessThan(
+      retryDelayMs(classifySubmission({ stderr: 'Custom error: 173', exitCode: 1 }), 1),
+    );
   });
 });
 

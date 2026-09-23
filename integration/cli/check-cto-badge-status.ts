@@ -15,7 +15,7 @@
 
 import { indexerPublicDataProvider } from '@midnight-ntwrk/midnight-js-indexer-public-data-provider';
 import { checkCtoCompletionStatus } from '../cto-badge.js';
-import { parseJsonStdin, readStdin, requireFieldsFalsy } from './cli-io.js';
+import { claimStdoutForResult, parseJsonStdin, readStdin, requireFieldsFalsy } from './cli-io.js';
 
 interface CheckCtoBadgeInput {
   indexerUri: string;
@@ -24,6 +24,8 @@ interface CheckCtoBadgeInput {
 }
 
 async function main() {
+  // Stdout carries the result and nothing else; what the SDK logs goes with the rest of the diagnostics.
+  claimStdoutForResult();
   const raw = await readStdin();
   const input = parseJsonStdin<CheckCtoBadgeInput>(raw);
 

@@ -176,6 +176,43 @@ describe('one turn of the conductor', () => {
     expect(describeTick('JINX', tick)).toMatch(/refused.*retrying in/);
   });
 
+  it('schedules a fresh read, not a stop, when the node’s reply could not be decoded', async () => {
+    // Seen live: the transition had landed, the SDK could not decode the
+    // node's reply, and the tick reported "refused, needs an operator". The
+    // next tick's read is the answer, so that is what gets scheduled.
+    const lostReceipt: BankedJobResult = {
+      stdout:
+        '{"ok":false,"error":"Transaction submission error <- Failed to parse result provided by node <- { readonly blockNumber: BN }"}',
+      stderr: 'waiting for the wallet to catch up to the chain head\n',
+      exitCode: 1,
+    };
+    const tick = await runConductorTick(tickInput({ submit: async () => lostReceipt }));
+    expect(tick.did).toBe('failed');
+    expect(tick.did === 'failed' && tick.outcome.disposition).toBe('replan');
+    expect(tick.did === 'failed' && tick.retryInMs).toBeGreaterThan(0);
+    const line = describeTick('JINX', tick);
+    expect(line).toMatch(/needs a fresh read.*re-reading in/);
+    expect(line).not.toMatch(/was refused/);
+  });
+
+  it('schedules a fresh read on a stale-view refusal rather than stopping', async () => {
+    const tick = await runConductorTick(
+      tickInput({ submit: async () => ({ stderr: '1010: Invalid Transaction: Custom error: 104', exitCode: 1 }) }),
+    );
+    expect(tick.did === 'failed' && tick.outcome.disposition).toBe('replan');
+    expect(tick.did === 'failed' && tick.retryInMs).toBeGreaterThan(0);
+  });
+
+  it('waits on the indexer, then reads, when the action died in an outage', async () => {
+    const tick = await runConductorTick(
+      tickInput({
+        submit: async () => ({ stderr: "Wallet.Sync: [object ErrorEvent] {\n  _tag: 'Wallet.Sync'\n}", exitCode: 1 }),
+      }),
+    );
+    expect(tick.did === 'failed' && tick.outcome.disposition).toBe('wait-indexer');
+    expect(describeTick('JINX', tick)).toMatch(/waiting on the indexer.*re-reading in/);
+  });
+
   it('refuses to schedule a retry for something a human has to look at', async () => {
     const tick = await runConductorTick(
       tickInput({ submit: async () => ({ stderr: 'Custom error: 117', exitCode: 1 }) }),

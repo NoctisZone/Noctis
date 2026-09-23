@@ -13,7 +13,7 @@
 
 import { indexerPublicDataProvider } from '@midnight-ntwrk/midnight-js-indexer-public-data-provider';
 import { readDvPurchases } from '../read-dv-purchases.js';
-import { parseJsonStdin, readStdin, requireFieldsFalsy } from './cli-io.js';
+import { claimStdoutForResult, parseJsonStdin, readStdin, requireFieldsFalsy } from './cli-io.js';
 
 interface ReadDvPurchasesInput {
   indexerUri: string;
@@ -22,6 +22,8 @@ interface ReadDvPurchasesInput {
 }
 
 async function main() {
+  // Stdout carries the result and nothing else; what the SDK logs goes with the rest of the diagnostics.
+  claimStdoutForResult();
   const raw = await readStdin();
   const input = parseJsonStdin<ReadDvPurchasesInput>(raw);
 

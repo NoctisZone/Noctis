@@ -44,6 +44,7 @@ import {
   snapshotOptionsFrom,
   waitForWalletState,
 } from '../midnight-server-wallet.js';
+import { claimStdoutForResult } from './cli-io.js';
 
 interface WalletInput {
   role: string;
@@ -266,6 +267,8 @@ async function registerOne(input: Input, wallet: WalletInput): Promise<Record<st
 }
 
 async function main(): Promise<void> {
+  // Stdout carries the result and nothing else; what the SDK logs goes with the rest of the diagnostics.
+  claimStdoutForResult();
   const input: Input = JSON.parse(await readStdin());
   if (!input.proofServerUrl) throw new Error('proofServerUrl is required.');
   if (!Array.isArray(input.wallets) || input.wallets.length === 0) {

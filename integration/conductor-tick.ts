@@ -261,10 +261,21 @@ export function describeTick(launchId: string, tick: ConductorTickResult): strin
       return `${launchId}: BLOCKED — ${tick.note}`;
     case 'unrehearsed':
       return `${launchId}: NOT REHEARSED — ${tick.action.kind} was not submitted: ${tick.why}`;
-    case 'failed':
-      return (
-        `${launchId}: ${tick.action.kind} was refused — ${tick.outcome.reason} ` +
-        (tick.retryInMs === null ? '[needs an operator]' : `[retrying in ${Math.round(tick.retryInMs / 1000)}s]`)
-      );
+    case 'failed': {
+      const next =
+        tick.retryInMs === null
+          ? '[needs an operator]'
+          : `[${tick.outcome.disposition === 'replan' || tick.outcome.disposition === 'wait-indexer' ? 're-reading' : 'retrying'} in ${Math.round(tick.retryInMs / 1000)}s]`;
+      // A lost receipt or an outage is not a refusal, and a log line that
+      // called it one sent an operator looking for a failure that had not
+      // happened. The chain is read again before anything is resubmitted.
+      const what =
+        tick.outcome.disposition === 'replan'
+          ? 'needs a fresh read'
+          : tick.outcome.disposition === 'wait-indexer'
+            ? 'is waiting on the indexer'
+            : 'was refused';
+      return `${launchId}: ${tick.action.kind} ${what} — ${tick.outcome.reason} ${next}`;
+    }
   }
 }

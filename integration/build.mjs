@@ -590,6 +590,23 @@ const conductLaunchCliConfig = {
 	logLevel: "info",
 };
 
+// Not a CLI: a library bundle for the launch drivers kept outside the
+// repository, which cannot import TypeScript. Re-exports the classifier, the
+// indexer probe and the wallet-free ledger read so a driver shares them with
+// the conductor rather than restating them. Same packages:external treatment,
+// for the same reason.
+const launchDriverLibConfig = {
+	entryPoints: [join(__dirname, "cli/launch-driver-lib.ts")],
+	outfile: join(__dirname, "cli/dist/launch-driver-lib.mjs"),
+	bundle: true,
+	platform: "node",
+	packages: "external",
+	format: "esm",
+	target: "node20",
+	sourcemap,
+	logLevel: "info",
+};
+
 const deliverDeferredCircuitsCliConfig = {
 	entryPoints: [join(__dirname, "cli/deliver-deferred-circuits.ts")],
 	outfile: join(__dirname, "cli/dist/deliver-deferred-circuits.mjs"),
@@ -1048,6 +1065,7 @@ async function run() {
 		deliverDeferredCircuitsCliConfig,
 		darkVeilActionCliConfig,
 		conductLaunchCliConfig,
+		launchDriverLibConfig,
 		deployCtoGovernanceCliConfig,
 		ctoGovernanceActionCliConfig,
 		buildCtoSnapshotBundleCliConfig,

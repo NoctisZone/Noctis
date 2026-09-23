@@ -30,9 +30,12 @@ const CLI_DIR = fileURLToPath(new URL('../cli/', import.meta.url));
 
 /**
  * `cli-io.ts` is the shared helper the others import, not an entry point: it
- * has no `main()` and must not be held to entry-point rules.
+ * has no `main()` and must not be held to entry-point rules. Likewise
+ * `launch-driver-lib.ts`, which is bundled as a library for the launch drivers
+ * kept outside the repository and re-exports tested modules rather than
+ * reading anything from stdin.
  */
-const HELPERS = new Set(['cli-io.ts']);
+const HELPERS = new Set(['cli-io.ts', 'launch-driver-lib.ts']);
 
 const entryPoints = readdirSync(CLI_DIR)
   .filter((f) => f.endsWith('.ts') && !HELPERS.has(f))

@@ -60,6 +60,7 @@ import {
   WalletStateStore,
   waitForCursorToAdvance,
 } from '../midnight-wallet-state-store.js';
+import { claimStdoutForResult } from './cli-io.js';
 
 interface WalletInput {
   role: string;
@@ -487,6 +488,8 @@ async function runSupervisor(input: Input): Promise<never> {
 }
 
 async function main(): Promise<never> {
+  // Stdout carries the result and nothing else; what the SDK logs goes with the rest of the diagnostics.
+  claimStdoutForResult();
   if (process.argv.includes('--worker')) return await runWorker();
   return await runSupervisor(JSON.parse(await readStdin()) as Input);
 }

@@ -52,6 +52,7 @@ import {
 } from '../../contracts/midnight/compiled/eligibility_gate/contract/index.js';
 import { fromHex32 } from '../eligibility-gate-deploy-args.js';
 import { describeError } from '../error-detail.js';
+import { assertIndexerReachable, waitForIndexer } from '../indexer-availability.js';
 import { compileCtoGovernance, compileEligibilityGate } from '../midnight-client.js';
 import { deriveContractSigningKey, operationNames } from '../midnight-deploy-subset.js';
 import { deliverCircuits, planCircuitDelivery, verifyDeliveredCircuits } from '../midnight-maintenance.js';
@@ -66,9 +67,27 @@ import {
 } from '../midnight-server-wallet.js';
 import { ephemeralPrivateStatePassword, inMemoryLevelFactory } from '../private-state-store.js';
 import { assertZkConfigMatchesBuild } from '../zk-config-fingerprint.js';
-import { jsonSafe, parseJsonStdin, readStdin, requireFieldsFalsy } from './cli-io.js';
+import { claimStdoutForResult, jsonSafe, parseJsonStdin, readStdin, requireFieldsFalsy } from './cli-io.js';
 
 type DeployedContractKind = 'eligibility_gate' | 'cto_governance';
+
+/**
+ * Longest an outage is waited out before the run stops. Long, because the
+ * alternative is handing the wait to a person, and the outages measured were
+ * under an hour each.
+ */
+const DEFAULT_INDEXER_WAIT_MS = 4 * 60 * 60 * 1000;
+
+/**
+ * How the final verification is retried when it runs ahead of the index. The
+ * last update landed seconds before the read, and the block that carries it
+ * can still be on its way into the indexer; six reads fifteen seconds apart
+ * cover several times the lag measured on Preprod.
+ */
+const VERIFY_RECHECKS = 6;
+const VERIFY_RECHECK_MS = 15_000;
+
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 interface Input extends SnapshotCliInput {
   network: MidnightNetwork;
@@ -94,6 +113,8 @@ interface Input extends SnapshotCliInput {
   indexerHttpUrl?: string;
   indexerWsUrl?: string;
   syncTimeoutMs?: number;
+  /** Longest to wait for the indexer through an outage. See DEFAULT_INDEXER_WAIT_MS. */
+  indexerWaitMs?: number;
 }
 
 /**
@@ -149,6 +170,9 @@ function compiledFor(kind: DeployedContractKind) {
 }
 
 async function main() {
+  // Before anything in the SDK can log: stdout carries the result and nothing
+  // else, or the caller reads a landed delivery as "no JSON result".
+  claimStdoutForResult();
   const input = parseJsonStdin<Input>(await readStdin());
 
   requireFieldsFalsy(input, [
@@ -192,6 +216,17 @@ async function main() {
       'relayUrl/indexerHttpUrl/indexerWsUrl must be supplied explicitly for network "mainnet" (no confirmed defaults exist yet).',
     );
   }
+  // The wallet below syncs through the indexer, and a dead one costs minutes
+  // to discover as a websocket failure that names neither. Refused here, in a
+  // message the caller's classifier reads as an outage to wait out.
+  await assertIndexerReachable(indexerHttpUrl);
+  const indexerLog = (message: string) => process.stderr.write(`${message}\n`);
+  const awaitIndexer = async () => {
+    await waitForIndexer(indexerHttpUrl, {
+      log: indexerLog,
+      maxWaitMs: input.indexerWaitMs ?? DEFAULT_INDEXER_WAIT_MS,
+    });
+  };
 
   const expected = definedCircuits(kind);
 
@@ -294,12 +329,27 @@ async function main() {
 
     const delivered = await deliverCircuits(providers, compiled, input.contractAddress, toDeliver, {
       onProgress: (message) => process.stderr.write(`${message}\n`),
+      awaitIndexer,
     });
 
     // Re-read from chain rather than reporting what was submitted: the point of
     // this step is what the contract holds, not what we believe we sent it.
-    const verification = await verifyDeliveredCircuits(providers, input.contractAddress, expected);
-    const complete = verification.every((result) => result.present && result.keyMatches);
+    //
+    // Read again, a few times, if it disagrees with what was just delivered:
+    // the last update landed seconds ago, and the block carrying it can still
+    // be on its way into the index. A run that reported "incomplete" for that
+    // reason sent its operator to deliver something that was already there.
+    let verification = await verifyDeliveredCircuits(providers, input.contractAddress, expected);
+    let complete = verification.every((result) => result.present && result.keyMatches);
+    for (let check = 1; !complete && delivered.length > 0 && check <= VERIFY_RECHECKS; check++) {
+      const missing = verification.filter((r) => !r.present).map((r) => r.circuitId);
+      process.stderr.write(
+        `verification still finds ${missing.join(', ')} missing right after delivery; reading again in ${VERIFY_RECHECK_MS / 1000}s (${check} of ${VERIFY_RECHECKS})\n`,
+      );
+      await sleep(VERIFY_RECHECK_MS);
+      verification = await verifyDeliveredCircuits(providers, input.contractAddress, expected);
+      complete = verification.every((result) => result.present && result.keyMatches);
+    }
 
     process.stdout.write(
       JSON.stringify(

@@ -58,13 +58,22 @@ import {
   settlementCompleteness,
 } from '../conductor-actions.js';
 import { type ConductorTickResult, describeTick, runConductorTick } from '../conductor-tick.js';
+import { describeError } from '../error-detail.js';
+import { waitForIndexer } from '../indexer-availability.js';
 import { nextAction } from '../launch-conductor.js';
 import { readEligibilityGateLedger, summarizeDarkVeil } from '../midnight-public-state.js';
 import { defaultNetworkConfig, type MidnightNetwork } from '../midnight-server-wallet.js';
 import { fileRehearsalLog } from '../rehearsal-log.js';
 import { SubmissionGate } from '../submission-gate.js';
 import type { BankedJobResult } from '../submission-outcome.js';
-import { jsonSafe, parseJsonStdin, readStdin, requireFieldsFalsy } from './cli-io.js';
+import { claimStdoutForResult, jsonSafe, parseJsonStdin, readStdin, requireFieldsFalsy } from './cli-io.js';
+
+/**
+ * Longest an indexer outage is waited out before a tick gives up. Long on
+ * purpose: the outages measured were under an hour each, and a tick that
+ * gives up hands the wait to a person, which is the cost this removes.
+ */
+const DEFAULT_INDEXER_WAIT_MS = 4 * 60 * 60 * 1000;
 
 /**
  * How long one action may run before it is stopped.
@@ -118,6 +127,8 @@ interface Input {
   pollMs?: number;
   /** Per-action deadline; see DEFAULT_ACTION_TIMEOUT_MS. */
   actionTimeoutMs?: number;
+  /** Longest to wait for the indexer through an outage; see DEFAULT_INDEXER_WAIT_MS. */
+  indexerWaitMs?: number;
 }
 
 /** Everything one tick needs from the chain, from a single decode. */
@@ -173,6 +184,9 @@ function runAction(cliPath: string, payload: unknown, timeoutMs: number): Promis
 }
 
 async function main() {
+  // Stdout carries the result and nothing else; anything the SDK logs goes
+  // with the rest of the diagnostics.
+  claimStdoutForResult();
   const input = parseJsonStdin<Input>(await readStdin());
   requireFieldsFalsy(input, [
     'launchId',
@@ -218,13 +232,34 @@ async function main() {
   });
 
   /** One decode, so nothing in a tick can come from two different blocks. */
-  const read = async (): Promise<ChainRead> => {
+  const decode = async (): Promise<ChainRead> => {
     const ledger = await readEligibilityGateLedger(publicDataProvider, input.contractAddress);
     const revealedKeys: string[] = [];
     for (const [key] of ledger.dvTokensPurchased) revealedKeys.push(hex(key));
     const recordedSettlements: Record<string, string> = {};
     for (const [key, amount] of ledger.settledDvPurchases) recordedSettlements[hex(key)] = amount.toString();
     return { snapshot: summarizeDarkVeil(ledger), revealedKeys, recordedSettlements };
+  };
+
+  // THE READ WAITS FOR THE INDEXER RATHER THAN DYING ON IT. The public
+  // indexer went down three times in one night on Preprod, for up to
+  // forty-four minutes, while the node stayed healthy; a tick that threw on
+  // the first failed read ended the run and handed the wait to a person. The
+  // probe is cheap (one request, about a second) and is made before every
+  // decode, so a tick never plans from an indexer that is back but behind.
+  const indexerLog = (message: string) => process.stderr.write(`  ${message}\n`);
+  const indexerWaitMs = input.indexerWaitMs ?? DEFAULT_INDEXER_WAIT_MS;
+  const read = async (): Promise<ChainRead> => {
+    await waitForIndexer(indexerHttpUrl, { log: indexerLog, maxWaitMs: indexerWaitMs });
+    try {
+      return await decode();
+    } catch (err) {
+      // It answered the probe and then not the read: it can go away between
+      // the two. One more wait and one more read; a second failure is real.
+      indexerLog(`the read failed after the indexer answered (${describeError(err)}); waiting for it once more`);
+      await waitForIndexer(indexerHttpUrl, { log: indexerLog, maxWaitMs: indexerWaitMs });
+      return await decode();
+    }
   };
 
   const base = {
@@ -310,7 +345,14 @@ async function main() {
     // Nothing left to do, or nothing that another turn would change.
     if (tick.did === 'nothing' || tick.did === 'blocked' || tick.did === 'unrehearsed' || input.dryRun) break;
     if (tick.did === 'failed' && tick.retryInMs === null) break;
-    if (i + 1 < ticks && input.pollMs) await new Promise((r) => setTimeout(r, input.pollMs));
+    if (i + 1 < ticks) {
+      // A recoverable failure names its own wait — long enough for the
+      // indexer to show the block a lost receipt was about, or for a ctime
+      // race to pass — and the next turn's read is what settles it. Ticking
+      // again at once would plan from the state the submission just changed.
+      const waitMs = Math.max(input.pollMs ?? 0, tick.did === 'failed' ? (tick.retryInMs ?? 0) : 0);
+      if (waitMs > 0) await new Promise((r) => setTimeout(r, waitMs));
+    }
   }
 
   // Reported alongside the turns because it is the one judgement the conductor

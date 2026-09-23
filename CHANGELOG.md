@@ -8,6 +8,21 @@ Notable changes to the Noctis Zone, by release. Internal development history pre
 
 ### Changed
 
+- **A launch step whose receipt was lost is confirmed from the chain rather than
+  repeated or abandoned.** The node reports a transaction in a block before its
+  reply is decoded, so a reply that cannot be decoded describes a transaction
+  that landed. Every tool that drives a launch now reads the chain before
+  deciding what a failed step means, records a step the chain shows as done,
+  and submits again only what is still owed, a bounded number of times.
+- **Every Midnight-side step waits out an indexer outage instead of failing on
+  it.** The indexer is probed before a step starts and again after any failure,
+  and a step is retried only for a failure that is known to pass, never without
+  asking the chain first. An indexer that is back but behind the chain is
+  waited for as well, so nothing is built against a state the chain has left.
+- **A command-line tool's result is read past anything logged ahead of it**,
+  and every tool that opens a wallet keeps its standard output for the result
+  alone, so a completed step can no longer be reported as one that produced no
+  result.
 - **A launch's phase changes are now driven by one decision, taken from the
   chain and the launch's own published schedule.** What is due is worked out
   from a reading of the contract and the clock, so two runs cannot disagree

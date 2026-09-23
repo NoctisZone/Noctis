@@ -64,7 +64,7 @@ import {
 import { deriveUserSecretFromSeed } from '../midnight-user-identity.js';
 import { ephemeralPrivateStatePassword, inMemoryLevelFactory } from '../private-state-store.js';
 import { assertZkConfigMatchesBuild } from '../zk-config-fingerprint.js';
-import { jsonSafe, parseJsonStdin, readStdin, requireFieldsFalsy } from './cli-io.js';
+import { claimStdoutForResult, jsonSafe, parseJsonStdin, readStdin, requireFieldsFalsy } from './cli-io.js';
 
 interface Input extends SnapshotCliInput, Partial<ProposalInput> {
   action: CtoAction;
@@ -174,6 +174,8 @@ function newProposalIds(before: CtoGovernanceSnapshot, after: CtoGovernanceSnaps
 }
 
 async function main() {
+  // Stdout carries the result and nothing else; what the SDK logs goes with the rest of the diagnostics.
+  claimStdoutForResult();
   const input = parseJsonStdin<Input>(await readStdin());
   requireFieldsFalsy(input, ['action', 'network']);
   if (!isCtoAction(input.action)) {

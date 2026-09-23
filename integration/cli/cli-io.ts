@@ -54,6 +54,61 @@ export function parseJsonStdin<T>(raw: string): T {
   }
 }
 
+/**
+ * Keep stdout for the result and nothing else.
+ *
+ * Every CLI here writes one JSON object to stdout and everything else to
+ * stderr, and every caller — PHP's runner and the launch drivers alike —
+ * parses stdout as that object. The Midnight SDK is built on Effect, whose
+ * default logger writes through `console.log`, so a wallet that retries an
+ * internal service prints a multi-line WARN record onto stdout ahead of the
+ * result. Measured: a delivery whose transaction had landed was read by its
+ * caller as "no JSON result" for exactly this reason, and an operator went
+ * looking for a failure that had not happened.
+ *
+ * Called once, first thing, by a CLI that builds a wallet. `console.error`
+ * is left alone: it already goes where the rest of the diagnostics go.
+ */
+export function claimStdoutForResult(): void {
+  const toStderr = (...args: unknown[]) => {
+    console.error(...args);
+  };
+  console.log = toStderr;
+  console.info = toStderr;
+  console.warn = toStderr;
+  console.debug = toStderr;
+}
+
+/**
+ * The result object out of a CLI's stdout, tolerant of anything printed
+ * before it.
+ *
+ * The result is written last and as one line, so it is the last line that
+ * parses as an object. A stdout that holds only a pretty-printed object still
+ * parses as a whole. Anything else — a log record, a stack, nothing — is null,
+ * and the caller reports the stderr, which is where the account of a failed
+ * run actually is.
+ */
+export function resultJsonFrom(stdout: string): Record<string, unknown> | null {
+  const lines = stdout.split(/\r?\n/);
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i].trim();
+    if (!line.startsWith('{')) continue;
+    try {
+      const parsed: unknown = JSON.parse(line);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed as Record<string, unknown>;
+    } catch {
+      /* a line that starts like JSON and is not; keep looking upward */
+    }
+  }
+  try {
+    const parsed: unknown = JSON.parse(stdout);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : null;
+  } catch {
+    return null;
+  }
+}
+
 // Three real, distinct truth tables are in use across the CLI scripts for
 // "is this required field missing" — kept as separate named functions
 // rather than collapsed into one, since they genuinely disagree on whether

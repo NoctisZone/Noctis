@@ -28,7 +28,9 @@
 
 import type { ContractProviders } from '@midnight-ntwrk/midnight-js-contracts';
 import { submitInsertVerifierKeyTx, verifierKeysEqual } from '@midnight-ntwrk/midnight-js-contracts';
+import { describeError } from './error-detail.js';
 import { operationNames } from './midnight-deploy-subset.js';
+import { classifySubmission, indexerOutageIn, isAutomaticallyRecoverable, retryDelayMs } from './submission-outcome.js';
 
 /** What a contract still needs, measured against what it should end up with. */
 export interface CircuitDelivery {
@@ -69,15 +71,36 @@ export function planCircuitDelivery(
 
 export interface DeliveredCircuit {
   readonly circuitId: string;
-  readonly txId: string;
-  readonly txHash: string;
-  readonly blockHeight: number;
+  readonly txId?: string;
+  readonly txHash?: string;
+  readonly blockHeight?: number;
+  /**
+   * Set when the update's own receipt was lost — the node's reply could not
+   * be decoded, or the indexer went away under it — and a read of the chain
+   * confirmed the circuit present instead. No transaction ids in that case:
+   * the read does not return one, and an invented one would be worse than
+   * none.
+   */
+  readonly confirmedByChain?: true;
 }
 
 export interface DeliverCircuitsOptions {
   /** Called before each transaction, so a long run reports progress as it goes. */
   readonly onProgress?: (message: string) => void;
+  /**
+   * Waits for the indexer to come back. Supplied by a caller that knows where
+   * the indexer is; without it an outage is waited out with the classifier's
+   * own delay and a re-read, which is slower but not wrong.
+   */
+  readonly awaitIndexer?: () => Promise<void>;
+  /** Replaceable so a test does not really wait. */
+  readonly sleep?: (ms: number) => Promise<void>;
+  /** How many times one circuit may be submitted before the run stops. */
+  readonly maxAttempts?: number;
 }
+
+const defaultSleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+const DEFAULT_MAX_ATTEMPTS = 3;
 
 /**
  * Delivers `circuits` to an already-deployed contract, one transaction each.
@@ -98,32 +121,92 @@ export async function deliverCircuits(
   compiledContract: any,
   contractAddress: string,
   circuits: readonly string[],
-  { onProgress }: DeliverCircuitsOptions = {},
+  options: DeliverCircuitsOptions = {},
 ): Promise<DeliveredCircuit[]> {
+  const { onProgress } = options;
+  const sleep = options.sleep ?? defaultSleep;
+  const maxAttempts = options.maxAttempts ?? DEFAULT_MAX_ATTEMPTS;
   const delivered: DeliveredCircuit[] = [];
 
   for (const [index, circuitId] of circuits.entries()) {
-    onProgress?.(`delivering ${circuitId} (${index + 1} of ${circuits.length})`);
+    for (let attempt = 1; ; attempt++) {
+      onProgress?.(
+        `delivering ${circuitId} (${index + 1} of ${circuits.length}${attempt > 1 ? `, attempt ${attempt}` : ''})`,
+      );
 
-    const verifierKey = await providers.zkConfigProvider.getVerifierKey(circuitId);
-    const txData = await submitInsertVerifierKeyTx(
-      providers,
-      compiledContract,
-      contractAddress,
-      circuitId,
-      verifierKey,
-    );
+      const verifierKey = await providers.zkConfigProvider.getVerifierKey(circuitId);
+      try {
+        const txData = await submitInsertVerifierKeyTx(
+          providers,
+          compiledContract,
+          contractAddress,
+          circuitId,
+          verifierKey,
+        );
+        delivered.push({
+          circuitId,
+          txId: txData.txId,
+          txHash: txData.txHash,
+          blockHeight: txData.blockHeight,
+        });
+        onProgress?.(`  ${circuitId} in block ${txData.blockHeight}`);
+        break;
+      } catch (err) {
+        // A failure the classifier cannot vouch for stops the run here, as it
+        // always did, with the original error: everything already delivered
+        // stays on chain and a re-run skips it.
+        const account = describeError(err);
+        const outcome = classifySubmission({ stderr: account, exitCode: 1 });
+        if (!isAutomaticallyRecoverable(outcome)) throw err;
+        onProgress?.(`  ${circuitId}: ${outcome.reason}`);
 
-    delivered.push({
-      circuitId,
-      txId: txData.txId,
-      txHash: txData.txHash,
-      blockHeight: txData.blockHeight,
-    });
-    onProgress?.(`  ${circuitId} in block ${txData.blockHeight}`);
+        if (outcome.disposition === 'wait-indexer' && options.awaitIndexer) {
+          await options.awaitIndexer();
+        } else {
+          await sleep(retryDelayMs(outcome, attempt));
+        }
+
+        // THE CHAIN, NOT THE ERROR, SAYS WHETHER IT LANDED. A lost receipt
+        // was measured three times in one night, and each time the circuit
+        // was on chain at the next read; a resubmission would have been
+        // refused as a duplicate and read as yet another failure.
+        if (await isOnChain(providers, contractAddress, circuitId, options.awaitIndexer)) {
+          delivered.push({ circuitId, confirmedByChain: true });
+          onProgress?.(`  ${circuitId} is on chain — confirmed by a read; its receipt was lost`);
+          break;
+        }
+        if (attempt >= maxAttempts) {
+          throw new Error(
+            `${circuitId} was submitted ${attempt} times and is still not on chain. Last failure: ${account}`,
+          );
+        }
+      }
+    }
   }
 
   return delivered;
+}
+
+/** Whether the contract carries `circuitId` right now, by reading it. */
+async function isOnChain(
+  providers: ContractProviders,
+  contractAddress: string,
+  circuitId: string,
+  awaitIndexer?: () => Promise<void>,
+): Promise<boolean> {
+  const read = async () => {
+    const state = await providers.publicDataProvider.queryContractState(contractAddress);
+    return state !== null && operationNames(state).includes(circuitId);
+  };
+  try {
+    return await read();
+  } catch (err) {
+    // The read goes through the indexer too. If that is what is gone, wait
+    // for it and ask once more; anything else is the caller's to see.
+    if (!awaitIndexer || !indexerOutageIn(describeError(err))) throw err;
+    await awaitIndexer();
+    return await read();
+  }
 }
 
 export interface CircuitVerification {

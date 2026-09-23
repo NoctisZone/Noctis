@@ -44,7 +44,7 @@ import { setNetworkId } from '@midnight-ntwrk/midnight-js-network-id';
 import { buildRegistrantTree, hashRegistrantLeaf } from '../../packages/zk-proofs/src/eligibility-gate.js';
 import { readEligibilityGateLedger } from '../midnight-public-state.js';
 import { defaultNetworkConfig, type MidnightNetwork } from '../midnight-server-wallet.js';
-import { jsonSafe, parseJsonStdin, readStdin, requireFieldsFalsy } from './cli-io.js';
+import { claimStdoutForResult, jsonSafe, parseJsonStdin, readStdin, requireFieldsFalsy } from './cli-io.js';
 
 interface Input {
   network: MidnightNetwork;
@@ -56,6 +56,8 @@ interface Input {
 const toHex = (bytes: Uint8Array) => Buffer.from(bytes).toString('hex');
 
 async function main() {
+  // Stdout carries the result and nothing else; what the SDK logs goes with the rest of the diagnostics.
+  claimStdoutForResult();
   const input = parseJsonStdin<Input>(await readStdin());
   requireFieldsFalsy(input, ['network', 'contractAddress']);
 

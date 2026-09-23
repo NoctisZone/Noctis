@@ -9,6 +9,7 @@ import { readFileSync } from 'node:fs';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   CARDANO_NETWORK_MAP,
+  claimStdoutForResult,
   jsonSafe,
   loadPlutusBlueprint,
   loadValidatorCbor,
@@ -19,6 +20,7 @@ import {
   requireFieldsFalsy,
   requireFieldsStrict,
   requireTimestampMs,
+  resultJsonFrom,
 } from '../cli/cli-io.js';
 
 vi.mock('node:fs', async (importOriginal) => {
@@ -45,6 +47,67 @@ function fakeStdin(chunks: string[]) {
     },
   });
 }
+
+describe('resultJsonFrom (the result object, whatever was printed before it)', () => {
+  // The exact stdout a delivery CLI produced on Preprod: the wallet SDK's
+  // logger wrote a multi-line WARN record through console.log ahead of the
+  // result, and the caller's plain JSON.parse read the whole run as "no JSON
+  // result" although the transaction had landed.
+  const POLLUTED =
+    'timestamp=2026-09-23T02:11:00.308Z level=WARN fiber=#26 message="{\n' +
+    '  \\"message\\": \\"An unknown error occurred\\",\n' +
+    '  \\"_tag\\": \\"ServerError\\"\n' +
+    '}" message="Observed error in PendingTransactionsService, retrying"\n' +
+    '{"ok":false,"error":"Transaction submission error <- Failed to parse result provided by node"}';
+
+  it('takes the last line that is an object, past anything logged ahead of it', () => {
+    expect(resultJsonFrom(POLLUTED)).toEqual({
+      ok: false,
+      error: 'Transaction submission error <- Failed to parse result provided by node',
+    });
+  });
+
+  it('reads a clean single-line result as before', () => {
+    expect(resultJsonFrom('{"ok":true,"state":{"dvState":1}}\n')).toEqual({ ok: true, state: { dvState: 1 } });
+  });
+
+  it('reads a pretty-printed result that spans lines', () => {
+    expect(resultJsonFrom('{\n "ok": true,\n "turns": []\n}\n')).toEqual({ ok: true, turns: [] });
+  });
+
+  it('is null for output that holds no object at all', () => {
+    expect(resultJsonFrom('')).toBeNull();
+    expect(resultJsonFrom('Error: something\n    at file:///x.js:1:1\n')).toBeNull();
+    expect(resultJsonFrom('[1,2]')).toBeNull();
+  });
+
+  it('skips a line that starts like an object and is not one', () => {
+    expect(resultJsonFrom('{"ok":true}\n{ not json')).toEqual({ ok: true });
+  });
+});
+
+describe('claimStdoutForResult', () => {
+  it('sends console.log and its siblings to stderr and leaves console.error alone', () => {
+    const saved = {
+      log: console.log,
+      info: console.info,
+      warn: console.warn,
+      debug: console.debug,
+      error: console.error,
+    };
+    const err = vi.fn();
+    console.error = err as never;
+    try {
+      claimStdoutForResult();
+      console.log('a record');
+      console.warn('another');
+      expect(err).toHaveBeenCalledTimes(2);
+      expect(err).toHaveBeenNthCalledWith(1, 'a record');
+    } finally {
+      Object.assign(console, saved);
+    }
+  });
+});
 
 describe('readStdin', () => {
   it('concatenates every chunk into one UTF-8 string', async () => {

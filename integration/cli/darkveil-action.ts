@@ -57,6 +57,7 @@ import type { MerkleProofEntry } from '../../contracts/midnight/witnesses.js';
 import { computeBuyCommit } from '../../packages/zk-proofs/src/eligibility-gate.js';
 import { fromHex32 } from '../eligibility-gate-deploy-args.js';
 import { describeError } from '../error-detail.js';
+import { assertIndexerReachable } from '../indexer-availability.js';
 import { NoctisLaunchManager, NoctisMidnightClient } from '../midnight-client.js';
 import {
   assertProofServerReachable,
@@ -70,7 +71,7 @@ import {
 import { deriveDarkVeilBuyNonce, deriveUserSecretFromSeed } from '../midnight-user-identity.js';
 import { ephemeralPrivateStatePassword, inMemoryLevelFactory } from '../private-state-store.js';
 import { assertZkConfigMatchesBuild } from '../zk-config-fingerprint.js';
-import { jsonSafe, parseJsonStdin, readStdin, requireFieldsFalsy } from './cli-io.js';
+import { claimStdoutForResult, jsonSafe, parseJsonStdin, readStdin, requireFieldsFalsy } from './cli-io.js';
 
 type Action =
   | 'advance-phase'
@@ -215,6 +216,9 @@ function requireBigint(value: string | undefined, field: string): bigint {
 }
 
 async function main() {
+  // Before anything in the SDK can log: stdout carries the result and nothing
+  // else, or a driver reads a landed step as "no JSON result".
+  claimStdoutForResult();
   const input = parseJsonStdin<Input>(await readStdin());
   requireFieldsFalsy(input, ['action', 'network', 'contractAddress', 'zkConfigBasePath', 'proofServerUrl']);
 
@@ -245,6 +249,11 @@ async function main() {
       'relayUrl/indexerHttpUrl/indexerWsUrl must be supplied explicitly for network "mainnet" (no confirmed defaults exist yet).',
     );
   }
+  // Every action, the read included, goes through the indexer. A dead one is
+  // otherwise discovered minutes in, as a sync failure that names neither the
+  // indexer nor the reason. Refused now, in a message the driver's classifier
+  // reads as an outage to wait out rather than a failure to report.
+  await assertIndexerReachable(indexerHttpUrl);
 
   // Whose identity the circuits see. A governor action presents the governor
   // secret for both, matching what publish-allowlist-root does: no user-side
