@@ -10,6 +10,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   CARDANO_NETWORK_MAP,
   claimStdoutForResult,
+  isNetworkFailure,
   jsonSafe,
   loadPlutusBlueprint,
   loadValidatorCbor,
@@ -21,6 +22,7 @@ import {
   requireFieldsStrict,
   requireTimestampMs,
   resultJsonFrom,
+  withFetchRetry,
 } from '../cli/cli-io.js';
 
 vi.mock('node:fs', async (importOriginal) => {
@@ -311,5 +313,67 @@ describe('loadPlutusBlueprint / loadValidatorCbor', () => {
     expect(() => loadValidatorCbor(blueprint, 'missing.validator')).toThrow(
       'missing.validator not found in plutus.json.',
     );
+  });
+});
+
+describe('withFetchRetry — a dropped connection is the same request owed again', () => {
+  const dropped = () =>
+    new TypeError('fetch failed', { cause: Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET' }) });
+  const terminated = () => new TypeError('terminated');
+  const reply = (status: number) => ({ status }) as Response;
+  const noWait = () => 0;
+
+  it('retries a network failure and returns the reply that finally arrives', async () => {
+    const base = vi
+      .fn<typeof fetch>()
+      .mockRejectedValueOnce(dropped())
+      .mockRejectedValueOnce(terminated())
+      .mockResolvedValueOnce(reply(200));
+    const res = await withFetchRetry(base, 4, noWait)('https://example.test/x');
+    expect(res.status).toBe(200);
+    expect(base).toHaveBeenCalledTimes(3);
+  });
+
+  it('never retries a reply, whatever its status', async () => {
+    const base = vi.fn<typeof fetch>().mockResolvedValue(reply(500));
+    const res = await withFetchRetry(base, 4, noWait)('https://example.test/x');
+    expect(res.status).toBe(500);
+    expect(base).toHaveBeenCalledTimes(1);
+  });
+
+  it('never retries a failure that is not the network', async () => {
+    const base = vi.fn<typeof fetch>().mockRejectedValue(new Error('Maximum Input Count Exceeded'));
+    await expect(withFetchRetry(base, 4, noWait)('https://example.test/x')).rejects.toThrow(/Maximum Input Count/);
+    expect(base).toHaveBeenCalledTimes(1);
+  });
+
+  it('gives up after the stated attempts with the last failure', async () => {
+    const base = vi.fn<typeof fetch>().mockRejectedValue(dropped());
+    await expect(withFetchRetry(base, 3, noWait)('https://example.test/x')).rejects.toThrow(/fetch failed/);
+    expect(base).toHaveBeenCalledTimes(3);
+  });
+
+  it('waits the stated backoff between attempts, and not before the first', async () => {
+    const waits: number[] = [];
+    const base = vi
+      .fn<typeof fetch>()
+      .mockRejectedValueOnce(dropped())
+      .mockRejectedValueOnce(dropped())
+      .mockResolvedValueOnce(reply(200));
+    await withFetchRetry(base, 4, (attempt) => {
+      waits.push(attempt);
+      return 0;
+    })('https://example.test/x');
+    expect(waits).toEqual([1, 2]);
+  });
+
+  it('recognises a network failure by its message, its code or its cause, and nothing else', () => {
+    expect(isNetworkFailure(dropped())).toBe(true);
+    expect(isNetworkFailure(terminated())).toBe(true);
+    expect(isNetworkFailure(new Error('request failed', { cause: { code: 'UND_ERR_SOCKET' } }))).toBe(true);
+    expect(isNetworkFailure('socket hang up')).toBe(true);
+    expect(isNetworkFailure(new Error('HTTP 429'))).toBe(false);
+    expect(isNetworkFailure(new DOMException('The operation was aborted', 'AbortError'))).toBe(false);
+    expect(isNetworkFailure(null)).toBe(false);
   });
 });

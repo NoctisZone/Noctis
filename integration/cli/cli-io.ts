@@ -344,3 +344,77 @@ export function loadValidatorCbor(blueprint: PlutusBlueprint, title: string): st
   }
   return entry.compiledCode;
 }
+
+// ----------------------------------------------------------------------------
+// A dropped connection is retried, for every fetch a CLI makes
+// ----------------------------------------------------------------------------
+// A CLI makes tens of requests per run — UTXO reads, an evaluation, a
+// submission — through whatever network the operator's machine has. A
+// connection that drops before any reply arrives is not a result; it is the
+// same request owed again. So every fetch the process makes is retried on a
+// NETWORK failure only, a few times with a short backoff. A reply is never
+// retried, whatever its status: an HTTP error is an answer.
+//
+// A submission whose request went out and whose reply was lost is re-sent as
+// the same bytes, which the node either accepts once or refuses as a
+// duplicate; either way the caller then reads the chain, which is what every
+// driver already does for a lost receipt.
+
+/** What a connection that never delivered a reply looks like, in the error's own words or its cause's. */
+export const NETWORK_FAILURE =
+  /fetch failed|terminated|ECONNRESET|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN|ENOTFOUND|socket hang up|UND_ERR|other side closed/i;
+
+export function isNetworkFailure(err: unknown): boolean {
+  if (typeof err === 'string') return NETWORK_FAILURE.test(err);
+  const seen = new Set<unknown>();
+  let current: unknown = err;
+  while (current && typeof current === 'object' && !seen.has(current)) {
+    seen.add(current);
+    const e = current as { message?: unknown; code?: unknown; name?: unknown; cause?: unknown };
+    for (const part of [e.message, e.code, e.name]) {
+      if (typeof part === 'string' && NETWORK_FAILURE.test(part)) return true;
+    }
+    current = e.cause;
+  }
+  return false;
+}
+
+/**
+ * Wraps a fetch so that a network failure is retried up to `attempts` times,
+ * waiting `wait(attempt)` milliseconds before each retry. Any other failure,
+ * and any reply, passes straight through.
+ */
+export function withFetchRetry(
+  base: typeof fetch,
+  attempts = 4,
+  wait: (attempt: number) => number = (attempt) => 400 * 2 ** (attempt - 1),
+): typeof fetch {
+  const retrying = (async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    for (let attempt = 1; ; attempt++) {
+      try {
+        return await base(input, init);
+      } catch (err) {
+        if (attempt >= attempts || !isNetworkFailure(err)) throw err;
+        await new Promise((resolve) => setTimeout(resolve, wait(attempt)));
+      }
+    }
+  }) as typeof fetch;
+  return retrying;
+}
+
+let fetchRetryInstalled = false;
+
+/** Installs the retrying fetch on the process, once. Idempotent. */
+export function installFetchRetry(): void {
+  if (fetchRetryInstalled || typeof globalThis.fetch !== 'function') return;
+  fetchRetryInstalled = true;
+  globalThis.fetch = withFetchRetry(globalThis.fetch);
+}
+
+// Every CLI imports this module, so this is where the process gets it. Not
+// under the test runner, whose suites stub fetch to say exactly what a
+// failure does; and NOCTIS_FETCH_RETRY=0 turns it off for a diagnosis that
+// wants to see the first failure as it happened.
+if (!process.env.VITEST && process.env.NOCTIS_FETCH_RETRY !== '0') {
+  installFetchRetry();
+}
