@@ -11,7 +11,12 @@
 
 import { Effect, Stream } from 'effect';
 import { describe, expect, it } from 'vitest';
-import { consumeUnshieldedTransactions, type UnshieldedTransactionEvent } from '../indexer-client.js';
+import {
+  consumeRegistrationState,
+  consumeUnshieldedTransactions,
+  type UnshieldedTransactionEvent,
+  type UnshieldedUtxoEvent,
+} from '../indexer-client.js';
 
 const NIGHT_TOKEN = 'night-token-type';
 const OTHER_TOKEN = 'some-other-token-type';
@@ -140,5 +145,83 @@ describe('indexer-client.ts — consumeUnshieldedTransactions', () => {
     // 5000 + 2000 - 1000 - 500 = 5500
     expect(result.balance).toBe(5500n);
     expect(result.transactionsProcessed).toBe(3);
+  });
+});
+
+describe('indexer-client.ts — consumeRegistrationState', () => {
+  const out = (
+    intentHash: string,
+    outputIndex: number,
+    value: number,
+    registered: boolean,
+    tokenType = NIGHT_TOKEN,
+  ): UnshieldedUtxoEvent => ({
+    tokenType,
+    value,
+    intentHash,
+    outputIndex,
+    ctime: 1_790_000_000 + outputIndex,
+    registeredForDustGeneration: registered,
+  });
+  const txOut = (
+    id: number,
+    created: UnshieldedUtxoEvent[],
+    spent: UnshieldedUtxoEvent[] = [],
+  ): UnshieldedTransactionEvent => ({
+    unshieldedTransactions: {
+      type: 'UnshieldedTransaction',
+      createdUtxos: created,
+      spentUtxos: spent,
+      transaction: { id },
+    },
+  });
+  const state = (events: UnshieldedTransactionEvent[]) =>
+    Effect.runPromise(Effect.scoped(consumeRegistrationState(Stream.fromIterable(events), NIGHT_TOKEN)));
+  const unregisteredKeys = (s: Awaited<ReturnType<typeof state>>) =>
+    s.unspentNight.filter((o) => !o.registered).map((o) => o.key);
+
+  it('names an unregistered output held beside a registered one', async () => {
+    const s = await state([txOut(1, [out('aa', 0, 1000, true)]), txOut(2, [out('bb', 0, 500, false)]), progress(2)]);
+    expect(s.registered).toBe(true);
+    expect(unregisteredKeys(s)).toEqual(['bb#0']);
+    expect(s.unspentNight).toHaveLength(2);
+  });
+
+  it('follows a registration rotation: the spent original drops out and the registered replacement stays', async () => {
+    const s = await state([
+      txOut(1, [out('aa', 0, 1000, false)]),
+      txOut(2, [out('bb', 0, 1000, true)], [out('aa', 0, 1000, false)]),
+      progress(2),
+    ]);
+    expect(s.registered).toBe(true);
+    expect(unregisteredKeys(s)).toEqual([]);
+    expect(s.unspentNight.map((o) => o.key)).toEqual(['bb#0']);
+    expect([s.createdNightUtxos, s.spentNightUtxos]).toEqual([2, 1]);
+  });
+
+  it('reads an address whose only registered output has been spent as not registered', async () => {
+    const s = await state([
+      txOut(1, [out('aa', 0, 1000, true)]),
+      txOut(2, [out('cc', 1, 400, false)], [out('aa', 0, 1000, true)]),
+      progress(2),
+    ]);
+    expect(s.registered).toBe(false);
+    expect(unregisteredKeys(s)).toEqual(['cc#1']);
+  });
+
+  it('ignores outputs of any other token type', async () => {
+    const s = await state([txOut(1, [out('aa', 0, 1000, true), out('aa', 1, 7, false, OTHER_TOKEN)]), progress(1)]);
+    expect(s.unspentNight.map((o) => o.key)).toEqual(['aa#0']);
+    expect(s.createdNightUtxos).toBe(1);
+  });
+
+  it('carries each output value and creation time from the chain', async () => {
+    const s = await state([txOut(1, [out('dd', 2, 2_119_448_482, false)]), progress(1)]);
+    expect(s.unspentNight[0]).toEqual({ key: 'dd#2', value: 2_119_448_482n, ctime: 1_790_000_002, registered: false });
+  });
+
+  it('terminates at once on a zero-history address', async () => {
+    const s = await state([progress(0)]);
+    expect(s).toEqual({ registered: false, createdNightUtxos: 0, spentNightUtxos: 0, unspentNight: [] });
   });
 });

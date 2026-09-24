@@ -15,7 +15,9 @@
 //
 // Already-registered UTXOs are filtered out rather than resubmitted, so this
 // is safe to re-run: a wallet with nothing left to register reports
-// `alreadyRegistered` instead of failing.
+// `alreadyRegistered` instead of failing. The chain decides that output by
+// output, from what the address holds now, and `dryRun` reports the decision
+// without submitting anything.
 //
 // Several wallets per process, results keyed by the caller's own role names —
 // same shape as midnight-wallet-balances.ts, and for the same reason: one
@@ -23,11 +25,14 @@
 //
 // Input:  {"network":"preprod","proofServerUrl":"http://127.0.0.1:6310",
 //          "wallets":[{"role":"buyer_1","seedHex":"<64 hex>"}, …],
-//          "waitForDustSeconds":0}
+//          "waitForDustSeconds":0, "dryRun":false}
 // Output: {"results":{"<role>":{"status":"registered","txId":…,
 //                               "utxosRegistered":n,"dustAtomic":…}
 //                     | {"status":"alreadyRegistered", …}
+//                     | {"status":"pastGracePeriod" | "walletBehindChain" | "dryRun", …}
 //                     | {"error":"…"}}}
+// Every status except an error also carries the chain's per-output counts:
+// registeredUnspent, unregisteredUnspent, unregisteredPastGrace.
 // ============================================================================
 
 import { inspect } from 'node:util';
@@ -62,6 +67,8 @@ interface Input extends SnapshotCliInput {
    * times over.
    */
   waitForDustSeconds?: number;
+  /** Report what would be registered, output by output, and submit nothing. */
+  dryRun?: boolean;
 }
 
 async function readStdin(): Promise<string> {
@@ -82,6 +89,13 @@ const COIN_WAIT_TIMEOUT_MS = 300_000;
 
 /** How many times to re-attempt a submission that lost its node connection. */
 const SUBMIT_ATTEMPTS = 4;
+
+/**
+ * How long before the end of an output's grace period to stop counting it as
+ * registrable: syncing, proving and submitting take minutes, and a
+ * registration that arrives after the period gets 173.
+ */
+const GRACE_MARGIN_SECONDS = 600;
 
 /**
  * Phase logging to stderr, so stdout stays a clean JSON channel.
@@ -136,25 +150,45 @@ async function registerOne(input: Input, wallet: WalletInput): Promise<Record<st
   try {
     const nightTokenType = ledger.nativeToken().raw;
 
-    // Ask the CHAIN whether this wallet is already registered, before touching
-    // the wallet's own view of its coins. A short-lived facade keeps serving
-    // the original, already-spent UTXO — registration rotates it — so trusting
-    // availableCoins here means re-registering an already-registered wallet,
+    // Ask the CHAIN which outputs need registering, before touching the
+    // wallet's own view of its coins. A short-lived facade keeps serving the
+    // original, already-spent UTXO — registration rotates it — so trusting
+    // availableCoins here means re-registering an already-registered output,
     // collecting 173, and eventually a 1012 ban.
+    //
+    // Output by output, from what the address holds now: an address is not
+    // taken as registered because some output it once held was, and only the
+    // unspent outputs the chain names as unregistered are submitted.
     const address = String(PublicKey.fromKeyStore(built.unshieldedKeystore).address);
     log(wallet.role, 'checking chain registration state');
     const onChain = await getUnshieldedRegistrationState(config.indexerWsUrl, address);
-    if (onChain.registered) {
-      log(wallet.role, 'already registered on chain — nothing to do');
-      return {
-        status: 'alreadyRegistered',
-        utxosRegistered: 0,
-        createdNightUtxos: onChain.createdNightUtxos,
-        spentNightUtxos: onChain.spentNightUtxos,
-      };
+
+    // A new output's registration is paid from the DUST it generated during the
+    // ledger's grace period; past that the node answers 173, so an older
+    // unregistered output is reported rather than submitted.
+    const graceSeconds = Number(ledger.LedgerParameters.initialParameters().dust.dustGracePeriodSeconds);
+    const nowSeconds = Date.now() / 1000;
+    const unregistered = onChain.unspentNight.filter((o) => !o.registered);
+    const inGrace = unregistered.filter((o) => nowSeconds - o.ctime < graceSeconds - GRACE_MARGIN_SECONDS);
+    const summary = {
+      createdNightUtxos: onChain.createdNightUtxos,
+      spentNightUtxos: onChain.spentNightUtxos,
+      registeredUnspent: onChain.unspentNight.length - unregistered.length,
+      unregisteredUnspent: unregistered.length,
+      unregisteredPastGrace: unregistered.length - inGrace.length,
+    };
+    if (onChain.unspentNight.length > 0 && inGrace.length === 0) {
+      const past = summary.unregisteredPastGrace;
+      log(
+        wallet.role,
+        past === 0
+          ? 'every unspent NIGHT output is registered on chain — nothing to do'
+          : `${past} unregistered NIGHT output(s), all past the grace period — not submitting`,
+      );
+      return { status: past === 0 ? 'alreadyRegistered' : 'pastGracePeriod', utxosRegistered: 0, ...summary };
     }
 
-    log(wallet.role, 'not registered on chain; waiting for NIGHT UTXOs');
+    log(wallet.role, `${inGrace.length} unregistered NIGHT output(s) on chain; waiting for the wallet to see them`);
 
     // Wait for the NIGHT UTXOs this command actually needs, not for all three
     // sub-wallets to reach the tip. The unshielded sub-wallet carries them and
@@ -167,18 +201,36 @@ async function registerOne(input: Input, wallet: WalletInput): Promise<Record<st
       'this wallet to reach the chain head with NIGHT UTXOs visible (is it funded?)',
     );
 
-    // Only NIGHT, and only what is not already generating. Resubmitting an
-    // already-registered UTXO is rejected, so this filter is what makes the
-    // command idempotent rather than a one-shot.
+    // Only NIGHT, only what is not already generating, and only what the chain
+    // itself names as unspent, unregistered and inside the grace period. The
+    // wallet's own coin objects are what get submitted; the chain decides which.
+    // Resubmitting an already-registered UTXO is rejected, so this filter is
+    // what makes the command idempotent rather than a one-shot.
+    const wanted = new Set(inGrace.map((o) => o.key));
     const toRegister: readonly UtxoWithMeta[] = state.unshielded.availableCoins.filter(
-      (coin) => coin.utxo.type === nightTokenType && coin.meta.registeredForDustGeneration === false,
+      (coin) =>
+        coin.utxo.type === nightTokenType &&
+        coin.meta.registeredForDustGeneration === false &&
+        wanted.has(`${coin.utxo.intentHash}#${coin.utxo.outputNo}`),
     );
 
     if (toRegister.length === 0) {
+      log(wallet.role, 'the wallet does not yet show any output the chain names — not submitting');
       return {
-        status: 'alreadyRegistered',
+        status: onChain.unspentNight.length === 0 ? 'alreadyRegistered' : 'walletBehindChain',
         utxosRegistered: 0,
+        ...summary,
         dustAtomic: state.dust.balance(new Date()).toString(),
+      };
+    }
+    if (input.dryRun) {
+      log(wallet.role, `dry run: would register ${toRegister.length} output(s); nothing submitted`);
+      return {
+        status: 'dryRun',
+        utxosRegistered: 0,
+        wouldRegister: toRegister.length,
+        wouldRegisterNight: toRegister.reduce((sum, c) => sum + c.utxo.value, 0n).toString(),
+        ...summary,
       };
     }
 
@@ -259,6 +311,7 @@ async function registerOne(input: Input, wallet: WalletInput): Promise<Record<st
       status: 'registered',
       txId,
       utxosRegistered: toRegister.length,
+      ...summary,
       dustAtomic: dustAtomic.toString(),
     };
   } finally {

@@ -70,6 +70,11 @@ export interface UnshieldedUtxoEvent {
   value: string | number | bigint;
   /** Present on created UTXOs; the chain's own view of registration status. */
   registeredForDustGeneration?: boolean;
+  /** The output's identity: the intent that created it and its index there. */
+  intentHash?: string;
+  outputIndex?: number;
+  /** Creation time, in seconds. */
+  ctime?: number;
 }
 export interface UnshieldedTransactionEvent {
   unshieldedTransactions:
@@ -233,47 +238,52 @@ export async function getUnshieldedNightBalance(
   );
 }
 
+/** One unspent NIGHT output, as the chain reports it. */
+export interface NightOutput {
+  /** `intentHash#outputIndex` — the same key the wallet SDK gives its own coins. */
+  key: string;
+  value: bigint;
+  /** Creation time, in seconds. */
+  ctime: number;
+  registered: boolean;
+}
+
 /** One address's DUST-generation registration state, as the CHAIN reports it. */
 export interface UnshieldedRegistrationState {
   /** True when the address holds an unspent NIGHT UTXO already registered. */
   registered: boolean;
   createdNightUtxos: number;
   spentNightUtxos: number;
+  /**
+   * Every unspent NIGHT output at the address, each with the chain's own
+   * registration flag, so a caller can act on exactly the outputs that lack it.
+   */
+  unspentNight: NightOutput[];
 }
 
-/**
- * Ask the indexer whether this address's NIGHT is already registered for DUST
- * generation.
- *
- * Do NOT infer this from a wallet's `availableCoins`. A short-lived facade
- * serves the ORIGINAL, ALREADY-SPENT UTXO because its unshielded sub-wallet
- * never syncs far enough to see the spend — so a caller that trusts it will
- * re-register an already-registered wallet, get 173
- * (InsufficientDustForRegistrationFee, the allowance having been consumed by
- * the registration that succeeded), and on repetition earn a 1012 ban.
- *
- * Registration ROTATES the UTXO: the original is spent and a replacement is
- * created carrying `registeredForDustGeneration = true`. That pair is the
- * evidence this reads.
- */
-export async function getUnshieldedRegistrationState(
-  indexerWsUrl: string,
-  address: string,
-): Promise<UnshieldedRegistrationState> {
-  const nightTokenType = nativeToken().raw;
-  const stream = UnshieldedTransactions.run({ address, transactionId: 0 }) as unknown as Stream.Stream<
-    UnshieldedTransactionEvent,
-    unknown
-  >;
+const outputKey = (utxo: UnshieldedUtxoEvent): string => `${utxo.intentHash}#${utxo.outputIndex}`;
 
-  const program = Effect.gen(function* () {
+/**
+ * The registration state of one address, from its unshielded transaction
+ * stream. Extracted from the wrapper below so it can be tested against a mock
+ * stream; terminates exactly as `consumeUnshieldedTransactions` does.
+ *
+ * Tracks created minus spent BY OUTPUT: a flag on an output that has since been
+ * spent says nothing about what the address holds now, so `registered` is read
+ * from the unspent outputs alone.
+ */
+export function consumeRegistrationState(
+  stream: Stream.Stream<UnshieldedTransactionEvent, unknown>,
+  nightTokenType: string,
+): Effect.Effect<UnshieldedRegistrationState, unknown, Scope.Scope> {
+  return Effect.gen(function* () {
     const pull = yield* Stream.toPull(stream);
     let watermark: number | null = null;
     let seen = false;
     let caughtUp = false;
     let createdNightUtxos = 0;
     let spentNightUtxos = 0;
-    let registered = false;
+    const unspent = new Map<string, NightOutput>();
 
     while (!caughtUp) {
       const result = yield* Effect.either(pull);
@@ -292,12 +302,18 @@ export async function getUnshieldedRegistrationState(
         for (const utxo of payload.createdUtxos) {
           if (utxo.tokenType !== nightTokenType) continue;
           createdNightUtxos++;
-          if ((utxo as { registeredForDustGeneration?: boolean }).registeredForDustGeneration === true) {
-            registered = true;
-          }
+          const key = outputKey(utxo);
+          unspent.set(key, {
+            key,
+            value: BigInt(utxo.value),
+            ctime: Number(utxo.ctime ?? 0),
+            registered: utxo.registeredForDustGeneration === true,
+          });
         }
         for (const utxo of payload.spentUtxos) {
-          if (utxo.tokenType === nightTokenType) spentNightUtxos++;
+          if (utxo.tokenType !== nightTokenType) continue;
+          spentNightUtxos++;
+          unspent.delete(outputKey(utxo));
         }
         if (watermark !== null && payload.transaction.id >= watermark) {
           caughtUp = true;
@@ -305,10 +321,44 @@ export async function getUnshieldedRegistrationState(
         }
       }
     }
-    return { registered, createdNightUtxos, spentNightUtxos };
+    const unspentNight = [...unspent.values()];
+    return {
+      registered: unspentNight.some((o) => o.registered),
+      createdNightUtxos,
+      spentNightUtxos,
+      unspentNight,
+    };
   });
+}
 
+/**
+ * Ask the indexer which of this address's NIGHT is registered for DUST
+ * generation, output by output.
+ *
+ * Do NOT infer this from a wallet's `availableCoins`. A short-lived facade
+ * serves the ORIGINAL, ALREADY-SPENT UTXO because its unshielded sub-wallet
+ * never syncs far enough to see the spend — so a caller that trusts it will
+ * re-register an already-registered wallet, get 173
+ * (InsufficientDustForRegistrationFee, the allowance having been consumed by
+ * the registration that succeeded), and on repetition earn a 1012 ban.
+ *
+ * Registration ROTATES the UTXO: the original is spent and a replacement is
+ * created carrying `registeredForDustGeneration = true`. That pair is the
+ * evidence this reads.
+ */
+export async function getUnshieldedRegistrationState(
+  indexerWsUrl: string,
+  address: string,
+): Promise<UnshieldedRegistrationState> {
+  const stream = UnshieldedTransactions.run({ address, transactionId: 0 }) as unknown as Stream.Stream<
+    UnshieldedTransactionEvent,
+    unknown
+  >;
   return Effect.runPromise(
-    Effect.scoped(program.pipe(Effect.provide(WsSubscriptionClient.layer({ url: indexerWsUrl })))),
+    Effect.scoped(
+      consumeRegistrationState(stream, nativeToken().raw).pipe(
+        Effect.provide(WsSubscriptionClient.layer({ url: indexerWsUrl })),
+      ),
+    ),
   );
 }
