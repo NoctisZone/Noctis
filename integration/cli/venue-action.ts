@@ -3,6 +3,10 @@
 // ============================================================================
 //   read-pools   what pools exist at the venue, and what each one holds
 //   read-round   what is fillable right now, and why nothing else is
+//   read-market  what a venue site states about each pool: its trades since a
+//                point the caller holds, its order queue, its liquidity
+//                providers and its holders, with the platform's own addresses
+//                named so a page can tell a contract from a person
 //   batch        run ONE round of fills and stop
 //   serve        run rounds on an interval until stopped
 //
@@ -43,6 +47,7 @@ import { MESH_NETWORK_ID, type ReferenceScriptPointer } from '../reference-scrip
 import { VenueBatcher, type VenueBatcherRound, type VenueFillOutcome } from '../venue-batcher.js';
 import { readVenueFillRound, readVenuePools, type VenueChainProvider } from '../venue-chain-reader.js';
 import { VenueFiller, type VenueScriptSource } from '../venue-fill-submitter.js';
+import { readVenueMarket } from '../venue-market-reader.js';
 import { VENUE_FACTORY_TITLE } from '../venue-pool.js';
 import { venueUnitOf } from '../venue-swap.js';
 import {
@@ -58,7 +63,7 @@ import {
 
 declare const __dirname: string;
 
-type Action = 'read-pools' | 'read-round' | 'batch' | 'serve';
+type Action = 'read-pools' | 'read-round' | 'read-market' | 'batch' | 'serve';
 
 /** The pool validator, applied with its `royalty_withdraw_vh` parameter. */
 const VENUE_POOL_TITLE = 'royalty_pool/pool.pool.spend';
@@ -119,6 +124,14 @@ interface Input {
   intervalMs?: number;
   /** `serve` only: stop after this long. Unset, it runs until killed. */
   runForMs?: number;
+  /** `read-market` only: one pool by its NFT unit; omitted, every pool. */
+  poolNft?: string;
+  /** `read-market` only: per pool NFT, the newest transaction the caller already holds. */
+  since?: Record<string, string>;
+  /** `read-market` only: the most events one read walks per pool. */
+  maxEvents?: number;
+  /** `read-market` only: how many of a token's largest holders to return. */
+  holdersLimit?: number;
 }
 
 /**
@@ -158,6 +171,31 @@ function emptyWhenUnused(client: BlockfrostClient): VenueChainProvider {
     },
     getTxPosition: (txHash: string) => client.getTxPosition(txHash),
   };
+}
+
+/**
+ * The launch package's own script addresses, derived from its compiled bytes
+ * like the venue's are. A holder list names these so a page can tell a
+ * contract holding a token — the curve, the escrow, the staking pool — from a
+ * person, without anyone having typed an address in.
+ */
+const LAUNCH_SCRIPT_LABELS: [string, string][] = [
+  ['bonding_curve_tier_b.bonding_curve_tier_b.spend', 'CURVE'],
+  ['curve_order.curve_order.spend', 'CURVE ORDERS'],
+  ['lp_escrow.lp_escrow.spend', 'LP ESCROW'],
+  ['staking_pool.staking_pool.spend', 'STAKING POOL'],
+  ['vesting.vesting.spend', 'VESTING'],
+];
+
+function launchScriptLabels(network: Parameters<typeof validatorToAddress>[0]): Record<string, string> {
+  const labels: Record<string, string> = {};
+  const validators = loadDeployedValidators(__dirname);
+  for (const [title, label] of LAUNCH_SCRIPT_LABELS) {
+    const entry = validators.find((v) => v.title === title);
+    if (!entry) continue;
+    labels[validatorToAddress(network, { type: 'PlutusV3', script: entry.compiledCode } as never)] = label;
+  }
+  return labels;
 }
 
 /** One venue validator's real bytes, by title, from whichever file holds them. */
@@ -297,6 +335,52 @@ async function main() {
           reason: u.reason,
         })),
         skipped: round.skipped,
+      };
+      break;
+    }
+
+    case 'read-market': {
+      const client = new BlockfrostClient({ apiKey: input.blockfrostProjectId, network: input.network });
+      const market = await readVenueMarket(
+        {
+          chain: provider,
+          history: client,
+          blocks: {
+            async getTxBlock(txHash: string) {
+              const info = (await client.getTxInfo(txHash)) as { block_height: number; block_time: number };
+              return { height: info.block_height, timeSeconds: info.block_time };
+            },
+          },
+          holders: {
+            // An asset the chain has never seen holds nothing: Blockfrost says
+            // 404, and here that is an empty list rather than a fault.
+            async getAssetAddresses(unit: string) {
+              try {
+                return await client.getAssetAddresses(unit);
+              } catch (err) {
+                const message = err instanceof Error ? err.message : String(err);
+                if (message.includes('Blockfrost API error 404')) return [];
+                throw err;
+              }
+            },
+          },
+        },
+        {
+          poolAddress,
+          orderAddress,
+          factoryPolicyId,
+          ...(input.poolNft ? { poolNft: input.poolNft } : {}),
+          ...(input.since ? { since: input.since } : {}),
+          ...(input.maxEvents ? { maxEvents: input.maxEvents } : {}),
+          ...(input.holdersLimit !== undefined ? { holdersLimit: input.holdersLimit } : {}),
+          ...(fillCostLovelace !== undefined ? { fillCostLovelace } : {}),
+        },
+      );
+      result = {
+        ...where,
+        labels: { ...launchScriptLabels(lucidNetwork), [poolAddress]: 'POOL', [orderAddress]: 'ORDER BOOK' },
+        pools: market.pools,
+        skipped: market.skipped,
       };
       break;
     }
