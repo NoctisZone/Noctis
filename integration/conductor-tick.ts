@@ -228,6 +228,88 @@ export async function runConductorTick(input: ConductorTickInput): Promise<Condu
 }
 
 /**
+ * Refusals that changed nothing on chain and ask only to be tried again soon:
+ * a DUST-root race (170), a lost receipt that needs a fresh read (104, 107),
+ * an indexer that is behind (171). A stale wallet and an empty DUST balance are
+ * left out on purpose — their waits run to minutes or hours, and a run that
+ * meets one should spend its turns on it visibly rather than quietly stretch.
+ */
+const FREE_RETRY_DISPOSITIONS: ReadonlySet<string> = new Set(['retry', 'replan', 'wait-indexer']);
+
+/** How many of those a run absorbs without spending a turn. */
+export const DEFAULT_FREE_RETRIES = 6;
+
+export interface ConductorTurnsInput {
+  /** Turns the caller asked for: submissions, and anything else that ends a turn. */
+  ticks: number;
+  /** Retryable refusals absorbed without spending a turn. Defaults to {@link DEFAULT_FREE_RETRIES}. */
+  retries?: number;
+  /** Least wait between turns. */
+  pollMs?: number;
+  dryRun?: boolean;
+  /** One turn. `attempt` counts consecutive failures of the same action, for the backoff. */
+  turn: (attempt: number) => Promise<ConductorTickResult>;
+  onTurn?: (tick: ConductorTickResult) => void;
+  sleep?: (ms: number) => Promise<void>;
+}
+
+/**
+ * Runs up to `ticks` turns for one launch. The only loop over turns.
+ *
+ * A REFUSAL THE NODE ASKS US TO RETRY IS NOT A TURN. A 170 changed nothing on
+ * chain, so charging it to the budget ended a run short of the work it was
+ * asked for: a settlement run given one turn per entry plus one stopped a turn
+ * before its finalize. Those refusals draw on their own budget instead, and the
+ * backoff grows with consecutive failures of the same action (the tick used to
+ * be told attempt 1 every time). A refusal nobody should retry automatically
+ * still ends the run, as does a turn with nothing to do, a blocked or
+ * unrehearsed action, and any dry run.
+ */
+export async function runConductorTurns(input: ConductorTurnsInput): Promise<ConductorTickResult[]> {
+  const ticks = Math.max(1, Math.floor(input.ticks));
+  let free = Math.max(0, Math.floor(input.retries ?? DEFAULT_FREE_RETRIES));
+  const pollMs = input.pollMs ?? 0;
+  const sleep = input.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+  const turns: ConductorTickResult[] = [];
+  let spent = 0;
+  let streak = 0;
+  let streakKind: string | undefined;
+
+  while (spent < ticks) {
+    const tick = await input.turn(streak + 1);
+    turns.push(tick);
+    input.onTurn?.(tick);
+
+    if (tick.did === 'nothing' || tick.did === 'blocked' || tick.did === 'unrehearsed' || input.dryRun) break;
+
+    if (tick.did === 'failed') {
+      if (tick.retryInMs === null) break;
+      streak = streakKind === tick.action.kind ? streak + 1 : 1;
+      streakKind = tick.action.kind;
+      if (free > 0 && FREE_RETRY_DISPOSITIONS.has(tick.outcome.disposition)) {
+        free -= 1;
+      } else {
+        spent += 1;
+        if (spent >= ticks) break;
+      }
+      // The failure names its own wait — long enough for the indexer to show
+      // the block a lost receipt was about, or for a ctime race to pass — and
+      // the next turn's read is what settles it.
+      await sleep(Math.max(pollMs, tick.retryInMs));
+      continue;
+    }
+
+    streak = 0;
+    streakKind = undefined;
+    spent += 1;
+    // Ticking again at once would plan from the state the submission just
+    // changed, before the indexer shows it.
+    if (spent < ticks && pollMs > 0) await sleep(pollMs);
+  }
+  return turns;
+}
+
+/**
  * Whether a banked result is a rejection at all.
  *
  * A non-zero exit or a stopped child. Deliberately not "does the stderr

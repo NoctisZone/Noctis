@@ -7,8 +7,9 @@
 // a specific evening. What a launch is owed is now decided by a pure function
 // of a chain read and the clock (launch-conductor.ts), composed into one turn
 // (conductor-tick.ts), with the call shapes and their refusals in
-// conductor-actions.ts. What is left here is the part that genuinely has to
-// touch the world: reading the chain, spawning the action, and the loop.
+// conductor-actions.ts, and the loop over turns in conductor-tick.ts too
+// (runConductorTurns), where it is tested. What is left here is the part that
+// genuinely has to touch the world: reading the chain and spawning the action.
 //
 // ONE PROCESS PER SUBMISSION, DELIBERATELY. Every action is a child running
 // darkveil-action.mjs, not an in-process call, for two reasons that both cost
@@ -57,7 +58,7 @@ import {
   type SettlementAttestation,
   settlementCompleteness,
 } from '../conductor-actions.js';
-import { type ConductorTickResult, describeTick, runConductorTick } from '../conductor-tick.js';
+import { type ConductorTickResult, describeTick, runConductorTick, runConductorTurns } from '../conductor-tick.js';
 import { describeError } from '../error-detail.js';
 import { waitForIndexer } from '../indexer-availability.js';
 import { nextAction } from '../launch-conductor.js';
@@ -123,6 +124,11 @@ interface Input {
 
   /** How many turns to take in this invocation. One by default. */
   ticks?: number;
+  /**
+   * Refusals the node asks us to retry (170, a lost receipt, a lagging
+   * indexer) absorbed without spending a turn. Six by default.
+   */
+  retries?: number;
   /** How long to wait between them. */
   pollMs?: number;
   /** Per-action deadline; see DEFAULT_ACTION_TIMEOUT_MS. */
@@ -275,85 +281,83 @@ async function main() {
   };
 
   const turns: Array<{ line: string; tick: ConductorTickResult }> = [];
-  const ticks = Math.max(1, Number(input.ticks ?? 1));
+  await runConductorTurns({
+    ticks: Number(input.ticks ?? 1),
+    retries: input.retries,
+    pollMs: input.pollMs,
+    dryRun: input.dryRun,
+    onTurn: (tick) => {
+      const line = describeTick(input.launchId, tick);
+      process.stderr.write(`${line}\n`);
+      turns.push({ line, tick });
+    },
+    turn: async (attempt) => {
+      // Held for this turn so the plan, the completeness verdict and the call
+      // are all answered from the same decode.
+      let current: ChainRead | null = null;
 
-  for (let i = 0; i < ticks; i++) {
-    // Held for this turn so the plan, the completeness verdict and the call
-    // are all answered from the same decode.
-    let current: ChainRead | null = null;
-
-    const tick = await runConductorTick({
-      launchId: input.launchId,
-      contractAddress: input.contractAddress,
-      readSnapshot: async () => {
-        current = await read();
-        return current.snapshot;
-      },
-      now: () => (input.atSeconds !== undefined ? BigInt(input.atSeconds) : BigInt(Math.floor(Date.now() / 1000))),
-      nowMs: () => Date.now(),
-      gate,
-      fundingWalletKey: input.walletSeedHex,
-      rehearsal,
-      dryRun: input.dryRun,
-      rehearsalNote: input.rehearsalNote,
-      settlementsComplete: () => {
-        const chain = current;
-        if (!chain) return undefined;
-        const verdict = settlementCompleteness(contextFor(chain));
-        // "Unknown" is not "no" — it is the planner's own signal that the
-        // record must not be closed, and it reads an absent value as exactly
-        // that. Flattening it to false here would lose the distinction the
-        // planner's own comment turns on.
-        return verdict.complete === 'unknown' ? undefined : verdict.complete;
-      },
-      canSupplyOffChainInput: (action) => {
-        const chain = current;
-        if (!chain) return false;
-        return planCall(action, contextFor(chain)).ok;
-      },
-      submit: async (action) => {
-        const chain = current;
-        if (!chain) throw new Error('the chain read did not complete before the action was built');
-        const plan = planCall(action, contextFor(chain));
-        if (!plan.ok) {
-          // Reached only if the state moved between the check above and here,
-          // which is a real possibility on a chain and not a fault. Reported
-          // as a banked failure rather than thrown, so it classifies like any
-          // other refusal instead of ending the run.
-          return { stdout: '', stderr: `[conduct] needs ${plan.missing}`, exitCode: 1 };
-        }
-        if (plan.call.needsGovernorSecret && !input.governorSecretHex) {
-          return { stdout: '', stderr: `[conduct] ${plan.call.action} must present the governor secret`, exitCode: 1 };
-        }
-        return runAction(
-          cliPath,
-          {
-            ...base,
-            action: plan.call.action,
-            ...plan.call.args,
-            ...(plan.call.needsGovernorSecret ? { governorSecretHex: input.governorSecretHex } : {}),
-          },
-          timeoutMs,
-        );
-      },
-    });
-
-    const line = describeTick(input.launchId, tick);
-    process.stderr.write(`${line}\n`);
-    turns.push({ line, tick });
-
-    // Nothing left to do, or nothing that another turn would change.
-    if (tick.did === 'nothing' || tick.did === 'blocked' || tick.did === 'unrehearsed' || input.dryRun) break;
-    if (tick.did === 'failed' && tick.retryInMs === null) break;
-    if (i + 1 < ticks) {
-      // A recoverable failure names its own wait — long enough for the
-      // indexer to show the block a lost receipt was about, or for a ctime
-      // race to pass — and the next turn's read is what settles it. Ticking
-      // again at once would plan from the state the submission just changed.
-      const waitMs = Math.max(input.pollMs ?? 0, tick.did === 'failed' ? (tick.retryInMs ?? 0) : 0);
-      if (waitMs > 0) await new Promise((r) => setTimeout(r, waitMs));
-    }
-  }
+      return runConductorTick({
+        attempt,
+        launchId: input.launchId,
+        contractAddress: input.contractAddress,
+        readSnapshot: async () => {
+          current = await read();
+          return current.snapshot;
+        },
+        now: () => (input.atSeconds !== undefined ? BigInt(input.atSeconds) : BigInt(Math.floor(Date.now() / 1000))),
+        nowMs: () => Date.now(),
+        gate,
+        fundingWalletKey: input.walletSeedHex,
+        rehearsal,
+        dryRun: input.dryRun,
+        rehearsalNote: input.rehearsalNote,
+        settlementsComplete: () => {
+          const chain = current;
+          if (!chain) return undefined;
+          const verdict = settlementCompleteness(contextFor(chain));
+          // "Unknown" is not "no" — it is the planner's own signal that the
+          // record must not be closed, and it reads an absent value as exactly
+          // that. Flattening it to false here would lose the distinction the
+          // planner's own comment turns on.
+          return verdict.complete === 'unknown' ? undefined : verdict.complete;
+        },
+        canSupplyOffChainInput: (action) => {
+          const chain = current;
+          if (!chain) return false;
+          return planCall(action, contextFor(chain)).ok;
+        },
+        submit: async (action) => {
+          const chain = current;
+          if (!chain) throw new Error('the chain read did not complete before the action was built');
+          const plan = planCall(action, contextFor(chain));
+          if (!plan.ok) {
+            // Reached only if the state moved between the check above and here,
+            // which is a real possibility on a chain and not a fault. Reported
+            // as a banked failure rather than thrown, so it classifies like any
+            // other refusal instead of ending the run.
+            return { stdout: '', stderr: `[conduct] needs ${plan.missing}`, exitCode: 1 };
+          }
+          if (plan.call.needsGovernorSecret && !input.governorSecretHex) {
+            return {
+              stdout: '',
+              stderr: `[conduct] ${plan.call.action} must present the governor secret`,
+              exitCode: 1,
+            };
+          }
+          return runAction(
+            cliPath,
+            {
+              ...base,
+              action: plan.call.action,
+              ...plan.call.args,
+              ...(plan.call.needsGovernorSecret ? { governorSecretHex: input.governorSecretHex } : {}),
+            },
+            timeoutMs,
+          );
+        },
+      });
+    },
+  });
 
   // Reported alongside the turns because it is the one judgement the conductor
   // cannot make for itself, and an operator reading a run needs to see what it

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { DarkVeilState, LaunchPhase } from '../../contracts/midnight/compiled/eligibility_gate/contract/index.js';
-import { type ConductorTickInput, describeTick, runConductorTick } from '../conductor-tick.js';
+import { type ConductorTickInput, describeTick, runConductorTick, runConductorTurns } from '../conductor-tick.js';
 import type { DarkVeilSnapshot } from '../midnight-public-state.js';
 import {
   DEFAULT_REHEARSAL_TTL_MS,
@@ -378,5 +378,81 @@ describe('one turn of the conductor', () => {
         }),
       ),
     ).rejects.toThrow('indexer unreachable');
+  });
+});
+
+describe('a run of turns', () => {
+  const refused = (code: number): BankedJobResult => ({
+    stderr: `1010: Invalid Transaction: Custom error: ${code}`,
+    exitCode: 1,
+  });
+  const landed: BankedJobResult = { stdout: '{}', exitCode: 0 };
+
+  /** A run whose submissions answer from `script` in order, recording what it was told. */
+  function scripted(script: BankedJobResult[], over: Partial<ConductorTickInput> = {}) {
+    const attempts: number[] = [];
+    const slept: number[] = [];
+    let i = 0;
+    return {
+      attempts,
+      slept,
+      turn: (attempt: number) => {
+        attempts.push(attempt);
+        return runConductorTick(
+          tickInput({
+            attempt,
+            submit: async () => script[Math.min(i++, script.length - 1)] as BankedJobResult,
+            ...over,
+          }),
+        );
+      },
+      sleep: async (ms: number) => {
+        slept.push(ms);
+      },
+    };
+  }
+
+  it('does not spend a turn on a refusal the node asks us to retry', async () => {
+    // A 170 changed nothing on chain. Charged to the budget, it ended a
+    // settlement run one turn short of its finalize.
+    const run = scripted([refused(170), landed, landed]);
+    const turns = await runConductorTurns({ ticks: 2, turn: run.turn, sleep: run.sleep });
+    expect(turns.map((t) => t.did)).toEqual(['failed', 'submitted', 'submitted']);
+  });
+
+  it('bounds those retries by their own budget', async () => {
+    const run = scripted([refused(170)]);
+    const turns = await runConductorTurns({ ticks: 1, retries: 2, turn: run.turn, sleep: run.sleep });
+    // Two absorbed, then the third spends the only turn.
+    expect(turns).toHaveLength(3);
+    expect(turns.every((t) => t.did === 'failed')).toBe(true);
+  });
+
+  it('grows the backoff across consecutive failures and resets it after a landing', async () => {
+    const run = scripted([refused(170), refused(170), landed, refused(170), landed]);
+    const turns = await runConductorTurns({ ticks: 2, turn: run.turn, sleep: run.sleep });
+    expect(turns.filter((t) => t.did === 'submitted')).toHaveLength(2);
+    expect(run.attempts).toEqual([1, 2, 3, 1, 2]);
+    // 6 s, then 12 s for the same action's second failure, then 6 s again.
+    expect(run.slept).toEqual([6_000, 12_000, 6_000]);
+  });
+
+  it('still ends the run on a refusal a person has to look at', async () => {
+    const run = scripted([refused(117), landed]);
+    const turns = await runConductorTurns({ ticks: 5, turn: run.turn, sleep: run.sleep });
+    expect(turns.map((t) => t.did)).toEqual(['failed']);
+  });
+
+  it('spends a turn on a stale wallet, whose wait is long enough to be seen', async () => {
+    const run = scripted([refused(196), landed]);
+    const turns = await runConductorTurns({ ticks: 1, turn: run.turn, sleep: run.sleep });
+    expect(turns.map((t) => t.did)).toEqual(['failed']);
+  });
+
+  it('ends at once when nothing is due, and after one turn of a dry run', async () => {
+    const early = scripted([landed], { now: () => REG_OPEN - 1n });
+    expect(await runConductorTurns({ ticks: 5, turn: early.turn, sleep: early.sleep })).toHaveLength(1);
+    const dry = scripted([landed], { dryRun: true });
+    expect(await runConductorTurns({ ticks: 5, dryRun: true, turn: dry.turn, sleep: dry.sleep })).toHaveLength(1);
   });
 });
