@@ -366,6 +366,16 @@ batcher choosing not to, under a stated rule; and `failed` is the only one that
 is ever an alarm. A monitor that cannot tell an idle market from a broken one
 pages for the first and stays silent through the second.
 
+**Deposit and redeem requests ride the same chain.** The reader lists them
+beside swap orders, all three kinds are merged into one sequence by the same
+chain facts, and each liquidity fill is planned against the pool as the fill
+before it left it. Their outcomes come back in the same four kinds, reported
+beside the swaps' rather than mixed into them.
+
+**The rounds run on the platform's schedule, outside this package.** What is
+here is the loop, the fill and the reading they call. Splash's executor is
+unlicensed and is not used, so this is written rather than adopted.
+
 ### What the executor's float has to be
 
 A fill has two inputs and neither is the executor's — the order pays for its
@@ -631,7 +641,8 @@ of what each side needs:
   collecting are built on a transaction library that signs with keys a server
   holds, and the widget builds alias it to an empty module.
 
-So a browser can price, place, watch and withdraw, and can never move a pool.
+So a browser can price, place, watch and withdraw a swap, a deposit or a
+redeem, and can never move a pool.
 That is checked against the built bundle rather than the import graph — the
 shipped file contains no executor symbol at all.
 
@@ -643,6 +654,8 @@ Two shapes make the placer's half possible:
 - **Cancelling is a real script spend, and it fits.** `swap_order` compiles to
   3,448 bytes against the 16,384-byte transaction cap, so a browser can carry
   it and the owner's exit needs no reference script and nobody's cooperation.
+  The deposit and redeem requests are smaller still, 2,495 and 2,389 bytes, so
+  a browser refunds a liquidity request the same way.
   The launch curve is the contrast: its Cardano Launch validator is 14,226
   bytes and cannot be spent from a browser at all, which is why that path
   places orders and never touches the curve.
@@ -669,11 +682,6 @@ than about the order. Those positions never move once a transaction is on
 chain, so they are cached and a second look costs nothing.
 
 ## Not here yet
-
-Running the batcher in production: where it is hosted, how its key is held, and
-what watches it. The loop, the fill and the reading are here and tested; the
-operational half is a deployment decision the build plan tracks. Splash's
-executor is unlicensed and is not used, so this is written rather than adopted.
 
 The aggregator-facing price feed's wire format. Everything it is built from is
 here — a pool's market state from its current UTXO, and a stream of trades with

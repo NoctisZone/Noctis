@@ -23,8 +23,12 @@ High-level structural diagrams for the protocol. For full contract specs, consta
 > backend was built out (voter identity, balance-snapshot builder, relay, badge)
 > though the vote-casting transaction layer is still unbuilt; and **the Staking
 > Rewards Pool was rebuilt to run unattended** — see the Staking section below.
-> Current counts (re-verified this pass, real compile+test runs): **12 Aiken
-> validator modules / 549 checks, 8 Compact PSMs / 502 tests**.
+> **The NoctisSwap venue fills liquidity as well as swaps:** deposit and redeem
+> requests ride the batcher's sequence beside swap orders, and the venue site
+> reads its pools from the chain — see the NoctisSwap Venue section.
+> Current counts (real compile+test runs in CI): **12 launch validators / 522
+> checks and 9 venue validators / 235 checks in Aiken, 8 Compact PSMs / 568
+> tests**.
 >
 > **`token_metadata.ak` (CIP-68 on-chain logo):** a validator plus one-shot
 > minting policy for a mutable, creator/CTO-controlled reference-NFT logo — not a
@@ -44,6 +48,7 @@ High-level structural diagrams for the protocol. For full contract specs, consta
 - [Midnight PSM Flow (DarkVeil)](#midnight-psm-flow-darkveil)
 - [Midnight Wallet Operations (off-chain)](#midnight-wallet-operations-off-chain)
 - [Graduation Flow (Cardano Launch — LP Seeding)](#graduation-flow-cardano-launch--lp-seeding)
+- [NoctisSwap Venue (orders, liquidity requests, the batcher)](#noctisswap-venue-orders-liquidity-requests-the-batcher)
 - [Staking Rewards Pool](#staking-rewards-pool)
 - [Failure & Refund Flow (Stuck Curve, Cancelled Launch)](#failure--refund-flow-stuck-curve-cancelled-launch)
 - [CTO Governance Flow](#cto-governance-flow)
@@ -345,6 +350,76 @@ notes in `CLAUDE.md` for the same off-chain-computed, on-chain-verified shape.
 
 ---
 
+## NoctisSwap Venue (orders, liquidity requests, the batcher)
+
+A graduated Cardano launch trades on its own NoctisSwap pool, which the graduation
+transaction opens (see above). Nobody trades against the pool directly. Every action
+is a request that rests at its own script address until the batcher fills it, and
+each fill is checked by both the pool's validator and the request's. The venue's
+contracts are their own Aiken package, `contracts/cardano-dex`, whose README is the
+full reference.
+
+```
+  PLACER: a browser wallet, on the launch page's trading panel
+  placing is an ordinary payment, so no script runs
+                                 │
+          ┌──────────────────────┼──────────────────────┐
+          ▼                      ▼                      ▼
+┌──────────────────┐   ┌──────────────────┐   ┌──────────────────┐
+│ SWAP ORDER       │   │ DEPOSIT REQUEST  │   │ REDEEM REQUEST   │
+│ swap_order.ak    │   │ deposit_order.ak │   │ redeem_order.ak  │
+│ a price floor    │   │ both sides to add│   │ LQ, to hand back │
+└──────────────────┘   └──────────────────┘   └──────────────────┘
+          │                      │                      │
+          └──────────────────────┼──────────────────────┘
+                                 ▼
+┌────────────────────────────────────────────────────────────────┐
+│ BATCHER: the platform's scheduled round                        │
+│ reads the pool and every resting request, and fills them in    │
+│ the order the chain accepted them, one per transaction:        │
+│ exactly two inputs, the pool and the request                   │
+└────────────────────────────────────────────────────────────────┘
+                                 │
+                                 ▼
+┌────────────────────────────────────────────────────────────────┐
+│ POOL: pool.ak, one UTXO per launch, carrying its pool NFT      │
+│ swap:    the reserves move along the pool's curve              │
+│ deposit: mints lq = min(floor(dX·L/rX), floor(dY·L/rY))        │
+│          and takes ceil(lq·r/L) of each side                   │
+│ redeem:  burns lq and pays floor(lq·r/L) of each side          │
+└────────────────────────────────────────────────────────────────┘
+                                 │
+                                 ▼
+  the placer's output, at the address the request names: what
+  the swap bought, the LQ a deposit minted or the assets a
+  redeem released, with the rest of a deposit and the unused fee
+```
+
+- **Placing is a payment; taking back is a spend.** Creating a request runs no
+  script, so the launch page's trading panel places swaps, deposits and redeems from
+  an ordinary browser wallet. A cancel or a refund is the owner's own script spend,
+  and pays where the request said when it was written. The request validators are
+  small enough to carry in a browser transaction: 3,448 bytes for a swap, 2,495 for
+  a deposit and 2,389 for a redeem.
+- **The chain sets the order.** Swaps and liquidity requests are merged into one
+  sequence by where the chain placed them (block, then transaction, then output),
+  and each fill is planned against the pool as the previous fill left it.
+- **A fill has exactly two inputs, and the executor supplies neither.** Its payment
+  and the network fee come out of the fee the request names, and whatever the fill
+  does not use goes back to the placer.
+- **Liquidity is priced exactly as the pool prices it.** A deposit's LQ, the part of
+  each side it takes and a redeem's payout follow the pool validator's own integer
+  arithmetic, so a planned fill and the validator never disagree. On Preprod every
+  deposit, redeem and refund paid what the planner computed, to the lovelace.
+
+**Reading the market.** The platform site reads each pool from the chain: its trades
+at the prices they cleared, the resting requests, providers and holders, 24-hour
+figures and hourly candles. It serves them on one public route, and noctisswap.zone
+renders what that route returns. A connected wallet's own positions are read in the
+browser from the wallet itself, so no address is sent to a server.
+
+---
+
 ## Staking Rewards Pool
 
 An optional per-launch pool a creator funds out of the launch's own supply. Once
@@ -415,10 +490,12 @@ separate staking contract could take custody of it. Reward *claiming* there is
 real: the payout is minted to the staker directly. The trustless custody model
 above is the Cardano one.
 
-> **Not yet exercised on a real chain.** The contracts, their 549 checks and the
-> browser-signed UI are all in place; a Preprod run of stake → claim → unstake →
-> top-up → close has not been done. Pools created before this rebuild sit at the
-> previous validator's address and cannot be reached by the new one.
+> **Exercised on Preprod, 2026-09-23.** A rehearsal launch's graduation seeded its
+> pool; from the browser panel a position was staked, a reward was claimed with its
+> 5 ADA charge, and an early unstake was refused by the seven-day lock. An unstake
+> after the lock, a top-up and a close have not yet run on a real chain. Pools
+> created before the rebuild sit at the previous validator's address and cannot be
+> reached by the new one.
 
 ---
 
@@ -607,6 +684,7 @@ build with the next validator release.
 | CTO Sybil-Challenge Contract | ✓ | ✓ | Cardano L1 (`cto_sybil_challenge.ak` — bonded, governor-adjudicated secondary defence against a creator voting through wallets other than their registered `creatorKey` to evade `maxVoterCap`; a structural adaptation of `nhop_challenge.ak`) |
 | Staking Rewards Pool | ✓ `staking_pool.ak` | ✓ `staking_pool.compact` | Cardano L1 (Aiken) / Midnight — optional per launch; see the Staking Rewards Pool section |
 | Token Metadata (CIP-68 logo) | ✓ | not yet built | Cardano L1 (`token_metadata.ak` — mutable, creator/CTO-controlled reference-NFT metadata, decoupled from the platform's own time-locked minting policy) |
+| NoctisSwap venue (pool, swap / deposit / redeem requests, royalty withdraw, royalty redirect, platform treasury) | ✓ `contracts/cardano-dex` | — | Cardano L1 (Aiken; see the NoctisSwap Venue section and the package's README) |
 
 **CTO fee-redirect (2026-07-12) — applies across every row above with a fee/token stream:** until this fix, none of the three bonding curve contracts, Creator Fee Escrow, Vesting, or LP Escrow had any CTO-awareness at all — a passed CTO vote never actually redirected the creator fee, unvested tokens, or LP trading fees to the community wallet, regardless of what `cto_governance`'s own vote-tallying logic said. Fixed by adding the same `ctoTriggered`/community-wallet pattern (`TriggerCTO`/`DissolveCTO` or `triggerCTO`/`dissolveCTO`) to every one of them. Each contract's own trigger must still be called as a separate, off-chain-orchestrated transaction after a vote passes — no cross-contract call mechanism exists to do this atomically.
 
