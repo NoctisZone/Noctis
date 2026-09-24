@@ -10,7 +10,12 @@
 
 import { Constr } from '@lucid-evolution/lucid';
 import { describe, expect, it } from 'vitest';
-import { capAccumulatorFromHistory, deltasOf, rebuildCapAccumulator } from '../cap-accumulator-from-history.js';
+import {
+  capAccumulatorFromHistory,
+  deltasOf,
+  rebuildCapAccumulator,
+  rebuildCapAccumulatorFrom,
+} from '../cap-accumulator-from-history.js';
 import { bytesToHex, CapAccumulator, hexToBytes } from '../cap-accumulator-tree.js';
 import type { TradeEvent } from '../tier-a-trade-history-reader.js';
 
@@ -145,5 +150,65 @@ describe('rebuilding against the curve’s own root', () => {
   it('refuses a rebuild the curve disagrees with, naming both roots', async () => {
     const wrong = bytesToHex(new CapAccumulator().root);
     await expect(rebuildCapAccumulator(source, wrong)).rejects.toThrow(new RegExp(wrong));
+  });
+});
+
+describe('continuing from a checkpoint', () => {
+  // Four curve transactions, oldest first; each carries its own hash so the
+  // source can answer "everything after this one" the way the reader does.
+  const at = (n: number, e: TradeEvent): TradeEvent => ({ ...e, txHash: String(n).repeat(64).slice(0, 64) });
+  const history = [
+    at(1, event('ClaimDarkVeilTokens', { buyer_key_hash: ALICE, token_amount: '100' })),
+    at(2, batch(batchOrder(ALICE, true, 50n), batchOrder(BOB, true, 70n))),
+    at(3, batch(batchOrder(ALICE, false, 30n))),
+    at(4, batch(batchOrder(BOB, false, 500n), batchOrder(ALICE, true, 5n))),
+  ];
+  const asked: (string | undefined)[] = [];
+  const source = {
+    getCurveTradeHistory: async (stop?: string) => {
+      asked.push(stop);
+      const from = stop ? history.findIndex((e) => e.txHash === stop) + 1 : 0;
+      return history.slice(from);
+    },
+  };
+  const full = capAccumulatorFromHistory(history);
+  const root = bytesToHex(full.root);
+  const checkpointAfter = (n: number) => {
+    const acc = capAccumulatorFromHistory(history.slice(0, n));
+    return {
+      headTxHash: history[n - 1]?.txHash as string,
+      capState: acc.entries().map((e) => ({ keyHashHex: bytesToHex(e.key), total: e.total })),
+    };
+  };
+
+  it('reads only what came after the checkpoint and lands on the same totals as a full replay', async () => {
+    asked.length = 0;
+    const r = await rebuildCapAccumulatorFrom(source, root, checkpointAfter(2));
+    expect(r.incremental).toBe(true);
+    expect(r.replayed).toBe(2);
+    expect(asked).toEqual([history[1]?.txHash]);
+    expect(bytesToHex(r.acc.root)).toBe(root);
+    // The sell floored at zero on the way: BOB sold more than he held.
+    expect(r.acc.totalOf(hexToBytes(BOB))).toBe(0n);
+    expect(r.acc.totalOf(hexToBytes(ALICE))).toBe(125n);
+  });
+
+  it('costs nothing new when nothing has happened since the checkpoint', async () => {
+    const r = await rebuildCapAccumulatorFrom(source, root, checkpointAfter(4));
+    expect(r).toMatchObject({ incremental: true, replayed: 0 });
+  });
+
+  it('replays from the start when the checkpoint does not reach the datum’s root', async () => {
+    asked.length = 0;
+    const stale = { ...checkpointAfter(2), capState: [{ keyHashHex: ALICE, total: '999' }] };
+    const r = await rebuildCapAccumulatorFrom(source, root, stale);
+    expect(r.incremental).toBe(false);
+    expect(asked).toEqual([history[1]?.txHash, undefined]);
+    expect(bytesToHex(r.acc.root)).toBe(root);
+  });
+
+  it('still refuses when neither the checkpoint nor a full replay derives the root', async () => {
+    const wrong = bytesToHex(new CapAccumulator().root);
+    await expect(rebuildCapAccumulatorFrom(source, wrong, checkpointAfter(2))).rejects.toThrow(new RegExp(wrong));
   });
 });

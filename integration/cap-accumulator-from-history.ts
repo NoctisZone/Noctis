@@ -39,7 +39,7 @@
 // here would put the rebuild permanently out of step with the chain.
 
 import { Constr } from '@lucid-evolution/lucid';
-import { bytesToHex, CapAccumulator, hexToBytes } from './cap-accumulator-tree.js';
+import { bytesToHex, CapAccumulator, capAccumulatorFromHex, hexToBytes } from './cap-accumulator-tree.js';
 import type { TradeEvent } from './tier-a-trade-history-reader.js';
 
 /** Where in a `BatchOrder` each field sits — see the type in either curve. */
@@ -128,9 +128,31 @@ export function capAccumulatorFromHistory(events: readonly TradeEvent[]): CapAcc
   return acc;
 }
 
-/** What a reader has to provide. `TierATradeHistoryReader` satisfies it. */
+/**
+ * What a reader has to provide. `TierATradeHistoryReader` satisfies it.
+ *
+ * `stopAtTxHash` returns only what happened after that curve transaction,
+ * oldest first; without it, the whole history.
+ */
 export interface CurveHistorySource {
-  getCurveTradeHistory(): Promise<TradeEvent[]>;
+  getCurveTradeHistory(stopAtTxHash?: string): Promise<TradeEvent[]>;
+}
+
+/**
+ * Where an earlier rebuild stood: the curve transaction it had reached, and
+ * every wallet's total at that point.
+ */
+export interface CapCheckpoint {
+  headTxHash: string;
+  capState: readonly { keyHashHex: string; total: bigint | string }[];
+}
+
+export interface CapRebuild {
+  acc: CapAccumulator;
+  /** True when the checkpoint was used; false for a replay from the start. */
+  incremental: boolean;
+  /** Events replayed to get here. */
+  replayed: number;
 }
 
 /**
@@ -141,11 +163,28 @@ export interface CurveHistorySource {
  * refuses to hand back an accumulator that does not derive it, rather than
  * letting the mismatch surface later as a proof that fails against a validator
  * with nothing useful to say.
+ *
+ * WITH A CHECKPOINT, only the transactions after it are read and folded onto
+ * its totals. The fold is sequential and the checkpoint is the fold of
+ * everything before it, so the result is the same accumulator a replay from
+ * the start would give, for the cost of the new transactions alone. It is held
+ * to the same root check, and a checkpoint that does not reach the datum's
+ * root (stale, or taken on a chain that has since moved) costs one full
+ * replay, never a wrong answer.
  */
-export async function rebuildCapAccumulator(
+export async function rebuildCapAccumulatorFrom(
   source: CurveHistorySource,
   expectedCapRootHex: string,
-): Promise<CapAccumulator> {
+  checkpoint?: CapCheckpoint,
+): Promise<CapRebuild> {
+  if (checkpoint) {
+    const events = await source.getCurveTradeHistory(checkpoint.headTxHash);
+    const acc = capAccumulatorFromHex(checkpoint.capState);
+    for (const event of events) {
+      for (const { keyHashHex, delta } of deltasOf(event)) acc.apply(hexToBytes(keyHashHex), delta);
+    }
+    if (bytesToHex(acc.root) === expectedCapRootHex) return { acc, incremental: true, replayed: events.length };
+  }
   const events = await source.getCurveTradeHistory();
   const acc = capAccumulatorFromHistory(events);
   const derived = bytesToHex(acc.root);
@@ -156,5 +195,13 @@ export async function rebuildCapAccumulator(
         'moved the root — do not trade against this until it does.',
     );
   }
-  return acc;
+  return { acc, incremental: false, replayed: events.length };
+}
+
+/** A replay from the start — see {@link rebuildCapAccumulatorFrom}. */
+export async function rebuildCapAccumulator(
+  source: CurveHistorySource,
+  expectedCapRootHex: string,
+): Promise<CapAccumulator> {
+  return (await rebuildCapAccumulatorFrom(source, expectedCapRootHex)).acc;
 }

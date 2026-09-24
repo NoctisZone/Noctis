@@ -10,11 +10,19 @@
 // gets either a usable answer or a refusal — never a plausible-looking list
 // that would produce proofs the validator rejects.
 //
+// Given `since` — the `headTxHash` and `capState` an earlier run printed — it
+// reads only the curve transactions after that one and folds them onto those
+// totals, under the same root check; a checkpoint that does not reach the
+// datum's root falls back to a replay from the start. A caller that polls (the
+// batcher does, every tick) keeps what this prints and passes it back, so a
+// tick costs the transactions since the last one rather than the launch's
+// whole history.
+//
 // Input: single JSON object on stdin. Output: single JSON object on stdout.
 // ============================================================================
 
 import { Blockfrost, Data, Lucid, validatorToAddress } from '@lucid-evolution/lucid';
-import { rebuildCapAccumulator } from '../cap-accumulator-from-history.js';
+import { rebuildCapAccumulatorFrom } from '../cap-accumulator-from-history.js';
 import { bytesToHex } from '../cap-accumulator-tree.js';
 import { selectLaunchUtxo } from '../launch-utxo-lookup.js';
 import { BondingCurveTierBDatumSchema } from '../tier-a-schemas.js';
@@ -38,6 +46,8 @@ interface Input {
   blockfrostProjectId: string;
   blockfrostUrl: string;
   tier: 'B';
+  /** An earlier run's `headTxHash` and `capState`, to continue from. */
+  since?: { headTxHash: string; capState: { keyHashHex: string; total: string }[] };
 }
 
 const CURVE_TITLE = 'bonding_curve_tier_b.bonding_curve_tier_b.spend';
@@ -94,12 +104,21 @@ async function main() {
     tier: input.tier,
   } as never);
 
-  const acc = await rebuildCapAccumulator(reader, cap_root);
+  const since =
+    input.since && /^[0-9a-f]{64}$/.test(input.since.headTxHash) && Array.isArray(input.since.capState)
+      ? input.since
+      : undefined;
+  const { acc, incremental, replayed } = await rebuildCapAccumulatorFrom(reader, cap_root, since);
   process.stdout.write(
     JSON.stringify(
       jsonSafe({
         capRoot: cap_root,
         capState: acc.entries().map((e) => ({ keyHashHex: bytesToHex(e.key), total: e.total })),
+        // The curve transaction these totals are current to: pass it back as
+        // `since.headTxHash` next time.
+        headTxHash: found.utxo.txHash,
+        incremental,
+        replayed,
       }),
     ),
   );
