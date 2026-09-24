@@ -60,8 +60,10 @@ import {
   type SkippedUtxo,
   type VenueChainProvider,
   type VenueFillCandidate,
+  type VenueLiquidityCandidate,
 } from './venue-chain-reader.js';
 import type { VenueFiller, VenueFillPlan } from './venue-fill-submitter.js';
+import { planVenueLiquidityFill, type VenueLiquidityOrderUtxo, venueLiquidityFillable } from './venue-liquidity.js';
 import { VenuePoolConfigSchema } from './venue-pool.js';
 import {
   planVenueSwapFill,
@@ -108,6 +110,13 @@ export interface VenueBatcherConfig {
   network: CurveNetwork;
   poolAddress: string;
   orderAddress: string;
+  /**
+   * The deposit and redeem request addresses. Unset, the batcher fills swaps
+   * only; set, it fills requests to add and remove liquidity too, in the same
+   * chain order as everything else.
+   */
+  depositAddress?: string;
+  redeemAddress?: string;
   /** The factory's minting policy — what makes a pool a pool. Required. */
   factoryPolicyId: string;
   /** The protocol's minimum for an output, from the protocol parameters. */
@@ -161,9 +170,28 @@ export interface VenueFailedOutcome {
 
 export type VenueFillOutcome = VenueFilledOrder | VenueUnfillableOutcome | VenueDeclinedOutcome | VenueFailedOutcome;
 
+/**
+ * What happened to one deposit or redeem request. The same four outcomes as a
+ * swap, and they mean the same things, except that a request has no price to
+ * wait for: `unfillable` here means it never will be, and says why.
+ */
+export type VenueLiquidityOutcome =
+  | {
+      status: 'filled';
+      order: VenueLiquidityOrderUtxo;
+      txHash: string;
+      /** LQ the pool released (a deposit) or took back (a redeem). */
+      lq: bigint;
+      exFeeTaken: bigint;
+      networkFee: bigint;
+    }
+  | { status: 'unfillable' | 'declined' | 'failed'; order: VenueLiquidityOrderUtxo; reason: string };
+
 export interface VenueBatcherRound {
   /** One per order read, in the order fills are obliged to follow. */
   outcomes: VenueFillOutcome[];
+  /** One per deposit or redeem request read, in the same chain order. */
+  liquidityOutcomes: VenueLiquidityOutcome[];
   /** UTXOs at either address the reader declined, each with a reason. */
   skipped: SkippedUtxo[];
   filled: number;
@@ -181,9 +209,14 @@ function keyHashOf(address: string): string {
   return hash;
 }
 
-function orderKey(order: VenueSwapOrderUtxo): string {
+function orderKey(order: { txHash: string; outputIndex: number }): string {
   return `${order.txHash}#${order.outputIndex}`;
 }
+
+/** One piece of the round's work, whichever kind of order it is. */
+type RoundWork =
+  | { kind: 'swap'; candidate: VenueFillCandidate; outputIndex: number; placedAt?: VenueOrderPosition }
+  | { kind: 'liquidity'; candidate: VenueLiquidityCandidate; outputIndex: number; placedAt?: VenueOrderPosition };
 
 /**
  * Runs rounds of fills against the venue.
@@ -251,9 +284,17 @@ export class VenueBatcher {
       factoryPolicyId: this.config.factoryPolicyId,
       fillCostLovelace: this.config.fillCostLovelace,
       positions: this.placements,
+      ...(this.config.depositAddress ? { depositAddress: this.config.depositAddress } : {}),
+      ...(this.config.redeemAddress ? { redeemAddress: this.config.redeemAddress } : {}),
+      network: LUCID_NETWORK[this.config.network],
+      minOutputLovelace: this.config.minOutputLovelace,
     });
 
     const outcomes = new Map<string, VenueFillOutcome>();
+    const liquidityOutcomes = new Map<string, VenueLiquidityOutcome>();
+    for (const entry of round.liquidityUnfillable) {
+      liquidityOutcomes.set(orderKey(entry.order), { status: 'unfillable', order: entry.order, reason: entry.reason });
+    }
     for (const entry of round.unfillable) {
       outcomes.set(orderKey(entry.order), {
         status: 'unfillable',
@@ -274,7 +315,80 @@ export class VenueBatcher {
     let filled = 0;
     let failed = 0;
 
-    for (const candidate of round.candidates) {
+    // Swaps and liquidity requests meet a pool in ONE sequence — the order the
+    // chain accepted them — so a deposit placed before a swap fills before it,
+    // and neither kind can be moved ahead of the other by the executor.
+    const work: RoundWork[] = venueFillSequence([
+      ...round.candidates.map(
+        (candidate): RoundWork => ({
+          kind: 'swap',
+          candidate,
+          outputIndex: candidate.order.outputIndex,
+          ...(candidate.order.placedAt ? { placedAt: candidate.order.placedAt } : {}),
+        }),
+      ),
+      ...round.liquidity.map(
+        (candidate): RoundWork => ({
+          kind: 'liquidity',
+          candidate,
+          outputIndex: candidate.order.outputIndex,
+          ...(candidate.order.placedAt ? { placedAt: candidate.order.placedAt } : {}),
+        }),
+      ),
+    ]);
+
+    for (const item of work) {
+      if (item.kind === 'liquidity') {
+        const { order } = item.candidate;
+        const key = orderKey(order);
+        const nft = venueUnitOf(order.datum.pool_nft);
+        const declined = this.declineReason({
+          candidate: null,
+          executorKeyHash,
+          abandoned: abandoned.has(nft),
+          poolDepth: depth.get(nft) ?? 0,
+          maxPerPool,
+          roundDepth: filled,
+          maxPerRound,
+        });
+        if (declined) {
+          liquidityOutcomes.set(key, { status: 'declined', order, reason: declined });
+          continue;
+        }
+        const pool = poolNow.get(nft) ?? item.candidate.pool;
+        const answer = venueLiquidityFillable({
+          pool,
+          order,
+          network: LUCID_NETWORK[this.config.network],
+          minOutputLovelace: this.config.minOutputLovelace,
+          ...(this.config.fillCostLovelace !== undefined ? { fillCostLovelace: this.config.fillCostLovelace } : {}),
+        });
+        if (!answer.fillable) {
+          liquidityOutcomes.set(key, { status: 'unfillable', order, reason: answer.reason });
+          continue;
+        }
+        try {
+          const result = await this.fillLiquidity(pool, order);
+          poolNow.set(nft, result.nextPool);
+          depth.set(nft, (depth.get(nft) ?? 0) + 1);
+          filled += 1;
+          liquidityOutcomes.set(key, {
+            status: 'filled',
+            order,
+            txHash: result.txHash,
+            lq: result.lq,
+            exFeeTaken: result.exFeeTaken,
+            networkFee: result.networkFee,
+          });
+        } catch (error) {
+          abandoned.add(nft);
+          failed += 1;
+          liquidityOutcomes.set(key, { status: 'failed', order, reason: describeThrown(error) });
+        }
+        continue;
+      }
+
+      const { candidate } = item;
       const key = orderKey(candidate.order);
       const nft = venueUnitOf(candidate.order.datum.pool_nft);
       const declined = this.declineReason({
@@ -340,12 +454,13 @@ export class VenueBatcher {
       ...round.candidates.map((candidate) => candidate.order),
       ...round.unfillable.map((entry) => entry.order),
     ]);
-    // Only the transactions still holding orders are worth remembering.
-    this.placements = new Map(
-      everyOrder
-        .filter((order) => this.placements.has(order.txHash))
-        .map((order) => [order.txHash, this.placements.get(order.txHash) as VenueOrderPosition]),
-    );
+    const everyRequest = venueFillSequence([
+      ...round.liquidity.map((candidate) => candidate.order),
+      ...round.liquidityUnfillable.map((entry) => entry.order),
+    ]);
+    // Only the transactions still holding orders or requests are worth remembering.
+    const resting = new Set([...everyOrder, ...everyRequest].map((order) => order.txHash));
+    this.placements = new Map([...this.placements].filter(([txHash]) => resting.has(txHash)));
 
     return {
       outcomes: everyOrder.map((order) => {
@@ -353,6 +468,16 @@ export class VenueBatcher {
         /* c8 ignore next 4 -- every order was read into exactly one bucket above. */
         if (!outcome) {
           throw new Error(`Order ${orderKey(order)} was read this round and reported in none of the four outcomes.`);
+        }
+        return outcome;
+      }),
+      liquidityOutcomes: everyRequest.map((request) => {
+        const outcome = liquidityOutcomes.get(orderKey(request));
+        /* c8 ignore next 5 -- every request was read into exactly one bucket above. */
+        if (!outcome) {
+          throw new Error(
+            `Request ${orderKey(request)} was read this round and reported in none of the four outcomes.`,
+          );
         }
         return outcome;
       }),
@@ -364,7 +489,8 @@ export class VenueBatcher {
 
   /** Why this batcher will not take a candidate on, or null if it will. */
   private declineReason(args: {
-    candidate: VenueFillCandidate;
+    /** A swap candidate, or null for a liquidity request, which names no executors. */
+    candidate: VenueFillCandidate | null;
     executorKeyHash: string;
     abandoned: boolean;
     poolDepth: number;
@@ -372,8 +498,7 @@ export class VenueBatcher {
     roundDepth: number;
     maxPerRound?: number;
   }): string | null {
-    const swap = args.candidate.order.datum;
-    if (!mayExecute(swap, args.executorKeyHash)) {
+    if (args.candidate && !mayExecute(args.candidate.order.datum, args.executorKeyHash)) {
       return 'the order names permitted executors and this batcher is not one of them';
     }
     if (args.abandoned) {
@@ -472,6 +597,63 @@ export class VenueBatcher {
         assets: poolAssets,
         datum: poolDatum,
       },
+    };
+  }
+
+  /**
+   * Builds, signs and submits one deposit or redeem, and works out what the
+   * pool becomes. The pool's datum does not change under either arm, so the
+   * successor carries the one it had.
+   */
+  private async fillLiquidity(
+    pool: VenuePoolUtxo,
+    order: VenueLiquidityOrderUtxo,
+  ): Promise<{ txHash: string; lq: bigint; exFeeTaken: bigint; networkFee: bigint; nextPool: VenuePoolUtxo }> {
+    let poolAssets: Record<string, bigint> | undefined;
+    let lq = 0n;
+    const makePlan = (executorFee: bigint): VenueFillPlan => {
+      const fill = planVenueLiquidityFill({
+        pool,
+        order,
+        network: LUCID_NETWORK[this.config.network],
+        executorFee,
+        minOutputLovelace: this.config.minOutputLovelace,
+        ...(this.config.fillCostLovelace !== undefined ? { fillCostLovelace: this.config.fillCostLovelace } : {}),
+      });
+      poolAssets = fill.poolAssets;
+      lq = fill.lq;
+      return {
+        kind: order.kind,
+        pool: { txHash: pool.txHash, outputIndex: pool.outputIndex, address: pool.address, assets: pool.assets },
+        order: { txHash: order.txHash, outputIndex: order.outputIndex, address: order.address, assets: order.assets },
+        poolOutput: {
+          address: pool.address,
+          assets: fill.poolAssets,
+          datumCbor: Data.to(pool.datum, VenuePoolConfigSchema),
+        },
+        successorOutput: { address: fill.reward.address, assets: fill.reward.assets },
+      };
+    };
+
+    const { txHex, executorFee, networkFee } = await this.config.filler.buildSettled(
+      makePlan,
+      this.config.wallet,
+      this.config.executorPayoutLovelace === undefined
+        ? {}
+        : { executorPayoutLovelace: this.config.executorPayoutLovelace },
+    );
+    const txHash = await this.config.wallet.submitTx(await this.config.wallet.signTx(txHex));
+
+    /* c8 ignore next 3 -- makePlan has run twice by here; both set it. */
+    if (!poolAssets) {
+      throw new Error('The fill was built without planning the pool successor. This should be unreachable.');
+    }
+    return {
+      txHash,
+      lq,
+      exFeeTaken: executorFee,
+      networkFee,
+      nextPool: { txHash, outputIndex: 0, address: pool.address, assets: poolAssets, datum: pool.datum },
     };
   }
 

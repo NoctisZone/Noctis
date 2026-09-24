@@ -97,6 +97,7 @@ System overview and Midnight PSM flow diagrams, plus a full table of which contr
 - [x] **The Cardano launch lifecycle proven end-to-end on real Preprod** — mint → buy → graduate → LP lock → creator vesting claim → stall/expire/buyback, every step a real, explorer-verifiable transaction
 - [x] **The full DarkVeil lifecycle rehearsed on Preprod** — registration through private buying, settlement and bond refunds, reconciled against the chain
 - [x] Multiple full adversarial security review passes across both chains — every finding resolved or explicitly accepted, all covered by regression tests. Posture summary in `docs/SECURITY_MODEL.md`
+- [x] NoctisSwap venue — the pool a graduation opens, trading by swap orders, and adding or removing liquidity by deposit and redeem requests, all filled by a batcher in the order the chain accepted them. Each fill is priced exactly as the pool and order validators price it, proven on Preprod; a venue site reads every pool's trades, queue, providers and holders from the chain
 - [x] Staking Rewards Pool — an optional per-launch pool that runs unattended once opened: the contract computes what each position is owed from elapsed time, so no key, signature or published snapshot decides a payout. Browser-wallet-signed stake/unstake/claim on a Cardano launch
 - [x] CTO Governance — both chains' contracts complete and audited, with an extensive off-chain backend (voter identity, balance-snapshot, relay, sybil-challenge). Vote-casting UI is the one piece still unbuilt — see What's next
 

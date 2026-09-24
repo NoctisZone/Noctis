@@ -40,8 +40,16 @@
 // chain order; this does not rely on that.
 // ============================================================================
 
-import { Data } from '@lucid-evolution/lucid';
+import { Data, type Network as LucidNetwork } from '@lucid-evolution/lucid';
 import { VENUE_ROLES } from './tier-a-schemas.js';
+import {
+  type VenueDepositConfigData,
+  VenueDepositConfigSchema,
+  type VenueLiquidityOrderUtxo,
+  type VenueRedeemConfigData,
+  VenueRedeemConfigSchema,
+  venueLiquidityFillable,
+} from './venue-liquidity.js';
 import { type VenuePoolConfigData, VenuePoolConfigSchema } from './venue-pool.js';
 import {
   type VenueOrderPosition,
@@ -246,6 +254,91 @@ export async function readVenueSwapOrders(
   return { orders, skipped };
 }
 
+/**
+ * Every open deposit and redeem request at the venue's two request addresses,
+ * with the position the chain accepted each one at.
+ *
+ * The same discipline as the swap reader: a request is not authenticated,
+ * because it can only ever spend itself; one whose datum will not decode, or
+ * that names a pool this reader did not find, comes back in `skipped` with a
+ * reason rather than being dropped. A request is recognised by the address it
+ * sits at — each validator locks one kind — and decoded against that kind.
+ */
+export async function readVenueLiquidityOrders(
+  provider: VenueChainProvider,
+  args: {
+    depositAddress?: string;
+    redeemAddress?: string;
+    knownPools: readonly string[];
+    positions?: Map<string, VenueOrderPosition>;
+    includeUnknownPools?: boolean;
+  },
+): Promise<{ orders: VenueLiquidityOrderUtxo[]; skipped: SkippedUtxo[] }> {
+  const known = new Set(args.knownPools);
+  const positions = args.positions ?? new Map<string, VenueOrderPosition>();
+  const orders: VenueLiquidityOrderUtxo[] = [];
+  const skipped: SkippedUtxo[] = [];
+
+  const sources: Array<{ kind: 'deposit' | 'redeem'; address: string }> = [];
+  if (args.depositAddress) sources.push({ kind: 'deposit', address: args.depositAddress });
+  if (args.redeemAddress) sources.push({ kind: 'redeem', address: args.redeemAddress });
+
+  for (const source of sources) {
+    const utxos = await provider.getAddressUtxosAll(source.address);
+    for (const utxo of utxos) {
+      const at = { txHash: utxo.tx_hash, outputIndex: utxo.output_index };
+      if (!utxo.inline_datum) {
+        skipped.push({ ...at, reason: `no inline datum — a ${source.kind} request states its terms inline` });
+        continue;
+      }
+      let datum: VenueDepositConfigData | VenueRedeemConfigData;
+      try {
+        datum =
+          source.kind === 'deposit'
+            ? Data.from(utxo.inline_datum, VenueDepositConfigSchema)
+            : Data.from(utxo.inline_datum, VenueRedeemConfigSchema);
+      } catch (error) {
+        skipped.push({ ...at, reason: `datum is not a ${source.kind} request: ${(error as Error).message}` });
+        continue;
+      }
+      const nft = venueUnitOf(datum.pool_nft);
+      if (!known.has(nft) && !args.includeUnknownPools) {
+        skipped.push({ ...at, reason: `names pool ${nft}, which is not one of the pools this reader found` });
+        continue;
+      }
+      if (!positions.has(utxo.tx_hash)) {
+        const position = await provider.getTxPosition(utxo.tx_hash);
+        positions.set(utxo.tx_hash, { blockHeight: position.block_height, txIndexInBlock: position.index });
+      }
+      const base = {
+        txHash: utxo.tx_hash,
+        outputIndex: utxo.output_index,
+        address: utxo.address,
+        assets: assetsOf(utxo),
+        placedAt: positions.get(utxo.tx_hash),
+      };
+      orders.push(
+        source.kind === 'deposit'
+          ? { kind: 'deposit', ...base, datum: datum as VenueDepositConfigData }
+          : { kind: 'redeem', ...base, datum: datum as VenueRedeemConfigData },
+      );
+    }
+  }
+  return { orders, skipped };
+}
+
+/** One deposit or redeem to fill, and the pool it meets. */
+export interface VenueLiquidityCandidate {
+  order: VenueLiquidityOrderUtxo;
+  pool: VenuePoolUtxo;
+}
+
+/** A deposit or redeem nobody can fill, and why. */
+export interface VenueUnfillableLiquidityOrder {
+  order: VenueLiquidityOrderUtxo;
+  reason: string;
+}
+
 /** One piece of work: an order, the pool it meets, and how much of it fills. */
 export interface VenueFillCandidate {
   order: VenueSwapOrderUtxo;
@@ -265,6 +358,13 @@ export interface VenueFillRound {
   candidates: VenueFillCandidate[];
   /** Orders no executor can fill as things stand, each with why. */
   unfillable: VenueUnfillableOrder[];
+  /**
+   * Deposit and redeem requests to fill, in the order the chain accepted them.
+   * Empty unless the round was given the request addresses.
+   */
+  liquidity: VenueLiquidityCandidate[];
+  /** Deposit and redeem requests nobody can fill, each with why. */
+  liquidityUnfillable: VenueUnfillableLiquidityOrder[];
   /** Everything the reader declined on the way, pools and orders alike. */
   skipped: SkippedUtxo[];
 }
@@ -292,6 +392,12 @@ export async function readVenueFillRound(
     /** What one fill costs; `VENUE_FILL_FLOOR_LOVELACE` unless measured again. */
     fillCostLovelace?: bigint;
     positions?: Map<string, VenueOrderPosition>;
+    /** The deposit and redeem request addresses. Without them the round reads swaps only. */
+    depositAddress?: string;
+    redeemAddress?: string;
+    /** Needed to judge a liquidity request: its reward address, and an output's minimum. */
+    network?: LucidNetwork;
+    minOutputLovelace?: bigint;
   },
 ): Promise<VenueFillRound> {
   const poolsRead = await readVenuePools(provider, args);
@@ -326,5 +432,41 @@ export async function readVenueFillRound(
     candidates.push({ order, pool, traded: answer.largest });
   }
 
-  return { candidates, unfillable, skipped: [...poolsRead.skipped, ...ordersRead.skipped] };
+  const liquidity: VenueLiquidityCandidate[] = [];
+  const liquidityUnfillable: VenueUnfillableLiquidityOrder[] = [];
+  let liquiditySkipped: SkippedUtxo[] = [];
+  if (args.depositAddress || args.redeemAddress) {
+    const read = await readVenueLiquidityOrders(provider, {
+      ...(args.depositAddress ? { depositAddress: args.depositAddress } : {}),
+      ...(args.redeemAddress ? { redeemAddress: args.redeemAddress } : {}),
+      knownPools: [...byNft.keys()],
+      positions: args.positions,
+    });
+    liquiditySkipped = read.skipped;
+    for (const order of venueFillSequence(read.orders)) {
+      const pool = byNft.get(venueUnitOf(order.datum.pool_nft));
+      /* c8 ignore next 4 -- the reader already set aside requests naming no known pool. */
+      if (!pool) {
+        liquidityUnfillable.push({ order, reason: 'names a pool this round did not read' });
+        continue;
+      }
+      const answer = venueLiquidityFillable({
+        pool,
+        order,
+        network: args.network ?? 'Preprod',
+        minOutputLovelace: args.minOutputLovelace ?? 1_000_000n,
+        ...(args.fillCostLovelace !== undefined ? { fillCostLovelace: args.fillCostLovelace } : {}),
+      });
+      if (answer.fillable) liquidity.push({ order, pool });
+      else liquidityUnfillable.push({ order, reason: answer.reason });
+    }
+  }
+
+  return {
+    candidates,
+    unfillable,
+    liquidity,
+    liquidityUnfillable,
+    skipped: [...poolsRead.skipped, ...ordersRead.skipped, ...liquiditySkipped],
+  };
 }

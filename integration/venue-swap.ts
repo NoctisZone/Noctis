@@ -340,7 +340,9 @@ export interface VenueOrderPosition {
  * orders keep the order they were given in — a batcher that has not looked up
  * where an order came from does not get to treat it as early.
  */
-export function venueFillSequence<T extends VenueSwapOrderUtxo>(orders: readonly T[]): T[] {
+export function venueFillSequence<T extends { outputIndex: number; placedAt?: VenueOrderPosition }>(
+  orders: readonly T[],
+): T[] {
   return orders
     .map((order, tieBreak) => ({ order, tieBreak }))
     .sort((a, b) => {

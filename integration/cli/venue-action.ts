@@ -44,9 +44,15 @@ import { BlockfrostClient } from '../blockfrost-client.js';
 import { KeyCurveSpendWallet } from '../key-curve-spend-wallet.js';
 import type { CurveNetwork, CurveSpendWallet } from '../mesh-curve-spend.js';
 import { MESH_NETWORK_ID, type ReferenceScriptPointer } from '../reference-script.js';
-import { VenueBatcher, type VenueBatcherRound, type VenueFillOutcome } from '../venue-batcher.js';
+import {
+  VenueBatcher,
+  type VenueBatcherRound,
+  type VenueFillOutcome,
+  type VenueLiquidityOutcome,
+} from '../venue-batcher.js';
 import { readVenueFillRound, readVenuePools, type VenueChainProvider } from '../venue-chain-reader.js';
 import { VenueFiller, type VenueScriptSource } from '../venue-fill-submitter.js';
+import { VENUE_DEPOSIT_ORDER_TITLE, VENUE_REDEEM_ORDER_TITLE } from '../venue-liquidity.js';
 import { readVenueMarket } from '../venue-market-reader.js';
 import { VENUE_FACTORY_TITLE } from '../venue-pool.js';
 import { venueUnitOf } from '../venue-swap.js';
@@ -112,6 +118,13 @@ interface Input {
    */
   poolReferenceScript?: ReferenceScriptPointer;
   orderReferenceScript?: ReferenceScriptPointer;
+  /**
+   * Where the deposit and redeem request validators are published. Each is
+   * optional on its own terms: without a pointer the script travels in the
+   * transaction, and both are small enough to.
+   */
+  depositReferenceScript?: ReferenceScriptPointer;
+  redeemReferenceScript?: ReferenceScriptPointer;
 
   /** Tunables. Every one of these has a documented default in the batcher. */
   minOutputLovelace?: string;
@@ -259,11 +272,31 @@ function outcomeSummary(outcome: VenueFillOutcome) {
   }
 }
 
+/** A deposit or redeem outcome, flattened the same way. */
+function liquidityOutcomeSummary(outcome: VenueLiquidityOutcome) {
+  const order = `${outcome.order.txHash}#${outcome.order.outputIndex}`;
+  const pool = venueUnitOf(outcome.order.datum.pool_nft);
+  if (outcome.status === 'filled') {
+    return {
+      order,
+      kind: outcome.order.kind,
+      pool,
+      status: outcome.status,
+      txHash: outcome.txHash,
+      lq: outcome.lq,
+      exFeeTaken: outcome.exFeeTaken,
+      networkFee: outcome.networkFee,
+    };
+  }
+  return { order, kind: outcome.order.kind, pool, status: outcome.status, reason: outcome.reason };
+}
+
 function roundSummary(round: VenueBatcherRound) {
   return {
     filled: round.filled,
     failed: round.failed,
     outcomes: round.outcomes.map(outcomeSummary),
+    liquidityOutcomes: round.liquidityOutcomes.map(liquidityOutcomeSummary),
     skipped: round.skipped,
   };
 }
@@ -285,9 +318,15 @@ async function main() {
   const factory = loadAppliedVenueValidator(__dirname, VENUE_FACTORY_TITLE);
   const pool = loadAppliedVenueValidator(__dirname, VENUE_POOL_TITLE);
   const orderCbor = venueBlueprintCbor(VENUE_SWAP_ORDER_TITLE);
+  // The two request validators take no parameter, so their blueprint bytes are
+  // the deployed ones, and their addresses are derived like the swap order's.
+  const depositCbor = venueBlueprintCbor(VENUE_DEPOSIT_ORDER_TITLE);
+  const redeemCbor = venueBlueprintCbor(VENUE_REDEEM_ORDER_TITLE);
 
   const poolAddress = validatorToAddress(lucidNetwork, { type: 'PlutusV3', script: pool.compiledCode } as never);
   const orderAddress = validatorToAddress(lucidNetwork, { type: 'PlutusV3', script: orderCbor } as never);
+  const depositAddress = validatorToAddress(lucidNetwork, { type: 'PlutusV3', script: depositCbor } as never);
+  const redeemAddress = validatorToAddress(lucidNetwork, { type: 'PlutusV3', script: redeemCbor } as never);
   const factoryPolicyId = factory.hash;
 
   const provider = emptyWhenUnused(new BlockfrostClient({ apiKey: input.blockfrostProjectId, network: input.network }));
@@ -296,7 +335,8 @@ async function main() {
   // Addresses are part of every answer, including a failing one: a round that
   // finds nothing and a round pointed somewhere empty look identical without
   // them.
-  const where = { poolAddress, orderAddress, factoryPolicyId, poolHash: pool.hash };
+  const where = { poolAddress, orderAddress, depositAddress, redeemAddress, factoryPolicyId, poolHash: pool.hash };
+  const minOutputLovelace = input.minOutputLovelace ? BigInt(input.minOutputLovelace) : DEFAULT_MIN_OUTPUT_LOVELACE;
 
   let result: unknown;
   switch (input.action) {
@@ -320,6 +360,10 @@ async function main() {
         poolAddress,
         orderAddress,
         factoryPolicyId,
+        depositAddress,
+        redeemAddress,
+        network: lucidNetwork,
+        minOutputLovelace,
         ...(fillCostLovelace !== undefined ? { fillCostLovelace } : {}),
       });
       result = {
@@ -332,6 +376,17 @@ async function main() {
         })),
         unfillable: round.unfillable.map((u) => ({
           order: `${u.order.txHash}#${u.order.outputIndex}`,
+          reason: u.reason,
+        })),
+        liquidity: round.liquidity.map((c) => ({
+          order: `${c.order.txHash}#${c.order.outputIndex}`,
+          kind: c.order.kind,
+          pool: `${c.pool.txHash}#${c.pool.outputIndex}`,
+          poolNft: venueUnitOf(c.order.datum.pool_nft),
+        })),
+        liquidityUnfillable: round.liquidityUnfillable.map((u) => ({
+          order: `${u.order.txHash}#${u.order.outputIndex}`,
+          kind: u.order.kind,
           reason: u.reason,
         })),
         skipped: round.skipped,
@@ -368,6 +423,9 @@ async function main() {
         {
           poolAddress,
           orderAddress,
+          depositAddress,
+          redeemAddress,
+          network: lucidNetwork,
           factoryPolicyId,
           ...(input.poolNft ? { poolNft: input.poolNft } : {}),
           ...(input.since ? { since: input.since } : {}),
@@ -378,7 +436,13 @@ async function main() {
       );
       result = {
         ...where,
-        labels: { ...launchScriptLabels(lucidNetwork), [poolAddress]: 'POOL', [orderAddress]: 'ORDER BOOK' },
+        labels: {
+          ...launchScriptLabels(lucidNetwork),
+          [poolAddress]: 'POOL',
+          [orderAddress]: 'ORDER BOOK',
+          [depositAddress]: 'DEPOSIT REQUESTS',
+          [redeemAddress]: 'REDEEM REQUESTS',
+        },
         pools: market.pools,
         skipped: market.skipped,
       };
@@ -391,6 +455,8 @@ async function main() {
         network: input.network,
         poolScript: scriptSource(pool.compiledCode, input.poolReferenceScript),
         orderScript: scriptSource(orderCbor, input.orderReferenceScript),
+        depositScript: scriptSource(depositCbor, input.depositReferenceScript),
+        redeemScript: scriptSource(redeemCbor, input.redeemReferenceScript),
         provider: new BlockfrostProvider(input.blockfrostProjectId),
       });
 
@@ -401,8 +467,10 @@ async function main() {
         network: input.network,
         poolAddress,
         orderAddress,
+        depositAddress,
+        redeemAddress,
         factoryPolicyId,
-        minOutputLovelace: input.minOutputLovelace ? BigInt(input.minOutputLovelace) : DEFAULT_MIN_OUTPUT_LOVELACE,
+        minOutputLovelace,
         ...(fillCostLovelace !== undefined ? { fillCostLovelace } : {}),
         ...(input.executorPayoutLovelace ? { executorPayoutLovelace: BigInt(input.executorPayoutLovelace) } : {}),
         ...(input.maxFillsPerPool ? { maxFillsPerPool: input.maxFillsPerPool } : {}),

@@ -6,12 +6,18 @@ Notable changes to the Noctis Zone, by release. Internal development history pre
 
 ## [Unreleased]
 
+### Added
+
+- **Adding and removing NoctisSwap liquidity.** A deposit request pays both sides of a pool at its ratio and receives LQ; a redeem request hands LQ back for a share of both sides. The batcher fills them alongside swap orders, in the order the chain accepted them, each against the pool the previous fill left, and the placer can refund a request until it fills. The planners reproduce both validators' arithmetic exactly: each side pays the least that buys the LQ, and everything else returns with the collateral.
+- **A market read for each venue pool.** Its trades at the price they realised, the queue of resting swap orders and liquidity requests, its liquidity providers and its token's largest holders, read incrementally from the newest trade a caller already holds.
+
 ### Changed
 
 - **The pool a graduation opens is priced at 1.2× the graduation price on every launch.** The LP reserve is sized at mint from the ADA the curve will raise, net of fees and with the DarkVeil reserve at its flat price, so the opening price no longer depends on the creator share or the staking pool. It was a fixed 20% of supply, which opened a staking launch's pool below its graduation price. No validator changed, and launches already minted keep their datums. The wizard's supply bar and review show the sized reserve.
 - A batch of curve orders that does not fit in one transaction is re-planned at half the size and tried again, down to a single order, so a batcher tick fills what fits instead of failing while orders rest.
 - A venue buy order carries at least the ledger's minimum ADA for the token output that settles it, sized from the placer's address and the token, so its fill is accepted at submission.
 - A failed venue fill reports the reason it failed, whatever was thrown.
+- The trading, curve-order and staking browser widgets announce when they are ready, so the page scripts that use them start whenever their bundle finishes loading.
 
 - **A launch step whose receipt was lost is confirmed from the chain rather than
   repeated or abandoned.** The node reports a transaction in a block before its

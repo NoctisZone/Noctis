@@ -53,7 +53,20 @@ import {
   type ResolvedReferenceScript,
   resolveReferenceScript,
 } from './reference-script.js';
+import { venueApplyRedeemer } from './venue-liquidity.js';
 import { VENUE_POOL_ACTION, venueFillRedeemer, venuePoolRedeemer } from './venue-swap.js';
+
+/**
+ * What an order asks of the pool. A swap trades against it; a deposit or a
+ * redeem moves its liquidity, under the pool's own arm for each.
+ */
+export type VenueFillKind = 'swap' | 'deposit' | 'redeem';
+
+const POOL_ACTION_FOR: Record<VenueFillKind, number> = {
+  swap: VENUE_POOL_ACTION.Swap,
+  deposit: VENUE_POOL_ACTION.Deposit,
+  redeem: VENUE_POOL_ACTION.Redeem,
+};
 
 /**
  * What one fill really costs to run, measured rather than asked for.
@@ -96,6 +109,10 @@ export interface VenueFillerConfig {
   poolScript: VenueScriptSource;
   /** The swap-order validator. */
   orderScript: VenueScriptSource;
+  /** The deposit-request validator. Needed only to fill deposits. */
+  depositScript?: VenueScriptSource;
+  /** The redeem-request validator. Needed only to fill redeems. */
+  redeemScript?: VenueScriptSource;
   provider: CurveSpendProvider;
   /**
    * Budgets to declare instead of measuring — the same deliberate escape the
@@ -121,6 +138,8 @@ export interface VenueFillOutput {
  * builder has to work out what those positions become.
  */
 export interface VenueFillPlan {
+  /** What the order asks of the pool. A swap when absent. */
+  kind?: VenueFillKind;
   pool: PlanScriptUtxo;
   order: PlanScriptUtxo;
   /** The pool's continuing output. Always placed first. */
@@ -208,7 +227,7 @@ function assertInputsWhereClaimed(
  */
 export class VenueFiller {
   private readonly poolRef?: ResolvedReferenceScript;
-  private readonly orderRef?: ResolvedReferenceScript;
+  private readonly orderRefs: Partial<Record<VenueFillKind, ResolvedReferenceScript>> = {};
 
   constructor(private readonly config: VenueFillerConfig) {
     const networkId = MESH_NETWORK_ID[config.network];
@@ -219,13 +238,19 @@ export class VenueFiller {
         networkId,
       );
     }
-    if ('referenceScript' in config.orderScript) {
-      this.orderRef = resolveReferenceScript(
-        config.orderScript.compiledScriptCbor,
-        config.orderScript.referenceScript,
-        networkId,
-      );
+    for (const kind of ['swap', 'deposit', 'redeem'] as const) {
+      const source = this.orderSource(kind);
+      if (source && 'referenceScript' in source) {
+        this.orderRefs[kind] = resolveReferenceScript(source.compiledScriptCbor, source.referenceScript, networkId);
+      }
     }
+  }
+
+  /** The validator that locks one kind of order, if this filler was given it. */
+  private orderSource(kind: VenueFillKind): VenueScriptSource | undefined {
+    if (kind === 'deposit') return this.config.depositScript;
+    if (kind === 'redeem') return this.config.redeemScript;
+    return this.config.orderScript;
   }
 
   private newBuilder(): MeshTxBuilder {
@@ -238,9 +263,12 @@ export class VenueFiller {
     });
   }
 
-  private attachScript(tx: MeshTxBuilder, which: 'pool' | 'order'): void {
-    const source = which === 'pool' ? this.config.poolScript : this.config.orderScript;
-    const ref = which === 'pool' ? this.poolRef : this.orderRef;
+  private attachScript(tx: MeshTxBuilder, which: 'pool' | 'order', kind: VenueFillKind): void {
+    const source = which === 'pool' ? this.config.poolScript : this.orderSource(kind);
+    const ref = which === 'pool' ? this.poolRef : this.orderRefs[kind];
+    if (!source) {
+      throw new Error(`This filler was not given the ${kind} request validator, so it cannot fill a ${kind}.`);
+    }
     if (ref) {
       tx.spendingTxInReference(ref.txHash, ref.outputIndex, String(ref.rawSizeBytes), ref.scriptHash);
       return;
@@ -269,10 +297,17 @@ export class VenueFiller {
           `address is ${this.poolRef.scriptAddress}. Spending it would need the validator that locks it.`,
       );
     }
-    if (this.orderRef && plan.order.address !== this.orderRef.scriptAddress) {
+    const kind: VenueFillKind = plan.kind ?? 'swap';
+    if (!this.orderSource(kind)) {
+      throw new Error(`This filler was not given the ${kind} request validator, so it cannot fill a ${kind}.`);
+    }
+    const orderRef = this.orderRefs[kind];
+    if (orderRef && plan.order.address !== orderRef.scriptAddress) {
+      const what = kind === 'swap' ? 'order' : kind;
       throw new Error(
-        `The order UTXO sits at ${plan.order.address}, but this filler references an order validator whose ` +
-          `address is ${this.orderRef.scriptAddress}. Spending it would need the validator that locks it.`,
+        `The ${what} UTXO sits at ${plan.order.address}, but this filler references ${kind === 'swap' ? 'an' : 'a'} ` +
+          `${what} validator whose address is ${orderRef.scriptAddress}. Spending it would need the validator ` +
+          'that locks it.',
       );
     }
 
@@ -294,12 +329,16 @@ export class VenueFiller {
     const inputs: Array<'pool' | 'order'> = poolInIx === 0 ? ['pool', 'order'] : ['order', 'pool'];
     for (const which of inputs) {
       const utxo = which === 'pool' ? plan.pool : plan.order;
+      // A swap's `Fill` and a request's `Apply` are the same three positions
+      // under constructor 0; they are named apart for the reader, not the chain.
       const redeemer =
         which === 'pool'
-          ? venuePoolRedeemer(VENUE_POOL_ACTION.Swap, poolInIx)
-          : venueFillRedeemer(poolInIx, orderInIx, successorIx);
+          ? venuePoolRedeemer(POOL_ACTION_FOR[kind], poolInIx)
+          : kind === 'swap'
+            ? venueFillRedeemer(poolInIx, orderInIx, successorIx)
+            : venueApplyRedeemer(poolInIx, orderInIx, successorIx);
       tx.spendingPlutusScriptV3().txIn(utxo.txHash, utxo.outputIndex, toMesh(utxo.assets), utxo.address, 0);
-      this.attachScript(tx, which);
+      this.attachScript(tx, which, kind);
       tx.txInInlineDatumPresent().txInRedeemerValue(redeemer, 'CBOR', this.config.executionUnits);
     }
 

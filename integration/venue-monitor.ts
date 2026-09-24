@@ -101,7 +101,7 @@ export interface VenueMonitorState {
   lastErrorAtMs: number | null;
 }
 
-function countOutcomes(outcomes: readonly VenueFillOutcome[]) {
+function countOutcomes(outcomes: ReadonlyArray<{ status: VenueFillOutcome['status'] }>) {
   let filled = 0;
   let failed = 0;
   let unfillable = 0;
@@ -123,7 +123,7 @@ function countOutcomes(outcomes: readonly VenueFillOutcome[]) {
  */
 function poolsTouched(round: VenueBatcherRound): number {
   const seen = new Set<string>();
-  for (const outcome of round.outcomes) {
+  for (const outcome of [...round.outcomes, ...(round.liquidityOutcomes ?? [])]) {
     const nft = outcome.order.datum.pool_nft;
     if (nft) seen.add(`${nft.policy}${nft.name}`);
   }
@@ -167,12 +167,14 @@ export class VenueMonitor {
   /** A round that completed — however it went. Wire to the batcher's `onRound`. */
   observeRound(round: VenueBatcherRound, nowMs: number): VenueAlert[] {
     const alerts: VenueAlert[] = [];
-    const counts = countOutcomes(round.outcomes);
+    // Deposits and redeems are orders too: a failed one pages like a failed swap.
+    const every = [...round.outcomes, ...(round.liquidityOutcomes ?? [])];
+    const counts = countOutcomes(every);
     const pools = poolsTouched(round);
 
     this.state.roundsCompleted += 1;
     this.state.consecutiveProviderErrors = 0;
-    this.state.ordersSeen += round.outcomes.length;
+    this.state.ordersSeen += every.length;
     this.state.filled += counts.filled;
     this.state.failed += counts.failed;
     this.state.unfillable += counts.unfillable;
@@ -186,9 +188,12 @@ export class VenueMonitor {
 
     // The one order outcome that is ever an alarm.
     if (counts.failed > 0) {
-      const reasons = round.outcomes
-        .filter((outcome): outcome is Extract<VenueFillOutcome, { status: 'failed' }> => outcome.status === 'failed')
-        .map((outcome) => `${outcome.order.txHash}#${outcome.order.outputIndex}: ${outcome.reason}`);
+      const reasons = every
+        .filter((outcome) => outcome.status === 'failed')
+        .map(
+          (outcome) =>
+            `${outcome.order.txHash}#${outcome.order.outputIndex}: ${'reason' in outcome ? outcome.reason : ''}`,
+        );
       alerts.push({
         severity: 'page',
         code: 'fill_failed',

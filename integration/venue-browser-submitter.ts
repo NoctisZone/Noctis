@@ -56,9 +56,23 @@ import {
 import {
   type ProviderTxPosition,
   type ProviderUtxo,
+  readVenueLiquidityOrders,
   readVenuePools,
   type VenueChainProvider,
 } from './venue-chain-reader.js';
+import {
+  draftVenueDepositOrder,
+  draftVenueRedeemOrder,
+  VenueDepositConfigSchema,
+  type VenueDepositDraft,
+  type VenueLiquidityOrderUtxo,
+  VenueRedeemConfigSchema,
+  type VenueRedeemDraft,
+  venueDepositPair,
+  venueKeyAddress,
+  venueLiquidityFillable,
+  venueRefundRedeemer,
+} from './venue-liquidity.js';
 import {
   trackVenueOrders,
   type VenueOrderTracking,
@@ -100,6 +114,22 @@ export interface VenueBrowserSubmitterConfig {
   factoryPolicyId: string;
   /** What one fill costs, when an operator holds a better figure than the default. */
   fillCostLovelace?: bigint;
+  /**
+   * `deposit_order.ak`'s and `redeem_order.ak`'s compiled CBOR, from the venue
+   * blueprint. A panel given them can add and remove liquidity; one without
+   * them refuses to, by name, rather than paying to an address it derived
+   * from nothing.
+   */
+  depositScriptCbor?: string;
+  redeemScriptCbor?: string;
+}
+
+/** One of the placer's own deposit or redeem requests, and whether it can fill. */
+export interface VenueTrackedLiquidityRequest {
+  request: VenueLiquidityOrderUtxo;
+  /** `fillable` waits only for a batcher; the other two never fill and should be refunded. */
+  state: 'fillable' | 'unfundable' | 'orphaned';
+  reason: string;
 }
 
 /**
@@ -172,6 +202,29 @@ const COINS_PER_UTXO_BYTE = 4310n;
  * whatever the fill delivers; the placer receives the ADA back in that same
  * output, so erring high costs nothing.
  */
+/**
+ * The least ADA the ledger lets a liquidity reward carry: an output holding
+ * every unit named, each at the largest amount it could hold.
+ *
+ * A deposit's reward holds the LQ and, when the pool has moved, some of the
+ * token back; a redeem's holds the token side. The placer sets this aside and
+ * receives all of it back in that output, so sizing it high costs nothing,
+ * while sizing it low makes a request no executor can fill.
+ */
+export function minimumForLiquidityReward(coinsPerUtxoByte: bigint, address: string, units: readonly string[]): bigint {
+  const assets: Record<string, bigint> = { lovelace: 5_000_000n };
+  for (const unit of units) {
+    if (unit !== 'lovelace') assets[unit] = 2n ** 63n;
+  }
+  const minimum = calculateMinLovelaceFromUTxO(coinsPerUtxoByte, {
+    txHash: '0'.repeat(64),
+    outputIndex: 0,
+    address,
+    assets,
+  });
+  return minimum + 50_000n;
+}
+
 export function minimumForRewardOutput(coinsPerUtxoByte: bigint, address: string, unit: string): bigint {
   if (unit === 'lovelace') return 0n;
   const minimum = calculateMinLovelaceFromUTxO(coinsPerUtxoByte, {
@@ -186,6 +239,9 @@ export function minimumForRewardOutput(coinsPerUtxoByte: bigint, address: string
 export class VenueBrowserSubmitter {
   readonly orderAddress: string;
   readonly poolAddress: string;
+  /** Where deposit and redeem requests are paid, when this panel was given their validators. */
+  readonly depositAddress: string | null;
+  readonly redeemAddress: string | null;
   private readonly lucidPromise: Promise<LucidEvolution>;
   /** Placement positions already looked up. Fixed once on chain, so kept. */
   private readonly placements = new Map<string, VenueOrderPosition>();
@@ -199,6 +255,12 @@ export class VenueBrowserSubmitter {
       type: 'PlutusV3',
       script: config.poolScriptCbor,
     });
+    this.depositAddress = config.depositScriptCbor
+      ? validatorToAddress(config.network, { type: 'PlutusV3', script: config.depositScriptCbor })
+      : null;
+    this.redeemAddress = config.redeemScriptCbor
+      ? validatorToAddress(config.network, { type: 'PlutusV3', script: config.redeemScriptCbor })
+      : null;
     this.lucidPromise = Lucid(new Blockfrost(config.blockfrostUrl, config.blockfrostProjectId), config.network);
     // Nothing awaits this until a method runs; a later await still sees the
     // rejection. Same note the curve's own submitter carries.
@@ -348,6 +410,226 @@ export class VenueBrowserSubmitter {
   /** The orders a placer should be offered a cancel for, worst first. */
   async ordersWorthCancelling(walletApi: WalletApi): Promise<VenueTrackedOrder[]> {
     return venueOrdersWorthCancelling(await this.myOrders(walletApi));
+  }
+
+  /**
+   * A deposit, priced at the pool as it stands, and the request that asks for it.
+   *
+   * `tokenIn` defaults to what the pool's ratio pairs with `adaIn`, rounded up,
+   * so the ADA the placer chose is what limits the deposit and any rounding
+   * comes back. A pool that moves before the fill returns more of one side;
+   * the placer is never charged a ratio the pool does not hold.
+   */
+  async quoteDeposit(args: {
+    poolNftUnit: string;
+    adaIn: bigint;
+    tokenIn?: bigint;
+    walletAddress: string;
+    exFee?: bigint;
+  }): Promise<{ market: VenueMarket; tokenIn: bigint; draft: VenueDepositDraft }> {
+    if (!this.depositAddress) {
+      throw new Error('This panel was not given the deposit validator, so it cannot add liquidity.');
+    }
+    const pool = await this.poolFor(args.poolNftUnit);
+    const details = getAddressDetails(args.walletAddress);
+    const rewardPkh = venuePlacerKeyHash(args.walletAddress);
+    const tokenIn = args.tokenIn ?? venueDepositPair(pool, args.adaIn);
+    const market = venuePoolMarket(pool);
+    const collateralAda = minimumForLiquidityReward(COINS_PER_UTXO_BYTE, args.walletAddress, [
+      venueUnitOf(pool.datum.pool_lq),
+      venueUnitOf(pool.datum.pool_y),
+    ]);
+    const draft = draftVenueDepositOrder({
+      pool,
+      adaIn: args.adaIn,
+      tokenIn,
+      rewardPkh,
+      ...(details.stakeCredential?.hash ? { stakePkh: details.stakeCredential.hash } : {}),
+      collateralAda,
+      ...(args.exFee !== undefined ? { exFee: args.exFee } : {}),
+      ...(this.config.fillCostLovelace !== undefined ? { fillCostLovelace: this.config.fillCostLovelace } : {}),
+    });
+    return { market, tokenIn, draft };
+  }
+
+  /** A redeem of `lqIn`, priced at the pool as it stands, and the request that asks for it. */
+  async quoteRedeem(args: {
+    poolNftUnit: string;
+    lqIn: bigint;
+    walletAddress: string;
+    exFee?: bigint;
+  }): Promise<{ market: VenueMarket; draft: VenueRedeemDraft }> {
+    if (!this.redeemAddress) {
+      throw new Error('This panel was not given the redeem validator, so it cannot remove liquidity.');
+    }
+    const pool = await this.poolFor(args.poolNftUnit);
+    const details = getAddressDetails(args.walletAddress);
+    const rewardPkh = venuePlacerKeyHash(args.walletAddress);
+    const market = venuePoolMarket(pool);
+    const collateralAda = minimumForLiquidityReward(COINS_PER_UTXO_BYTE, args.walletAddress, [
+      venueUnitOf(pool.datum.pool_y),
+    ]);
+    const draft = draftVenueRedeemOrder({
+      pool,
+      lqIn: args.lqIn,
+      rewardPkh,
+      ...(details.stakeCredential?.hash ? { stakePkh: details.stakeCredential.hash } : {}),
+      collateralAda,
+      ...(args.exFee !== undefined ? { exFee: args.exFee } : {}),
+      ...(this.config.fillCostLovelace !== undefined ? { fillCostLovelace: this.config.fillCostLovelace } : {}),
+    });
+    return { market, draft };
+  }
+
+  /** How much of one unit the connected wallet holds, read through the wallet library. */
+  async walletUnitBalance(walletApi: WalletApi, unit: string): Promise<bigint> {
+    const lucid = await this.lucidPromise;
+    lucid.selectWallet.fromAPI(walletApi);
+    let held = 0n;
+    for (const utxo of await lucid.wallet().getUtxos()) held += utxo.assets[unit] ?? 0n;
+    return held;
+  }
+
+  /** Places a deposit request. An ordinary payment — no validator runs. */
+  async placeDeposit(walletApi: WalletApi, draft: VenueDepositDraft): Promise<{ txHash: string }> {
+    if (!this.depositAddress) {
+      throw new Error('This panel was not given the deposit validator, so it cannot add liquidity.');
+    }
+    const lucid = await this.lucidPromise;
+    lucid.selectWallet.fromAPI(walletApi);
+    const tx = await lucid
+      .newTx()
+      .pay.ToContract(this.depositAddress, { kind: 'inline', value: Data.to(draft.datum, VenueDepositConfigSchema) }, {
+        ...draft.assets,
+      } as Assets)
+      .complete();
+    const signed = await tx.sign.withWallet().complete();
+    return { txHash: await signed.submit() };
+  }
+
+  /** Places a redeem request. An ordinary payment — no validator runs. */
+  async placeRedeem(walletApi: WalletApi, draft: VenueRedeemDraft): Promise<{ txHash: string }> {
+    if (!this.redeemAddress) {
+      throw new Error('This panel was not given the redeem validator, so it cannot remove liquidity.');
+    }
+    const lucid = await this.lucidPromise;
+    lucid.selectWallet.fromAPI(walletApi);
+    const tx = await lucid
+      .newTx()
+      .pay.ToContract(this.redeemAddress, { kind: 'inline', value: Data.to(draft.datum, VenueRedeemConfigSchema) }, {
+        ...draft.assets,
+      } as Assets)
+      .complete();
+    const signed = await tx.sign.withWallet().complete();
+    return { txHash: await signed.submit() };
+  }
+
+  /**
+   * The connected wallet's own deposit and redeem requests, each with whether
+   * it can fill. Unlike a swap there is no price to wait for, so a request
+   * that cannot fill now never will, and the reason says why.
+   */
+  async myLiquidityRequests(walletApi: WalletApi): Promise<VenueTrackedLiquidityRequest[]> {
+    const lucid = await this.lucidPromise;
+    lucid.selectWallet.fromAPI(walletApi);
+    const owner = venuePlacerKeyHash(await lucid.wallet().address());
+    const provider = this.provider(lucid);
+    const pools = await readVenuePools(provider, {
+      poolAddress: this.poolAddress,
+      factoryPolicyId: this.config.factoryPolicyId,
+    });
+    const byNft = new Map(pools.pools.map((pool) => [venueUnitOf(pool.datum.pool_nft), pool]));
+    const read = await readVenueLiquidityOrders(provider, {
+      ...(this.depositAddress ? { depositAddress: this.depositAddress } : {}),
+      ...(this.redeemAddress ? { redeemAddress: this.redeemAddress } : {}),
+      knownPools: [...byNft.keys()],
+      positions: this.placements,
+      includeUnknownPools: true,
+    });
+    return read.orders
+      .filter((request) => request.datum.reward_pkh === owner)
+      .map((request): VenueTrackedLiquidityRequest => {
+        const pool = byNft.get(venueUnitOf(request.datum.pool_nft));
+        if (!pool) {
+          return {
+            request,
+            state: 'orphaned',
+            reason: 'names a pool the venue does not hold, so nothing can ever fill it',
+          };
+        }
+        const answer = venueLiquidityFillable({
+          pool,
+          order: request,
+          network: this.config.network,
+          minOutputLovelace: 1_000_000n,
+          ...(this.config.fillCostLovelace !== undefined ? { fillCostLovelace: this.config.fillCostLovelace } : {}),
+        });
+        return answer.fillable
+          ? { request, state: 'fillable', reason: 'waiting for the batcher' }
+          : { request, state: 'unfundable', reason: answer.reason };
+      });
+  }
+
+  /**
+   * Takes the placer's own deposit and redeem requests back, in one
+   * transaction. `Refund` asks only for the placer's signature, so requests of
+   * both kinds leave together, to the address they name.
+   */
+  async refundLiquidityRequests(
+    walletApi: WalletApi,
+    requests: readonly VenueLiquidityOrderUtxo[],
+  ): Promise<{ txHash: string }> {
+    if (requests.length === 0) {
+      throw new Error('A refund needs at least one request to take back.');
+    }
+    const lucid = await this.lucidPromise;
+    lucid.selectWallet.fromAPI(walletApi);
+    const owner = venuePlacerKeyHash(await lucid.wallet().address());
+
+    const destinations = new Set(
+      requests.map((r) => venueKeyAddress(r.datum.reward_pkh, r.datum.stake_pkh, this.config.network)),
+    );
+    if (destinations.size > 1) {
+      throw new Error(
+        `These ${requests.length} requests pay out to ${destinations.size} different addresses, and one ` +
+          'transaction returns them to one place. Refund each group sharing a reward address on its own.',
+      );
+    }
+    for (const request of requests) {
+      if (request.datum.reward_pkh !== owner) {
+        throw new Error(
+          `Request ${request.txHash}#${request.outputIndex} belongs to ${request.datum.reward_pkh}, not to the ` +
+            'connected wallet. Only its placer can take it back.',
+        );
+      }
+    }
+
+    const utxos: UTxO[] = requests.map((request) => ({
+      txHash: request.txHash,
+      outputIndex: request.outputIndex,
+      address: request.address,
+      assets: { ...request.assets },
+      datum:
+        request.kind === 'deposit'
+          ? Data.to(request.datum, VenueDepositConfigSchema)
+          : Data.to(request.datum, VenueRedeemConfigSchema),
+    }));
+
+    let tx = lucid.newTx().collectFrom(utxos, venueRefundRedeemer());
+    if (requests.some((r) => r.kind === 'deposit')) {
+      if (!this.config.depositScriptCbor) throw new Error('This panel was not given the deposit validator.');
+      tx = tx.attach.SpendingValidator({ type: 'PlutusV3', script: this.config.depositScriptCbor });
+    }
+    if (requests.some((r) => r.kind === 'redeem')) {
+      if (!this.config.redeemScriptCbor) throw new Error('This panel was not given the redeem validator.');
+      tx = tx.attach.SpendingValidator({ type: 'PlutusV3', script: this.config.redeemScriptCbor });
+    }
+    const built = await tx
+      // The REQUIRED SIGNERS field, which is what `Refund` reads.
+      .addSignerKey(owner)
+      .complete({ changeAddress: [...destinations][0] as string });
+    const signed = await built.sign.withWallet().complete();
+    return { txHash: await signed.submit() };
   }
 
   /**

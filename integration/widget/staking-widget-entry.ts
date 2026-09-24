@@ -224,6 +224,9 @@ declare global {
 
 if (typeof window !== 'undefined') {
   window.NoctisStaking = NoctisStaking;
+  // The bundle evaluates as an async module, so this line can run after the
+  // page script that uses it. That script waits for this event.
+  window.dispatchEvent(new CustomEvent('noctis-staking-ready'));
 }
 
 export default NoctisStaking;

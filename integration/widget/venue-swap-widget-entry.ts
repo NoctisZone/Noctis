@@ -43,6 +43,14 @@
 //    the launch token, the token's unit to sell it. Unlike the curve widget,
 //    which is buy-only because the curve template renders no sell side, the
 //    venue is symmetric and so is this.
+//
+// 6. LIQUIDITY IS A REQUEST TOO. Adding pays both sides to the deposit
+//    validator and removing pays LQ to the redeem validator; a batcher fills
+//    either against the pool at its ratio when it gets to it. There is no
+//    price to wait for, so a request either fills or never will, and
+//    `myLiquidityRequests` says which. `expectedLq` and `expectedOut*` are
+//    estimates at the pool as it stood: the request itself names no amount,
+//    and pays whatever the pool's ratio gives at the fill.
 // ============================================================================
 
 import type { Network as LucidNetwork, WalletApi } from '@lucid-evolution/lucid';
@@ -62,6 +70,48 @@ export interface VenueSwapWidgetConfig {
   factoryPolicyId: string;
   /** The launch's pool NFT unit: policy id followed by asset name, hex. */
   poolNftUnit: string;
+  /** `deposit_order.ak`'s and `redeem_order.ak`'s compiled CBOR. Without them the liquidity calls refuse. */
+  depositScriptCbor?: string;
+  redeemScriptCbor?: string;
+}
+
+/** What a panel shows before a deposit is signed. Strings, so the DOM can hold them. */
+export interface VenueDepositQuoteView {
+  adaIn: string;
+  tokenIn: string;
+  /** LQ at the pool as it stands. An estimate: the pool may move before a fill. */
+  expectedLq: string;
+  /** The share of the pool that LQ is, after the deposit, in basis points. */
+  shareAfterBps: string;
+  /** Lovelace the request carries in total: both sides aside, the fee ceiling and the collateral. */
+  carriedLovelace: string;
+  /** Returned in full with the LQ. */
+  collateralLovelace: string;
+  /** The most an executor may take. A ceiling — a fill charges less. */
+  maxExecutionFee: string;
+}
+
+/** What a panel shows before a redeem is signed. */
+export interface VenueRedeemQuoteView {
+  lqIn: string;
+  expectedAdaOut: string;
+  expectedTokenOut: string;
+  carriedLovelace: string;
+  collateralLovelace: string;
+  maxExecutionFee: string;
+}
+
+/** One of the placer's own liquidity requests, as a list row. */
+export interface VenueLiquidityRequestView {
+  txHash: string;
+  outputIndex: number;
+  kind: 'deposit' | 'redeem';
+  state: 'fillable' | 'unfundable' | 'orphaned';
+  reason: string;
+  /** Lovelace the request holds, fee and collateral included. */
+  lovelace: string;
+  /** A deposit's token side, or a redeem's LQ. */
+  amount: string;
 }
 
 /** Everything a panel renders for one quote. Strings, so the DOM can hold them. */
@@ -109,6 +159,9 @@ let config: VenueSwapWidgetConfig | null = null;
 let submitter: VenueBrowserSubmitter | null = null;
 /** The draft behind the last quote, so `place` signs what was shown. */
 let lastDraft: Awaited<ReturnType<VenueBrowserSubmitter['quote']>>['draft'] | null = null;
+/** The drafts behind the last liquidity quotes, so each place signs what was shown. */
+let lastDeposit: Awaited<ReturnType<VenueBrowserSubmitter['quoteDeposit']>>['draft'] | null = null;
+let lastRedeem: Awaited<ReturnType<VenueBrowserSubmitter['quoteRedeem']>>['draft'] | null = null;
 
 function requireConfigured(): { cfg: VenueSwapWidgetConfig; sub: VenueBrowserSubmitter } {
   if (!config || !submitter) {
@@ -126,8 +179,12 @@ function configure(newConfig: VenueSwapWidgetConfig): void {
     orderScriptCbor: newConfig.orderScriptCbor,
     poolScriptCbor: newConfig.poolScriptCbor,
     factoryPolicyId: newConfig.factoryPolicyId,
+    ...(newConfig.depositScriptCbor ? { depositScriptCbor: newConfig.depositScriptCbor } : {}),
+    ...(newConfig.redeemScriptCbor ? { redeemScriptCbor: newConfig.redeemScriptCbor } : {}),
   });
   lastDraft = null;
+  lastDeposit = null;
+  lastRedeem = null;
 }
 
 /** The pool's public state: what a price panel shows before anyone types. */
@@ -268,6 +325,129 @@ async function cancelOrders(params: {
   return sub.cancelOrders(params.walletApi, found);
 }
 
+/**
+ * Quotes a deposit of `adaIn` lovelace and holds the request it produced.
+ * The token side pairs at the pool's ratio unless `tokenIn` names it.
+ */
+async function quoteDeposit(params: {
+  adaIn: string;
+  tokenIn?: string;
+  walletAddress: string;
+}): Promise<VenueDepositQuoteView> {
+  const { cfg, sub } = requireConfigured();
+  const result = await sub.quoteDeposit({
+    poolNftUnit: cfg.poolNftUnit,
+    adaIn: BigInt(params.adaIn),
+    ...(params.tokenIn !== undefined ? { tokenIn: BigInt(params.tokenIn) } : {}),
+    walletAddress: params.walletAddress,
+  });
+  lastDeposit = result.draft;
+  return {
+    adaIn: params.adaIn,
+    tokenIn: result.tokenIn.toString(),
+    expectedLq: result.draft.expectedLq.toString(),
+    shareAfterBps: result.draft.shareAfterBps.toString(),
+    carriedLovelace: result.draft.carriedLovelace.toString(),
+    collateralLovelace: result.draft.datum.collateral_ada.toString(),
+    maxExecutionFee: result.draft.maxExecutionFee.toString(),
+  };
+}
+
+/** Places the deposit the last quote produced. Refuses rather than re-quoting silently. */
+async function placeDeposit(params: { walletApi: WalletApi }): Promise<{ txHash: string }> {
+  const { sub } = requireConfigured();
+  if (!lastDeposit) {
+    throw new Error(
+      'Nothing to place. Call NoctisVenueSwap.quoteDeposit() first — a request is signed as it was shown.',
+    );
+  }
+  const result = await sub.placeDeposit(params.walletApi, lastDeposit);
+  lastDeposit = null;
+  return result;
+}
+
+/** Quotes a redeem of `lqIn` LQ and holds the request it produced. */
+async function quoteRedeem(params: { lqIn: string; walletAddress: string }): Promise<VenueRedeemQuoteView> {
+  const { cfg, sub } = requireConfigured();
+  const result = await sub.quoteRedeem({
+    poolNftUnit: cfg.poolNftUnit,
+    lqIn: BigInt(params.lqIn),
+    walletAddress: params.walletAddress,
+  });
+  lastRedeem = result.draft;
+  return {
+    lqIn: params.lqIn,
+    expectedAdaOut: result.draft.expectedXOut.toString(),
+    expectedTokenOut: result.draft.expectedYOut.toString(),
+    carriedLovelace: result.draft.carriedLovelace.toString(),
+    collateralLovelace: (result.draft.carriedLovelace - result.draft.maxExecutionFee).toString(),
+    maxExecutionFee: result.draft.maxExecutionFee.toString(),
+  };
+}
+
+/** Places the redeem the last quote produced. */
+async function placeRedeem(params: { walletApi: WalletApi }): Promise<{ txHash: string }> {
+  const { sub } = requireConfigured();
+  if (!lastRedeem) {
+    throw new Error(
+      'Nothing to place. Call NoctisVenueSwap.quoteRedeem() first — a request is signed as it was shown.',
+    );
+  }
+  const result = await sub.placeRedeem(params.walletApi, lastRedeem);
+  lastRedeem = null;
+  return result;
+}
+
+/** The LQ unit of this launch's pool, and how much of it the connected wallet holds. */
+async function liquidityHeld(params: {
+  walletApi: WalletApi;
+}): Promise<{ lqUnit: string; held: string; issued: string }> {
+  const { cfg, sub } = requireConfigured();
+  const pool = await sub.poolFor(cfg.poolNftUnit);
+  const lqUnit = venueUnitOf(pool.datum.pool_lq);
+  const market = venuePoolMarket(pool);
+  const held = await sub.walletUnitBalance(params.walletApi, lqUnit);
+  return { lqUnit, held: held.toString(), issued: market.liquidity.toString() };
+}
+
+/** The connected wallet's own deposit and redeem requests, each with whether it can fill. */
+async function myLiquidityRequests(params: { walletApi: WalletApi }): Promise<VenueLiquidityRequestView[]> {
+  const { sub } = requireConfigured();
+  const tracked = await sub.myLiquidityRequests(params.walletApi);
+  return tracked.map((t) => ({
+    txHash: t.request.txHash,
+    outputIndex: t.request.outputIndex,
+    kind: t.request.kind,
+    state: t.state,
+    reason: t.reason,
+    lovelace: (t.request.assets.lovelace ?? 0n).toString(),
+    amount: (t.request.kind === 'deposit'
+      ? (t.request.assets[venueUnitOf(t.request.datum.y)] ?? 0n)
+      : (t.request.assets[venueUnitOf(t.request.datum.lq)] ?? 0n)
+    ).toString(),
+  }));
+}
+
+/** Takes the named requests back, in one transaction, matched against a fresh read. */
+async function refundLiquidityRequests(params: {
+  walletApi: WalletApi;
+  requests: Array<{ txHash: string; outputIndex: number }>;
+}): Promise<{ txHash: string }> {
+  const { sub } = requireConfigured();
+  const tracked = await sub.myLiquidityRequests(params.walletApi);
+  const found = params.requests.map((ref) => {
+    const match = tracked.find((t) => t.request.txHash === ref.txHash && t.request.outputIndex === ref.outputIndex);
+    if (!match) {
+      throw new Error(
+        `No open request ${ref.txHash}#${ref.outputIndex} belongs to this wallet. It may already have been ` +
+          'filled or refunded.',
+      );
+    }
+    return match.request;
+  });
+  return sub.refundLiquidityRequests(params.walletApi, found);
+}
+
 const NoctisVenueSwap = {
   configure,
   poolState,
@@ -276,6 +456,13 @@ const NoctisVenueSwap = {
   myOrders,
   ordersWorthCancelling,
   cancelOrders,
+  quoteDeposit,
+  placeDeposit,
+  quoteRedeem,
+  placeRedeem,
+  liquidityHeld,
+  myLiquidityRequests,
+  refundLiquidityRequests,
 };
 
 declare global {
@@ -286,6 +473,9 @@ declare global {
 
 if (typeof window !== 'undefined') {
   window.NoctisVenueSwap = NoctisVenueSwap;
+  // The bundle evaluates as an async module, so this line can run after the
+  // page script that uses it. That script waits for this event.
+  window.dispatchEvent(new CustomEvent('noctis-venue-swap-ready'));
 }
 
 export default NoctisVenueSwap;

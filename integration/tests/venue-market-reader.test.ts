@@ -17,6 +17,7 @@
 import { Data } from '@lucid-evolution/lucid';
 import { describe, expect, it, vi } from 'vitest';
 import type { ProviderUtxo, VenueChainProvider } from '../venue-chain-reader.js';
+import { VenueDepositConfigSchema, VenueRedeemConfigSchema } from '../venue-liquidity.js';
 import { readVenueMarket, type VenueMarketDeps } from '../venue-market-reader.js';
 import { type VenuePoolConfigData, VenuePoolConfigSchema } from '../venue-pool.js';
 import type { HistoryTx, HistoryTxUtxo } from '../venue-pool-history.js';
@@ -355,6 +356,97 @@ describe('readVenueMarket — the book, the liquidity and the holders', () => {
       { address: POOL_ADDRESS, quantity: 200_016_857n },
       { address: 'addr_test1big', quantity: 5_000_000n },
     ]);
+  });
+});
+
+describe('readVenueMarket — liquidity requests in the queue', () => {
+  const DEPOSIT_ADDRESS = 'addr_test1wq33333333333333333333333333333333333333333333333deposit';
+  const REDEEM_ADDRESS = 'addr_test1wq44444444444444444444444444444444444444444444444redeem';
+  const DEPOSIT_TX = 'b1'.repeat(32);
+  const REDEEM_TX = 'b2'.repeat(32);
+  const asset = (policy: string, name: string) => ({ policy, name });
+  const common = {
+    pool_nft: asset(FACTORY, `10${LAUNCH}`),
+    x: asset('', ''),
+    y: asset(TOKEN_POLICY, '746f6b656e'),
+    lq: asset(FACTORY, `11${LAUNCH}`),
+    ex_fee: 1_500_000n,
+    reward_pkh: PLACER,
+    stake_pkh: null,
+  };
+  const depositUtxo: ProviderUtxo = {
+    tx_hash: DEPOSIT_TX,
+    output_index: 0,
+    address: DEPOSIT_ADDRESS,
+    amount: [
+      { unit: 'lovelace', quantity: '102800000' },
+      { unit: TOKEN, quantity: '1000000' },
+    ],
+    inline_datum: Data.to({ ...common, collateral_ada: 1_300_000n }, VenueDepositConfigSchema),
+  };
+  const redeemUtxo: ProviderUtxo = {
+    tx_hash: REDEEM_TX,
+    output_index: 0,
+    address: REDEEM_ADDRESS,
+    amount: [
+      { unit: 'lovelace', quantity: '2800000' },
+      { unit: LQ, quantity: '5000000' },
+    ],
+    inline_datum: Data.to(common, VenueRedeemConfigSchema),
+  };
+  function withRequests(): VenueMarketDeps {
+    const base = deps();
+    return {
+      ...base,
+      chain: {
+        getAddressUtxosAll: vi.fn(async (address: string) =>
+          address === POOL_ADDRESS
+            ? [currentPool()]
+            : address === DEPOSIT_ADDRESS
+              ? [depositUtxo]
+              : address === REDEEM_ADDRESS
+                ? [redeemUtxo]
+                : ORDERS,
+        ),
+        // The deposit was placed before the swap orders and the redeem after.
+        getTxPosition: vi.fn(async (txHash: string) =>
+          txHash === DEPOSIT_TX
+            ? { block_height: 850, index: 0 }
+            : txHash === REDEEM_TX
+              ? { block_height: 950, index: 0 }
+              : { block_height: 900, index: 0 },
+        ),
+      },
+    };
+  }
+
+  it('queues deposit and redeem requests beside the swap orders, in the order the chain accepted them', async () => {
+    const { pools } = await readVenueMarket(withRequests(), {
+      ...ARGS,
+      depositAddress: DEPOSIT_ADDRESS,
+      redeemAddress: REDEEM_ADDRESS,
+    });
+    const queue = pools[0]?.queue ?? [];
+    expect(queue.map((o) => o.kind)).toEqual(['deposit', 'swap', 'swap', 'redeem']);
+    expect(queue[0]).toMatchObject({
+      ref: `${DEPOSIT_TX}#0`,
+      owner: PLACER,
+      side: null,
+      inUnit: 'lovelace',
+      amount: 100_000_000n,
+      outUnit: LQ,
+      pairedAmount: 1_000_000n,
+      state: 'fillable',
+      placedAtHeight: 850,
+    });
+    expect(queue[3]).toMatchObject({ ref: `${REDEEM_TX}#0`, inUnit: LQ, amount: 5_000_000n, outUnit: 'lovelace' });
+  });
+
+  it('reads no request address it was not given', async () => {
+    const d = withRequests();
+    const { pools } = await readVenueMarket(d, ARGS);
+    expect(pools[0]?.queue.every((o) => o.kind === 'swap')).toBe(true);
+    expect(d.chain.getAddressUtxosAll).not.toHaveBeenCalledWith(DEPOSIT_ADDRESS);
   });
 });
 

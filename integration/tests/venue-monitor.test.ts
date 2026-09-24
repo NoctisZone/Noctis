@@ -49,6 +49,7 @@ function order(id: string, poolName?: string): VenueSwapOrderUtxo {
 function round(outcomes: VenueFillOutcome[], skipped: VenueBatcherRound['skipped'] = []): VenueBatcherRound {
   return {
     outcomes,
+    liquidityOutcomes: [],
     skipped,
     filled: outcomes.filter((o) => o.status === 'filled').length,
     failed: outcomes.filter((o) => o.status === 'failed').length,

@@ -21,8 +21,10 @@
 // realised, never a float.
 // ============================================================================
 
+import type { Network as LucidNetwork } from '@lucid-evolution/lucid';
 import type { SkippedUtxo, VenueChainProvider } from './venue-chain-reader.js';
-import { readVenuePools } from './venue-chain-reader.js';
+import { readVenueLiquidityOrders, readVenuePools } from './venue-chain-reader.js';
+import { venueLiquidityFillable } from './venue-liquidity.js';
 import { trackVenueOrders, type VenueOrderState } from './venue-order-tracker.js';
 import {
   readVenuePoolHistory,
@@ -31,7 +33,7 @@ import {
   venueFeesEarned,
 } from './venue-pool-history.js';
 import { type VenueBlockProvider, venueFeedIsComplete, venueTradeSeries } from './venue-price-feed.js';
-import { readVenuePoolState, venueUnitOf } from './venue-swap.js';
+import { readVenuePoolState, venueFillSequence, venueUnitOf } from './venue-swap.js';
 
 /** Holders of one asset, as a chain provider reports them: every address, unsorted. */
 export interface VenueAssetHoldersProvider {
@@ -58,6 +60,14 @@ export interface VenueMarketArgs {
   /** How many of the token's largest holders to return. Default 25. */
   holdersLimit?: number;
   fillCostLovelace?: bigint;
+  /**
+   * The deposit and redeem request addresses. Given, the queue lists resting
+   * requests to add and remove liquidity beside the swap orders.
+   */
+  depositAddress?: string;
+  redeemAddress?: string;
+  /** Needed to judge a liquidity request's reward output. Preprod unless given. */
+  network?: LucidNetwork;
 }
 
 export interface VenueMarketTrade {
@@ -79,6 +89,8 @@ export interface VenueMarketTrade {
 }
 
 export interface VenueMarketOrder {
+  /** A swap order, or a request to add (`deposit`) or remove (`redeem`) liquidity. */
+  kind: 'swap' | 'deposit' | 'redeem';
   /** `txHash#outputIndex`. */
   ref: string;
   /** Where the proceeds go: the payment key hash the order is for. */
@@ -95,6 +107,8 @@ export interface VenueMarketOrder {
   fillableNow: bigint;
   shortfallBps?: bigint;
   placedAtHeight?: number;
+  /** A deposit's other side: the token it adds beside its ADA. */
+  pairedAmount?: bigint;
 }
 
 export interface VenueMarketHolder {
@@ -192,6 +206,15 @@ export async function readVenueMarket(deps: VenueMarketDeps, args: VenueMarketAr
     factoryPolicyId: args.factoryPolicyId,
     ...(args.fillCostLovelace !== undefined ? { fillCostLovelace: args.fillCostLovelace } : {}),
   });
+  const requests =
+    args.depositAddress || args.redeemAddress
+      ? await readVenueLiquidityOrders(deps.chain, {
+          ...(args.depositAddress ? { depositAddress: args.depositAddress } : {}),
+          ...(args.redeemAddress ? { redeemAddress: args.redeemAddress } : {}),
+          knownPools: poolsRead.pools.map((pool) => venueUnitOf(pool.datum.pool_nft)),
+          includeUnknownPools: true,
+        })
+      : { orders: [], skipped: [] };
 
   const pools: VenueMarketPool[] = [];
   for (const pool of wanted) {
@@ -215,12 +238,15 @@ export async function readVenueMarket(deps: VenueMarketDeps, args: VenueMarketAr
     const lqUnit = venueUnitOf(pool.datum.pool_lq);
     const tokenUnit = unitX === LOVELACE ? unitY : unitX;
 
-    const queue: VenueMarketOrder[] = tracking.orders
+    // Swap orders and liquidity requests, as one queue in the order the chain
+    // accepted them — the order a batcher meets them in.
+    const swapRows = tracking.orders
       .filter((tracked) => venueUnitOf(tracked.order.datum.pool_nft) === poolNft)
       .map((tracked) => {
         const inUnit = venueUnitOf(tracked.order.datum.input);
         const outUnit = venueUnitOf(tracked.order.datum.output);
-        return {
+        const row: VenueMarketOrder = {
+          kind: 'swap',
           ref: `${tracked.order.txHash}#${tracked.order.outputIndex}`,
           owner: tracked.order.datum.reward_pkh,
           side: inUnit === LOVELACE ? 'buy' : outUnit === LOVELACE ? 'sell' : null,
@@ -234,7 +260,41 @@ export async function readVenueMarket(deps: VenueMarketDeps, args: VenueMarketAr
           ...(tracked.shortfallBps !== undefined ? { shortfallBps: tracked.shortfallBps } : {}),
           ...(tracked.order.placedAt ? { placedAtHeight: tracked.order.placedAt.blockHeight } : {}),
         };
+        return { outputIndex: tracked.order.outputIndex, placedAt: tracked.order.placedAt, row };
       });
+    const requestRows = requests.orders
+      .filter((request) => venueUnitOf(request.datum.pool_nft) === poolNft)
+      .map((request) => {
+        const answer = venueLiquidityFillable({
+          pool,
+          order: request,
+          network: args.network ?? 'Preprod',
+          minOutputLovelace: 1_000_000n,
+          ...(args.fillCostLovelace !== undefined ? { fillCostLovelace: args.fillCostLovelace } : {}),
+        });
+        const deposit = request.kind === 'deposit';
+        const lovelace = request.assets[LOVELACE] ?? 0n;
+        const amount = deposit
+          ? lovelace - request.datum.ex_fee - (request.kind === 'deposit' ? request.datum.collateral_ada : 0n)
+          : (request.assets[lqUnit] ?? 0n);
+        const row: VenueMarketOrder = {
+          kind: request.kind,
+          ref: `${request.txHash}#${request.outputIndex}`,
+          owner: request.datum.reward_pkh,
+          side: null,
+          inUnit: deposit ? LOVELACE : lqUnit,
+          amount,
+          outUnit: deposit ? lqUnit : LOVELACE,
+          exFee: request.datum.ex_fee,
+          state: answer.fillable ? 'fillable' : 'unfundable',
+          reason: answer.fillable ? 'waiting for a batcher: a request fills at the pool’s ratio' : answer.reason,
+          fillableNow: answer.fillable ? amount : 0n,
+          ...(request.placedAt ? { placedAtHeight: request.placedAt.blockHeight } : {}),
+          ...(deposit ? { pairedAmount: request.assets[tokenUnit] ?? 0n } : {}),
+        };
+        return { outputIndex: request.outputIndex, placedAt: request.placedAt, row };
+      });
+    const queue: VenueMarketOrder[] = venueFillSequence([...swapRows, ...requestRows]).map((entry) => entry.row);
 
     const lqHolders = largestFirst(await deps.holders.getAssetAddresses(lqUnit)).filter(
       (row) => row.address !== pool.address,
@@ -289,5 +349,5 @@ export async function readVenueMarket(deps: VenueMarketDeps, args: VenueMarketAr
     });
   }
 
-  return { pools, skipped: [...poolsRead.skipped, ...tracking.skipped] };
+  return { pools, skipped: [...poolsRead.skipped, ...tracking.skipped, ...requests.skipped] };
 }
