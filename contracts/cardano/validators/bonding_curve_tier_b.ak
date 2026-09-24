@@ -467,7 +467,10 @@ pub type BondingCurveTierBRedeemer {
   /// this signed transaction is what lets `OpenDvClaim` be permissionless —
   /// a length is the one value in the DarkVeil lifecycle that only the party
   /// holding the registrant set can supply.
-  AnchorDvAllocationRoot { dv_allocation_root: ByteArray, claimed_bits: ByteArray }
+  AnchorDvAllocationRoot {
+    dv_allocation_root: ByteArray,
+    claimed_bits: ByteArray,
+  }
   QueryState
   /// Public sell — the reverse of BuyTokens. Same mechanism as the linear curve's
   /// bonding_curve.ak SellTokens — see that file's own doc comment
@@ -2193,15 +2196,14 @@ validator bonding_curve_tier_b {
           // Written as a branch rather than as `has_map == has_phase` plus a
           // ceiling, which reads more neatly and compiles 11 bytes LARGER. At
           // this validator's size that is not a free choice.
-          let bits_sized_for_the_phase =
-            if datum.dv_reserve_tokens > 0 {
-              and {
-                bytearray.length(claimed_bits) > 0,
-                bytearray.length(claimed_bits) <= max_claimed_bits,
-              }
-            } else {
-              claimed_bits == #""
+          let bits_sized_for_the_phase = if datum.dv_reserve_tokens > 0 {
+            and {
+              bytearray.length(claimed_bits) > 0,
+              bytearray.length(claimed_bits) <= max_claimed_bits,
             }
+          } else {
+            claimed_bits == #""
+          }
           and {
             list.has(self.extra_signatories, datum.governor_pub_key_hash),
             datum.curve_state == Inactive,
