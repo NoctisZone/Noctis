@@ -70,6 +70,39 @@ export interface TradeEvent {
    * from history — the per-wallet cap totals especially — has to read this.
    */
   raw?: Constr<unknown>;
+  /**
+   * A `BatchTrades` event's orders, each priced the way the curve priced it.
+   *
+   * Present only on a batch whose pre-batch datum decoded. It sits beside
+   * `raw` rather than replacing anything, so a consumer rebuilding state from
+   * `raw` reads exactly what it always has; a trade feed reads this instead.
+   */
+  batchFills?: BatchFill[];
+}
+
+/** One order inside a `BatchTrades` redeemer, as the curve reads it. */
+export interface BatchOrderView {
+  owner: string;
+  orderTxHash: string;
+  orderOutputIndex: number;
+  isBuy: boolean;
+  amount: bigint;
+}
+
+/** One order a batch settled, with what it paid or received. */
+export interface BatchFill {
+  /** The order's position in the redeemer's list. With the tx hash, unique. */
+  seq: number;
+  side: 'buy' | 'sell';
+  owner: string;
+  orderTxHash: string;
+  orderOutputIndex: number;
+  tokenAmount: bigint;
+  /** The order's share of its side's batch range, before fees. */
+  grossLovelace: bigint;
+  /** MICRO-lovelace per token — see UNIT_PRICE_SCALE. */
+  unitPrice: bigint;
+  isCreatorTrade: boolean;
 }
 
 /**
@@ -164,6 +197,133 @@ function pricedFields(
     // UNIT_PRICE_SCALE to get lovelace, or by UNIT_PRICE_SCALE * 1e6 for ADA.
     unit_price: ((gross * UNIT_PRICE_SCALE) / tokenAmount).toString(),
   };
+}
+
+/**
+ * Reads the order list out of a decoded `BatchTrades` redeemer.
+ *
+ * Each order is `BatchOrder { owner, order_ref, is_buy, amount, ... }`; only
+ * the leading fields are read, so the cap-proof fields behind them can change
+ * without touching this. An order reference whose transaction id is itself
+ * wrapped in a constructor is unwrapped, so both ledger encodings read alike.
+ */
+export function decodeBatchOrders(redeemer: Constr<unknown>): BatchOrderView[] {
+  const list = redeemer.fields[0];
+  if (!Array.isArray(list)) throw new Error('BatchTrades: the orders field is not a list');
+  return list.map((order: unknown) => {
+    if (!(order instanceof Constr)) throw new Error('BatchTrades: an order is not a constructor');
+    const [owner, ref, isBuy, amount] = order.fields as unknown[];
+    if (
+      typeof owner !== 'string' ||
+      !(ref instanceof Constr) ||
+      !(isBuy instanceof Constr) ||
+      typeof amount !== 'bigint'
+    ) {
+      throw new Error('BatchTrades: an order has an unexpected shape');
+    }
+    const [txId, index] = ref.fields as unknown[];
+    const orderTxHash = txId instanceof Constr ? txId.fields[0] : txId;
+    if (typeof orderTxHash !== 'string' || typeof index !== 'bigint') {
+      throw new Error('BatchTrades: an order reference has an unexpected shape');
+    }
+    return { owner, orderTxHash, orderOutputIndex: Number(index), isBuy: isBuy.index === 1, amount };
+  });
+}
+
+/** One row of a launch's public trade feed: a trade, or a bookkeeping action. */
+export interface FeedRow {
+  txHash: string;
+  blockTime: number;
+  contract: TradeEvent['contract'];
+  action: string;
+  /** Position within its transaction: a batch yields one row per order. */
+  seq: number;
+  isCreatorAction: boolean;
+  isCreatorTrade: boolean;
+  fields: Record<string, string>;
+}
+
+/**
+ * Turns decoded history into the feed a trading-history table and a price
+ * chart read: each priced batch becomes one BuyTokens or SellTokens row per
+ * order, carrying the same fields a direct trade carries, so the feed reads
+ * the same whichever way a trade reached the curve. A batch that could not be
+ * priced stays one unpriced row, so its transaction is still on record.
+ */
+export function toFeedRows(events: TradeEvent[]): FeedRow[] {
+  return events.flatMap((e): FeedRow[] => {
+    const base = {
+      txHash: e.txHash,
+      blockTime: e.blockTime,
+      contract: e.contract,
+      isCreatorAction: e.isCreatorAction,
+    };
+    if (e.action !== 'BatchTrades' || !e.batchFills?.length) {
+      return [{ ...base, action: e.action, seq: 0, isCreatorTrade: e.isCreatorTrade, fields: e.fields }];
+    }
+    const size = String(e.batchFills.length);
+    return e.batchFills.map((f) => ({
+      ...base,
+      action: f.side === 'buy' ? 'BuyTokens' : 'SellTokens',
+      seq: f.seq,
+      isCreatorTrade: f.isCreatorTrade,
+      fields: {
+        token_amount: f.tokenAmount.toString(),
+        [f.side === 'buy' ? 'buyer_key_hash' : 'seller_key_hash']: f.owner,
+        gross_lovelace: f.grossLovelace.toString(),
+        unit_price: f.unitPrice.toString(),
+        order_ref: `${f.orderTxHash}#${f.orderOutputIndex}`,
+        batch_size: size,
+      },
+    }));
+  });
+}
+
+/**
+ * Prices every order in a batch the way the curve's `BatchTrades` arm does.
+ *
+ * Uniform clearing price per side, both sides anchored at the pre-batch
+ * position: the buys together price the range above it and each buy pays its
+ * pro-rata share of that, rounded UP; the sells together price the range below
+ * it and each sell receives its share, rounded DOWN. Position inside the batch
+ * changes nothing, and a one-order batch prices exactly as the same trade made
+ * directly. Mirrors bonding_curve_tier_b.ak, whose own test vector pins it.
+ */
+export function priceBatch(
+  shape: CurveShape,
+  preDatum: CurveParams & { tokens_sold: bigint; creator_pub_key_hash?: string },
+  orders: BatchOrderView[],
+): BatchFill[] {
+  let buyAmount = 0n;
+  let sellAmount = 0n;
+  for (const o of orders) {
+    if (o.isBuy) buyAmount += o.amount;
+    else sellAmount += o.amount;
+  }
+  const s0 = preDatum.tokens_sold;
+  const buyGross = buyAmount > 0n ? buyCost(shape, preDatum, s0, buyAmount) : 0n;
+  const sellGross =
+    sellAmount > 0n && sellAmount <= s0 ? sellProceeds(shape, preDatum, s0 - sellAmount, sellAmount) : 0n;
+  return orders.map((o, seq) => {
+    const gross = o.isBuy
+      ? buyAmount > 0n
+        ? (buyGross * o.amount + buyAmount - 1n) / buyAmount
+        : 0n
+      : sellAmount > 0n
+        ? (sellGross * o.amount) / sellAmount
+        : 0n;
+    return {
+      seq,
+      side: o.isBuy ? 'buy' : 'sell',
+      owner: o.owner,
+      orderTxHash: o.orderTxHash,
+      orderOutputIndex: o.orderOutputIndex,
+      tokenAmount: o.amount,
+      grossLovelace: gross,
+      unitPrice: o.amount > 0n ? (gross * UNIT_PRICE_SCALE) / o.amount : 0n,
+      isCreatorTrade: preDatum.creator_pub_key_hash !== undefined && o.owner === preDatum.creator_pub_key_hash,
+    };
+  });
 }
 
 interface BfRedeemer {
@@ -310,6 +470,20 @@ async function walkHistory(
               // rather than carrying a guessed one.
             }
           }
+          // A batch names no single amount or trader, so the branch above
+          // skips it. Its orders are priced here instead, one by one.
+          let batchFills: BatchFill[] | undefined;
+          if (action === 'BatchTrades' && pricing && ownInput.inline_datum && decoded instanceof Constr) {
+            try {
+              const preDatum = Data.from<CurveParams & { tokens_sold: bigint; creator_pub_key_hash: string }>(
+                ownInput.inline_datum,
+                pricing.datumSchema as never,
+              );
+              batchFills = priceBatch(pricing.shape, preDatum, decodeBatchOrders(decoded));
+            } catch {
+              // Same rule as a single trade: unpriced rather than guessed.
+            }
+          }
           events.push({
             txHash,
             blockTime: txMeta.block_time,
@@ -319,6 +493,7 @@ async function walkHistory(
             isCreatorTrade,
             fields,
             ...(decoded instanceof Constr ? { raw: decoded } : {}),
+            ...(batchFills ? { batchFills } : {}),
           });
         }
       } catch {

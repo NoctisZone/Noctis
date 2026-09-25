@@ -6,10 +6,11 @@
 // read-tier-a-launch-state.ts (single JSON object on stdin, single JSON
 // object on stdout, exit 0 on success even for an empty/not-found result).
 //
-// Deliberately returns raw decoded TradeEvent[] and lets the PHP bridge
-// (trade-history-reader.php) own the incremental-cache boundary and the
-// candle-bucketing interpretation — this CLI's only job is "decode what's
-// new on chain since stopAtTxHash," not aggregation. Keeps the Node layer a
+// Returns the decoded feed (toFeedRows: one row per trade, a batch expanded
+// into its orders) and lets the PHP bridge (trade-history-reader.php) own the
+// incremental-cache boundary and the candle-bucketing interpretation — this
+// CLI's only job is "decode what's new on chain since stopAtTxHash," not
+// aggregation. Keeps the Node layer a
 // pure chain-decoder, matching this project's existing split (chain-state-
 // reader.php interprets/caches; the CLI it calls only decodes).
 //
@@ -19,7 +20,7 @@
 
 import { validatorToAddress } from '@lucid-evolution/lucid';
 import { loadValidator } from '../tier-a-schemas.js';
-import { TierATradeHistoryReader, type TradeEvent } from '../tier-a-trade-history-reader.js';
+import { TierATradeHistoryReader, type TradeEvent, toFeedRows } from '../tier-a-trade-history-reader.js';
 import {
   CARDANO_NETWORK_MAP,
   jsonSafe,
@@ -70,9 +71,12 @@ async function main() {
 
   const events: TradeEvent[] = await reader.getCurveTradeHistory(input.stopAtTxHash);
 
+  // The feed, not the raw decode: a batch arrives as one row per order it
+  // settled, each keyed by its position (`seq`) within the transaction. The
+  // boundary is still the newest TRANSACTION, taken before that expansion.
   process.stdout.write(
     JSON.stringify({
-      events: jsonSafe(events),
+      events: jsonSafe(toFeedRows(events)),
       newestTxHash: events.length ? events[events.length - 1].txHash : (input.stopAtTxHash ?? null),
     }),
   );

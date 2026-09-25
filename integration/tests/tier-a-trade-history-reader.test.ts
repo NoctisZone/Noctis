@@ -24,13 +24,17 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Constr, credentialToAddress, Data, type Data as LucidData } from '@lucid-evolution/lucid';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { buyCost, sellProceeds } from '../curve-pricing.js';
 import { BONDING_CURVE_TIER_B_REDEEMER } from '../redeemer-indices.js';
 import { buildGenesisDatums } from '../tier-a-genesis-datums.js';
 import {
   BONDING_CURVE_ACTIONS,
   BONDING_CURVE_TIER_B_ACTIONS,
   CURVE_FIELDS,
+  decodeBatchOrders,
+  priceBatch,
   TierATradeHistoryReader,
+  toFeedRows,
   VESTING_ACTIONS,
 } from '../tier-a-trade-history-reader.js';
 
@@ -443,5 +447,162 @@ describe('getCurveTradeHistory', () => {
     expect(events.map((e) => e.txHash)).toEqual(['newest']);
     // The incremental promise: nothing older was even requested.
     expect(f.mock.calls.some((c) => (c[0] as string).includes('/txs/older'))).toBe(false);
+  });
+});
+
+// A batch settles several orders in one curve spend. The feed and the chart
+// need one priced row per order; the cap rebuild needs the raw redeemer. Both
+// come from the same event, so the tests below hold each to its own reading.
+describe('batches', () => {
+  // The contract's own fixture — mock_datum in bonding_curve_tier_b.ak: base
+  // 100, max 1000, supply 1000.
+  const fixture = { base_price: 100n, max_price: 1000n, curve_supply: 1000n, tokens_sold: 0n };
+  const order = (owner: string, isBuy: boolean, amount: bigint, ix = 0) => ({
+    owner,
+    orderTxHash: 'ab'.repeat(32),
+    orderOutputIndex: ix,
+    isBuy,
+    amount,
+  });
+  const batchOrder = (owner: string, txHash: string, ix: bigint, isBuy: boolean, amount: bigint) =>
+    new Constr(0, [owner, new Constr(0, [txHash, ix]), new Constr(isBuy ? 1 : 0, []), amount, amount, 0n, []]);
+
+  it("prices each buy at the batch average, to the contract's own figures", () => {
+    const fills = priceBatch('quadratic', fixture, [order('de', true, 400n), order('df', true, 300n, 1)]);
+    // batch_prices_every_order_at_the_batch_average, value for value.
+    expect(fills.map((f) => f.grossLovelace)).toEqual([98_675n, 74_006n]);
+    expect(fills.map((f) => f.seq)).toEqual([0, 1]);
+    expect(fills.every((f) => f.side === 'buy')).toBe(true);
+  });
+
+  it('prices a one-order batch exactly as the same trade made directly', () => {
+    const d = { ...fixture, tokens_sold: 250n };
+    const [buy] = priceBatch('quadratic', d, [order('de', true, 120n)]);
+    expect(buy.grossLovelace).toBe(buyCost('quadratic', d, 250n, 120n));
+    const [sell] = priceBatch('quadratic', d, [order('de', false, 120n)]);
+    expect(sell.grossLovelace).toBe(sellProceeds('quadratic', d, 130n, 120n));
+  });
+
+  it('anchors both sides at the pre-batch position, sells rounded down', () => {
+    const d = { ...fixture, tokens_sold: 500n };
+    const fills = priceBatch('quadratic', d, [
+      order('de', true, 100n),
+      order('df', false, 60n, 1),
+      order('e0', false, 40n, 2),
+    ]);
+    expect(fills[0].grossLovelace).toBe(buyCost('quadratic', d, 500n, 100n));
+    const sellRange = sellProceeds('quadratic', d, 400n, 100n);
+    expect(fills[1].grossLovelace).toBe((sellRange * 60n) / 100n);
+    expect(fills[2].grossLovelace).toBe((sellRange * 40n) / 100n);
+    expect(fills.map((f) => f.side)).toEqual(['buy', 'sell', 'sell']);
+  });
+
+  it('reads owner, order reference, side and amount from a real encoding', () => {
+    const cbor = redeemerCbor(BONDING_CURVE_TIER_B_REDEEMER.BatchTrades, [
+      [batchOrder(BUYER, 'ab'.repeat(32), 1n, true, 400n), batchOrder(CREATOR, 'cd'.repeat(32), 0n, false, 50n)],
+      'ba'.repeat(28),
+    ]);
+    expect(decodeBatchOrders(Data.from(cbor) as Constr<unknown>)).toEqual([
+      { owner: BUYER, orderTxHash: 'ab'.repeat(32), orderOutputIndex: 1, isBuy: true, amount: 400n },
+      { owner: CREATOR, orderTxHash: 'cd'.repeat(32), orderOutputIndex: 0, isBuy: false, amount: 50n },
+    ]);
+  });
+
+  it('prices a batch from its pre-batch datum and keeps the raw redeemer', async () => {
+    const { hex, launchId } = await curveDatum();
+    const r = new TierATradeHistoryReader({
+      blockfrostProjectId: 'k',
+      blockfrostUrl: 'https://bf.test',
+      bondingCurveAddress: CURVE_ADDR,
+      launchIdHex: launchId,
+      tier: 'B',
+    });
+    const cbor = redeemerCbor(BONDING_CURVE_TIER_B_REDEEMER.BatchTrades, [
+      [
+        batchOrder(BUYER, 'ab'.repeat(32), 0n, true, 3_000n),
+        batchOrder('22'.repeat(28), 'cd'.repeat(32), 0n, true, 1_000n),
+      ],
+      'ba'.repeat(28),
+    ]);
+    vi.stubGlobal(
+      'fetch',
+      chainFetch(
+        [{ tx_hash: 'batch1', inline_datum: hex }],
+        [
+          {
+            hash: 'batch1',
+            blockTime: 300,
+            spends: 'genesis',
+            inlineDatum: hex,
+            redeemers: [{ purpose: 'spend', script_hash: SCRIPT_HASH, redeemer_data_hash: 'curve' }],
+            redeemerCbor: { curve: cbor },
+          },
+          { hash: 'genesis', blockTime: 100 },
+        ],
+      ),
+    );
+
+    const events = await r.getCurveTradeHistory();
+    const batch = events.find((e) => e.txHash === 'batch1');
+
+    expect(batch?.action).toBe('BatchTrades');
+    // The cap rebuild reads the redeemer itself; the pricing must not replace it.
+    expect(batch?.raw).toBeInstanceOf(Constr);
+    expect(batch?.batchFills?.map((f) => [f.seq, f.owner, f.tokenAmount])).toEqual([
+      [0, BUYER, 3_000n],
+      [1, '22'.repeat(28), 1_000n],
+    ]);
+    const total = (batch?.batchFills ?? []).reduce((a, f) => a + f.grossLovelace, 0n);
+    // Rounded up per order, so the orders together cover the batch range.
+    expect(total).toBeGreaterThan(0n);
+  });
+
+  it('feeds one row per order, keyed by position, and leaves other events whole', () => {
+    const fills = priceBatch('quadratic', fixture, [order(BUYER, true, 400n), order('df', true, 300n, 1)]);
+    const rows = toFeedRows([
+      {
+        txHash: 'm',
+        blockTime: 1,
+        contract: 'bonding_curve',
+        action: 'Mint',
+        isCreatorAction: false,
+        isCreatorTrade: false,
+        fields: {},
+      },
+      {
+        txHash: 'b',
+        blockTime: 2,
+        contract: 'bonding_curve',
+        action: 'BatchTrades',
+        isCreatorAction: false,
+        isCreatorTrade: false,
+        fields: { orders: '[object]' },
+        batchFills: fills,
+      },
+      // A batch that could not be priced stays on record as one row.
+      {
+        txHash: 'u',
+        blockTime: 3,
+        contract: 'bonding_curve',
+        action: 'BatchTrades',
+        isCreatorAction: false,
+        isCreatorTrade: false,
+        fields: {},
+      },
+    ]);
+    expect(rows.map((x) => [x.txHash, x.action, x.seq])).toEqual([
+      ['m', 'Mint', 0],
+      ['b', 'BuyTokens', 0],
+      ['b', 'BuyTokens', 1],
+      ['u', 'BatchTrades', 0],
+    ]);
+    expect(rows[1].fields).toMatchObject({
+      token_amount: '400',
+      buyer_key_hash: BUYER,
+      gross_lovelace: '98675',
+      order_ref: `${'ab'.repeat(32)}#0`,
+      batch_size: '2',
+    });
+    expect(rows[2].fields).toMatchObject({ token_amount: '300', buyer_key_hash: 'df', gross_lovelace: '74006' });
   });
 });
