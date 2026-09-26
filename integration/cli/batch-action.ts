@@ -165,6 +165,10 @@ async function main() {
     });
   const summarise = (plan: BatchPlan) => ({
     curveUtxo: `${found.utxo.txHash}#${found.utxo.outputIndex}`,
+    // Where this launch's orders wait. A scheduled tick reads that address's
+    // newest transaction to tell whether anything arrived since it last found
+    // nothing to fill: one read in place of a full plan.
+    orderAddress: orders.orderAddress,
     openOrders: candidates.length,
     fills: plan.fills.map((f) => ({
       order: `${f.order.txHash}#${f.order.outputIndex}`,
