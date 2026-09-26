@@ -50,7 +50,7 @@ vi.mock('@meshsdk/core', async (importOriginal) => {
 import { type Constr, credentialToAddress, Lucid } from '@lucid-evolution/lucid';
 import { type BatchPlan, planBatch } from '../batch-planner.js';
 import { BatcherSubmitter, REDEEMER_APPLY_ORDER, REDEEMER_BATCH_TRADES } from '../batcher-submitter.js';
-import { bytesToHex, CAP_EMPTY_ROOT, CapAccumulator } from '../cap-accumulator-tree.js';
+import { bytesToHex, CAP_EMPTY_ROOT, CapAccumulator, hexToBytes } from '../cap-accumulator-tree.js';
 import type { CurveBatchPlan } from '../mesh-curve-spend.js';
 
 const blueprint = JSON.parse(
@@ -265,6 +265,53 @@ describe('the batch a plan turns into', () => {
     const plan = buildPlan([{ owner: ALICE, index: 1, amount: 100n }]);
     await makeSubmitter().submitBatch(KEY, { curveUtxo: curveUtxo(), orderUtxos: [orderUtxo(1)], plan });
     expect(lastPlan().payouts[1]?.assets.lovelace).toBe(plan.fills[0]?.change);
+  });
+
+  // curve_order counts only what arrives ABOVE the lovelace the order itself
+  // held toward the seller's minimum, so the payout carries that deposit back
+  // with the proceeds: the seller receives everything their order held beyond
+  // the tokens the curve took, and a sell priced near its bound still clears.
+  it('pays a seller the proceeds and the deposit their order held', async () => {
+    const deposit = 2_500_000n;
+    const state = new CapAccumulator([{ key: hexToBytes(ALICE), total: 500n }]);
+    const plan = planBatch({
+      shape: 'linear',
+      curve: {
+        base_price: 100n,
+        max_price: 1000n,
+        curve_supply: 1000n,
+        tokens_sold: 500n,
+        total_raised: 0n,
+        creator_fees_accrued: 0n,
+        platform_fees_accrued: 0n,
+        wallet_cap: 500n,
+        cap_root: bytesToHex(state.root),
+        creator_pub_key_hash: '99'.repeat(28),
+      },
+      capState: state,
+      orders: [
+        {
+          txHash: ORDER_TX,
+          outputIndex: 1,
+          ownerKeyHashHex: ALICE,
+          isBuy: false,
+          amount: 100n,
+          minReceived: 0n,
+          maxSpend: 100n,
+          deadlineMs: 9_999_999n,
+          heldLovelace: deposit,
+          heldTokens: 100n,
+        },
+      ],
+      nowMs: 1_000n,
+      minPayoutLovelace: 1n,
+    });
+    const net = plan.fills[0]?.received ?? 0n;
+    expect(net).toBeGreaterThan(0n);
+    await makeSubmitter().submitBatch(KEY, { curveUtxo: curveUtxo(), orderUtxos: [orderUtxo(1, deposit)], plan });
+    expect(lastPlan().payouts[0]?.assets.lovelace).toBe(net + deposit);
+    // Nothing unsold, so no token change comes back.
+    expect(lastPlan().payouts).toHaveLength(1);
   });
 
   it('moves the curve’s own value by what the plan says', async () => {

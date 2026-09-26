@@ -15,7 +15,7 @@
 // ============================================================================
 
 import { Blockfrost, Lucid } from '@lucid-evolution/lucid';
-import { type BatchPlan, type CandidateOrder, planBatch, shrinkBatchAfter } from '../batch-planner.js';
+import { type BatchPlan, type CandidateOrder, isScriptRefusal, planBatch, shrinkBatchAfter } from '../batch-planner.js';
 import { BatcherSubmitter } from '../batcher-submitter.js';
 import { capAccumulatorFromHex } from '../cap-accumulator-tree.js';
 import { selectLaunchUtxo } from '../launch-utxo-lookup.js';
@@ -67,6 +67,13 @@ interface Input {
 }
 
 const CURVE_TITLE = 'bonding_curve_tier_b.bonding_curve_tier_b.spend';
+
+/**
+ * Most builds one tick may try. Every attempt is a round of reads and an
+ * evaluation, and the tick runs under a time limit; what does not fit in this
+ * waits for the next tick rather than overrunning this one.
+ */
+const MAX_SUBMIT_ATTEMPTS = 6;
 
 // The linear-curve path is retired, so the only tier this resolves is the
 // quadratic one. Checked at runtime rather than left to the type: input
@@ -144,12 +151,15 @@ async function main() {
     heldTokens: utxo.assets[tokenUnit] ?? 0n,
   }));
 
+  // Orders a validator refused on their own this tick, by reference.
+  const excluded = new Map<string, string>();
+  const refOf = (o: { txHash: string; outputIndex: number }) => `${o.txHash}#${o.outputIndex}`;
   const planWith = (maxOrders?: number) =>
     planBatch({
       shape: 'quadratic',
       curve: found.datum,
       capState: capAccumulatorFromHex(input.capState ?? []),
-      orders: candidates,
+      orders: candidates.filter((c) => !excluded.has(refOf(c))),
       nowMs: BigInt(input.nowMs ?? Date.now()),
       ...(maxOrders ? { maxOrders } : {}),
     });
@@ -194,26 +204,53 @@ async function main() {
         )
       : batcher.submitBatch(requireField(input, 'batcherMnemonic', 'submit'), submitParams);
   };
-  // A batch the builder cannot fit in one transaction is re-planned at half
-  // the size and tried again, down to a single order, so a tick fills what
-  // fits instead of failing whole while orders rest (shrinkBatchAfter).
+  // A batch refused whole is re-planned at half the size and tried again, down
+  // to a single order (shrinkBatchAfter); a single order a validator still
+  // refuses is left out of this tick and the rest are planned again
+  // (isScriptRefusal). So a tick fills what fits, and no one order can keep
+  // the others from filling.
   const shrunkFrom: number[] = [];
   let result: Awaited<ReturnType<typeof submitPlan>>;
-  for (;;) {
+  for (let attempt = 1; ; attempt++) {
     try {
       result = await submitPlan(plan);
       break;
     } catch (err) {
+      if (attempt >= MAX_SUBMIT_ATTEMPTS) throw err;
       const smaller = shrinkBatchAfter(err, plan.fills.length);
-      if (smaller === null) throw err;
-      shrunkFrom.push(plan.fills.length);
-      plan = planWith(smaller);
+      const only = plan.fills.length === 1 ? plan.fills[0] : undefined;
+      if (smaller !== null) {
+        shrunkFrom.push(plan.fills.length);
+        plan = planWith(smaller);
+      } else if (only && isScriptRefusal(err)) {
+        excluded.set(refOf(only.order), err instanceof Error ? err.message.slice(0, 200) : String(err).slice(0, 200));
+        plan = planWith(input.maxOrders);
+      } else {
+        throw err;
+      }
       if (plan.fills.length === 0) throw err;
     }
   }
 
+  // Said on stderr as well, which the scheduled tick writes to its log: a batch
+  // that shrank or an order left out is worth seeing without a debugger.
+  if (shrunkFrom.length || excluded.size) {
+    process.stderr.write(
+      `batch: filled ${plan.fills.length}` +
+        (shrunkFrom.length ? `, shrunk from ${shrunkFrom.join(' → ')}` : '') +
+        (excluded.size ? `, left out ${[...excluded.keys()].join(', ')}` : '') +
+        '\n',
+    );
+  }
   process.stdout.write(
-    JSON.stringify(jsonSafe({ ...summarise(plan), ...result, ...(shrunkFrom.length ? { shrunkFrom } : {}) })),
+    JSON.stringify(
+      jsonSafe({
+        ...summarise(plan),
+        ...result,
+        ...(shrunkFrom.length ? { shrunkFrom } : {}),
+        ...(excluded.size ? { excluded: [...excluded].map(([order, reason]) => ({ order, reason })) } : {}),
+      }),
+    ),
   );
 }
 

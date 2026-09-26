@@ -3,9 +3,10 @@
 // A plan the curve disagrees with is not a wrong number, it is a transaction
 // that never lands: the validator re-derives every figure and refuses anything
 // that does not match. So the tests worth having are the ones that pin the
-// properties a plausible-looking implementation gets wrong — pricing each
-// order at its own position, threading the cap root through the batch, and
-// leaving an unfillable order OUT rather than failing the whole batch with it.
+// properties a plausible-looking implementation gets wrong — pricing each side
+// as one range from where the batch opens, threading the cap root through the
+// batch, and leaving an unfillable order OUT rather than failing the whole
+// batch with it.
 //
 // The pricing here is deliberately checked against `curve-pricing`'s own
 // functions rather than against hard-coded lovelace figures. Those functions
@@ -17,6 +18,7 @@ import { describe, expect, it } from 'vitest';
 import {
   type BatchPlan,
   type CandidateOrder,
+  isScriptRefusal,
   MAX_ORDERS_PER_BATCH,
   type PlannerCurve,
   planBatch,
@@ -278,11 +280,31 @@ describe('planBatch — what it leaves out', () => {
       shape: 'linear',
       curve: c,
       capState: state,
-      orders: [order({ isBuy: false, amount: 1n, minReceived: 0n, maxSpend: 1n, heldTokens: 1n })],
+      // An order holding no lovelace of its own, so nothing but the proceeds
+      // can fill the output.
+      orders: [order({ isBuy: false, amount: 1n, minReceived: 0n, maxSpend: 1n, heldTokens: 1n, heldLovelace: 0n })],
       nowMs: NOW,
     });
     expect(result.fills).toEqual([]);
     expect(result.skipped[0]?.reason).toBe('proceeds-below-min-ada');
+  });
+
+  // The payout carries the order's own deposit as well as the proceeds, so the
+  // ledger's minimum applies to both together.
+  it('counts the deposit the order held toward the payout’s minimum', () => {
+    const state = new CapAccumulator([{ key: hexToBytes(ALICE), total: 500n }]);
+    const c = curve({ tokens_sold: 500n, cap_root: bytesToHex(state.root) });
+    const result = planBatch({
+      shape: 'linear',
+      curve: c,
+      capState: state,
+      orders: [
+        order({ isBuy: false, amount: 1n, minReceived: 0n, maxSpend: 1n, heldTokens: 1n, heldLovelace: 2_500_000n }),
+      ],
+      nowMs: NOW,
+    });
+    expect(result.skipped).toEqual([]);
+    expect(result.fills).toHaveLength(1);
   });
 
   it('fills a sell large enough to pay for its own output', () => {
@@ -313,16 +335,15 @@ describe('planBatch — what it leaves out', () => {
     expect(result.skipped[0]?.reason).toBe('exceeds-remaining-supply');
   });
 
-  // The number itself came from Preprod, not from a fixture: eight orders were
-  // refused for EXECUTION UNITS, having used 17,711,813 memory against a
-  // 17,500,000 cap while spending only two thirds of the steps allowed. Size
-  // was never close. Seven were accepted.
+  // The number itself came from Preprod, not from a fixture: on the quadratic
+  // curve four orders used 15.59M memory and five were refused
+  // `ExUnitsTooBigUTxO` at 21.2M against a 17,500,000 cap.
   //
   // Pinned as a literal so changing it is a deliberate act that fails a test.
-  // Nothing offline can tell whether 7 is RIGHT — only a node can — so this is
+  // Nothing offline can tell whether 4 is RIGHT — only a node can — so this is
   // a tripwire saying "re-measure", not a proof.
   it('keeps the ceiling at what was measured, or makes you say so', () => {
-    expect(MAX_ORDERS_PER_BATCH).toBe(7);
+    expect(MAX_ORDERS_PER_BATCH).toBe(4);
   });
 
   // This one is real: it fails if the planner stops applying a default at all,
@@ -454,8 +475,23 @@ describe('planBatch — Cardano Launch is a different curve, not a different fol
   });
 });
 
-describe('a batch that does not fit one transaction is re-planned smaller', () => {
+describe('a batch refused whole is re-planned smaller', () => {
   const refused = new Error('Maximum Input Count Exceeded');
+  // The three refusals below are the real texts, cut down, from live's batcher
+  // log on 2026-09-25: the node's memory cap, and Blockfrost's evaluator
+  // refusing a batch because one order in it could not be filled as planned.
+  const tooMuchMemory = new Error(
+    '{"contents":{"contents":{"contents":{"era":"ShelleyBasedEraConway","error":["ConwayUtxowFailure (UtxoFailure (ExUnitsTooBigUTxO Mismatch (RelLTEQ) {supplied: WrapExUnits {unWrapExUnits = ExUnits\' {exUnitsMem\' = 21214648, exUnitsSteps\' = 7466286447}}, expected: WrapExUnits {unWrapExUnits = ExUnits\' {exUnitsMem\' = 17500000, exUnitsSteps\' = 10000000000}}}))"]}}}}',
+  );
+  const scriptSaidNo = new Error(
+    'Evaluate redeemers failed: Tx evaluation failed: "{\\"type\\":\\"jsonwsp/response\\",\\"version\\":\\"1.0\\",\\"servicename\\":\\"ogmios\\",\\"methodname\\":\\"EvaluateTx\\",\\"result\\":{\\"EvaluationFailure\\":{\\"ScriptFailures\\":{}}}}" \n For txHex: 84a8',
+  );
+  // An input spent under the builder is ALSO an evaluation failure, but no
+  // script said anything: it is somebody else's race, and the next tick plans
+  // again. Leaving an order out for it would punish the wrong party.
+  const inputGone = new Error(
+    'Evaluate redeemers failed: Tx evaluation failed: {"result":{"EvaluationFailure":{"CannotCreateEvaluationContext":{"reason":"Unknown transaction input (missing from UTxO set)"}}}}',
+  );
 
   it('halves the fill count after the builder refuses the inputs', () => {
     expect(shrinkBatchAfter(refused, 7)).toBe(3);
@@ -463,13 +499,31 @@ describe('a batch that does not fit one transaction is re-planned smaller', () =
     expect(shrinkBatchAfter(refused, 2)).toBe(1);
   });
 
+  it('halves it after the node refuses the memory', () => {
+    expect(shrinkBatchAfter(tooMuchMemory, 5)).toBe(2);
+  });
+
+  it('halves it after a script refuses the batch, to find the order it refused', () => {
+    expect(shrinkBatchAfter(scriptSaidNo, 4)).toBe(2);
+    expect(shrinkBatchAfter(scriptSaidNo, 2)).toBe(1);
+  });
+
   it('is a real failure once a single order does not fit', () => {
     expect(shrinkBatchAfter(refused, 1)).toBeNull();
     expect(shrinkBatchAfter(refused, 0)).toBeNull();
+    expect(shrinkBatchAfter(scriptSaidNo, 1)).toBeNull();
   });
 
   it('never shrinks for any other refusal', () => {
     expect(shrinkBatchAfter(new Error('Insufficient input in transaction'), 7)).toBeNull();
-    expect(shrinkBatchAfter('script execution failed', 7)).toBeNull();
+    expect(shrinkBatchAfter(inputGone, 7)).toBeNull();
+  });
+
+  it('knows a script’s refusal from the node’s limits and from a race', () => {
+    expect(isScriptRefusal(scriptSaidNo)).toBe(true);
+    expect(isScriptRefusal('failed script execution\n Spend[3] the validator crashed / exited prematurely')).toBe(true);
+    expect(isScriptRefusal(tooMuchMemory)).toBe(false);
+    expect(isScriptRefusal(refused)).toBe(false);
+    expect(isScriptRefusal(inputGone)).toBe(false);
   });
 });

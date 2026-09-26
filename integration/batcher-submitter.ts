@@ -118,8 +118,11 @@ function assetsOf(fill: PlannedFill, tokenPolicyId: string, tokenAssetName: stri
   return fill.order.isBuy
     ? // A buy is delivered tokens; its change is the lovelace it did not spend.
       { fill: { [unit]: fill.received }, change: { lovelace: fill.change } }
-    : // A sell is paid lovelace; its change is the tokens it did not sell.
-      { fill: { lovelace: fill.received }, change: { [unit]: fill.change } };
+    : // A sell is paid its proceeds and, in the same output, the lovelace its own
+      // UTXO held — the deposit that carried the tokens. That deposit is the
+      // seller's and is not proceeds: curve_order counts only what arrives above
+      // it toward the seller's minimum. Its change is the tokens it did not sell.
+      { fill: { lovelace: fill.received + fill.order.heldLovelace }, change: { [unit]: fill.change } };
 }
 
 /**

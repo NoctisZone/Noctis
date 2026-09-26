@@ -10,10 +10,11 @@
 // So this module is a mirror of the validator's own fold, and the properties
 // it has to reproduce are the ones a naive implementation gets wrong:
 //
-//   - **Each order prices at its own position.** Order k pays for the range
-//     starting where order k-1 finished, not where the batch started. Pricing
-//     every order from the opening position is the obvious mistake and it
-//     under-charges every order after the first.
+//   - **Each side prices as one range from where the batch opens.** Every buy
+//     pays its share of one range above the opening position and every sell
+//     its share of one range below it — rounded up for a buy, down for a sell —
+//     so no order's price depends on where the batch happens to list it. The
+//     validator divides each range the same way, and so must this.
 //
 //   - **The cap accumulator threads too.** Each order proves its committed
 //     total against the root the PRECEDING order left, not the batch's
@@ -130,40 +131,67 @@ export interface BatchPlan {
 /**
  * Most orders one batch can carry.
  *
- * The binding limit is EXECUTION UNITS, not transaction size — which is not
- * what you would guess from a validator this large. Measured on Preprod: eight
- * The linear curve buys were refused with `ExUnitsTooBigUTxO`, having used 17,711,813
- * memory against a 17,500,000 cap, while spending only 6.66 billion of the ten
- * billion steps allowed. Seven of the same orders were accepted. Size was never
- * close on either.
+ * The binding limit is EXECUTION MEMORY, not transaction size, and it grows
+ * faster than the order count: every order's own spend reads the whole
+ * transaction, so each order added makes every other order dearer. Measured on
+ * Preprod against the quadratic curve (2026-09-25), memory per batch: one order
+ * 3.1M, two 6.5M, four 15.59M, five 21.2M — refused `ExUnitsTooBigUTxO`
+ * against a 17,500,000 cap, with steps at three quarters of theirs. Buys and
+ * sells cost the same.
  *
- * Memory is what runs out, so this is a count rather than a computed budget:
- * per-order cost varies with the cap proof each one carries, and a count that
- * is safe for the most expensive order is safe for all of them. A batch that
- * exceeds the cap is rejected whole, taking every order in it down together,
- * so the default errs low.
+ * Still a count rather than a computed budget: per-order cost also moves with
+ * the cap proof each order carries, which lengthens as more wallets trade. A
+ * batch refused anyway is re-planned smaller (see shrinkBatchAfter), so this is
+ * the first guess rather than the only guard — but a guess that is too high
+ * costs every tick an extra attempt, so it stays at what was measured to fit.
  *
- * Re-measure if the curve validator changes.
+ * Re-measure if the curve or order validator changes.
  */
-export const MAX_ORDERS_PER_BATCH = 7;
+export const MAX_ORDERS_PER_BATCH = 4;
 
 /**
- * When a submitted batch is refused for carrying too many inputs, the next
- * size to try — or null when the refusal is something else, or the batch is
- * already a single order and cannot shrink.
+ * When a submitted batch is refused whole, the next size to try — or null when
+ * a smaller batch cannot answer the refusal, or the batch is already a single
+ * order.
  *
- * The transaction builder's input selection bounds the number of inputs one
- * transaction may carry, and every order is an input beside the curve and the
- * batcher's own fee and collateral inputs. That bound moves with the wallet's
- * UTXO shape, so it cannot be a constant here: a batch that does not fit is
- * re-planned at half the size and tried again, down to one order, and a
- * single order that still does not fit is a real failure.
+ * Three refusals shrink it, each to half:
+ * - `Maximum Input Count Exceeded`: the builder's input selection bounds how
+ *   many inputs one transaction carries, and that bound moves with the batcher
+ *   wallet's UTXO shape, so it cannot be a constant here;
+ * - `ExUnitsTooBigUTxO`: the node's memory cap (see MAX_ORDERS_PER_BATCH);
+ * - a script refusal (see {@link isScriptRefusal}): a batch is all-or-nothing,
+ *   so one order the validators refuse takes every other order in it down too.
+ *   Halving isolates it, down to a single order, which the caller leaves out of
+ *   the tick instead of letting it hold up the rest.
  */
 export function shrinkBatchAfter(err: unknown, fills: number): number | null {
-  const message = err instanceof Error ? err.message : String(err);
-  if (!/Maximum Input Count Exceeded/i.test(message)) return null;
   if (fills <= 1) return null;
+  const message = errorMessage(err);
+  if (!BATCH_TOO_LARGE.test(message) && !SCRIPT_REFUSAL.test(message)) return null;
   return Math.max(1, Math.floor(fills / 2));
+}
+
+/**
+ * Whether a refusal came from a validator rather than from the builder or the
+ * node's size limits. On a single-order batch it means that order cannot be
+ * filled as planned, and it is left out of the tick.
+ */
+export function isScriptRefusal(err: unknown): boolean {
+  return SCRIPT_REFUSAL.test(errorMessage(err));
+}
+
+const BATCH_TOO_LARGE = /Maximum Input Count Exceeded|ExUnitsTooBig/i;
+// A SCRIPT said no: Ogmios v5 carries it as ScriptFailures, v6 as "Some scripts
+// of the transactions terminated with error", the local evaluator as a failed
+// script execution or a crashed validator. Deliberately not the bare
+// "EvaluationFailure": that is also how an input spent under the builder comes
+// back, and leaving out an order for that would punish it for someone else's
+// race — the next tick simply plans again.
+const SCRIPT_REFUSAL =
+  /ScriptFailures|scripts of the transactions? terminated|script execution failed|failed script execution|validator crashed/i;
+
+function errorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
 }
 
 export interface PlanBatchOptions {
@@ -387,12 +415,13 @@ function planOnce(options: PlanBatchOptions, pricingSet: readonly CandidateOrder
         skip('below-min-received', `${net} at the batch average < ${order.minReceived}`);
         continue;
       }
-      // The seller is paid in one output and that output must itself satisfy
-      // the ledger's minimum. Proposing a smaller one does not shortchange the
-      // seller — it builds a batch the node refuses entire, taking every other
+      // The seller is paid in one output — the proceeds and, with them, the
+      // lovelace the order itself held — and that output must satisfy the
+      // ledger's minimum. Proposing a smaller one does not shortchange the
+      // seller: it builds a batch the node refuses entire, taking every other
       // order down with it.
-      if (net < minPayout) {
-        skip('proceeds-below-min-ada', `${net} < ${minPayout} the output would need`);
+      if (net + order.heldLovelace < minPayout) {
+        skip('proceeds-below-min-ada', `${net} + ${order.heldLovelace} held < ${minPayout} the output would need`);
         continue;
       }
 
