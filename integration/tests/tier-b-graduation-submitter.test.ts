@@ -789,7 +789,9 @@ describe('TierBGraduationSubmitter.graduate (sequencing convenience wrapper)', (
       vestingUtxos: [{ datum: vestDatum({ vesting_state: 'Vesting' }), assets: {} }],
     });
 
-    const result = await submitter.graduate(REAL_EXTENDED_KEY_HEX, GOVERNOR_ADDR, 1000, undefined, { startVesting: false });
+    const result = await submitter.graduate(REAL_EXTENDED_KEY_HEX, GOVERNOR_ADDR, 1000, undefined, {
+      startVesting: false,
+    });
 
     expect(fakeLucid.awaitTx).toHaveBeenCalledWith('grad-b-tx-1');
     expect(result.graduateSealLockTxHash).toBe('grad-b-tx-1');
