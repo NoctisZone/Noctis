@@ -51,7 +51,7 @@ import {
   type VenueLiquidityOutcome,
 } from '../venue-batcher.js';
 import { readVenueFillRound, readVenuePools, type VenueChainProvider } from '../venue-chain-reader.js';
-import { VenueFiller, type VenueScriptSource } from '../venue-fill-submitter.js';
+import { VENUE_FILL_EXECUTION_UNITS, VenueFiller, type VenueScriptSource } from '../venue-fill-submitter.js';
 import { VENUE_DEPOSIT_ORDER_TITLE, VENUE_REDEEM_ORDER_TITLE } from '../venue-liquidity.js';
 import { readVenueMarket } from '../venue-market-reader.js';
 import { VENUE_FACTORY_TITLE } from '../venue-pool.js';
@@ -458,6 +458,12 @@ async function main() {
         depositScript: scriptSource(depositCbor, input.depositReferenceScript),
         redeemScript: scriptSource(redeemCbor, input.redeemReferenceScript),
         provider: new BlockfrostProvider(input.blockfrostProjectId),
+        // Declared, not measured. A round chains its fills: each spends the
+        // pool output the fill before it made, which is not on chain yet, and
+        // a remote evaluator refuses a transaction whose input it cannot find.
+        // Measuring would stop every round at its first fill. The budget was
+        // measured against the real validators for every fill kind.
+        executionUnits: VENUE_FILL_EXECUTION_UNITS,
       });
 
       const batcher = new VenueBatcher({
