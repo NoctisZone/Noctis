@@ -764,6 +764,10 @@ export class TierBGraduationSubmitter {
    * TX1's hash is preserved in the thrown error so a caller can tell
    * graduation already landed and only StartVesting needs a retry.
    *
+   * `options.startVesting: false` graduates without starting vesting: the
+   * allocation stays in NotStarted, where nothing can be claimed, until the
+   * governor runs startVesting() on its own. `startVestingTxHash` is then null.
+   *
    * @param lockSealTimestampMs  MILLISECONDS — used for both
    *   lp_escrow's lock_timestamp and vesting's vest_start_timestamp.
    */
@@ -772,9 +776,10 @@ export class TierBGraduationSubmitter {
     governorAddress: string,
     lockSealTimestampMs: number,
     creator?: CreatorSigner,
+    options: { startVesting?: boolean } = {},
   ): Promise<{
     graduateSealLockTxHash: string;
-    startVestingTxHash: string;
+    startVestingTxHash: string | null;
     lpAda: bigint;
     lpReserveTokens: bigint;
     stakingReserveTokens: bigint;
@@ -796,16 +801,18 @@ export class TierBGraduationSubmitter {
 
     await lucid.awaitTx(step1.txHash);
 
-    let step2TxHash: string;
-    try {
-      const step2 = await this.startVesting(governorPrivateKeyExtendedHex, governorAddress, lockSealTimestampMs);
-      step2TxHash = step2.txHash;
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      throw new Error(
-        `graduateAndSealLp succeeded (txHash: ${step1.txHash}) but startVesting failed: ${message}. ` +
-          'Retry with startVesting() directly — do not re-run graduate().',
-      );
+    let step2TxHash: string | null = null;
+    if (options.startVesting !== false) {
+      try {
+        const step2 = await this.startVesting(governorPrivateKeyExtendedHex, governorAddress, lockSealTimestampMs);
+        step2TxHash = step2.txHash;
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        throw new Error(
+          `graduateAndSealLp succeeded (txHash: ${step1.txHash}) but startVesting failed: ${message}. ` +
+            'Retry with startVesting() directly — do not re-run graduate().',
+        );
+      }
     }
 
     return {

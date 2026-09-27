@@ -779,6 +779,22 @@ describe('TierBGraduationSubmitter.graduate (sequencing convenience wrapper)', (
       /graduateAndSealLp succeeded \(txHash: grad-b-tx-1\) but startVesting failed/,
     );
   });
+
+  it('with startVesting false, graduates and leaves vesting unstarted: no TX2 is attempted', async () => {
+    const { builder } = makeFakeTxBuilder();
+    const { submitter, fakeLucid } = makeSubmitter(builder, {
+      curveUtxos: [{ datum: curveDatum({ total_raised: 1n }), assets: {} }],
+      lpUtxos: [{ datum: lpDatum(), assets: {} }],
+      // The same fixture that makes TX2 fail above: resolving proves TX2 never ran.
+      vestingUtxos: [{ datum: vestDatum({ vesting_state: 'Vesting' }), assets: {} }],
+    });
+
+    const result = await submitter.graduate(REAL_EXTENDED_KEY_HEX, GOVERNOR_ADDR, 1000, undefined, { startVesting: false });
+
+    expect(fakeLucid.awaitTx).toHaveBeenCalledWith('grad-b-tx-1');
+    expect(result.graduateSealLockTxHash).toBe('grad-b-tx-1');
+    expect(result.startVestingTxHash).toBeNull();
+  });
 });
 
 describe('TierBGraduationSubmitter — staking-enabled launches', () => {

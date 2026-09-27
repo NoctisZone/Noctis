@@ -13,7 +13,8 @@
 // ============================================================================
 // Input: single JSON object on stdin, including the governor's PLAINTEXT
 // 64-byte extended private key hex (decrypted server-side by the PHP
-// caller). Never logged. Output: {graduateSealLockTxHash, startVestingTxHash,
+// caller). Never logged. `startVesting: false` in the input graduates without
+// starting vesting (startVestingTxHash is then null). Output: {graduateSealLockTxHash, startVestingTxHash,
 // lpAda, lpReserveTokens, stakingReserveTokens, stakingSeeded, poolAddress,
 // poolUtxoRef, poolNftUnit, lqUnit, escrowedLq} on stdout.
 // ============================================================================
@@ -46,6 +47,8 @@ interface GraduateInput {
   governorAddress: string;
   governorPrivateKeyExtendedHex: string;
   lockSealTimestampMs: number;
+  /** false graduates without starting vesting; omitted or true starts it (TX2). */
+  startVesting?: boolean;
   blockfrostProjectId: string;
   blockfrostUrl: string;
   /** Published reference scripts TX1 names instead of carrying — required. */
@@ -135,6 +138,7 @@ async function main() {
     input.governorAddress,
     requireTimestampMs(input.lockSealTimestampMs, 'lockSealTimestampMs'),
     creator,
+    { startVesting: input.startVesting !== false },
   );
   process.stdout.write(
     JSON.stringify({
