@@ -13,6 +13,12 @@ Notable changes to the Noctis Zone, by release. Internal development history pre
 
 ### Changed
 
+- **Each filled curve order is paid in one output**: what it bought or sold, with what came back, together. The buyer's own change pays that output's minimum ADA, where the batcher used to add it from its own wallet on every buy, and each fill costs one output fewer. The batcher's cut from an order never reaches the reserve an order holds above its maximum spend.
+- **A creator-fee or platform-fee claim too small for the ledger is refused before it is built**, with the amount that would be enough, instead of being signed and then refused by the network.
+- **A launch's logo can be updated on its own, from an IPFS URI or an https one.** The metadata tool reads the launch's current metadata and replaces only the logo, and a platform without an IPFS pinning service can point the token at the image it hosts. The tool now finds a Cardano Launch's curve by its own role and datum.
+- **A staking pool read says when its rewards are quoted**, so a page can count each position's rewards up at the pool's rate between reads.
+- **The eligibility gate's refusal of an allowlist update names the rule**: the allowlist changes only while registration is open.
+
 - **The pool a graduation opens is priced at 1.2× the graduation price on every launch.** The LP reserve is sized at mint from the ADA the curve will raise, net of fees and with the DarkVeil reserve at its flat price, so the opening price no longer depends on the creator share or the staking pool. It was a fixed 20% of supply, which opened a staking launch's pool below its graduation price. No validator changed, and launches already minted keep their datums. The wizard's supply bar and review show the sized reserve.
 - A batch of curve orders that does not fit in one transaction is re-planned at half the size and tried again, down to a single order, so a batcher tick fills what fits instead of failing while orders rest.
 - A venue buy order carries at least the ledger's minimum ADA for the token output that settles it, sized from the placer's address and the token, so its fill is accepted at submission.
