@@ -640,16 +640,12 @@ export class VenueBatcher {
       };
     };
 
-    const { txHex, executorFee, networkFee } = await this.config.filler.buildSettled(
-      makePlan,
-      this.config.wallet,
-      {
-        ...(this.config.executorPayoutLovelace === undefined
-          ? {}
-          : { executorPayoutLovelace: this.config.executorPayoutLovelace }),
-        ...(this.config.executorPayoutAddress ? { payoutAddress: this.config.executorPayoutAddress } : {}),
-      },
-    );
+    const { txHex, executorFee, networkFee } = await this.config.filler.buildSettled(makePlan, this.config.wallet, {
+      ...(this.config.executorPayoutLovelace === undefined
+        ? {}
+        : { executorPayoutLovelace: this.config.executorPayoutLovelace }),
+      ...(this.config.executorPayoutAddress ? { payoutAddress: this.config.executorPayoutAddress } : {}),
+    });
     const txHash = await this.config.wallet.submitTx(await this.config.wallet.signTx(txHex));
 
     /* c8 ignore next 3 -- makePlan has run twice by here; both set these. */
@@ -705,16 +701,12 @@ export class VenueBatcher {
       };
     };
 
-    const { txHex, executorFee, networkFee } = await this.config.filler.buildSettled(
-      makePlan,
-      this.config.wallet,
-      {
-        ...(this.config.executorPayoutLovelace === undefined
-          ? {}
-          : { executorPayoutLovelace: this.config.executorPayoutLovelace }),
-        ...(this.config.executorPayoutAddress ? { payoutAddress: this.config.executorPayoutAddress } : {}),
-      },
-    );
+    const { txHex, executorFee, networkFee } = await this.config.filler.buildSettled(makePlan, this.config.wallet, {
+      ...(this.config.executorPayoutLovelace === undefined
+        ? {}
+        : { executorPayoutLovelace: this.config.executorPayoutLovelace }),
+      ...(this.config.executorPayoutAddress ? { payoutAddress: this.config.executorPayoutAddress } : {}),
+    });
     const txHash = await this.config.wallet.submitTx(await this.config.wallet.signTx(txHex));
 
     /* c8 ignore next 3 -- makePlan has run twice by here; both set it. */
