@@ -492,14 +492,14 @@ const ACTIONS: Action[] = [
   {
     name: 'claim creator fees',
     datum: { ...activeDatum(), creator_fees_accrued: 5_000_000n },
-    run: (s) => s.claimCreatorFees(GOVERNOR.extendedHex, GOVERNOR_ADDRESS, 1_000_000n),
+    run: (s) => s.claimCreatorFees(GOVERNOR.extendedHex, GOVERNOR_ADDRESS, 2_000_000n),
     signer: GOVERNOR_ADDRESS,
     payouts: 1,
   },
   {
     name: 'claim platform fees',
     datum: { ...activeDatum(), platform_fees_accrued: 5_000_000n },
-    run: (s) => s.claimPlatformFees(GOVERNOR.extendedHex, GOVERNOR_ADDRESS, 1_000_000n),
+    run: (s) => s.claimPlatformFees(GOVERNOR.extendedHex, GOVERNOR_ADDRESS, 2_000_000n),
     signer: GOVERNOR_ADDRESS,
     payouts: 1,
   },

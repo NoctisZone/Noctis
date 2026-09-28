@@ -62,7 +62,7 @@ import { Blockfrost, Constr, Data, getAddressDetails, Lucid, toUnit, validatorTo
 // cannot have them. See webpack.widgets.config.cjs's darkveil-widget alias
 // block. Keep any new server-only dependency in that block too, or the
 // widget build stops resolving.
-import { BlockfrostProvider, MeshWallet } from '@meshsdk/core';
+import { BlockfrostProvider, getOutputMinLovelace, MeshWallet } from '@meshsdk/core';
 import { buildCapTradeFields, type CapAccumulator } from './cap-accumulator-tree.js';
 import { setBit, testBit } from './claim-bitmap.js';
 import {
@@ -80,7 +80,12 @@ import { BONDING_CURVE_TIER_B_REDEEMER } from './redeemer-indices.js';
 import { MESH_NETWORK_ID, type ReferenceScriptPointer } from './reference-script.js';
 import { extendedHexToBech32PrivateKey, loadValidator } from './tier-a-curve-submitter.js';
 import type { BondingCurveTierBDatumData } from './tier-a-schemas.js';
-import { BondingCurveTierBDatumSchema, capProofToPlutus, settlementDatum } from './tier-a-schemas.js';
+import {
+  BondingCurveTierBDatumSchema,
+  capProofToPlutus,
+  SETTLEMENT_TAG_STANDIN_CBOR,
+  settlementDatum,
+} from './tier-a-schemas.js';
 
 // The platform's charge on a creator-fee claim — the same figure
 // bonding_curve_tier_b.ak names as `platform_charge_lovelace`, and the figure
@@ -264,6 +269,30 @@ interface CurveSpendDescription {
   signerAddress?: string;
   /** POSIX milliseconds. Both or neither. */
   validity?: { fromMs: number; toMs: number };
+}
+
+/**
+ * Refuse a fee claim the ledger would refuse, before anything is read or built.
+ *
+ * A claim pays its amount to the claimant as one ada-only output carrying the
+ * curve's settlement tag, and an output below the ledger's minimum is refused
+ * at submission (`BabbageOutputTooSmallUTxO`), after the claim has been
+ * signed. This says so first, in a sentence, and names the amount that would
+ * be enough. The tag is sized from a stand-in reference, which encodes to the
+ * same length as the real one.
+ */
+export function assertClaimMeetsMinimumOutput(recipient: string, amount: bigint, what: string): void {
+  const minimum = getOutputMinLovelace({
+    address: recipient,
+    amount: [{ unit: 'lovelace', quantity: amount.toString() }],
+    datum: { type: 'Inline', data: { type: 'CBOR', content: SETTLEMENT_TAG_STANDIN_CBOR } },
+  });
+  if (amount < minimum) {
+    throw new Error(
+      `This ${what} claim would pay ${amount} lovelace, below the ${minimum} the ledger requires for an output on ` +
+        `its own, so the network would refuse it. Claim once at least ${minimum} lovelace has accrued.`,
+    );
+  }
 }
 
 export class LucidTierBCurveSubmitter {
@@ -1045,6 +1074,7 @@ export class LucidTierBCurveSubmitter {
     amount: bigint,
     platformClaimFeeLovelace: bigint,
   ): Promise<{ curveUtxo: UTxO; spend: CurveSpendDescription }> {
+    assertClaimMeetsMinimumOutput(signerAddress, amount, 'creator-fee');
     if (platformClaimFeeLovelace < PLATFORM_CHARGE_LOVELACE) {
       throw new Error(
         `platform_claim_fee ${platformClaimFeeLovelace} is below the charge the contract enforces ` +
@@ -1099,6 +1129,7 @@ export class LucidTierBCurveSubmitter {
     governorAddress: string,
     amount: bigint,
   ): Promise<{ txHash: string }> {
+    assertClaimMeetsMinimumOutput(governorAddress, amount, 'platform-fee');
     const lucid = await this.lucidPromise;
     const curveUtxo = await this.findCurveUtxo(lucid);
     const currentDatum = Data.from<BondingCurveTierBDatumData>(

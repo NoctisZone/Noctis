@@ -485,60 +485,85 @@ describe('LucidTierBCurveSubmitter — direct public trades', () => {
 describe('LucidTierBCurveSubmitter.claimCreatorFees (two-directional value check)', () => {
   it('rejects a platformClaimFeeLovelace one lovelace below the charge the contract enforces', async () => {
     const { builder } = makeFakeTxBuilder();
-    const submitter = makeSubmitter(builder, [{ datum: baseDatum({ creator_fees_accrued: 1_000_000n }), assets: {} }]);
+    const submitter = makeSubmitter(builder, [{ datum: baseDatum({ creator_fees_accrued: 10_000_000n }), assets: {} }]);
     await expect(
-      submitter.claimCreatorFees(REAL_EXTENDED_KEY_HEX, addrFor(CREATOR_KEY_HASH), 100n, PLATFORM_CHARGE_LOVELACE - 1n),
+      submitter.claimCreatorFees(
+        REAL_EXTENDED_KEY_HEX,
+        addrFor(CREATOR_KEY_HASH),
+        2_000_000n,
+        PLATFORM_CHARGE_LOVELACE - 1n,
+      ),
     ).rejects.toThrow(/below the charge the contract enforces/);
   });
 
   it('defaults platformClaimFeeLovelace to the charge the contract names when omitted', async () => {
     const { builder, calls } = makeFakeTxBuilder();
-    const submitter = makeSubmitter(builder, [{ datum: baseDatum({ creator_fees_accrued: 1_000_000n }), assets: {} }]);
-    await submitter.claimCreatorFees(REAL_EXTENDED_KEY_HEX, addrFor(CREATOR_KEY_HASH), 100n);
+    const submitter = makeSubmitter(builder, [{ datum: baseDatum({ creator_fees_accrued: 10_000_000n }), assets: {} }]);
+    await submitter.claimCreatorFees(REAL_EXTENDED_KEY_HEX, addrFor(CREATOR_KEY_HASH), 2_000_000n);
     const redeemer = calls.collectFrom![1] as { fields: unknown[] };
     expect(redeemer.fields[1]).toBe(PLATFORM_CHARGE_LOVELACE);
   });
 
   it('rejects an amount exceeding accrued creator fees', async () => {
     const { builder } = makeFakeTxBuilder();
-    const submitter = makeSubmitter(builder, [{ datum: baseDatum({ creator_fees_accrued: 100n }), assets: {} }]);
+    const submitter = makeSubmitter(builder, [{ datum: baseDatum({ creator_fees_accrued: 2_000_000n }), assets: {} }]);
     await expect(
-      submitter.claimCreatorFees(REAL_EXTENDED_KEY_HEX, addrFor(CREATOR_KEY_HASH), 101n, PLATFORM_CHARGE_LOVELACE),
+      submitter.claimCreatorFees(
+        REAL_EXTENDED_KEY_HEX,
+        addrFor(CREATOR_KEY_HASH),
+        2_000_001n,
+        PLATFORM_CHARGE_LOVELACE,
+      ),
     ).rejects.toThrow(/exceeds creator_fees_accrued/);
+  });
+
+  // A claim smaller than the ledger's minimum output used to be built, signed
+  // and submitted, and only then refused by the node. It is refused first now,
+  // in a sentence, and before the chain is read at all: this submitter holds
+  // no curve UTxO, so any read would fail with a different message.
+  it('refuses a claim below the ledger minimum before reading the chain, and names the minimum', async () => {
+    const { builder } = makeFakeTxBuilder();
+    const submitter = makeSubmitter(builder, []);
+    await expect(
+      submitter.claimCreatorFees(REAL_EXTENDED_KEY_HEX, addrFor(CREATOR_KEY_HASH), 674_990n, PLATFORM_CHARGE_LOVELACE),
+    ).rejects.toThrow(/creator-fee claim would pay 674990 lovelace, below the \d+ the ledger requires/);
+    await expect(
+      submitter.claimPlatformFees(REAL_EXTENDED_KEY_HEX, addrFor(fakeKeyHash(0x11)), 674_990n),
+    ).rejects.toThrow(/platform-fee claim would pay 674990 lovelace, below the \d+ the ledger requires/);
   });
 
   it('accrues the whole platform charge to the one platform line, moving amount OUT while the charge moves IN', async () => {
     const { builder, calls } = makeFakeTxBuilder();
     const submitter = makeSubmitter(builder, [
       {
-        datum: baseDatum({ creator_fees_accrued: 1_000_000n }),
-        assets: { lovelace: 5_000_000n },
+        datum: baseDatum({ creator_fees_accrued: 10_000_000n }),
+        assets: { lovelace: 50_000_000n },
       },
     ]);
 
     await submitter.claimCreatorFees(
       REAL_EXTENDED_KEY_HEX,
       addrFor(CREATOR_KEY_HASH),
-      500_000n,
+      5_000_000n,
       PLATFORM_CHARGE_LOVELACE + 1n,
     );
 
     const payload = calls.payToContract![1] as {
       value: Record<string, unknown>;
     };
-    expect(payload.value.creator_fees_accrued).toBe(500_000n);
+    expect(payload.value.creator_fees_accrued).toBe(5_000_000n);
     // No split any more: the whole claim fee accrues to the one platform line.
     expect(payload.value.platform_fees_accrued).toBe(PLATFORM_CHARGE_LOVELACE + 1n);
     const assetsArg = calls.payToContract![2] as Record<string, bigint>;
-    expect(assetsArg.lovelace).toBe(5_000_000n - 500_000n + (PLATFORM_CHARGE_LOVELACE + 1n));
+    expect(assetsArg.lovelace).toBe(50_000_000n - 5_000_000n + (PLATFORM_CHARGE_LOVELACE + 1n));
   });
 
   it('claimCreatorFeesWithWallet signs via fromAPI/withWallet instead of a decrypted extended key', async () => {
     const { builder } = makeFakeTxBuilder();
     const walletApi = { __marker: 'creator-wallet' };
-    const submitter = makeSubmitter(builder, [{ datum: baseDatum({ creator_fees_accrued: 1_000_000n }), assets: {} }]);
+    const submitter = makeSubmitter(builder, [{ datum: baseDatum({ creator_fees_accrued: 10_000_000n }), assets: {} }]);
     await expect(
-      submitter.claimCreatorFeesWithWallet(walletApi as never, 100n, PLATFORM_CHARGE_LOVELACE),
+      submitter.claimCreatorFeesWithWallet(walletApi as never, 2_000_000n, PLATFORM_CHARGE_LOVELACE),
     ).resolves.toEqual({
       txHash: 'tier-b-tx-1',
     });
@@ -548,10 +573,10 @@ describe('LucidTierBCurveSubmitter.claimCreatorFees (two-directional value check
 describe('LucidTierBCurveSubmitter.claimPlatformFees (governor-signed, single-direction)', () => {
   it('claimPlatformFees rejects amount exceeding platform_fees_accrued, and uses redeemer index 4', async () => {
     const { builder } = makeFakeTxBuilder();
-    const submitter = makeSubmitter(builder, [{ datum: baseDatum({ platform_fees_accrued: 50n }), assets: {} }]);
-    await expect(submitter.claimPlatformFees(REAL_EXTENDED_KEY_HEX, addrFor(fakeKeyHash(0x11)), 51n)).rejects.toThrow(
-      /exceeds platform_fees_accrued/,
-    );
+    const submitter = makeSubmitter(builder, [{ datum: baseDatum({ platform_fees_accrued: 2_000_000n }), assets: {} }]);
+    await expect(
+      submitter.claimPlatformFees(REAL_EXTENDED_KEY_HEX, addrFor(fakeKeyHash(0x11)), 2_000_001n),
+    ).rejects.toThrow(/exceeds platform_fees_accrued/);
   });
 
   it('claimPlatformFees pays out and decrements platform_fees_accrued, redeemer index 4', async () => {
@@ -559,28 +584,28 @@ describe('LucidTierBCurveSubmitter.claimPlatformFees (governor-signed, single-di
     const governorAddr = addrFor(fakeKeyHash(0x22));
     const submitter = makeSubmitter(builder, [
       {
-        datum: baseDatum({ platform_fees_accrued: 1000n }),
-        assets: { lovelace: 5_000_000n },
+        datum: baseDatum({ platform_fees_accrued: 10_000_000n }),
+        assets: { lovelace: 50_000_000n },
       },
     ]);
 
-    await submitter.claimPlatformFees(REAL_EXTENDED_KEY_HEX, governorAddr, 400n);
+    await submitter.claimPlatformFees(REAL_EXTENDED_KEY_HEX, governorAddr, 4_000_000n);
 
     const redeemer = calls.collectFrom![1] as {
       index: number;
       fields: unknown[];
     };
     expect(redeemer.index).toBe(4);
-    expect(redeemer.fields).toEqual([400n]);
+    expect(redeemer.fields).toEqual([4_000_000n]);
     const payload = calls.payToContract![1] as {
       value: Record<string, unknown>;
     };
-    expect(payload.value.platform_fees_accrued).toBe(600n);
+    expect(payload.value.platform_fees_accrued).toBe(6_000_000n);
     const assetsArg = calls.payToContract![2] as Record<string, bigint>;
-    expect(assetsArg.lovelace).toBe(4_999_600n); // 5,000,000 - 400
+    expect(assetsArg.lovelace).toBe(46_000_000n); // 50,000,000 - 4,000,000
     const [addr, datum, payoutAssets] = payToAddressCalls[0] as [string, InlineDatumArg, Record<string, bigint>];
     expect(addr).toBe(governorAddr);
-    expect(payoutAssets.lovelace).toBe(400n);
+    expect(payoutAssets.lovelace).toBe(4_000_000n);
     // The payout names the spend it settles. Without the tag the validator
     // does not see a payout at all, so this is not decoration.
     expect(datum).toEqual(settlesCurveInput(0));

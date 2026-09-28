@@ -772,3 +772,13 @@ export function settlementDatum(utxo: { txHash: string; outputIndex: number }): 
     OutputReferenceSchema,
   );
 }
+
+/**
+ * A settlement tag's CBOR for a stand-in reference: 32 zero bytes, output 0.
+ *
+ * Every real tag whose output index is below 24 encodes to exactly this
+ * length (39 bytes), which is what sizing an output's minimum ada needs. It is
+ * written out by hand so code that only needs the size does not need the
+ * encoder; a test holds it equal to `settlementDatum`'s own output.
+ */
+export const SETTLEMENT_TAG_STANDIN_CBOR = `d8799f5820${'00'.repeat(32)}00ff`;

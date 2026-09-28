@@ -10,11 +10,24 @@
 import { type Constr, Data } from '@lucid-evolution/lucid';
 import { describe, expect, it } from 'vitest';
 
-import { type OutputReferenceData, OutputReferenceSchema, settlementDatum } from '../tier-a-schemas.js';
+import {
+  type OutputReferenceData,
+  OutputReferenceSchema,
+  SETTLEMENT_TAG_STANDIN_CBOR,
+  settlementDatum,
+} from '../tier-a-schemas.js';
 
 const TX = 'ab'.repeat(32);
 
 describe('settlementDatum', () => {
+  // Used to size an output's minimum ada without the encoder. If the encoding
+  // ever changes, a claim's minimum-output check would be sized wrong, and
+  // this is where that shows.
+  it('encodes the stand-in reference exactly as the hand-written stand-in tag', () => {
+    expect(settlementDatum({ txHash: '00'.repeat(32), outputIndex: 0 })).toBe(SETTLEMENT_TAG_STANDIN_CBOR);
+    expect(settlementDatum({ txHash: TX, outputIndex: 23 }).length).toBe(SETTLEMENT_TAG_STANDIN_CBOR.length);
+  });
+
   it('encodes as constructor 0 with the transaction id first and the index second', () => {
     const decoded = Data.from(settlementDatum({ txHash: TX, outputIndex: 3 })) as Constr<unknown>;
     expect(decoded.index).toBe(0);
