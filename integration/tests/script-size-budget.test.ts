@@ -44,6 +44,13 @@ for (const v of blueprint.validators) {
 /**
  * Measured 2026-08-08. Update in the same commit that moves one. Newest first.
  *
+ * bonding_curve_tier_b +13, 2026-09-28: a sell pays its own fee. The raise
+ * gives back only the share of a range that a buy of it banked, rounded down,
+ * and the sell's 1.5% comes out of that share. 15,904 against the 16,052 B
+ * publish limit leaves 148 B, so the next change to the curve has to be
+ * costed against that before it is written. The other ten validators are
+ * byte for byte identical.
+ *
  * token_metadata +175, 2026-09-17: a metadata key that is present has to say
  * something. The map was already refused when empty, on the reasoning that a
  * token with nothing to display is broken; a present key holding an empty
@@ -343,7 +350,7 @@ for (const v of blueprint.validators) {
  * left its address to be discovered at deployment.
  */
 const RECORDED: Record<string, number> = {
-  bonding_curve_tier_b: 15_891,
+  bonding_curve_tier_b: 15_904,
   cto_governance: 8_157,
   cto_sybil_challenge: 3_383,
   curve_order: 4_544,
@@ -376,7 +383,7 @@ const RECORDED: Record<string, number> = {
  * old one has to be considered before the change ships.
  */
 const RECORDED_HASHES: Record<string, string> = {
-  bonding_curve_tier_b: '711658bba102698beaf6b9451a51bb8ad8387fa31a35a4732f21ab36',
+  bonding_curve_tier_b: 'd2583fbc8bfe1c2328f4f91339a19666c12a8b7af8406c7b281e582c',
   cto_governance: '2acc12d791956e7da4c72c2cf1c4a8ceee74b9d7e33973cc973fa022',
   cto_sybil_challenge: 'f08befe8c02028948af4d01dfc27121bfdd7dd6582e582fd5a216441',
   curve_order: 'db34df4b2be92eea1458fc11248255f1ef3ecad93d47196f934d7397',
