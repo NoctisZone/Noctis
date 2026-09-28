@@ -611,6 +611,9 @@ describe('overview and positionOf', () => {
 
       const o = await h.submitter.overview();
       expect(o.positions[0].owed).toBe(atClaim);
+      // A page counts rewards up from this instant, so it has to be the one
+      // the figure was computed at, not the clock.
+      expect(o.quotedAtMs).toBe(claimInstant);
     } finally {
       vi.useRealTimers();
     }

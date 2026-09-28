@@ -62,6 +62,8 @@ export interface StakingPoolSummary {
   /** When an exhausted pool may be retired. A top-up before then revives it. */
   closesAfterMs: string | null;
   positions: StakingPositionSummary[];
+  /** The moment every position's `owed` is quoted at, so a page can count on from it. */
+  quotedAtMs: string;
 }
 
 export interface StakingPositionSummary {
@@ -110,6 +112,7 @@ function summarise(overview: PoolOverview): StakingPoolSummary {
     runwayDaysRemaining: overview.runwayDaysRemaining,
     exhaustedAtMs: overview.exhaustedAtMs === null ? null : overview.exhaustedAtMs.toString(),
     closesAfterMs: overview.closesAfterMs === null ? null : overview.closesAfterMs.toString(),
+    quotedAtMs: overview.quotedAtMs.toString(),
     positions: overview.positions.map((p) => ({
       stakerVkhHex: p.stakerVkhHex,
       stakedAmount: p.stakedAmount.toString(),

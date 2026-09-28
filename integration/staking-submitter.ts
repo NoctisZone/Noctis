@@ -155,6 +155,12 @@ export interface PoolOverview {
   exhaustedAtMs: bigint | null;
   /** Set once exhausted; a top-up before this clears it and revives the pool. */
   closesAfterMs: bigint | null;
+  /**
+   * The moment every `owed` above is quoted at: a claim's validity lower
+   * bound, a margin behind the clock. A page can count rewards up from here
+   * at the pool's rate without reading the chain again.
+   */
+  quotedAtMs: bigint;
 }
 
 /** A pool loaded, its position tree rebuilt, and the two checked against each other. */
@@ -405,6 +411,7 @@ export class StakingSubmitter {
       runwayDaysRemaining: runwayDaysRemaining(datum.emission_per_day, datum.unallocated, datum.total_staked),
       exhaustedAtMs: datum.exhausted_at,
       closesAfterMs: datum.exhausted_at === null ? null : datum.exhausted_at + 7_776_000_000n,
+      quotedAtMs: nowMs,
     };
   }
 
