@@ -330,9 +330,30 @@ describe('stakeCore', () => {
     const after = positions.get(hexToBytes(STAKER_VKH));
     expect(after.amount).toBe(1_000n + 500n + owed);
     expect(after.debt).toBe(debtAt(after.amount, acc));
-    // Compounded, not paid: only the pool output exists.
-    expect(h.tx.payToAddress).toHaveLength(0);
+    // Compounded, not paid: nothing goes to the staker.
+    expect(h.tx.payToAddress.map((p) => (p as [string])[0])).not.toContain(STAKER_ADDR);
     expect(writtenDatum(h).total_staked).toBe(1_000n + 500n + owed);
+  });
+
+  it('charges the governor for the rewards a compounding stake takes', async () => {
+    const positions = new StakeAccumulator();
+    positions.set(hexToBytes(STAKER_VKH), openPosition(1_000n, LAST_UPDATE_MS));
+    const h = harness({ positions, datum: { total_staked: 1_000n } });
+
+    await h.submitter.stakeCore(h.lucid as never, STAKER_ADDR, 500n, NOW_MS);
+
+    // Compounding takes the accrued reward as surely as a claim does, and the
+    // validator's Stake arm refuses it without the same charge.
+    expect(h.tx.payToAddress).toHaveLength(1);
+    const [govAddr, , govAssets] = h.tx.payToAddress[0] as [string, unknown, Record<string, bigint>];
+    expect(govAddr).toBe(addrFor(GOVERNOR_VKH));
+    expect(govAssets.lovelace).toBe(5_000_000n);
+  });
+
+  it('charges nothing for a first stake, which has nothing to compound', async () => {
+    const h = harness();
+    await h.submitter.stakeCore(h.lucid as never, STAKER_ADDR, 1_000n, NOW_MS);
+    expect(h.tx.payToAddress).toHaveLength(0);
   });
 
   it('advances the accumulator and spends the emission out of the unallocated budget', async () => {

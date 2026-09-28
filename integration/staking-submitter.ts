@@ -552,12 +552,17 @@ export class StakingSubmitter {
     );
   }
 
-  /** Open or add to a position. Anything owed is compounded, and the lock restarts. */
+  /**
+   * Open or add to a position. Anything owed is compounded, which pays the
+   * platform charge, and the lock restarts.
+   */
   async stakeCore(lucid: LucidEvolution, stakerAddress: string, amount: bigint, nowMs = Date.now()) {
     if (amount <= 0n) throw new Error('Stake amount must be positive.');
     const loaded = await this.loadPool();
     const vkh = keyHashFromAddress(stakerAddress);
+    let compounded = 0n;
     const { tx } = this.buildSpend(lucid, loaded, vkh, nowMs, ({ acc, before, owed, now }) => {
+      compounded = owed;
       const total = before.amount + amount + owed;
       return {
         redeemerIndex: STAKING_POOL_REDEEMER.Stake,
@@ -570,7 +575,10 @@ export class StakingSubmitter {
         signer: stakerAddress,
       };
     });
-    return tx.complete();
+    // Compounding takes the accrued reward as surely as a claim does, so it
+    // pays the charge a claim would have, and the validator's Stake arm
+    // refuses it otherwise. A stake with nothing owed pays nothing.
+    return (compounded > 0n ? this.chargeGovernor(loaded, PLATFORM_CHARGE_LOVELACE, tx) : tx).complete();
   }
 
   /** Close a position: the stake and everything owed on it, out. */
