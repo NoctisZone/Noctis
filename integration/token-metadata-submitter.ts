@@ -59,8 +59,8 @@ import {
 } from '@lucid-evolution/lucid';
 import { LaunchUtxoNotFoundError, selectCip68MetadataUtxo, selectLaunchUtxo } from './launch-utxo-lookup.js';
 import {
-  type BondingCurveDatumData,
-  BondingCurveDatumSchema,
+  type BondingCurveTierBDatumData,
+  BondingCurveTierBDatumSchema,
   buildCip68FungibleMetadata,
   type Cip68FungibleMetadata,
   type Cip68MetadataData,
@@ -68,6 +68,45 @@ import {
   type TokenMetadataDatumData,
   TokenMetadataDatumSchema,
 } from './tier-a-schemas.js';
+
+/** The six fields Noctis writes into a launch's CIP-68 map, by their hex keys. */
+const KNOWN_METADATA_KEYS = ['name', 'description', 'ticker', 'url', 'logo', 'decimals'].map((k) =>
+  Buffer.from(k, 'utf8').toString('hex'),
+);
+
+/**
+ * A launch's metadata as it stands on chain, with only its logo replaced:
+ * what a logo update submits, since a revision replaces the whole map.
+ *
+ * `current` is the raw map `getCurrentMetadata` reads (hex keys, hex or
+ * integer values). A key outside the six this platform writes is refused
+ * rather than dropped, because the new map would silently lose it. The logo
+ * must be an `https://` or `ipfs://` URI: a wallet renders either, and a site
+ * without an IPFS pinning service can still point at the image it hosts.
+ */
+export function metadataWithLogo(current: Record<string, string>, logoUri: string): Cip68FungibleMetadata {
+  if (!/^(https|ipfs):\/\/\S+$/.test(logoUri)) {
+    throw new Error(`A logo must be an https:// or ipfs:// URI, got ${JSON.stringify(logoUri)}.`);
+  }
+  const unknown = Object.keys(current).filter((k) => !KNOWN_METADATA_KEYS.includes(k));
+  if (unknown.length) {
+    const names = unknown.map((k) => Buffer.from(k, 'hex').toString('utf8'));
+    throw new Error(`The metadata carries fields this update would drop (${names.join(', ')}); refusing to lose them.`);
+  }
+  const text = (key: string): string | undefined => {
+    const hex = current[Buffer.from(key, 'utf8').toString('hex')];
+    return hex === undefined ? undefined : Buffer.from(hex, 'hex').toString('utf8');
+  };
+  const decimals = current[Buffer.from('decimals', 'utf8').toString('hex')];
+  return {
+    name: text('name') ?? '',
+    description: text('description') ?? '',
+    ...(text('ticker') !== undefined ? { ticker: text('ticker') } : {}),
+    ...(text('url') !== undefined ? { url: text('url') } : {}),
+    ...(decimals !== undefined ? { decimals: Number(decimals) } : {}),
+    logo: logoUri,
+  };
+}
 
 // ============================================================================
 // DATA SCHEMAS
@@ -201,12 +240,15 @@ export class TokenMetadataSubmitter {
    */
   private async findCurveUtxo(lucid: LucidEvolution, curveAddress: Address): Promise<UTxO> {
     const utxos = await lucid.utxosAt(curveAddress);
-    const { utxo } = selectLaunchUtxo<BondingCurveDatumData>(
+    // The Cardano Launch curve: role 02 and its own datum. Role 01 and the
+    // linear datum belonged to the retired linear curve, which no launch
+    // uses, so a lookup under them found no curve for any real launch.
+    const { utxo } = selectLaunchUtxo<BondingCurveTierBDatumData>(
       utxos,
       curveAddress,
       toHex(this.config.launchId),
-      'bondingCurve',
-      BondingCurveDatumSchema,
+      'bondingCurveTierB',
+      BondingCurveTierBDatumSchema,
       this.config.threadNftPolicyId,
     );
     return utxo;

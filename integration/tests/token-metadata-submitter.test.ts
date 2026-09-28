@@ -30,7 +30,7 @@ vi.mock('@lucid-evolution/lucid', async (importOriginal) => {
 
 import { applyParamsToScript, credentialToAddress, Lucid } from '@lucid-evolution/lucid';
 import { cip68FungibleAssetName, cip68ReferenceAssetName, threadNftAssetName } from '../tier-a-schemas.js';
-import { TokenMetadataSubmitter, toHex } from '../token-metadata-submitter.js';
+import { metadataWithLogo, TokenMetadataSubmitter, toHex } from '../token-metadata-submitter.js';
 
 function fakeKeyHash(fill: number): string {
   return fill.toString(16).padStart(2, '0').repeat(28);
@@ -58,7 +58,7 @@ const CREATOR_ADDR = addrFor(fakeKeyHash(0x11));
 // One thread-NFT policy per launch, one role-tagged asset name per validator —
 // CTO_GOVERNANCE_NFT_POLICY is that policy, named for the role this file
 // already used it for.
-const CURVE_THREAD_NFT_UNIT = CTO_GOVERNANCE_NFT_POLICY + threadNftAssetName('bondingCurve', LAUNCH_ID_HEX);
+const CURVE_THREAD_NFT_UNIT = CTO_GOVERNANCE_NFT_POLICY + threadNftAssetName('bondingCurveTierB', LAUNCH_ID_HEX);
 
 /**
  * The curve UTXO token_metadata.ak reads as a reference input to derive live
@@ -383,7 +383,7 @@ describe('TokenMetadataSubmitter — which UTXO it reads and revises', () => {
         newMetadata: { name: 'Renamed', description: 'A mock launch', decimals: 0 },
         currentTimestamp: 1000,
       }),
-    ).rejects.toThrow(/carries launch .* bondingCurve thread NFT/);
+    ).rejects.toThrow(/carries launch .* bondingCurveTierB thread NFT/);
   });
 
   it('ignores another launch’s curve sitting at the same address', async () => {
@@ -394,7 +394,7 @@ describe('TokenMetadataSubmitter — which UTXO it reads and revises', () => {
       curveUtxos: [
         {
           datum: curveDatumFields({ launch_id: otherLaunch }),
-          assets: { [CTO_GOVERNANCE_NFT_POLICY + threadNftAssetName('bondingCurve', otherLaunch)]: 1n },
+          assets: { [CTO_GOVERNANCE_NFT_POLICY + threadNftAssetName('bondingCurveTierB', otherLaunch)]: 1n },
           bare: true,
         },
       ],
@@ -406,7 +406,7 @@ describe('TokenMetadataSubmitter — which UTXO it reads and revises', () => {
         newMetadata: { name: 'Renamed', description: 'A mock launch', decimals: 0 },
         currentTimestamp: 1000,
       }),
-    ).rejects.toThrow(/carries launch .* bondingCurve thread NFT/);
+    ).rejects.toThrow(/carries launch .* bondingCurveTierB thread NFT/);
   });
 });
 
@@ -532,5 +532,51 @@ describe('TokenMetadataSubmitter.finalizeAndSubmit', () => {
     expect(fakeLucid.fromTx).toHaveBeenCalledWith('unsigned-cbor-x');
     expect(assembleFn).toHaveBeenCalledWith(['witness-cbor-y']);
     expect(result.txHash).toBe('final-tx-hash-2');
+  });
+});
+
+describe('metadataWithLogo', () => {
+  const hex = (v: string) => Buffer.from(v, 'utf8').toString('hex');
+  const current = {
+    [hex('name')]: hex('Agent Jinx'),
+    [hex('description')]: hex('A launch whose description runs past sixty-four bytes, as real ones do.'),
+    [hex('ticker')]: hex('JINX'),
+    [hex('url')]: hex('https://example.com'),
+    [hex('decimals')]: '0',
+    [hex('logo')]: hex('ipfs://bafyold'),
+  };
+  // A site-hosted image: 72 bytes, past the 64-byte chunk a datum string is
+  // split into, which is the case a site without IPFS pinning produces.
+  const SITE_LOGO = 'https://noctis.zone/wp-content/uploads/2026/09/agent-jinx-logo-512x512.png';
+
+  it('keeps every other field and replaces only the logo', () => {
+    expect(SITE_LOGO.length).toBeGreaterThan(64);
+    expect(metadataWithLogo(current, SITE_LOGO)).toEqual({
+      name: 'Agent Jinx',
+      description: 'A launch whose description runs past sixty-four bytes, as real ones do.',
+      ticker: 'JINX',
+      url: 'https://example.com',
+      decimals: 0,
+      logo: SITE_LOGO,
+    });
+  });
+
+  it('takes an ipfs URI as well as an https one', () => {
+    expect(metadataWithLogo(current, 'ipfs://bafynew').logo).toBe('ipfs://bafynew');
+  });
+
+  it('leaves out optional fields the launch never set', () => {
+    const bare = { [hex('name')]: hex('X'), [hex('description')]: hex('Y') };
+    expect(metadataWithLogo(bare, 'ipfs://bafy')).toEqual({ name: 'X', description: 'Y', logo: 'ipfs://bafy' });
+  });
+
+  it('refuses a URI a wallet would not render, or one that is not a URI at all', () => {
+    for (const bad of ['http://plain.example/logo.png', 'javascript:alert(1)', 'bafybare', '']) {
+      expect(() => metadataWithLogo(current, bad)).toThrow(/https:\/\/ or ipfs:\/\//);
+    }
+  });
+
+  it('refuses to drop a field this platform did not write', () => {
+    expect(() => metadataWithLogo({ ...current, [hex('website')]: hex('x') }, SITE_LOGO)).toThrow(/website/);
   });
 });

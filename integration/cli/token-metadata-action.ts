@@ -17,7 +17,7 @@
 // ============================================================================
 
 import type { Cip68FungibleMetadata } from '../tier-a-schemas.js';
-import { TokenMetadataSubmitter } from '../token-metadata-submitter.js';
+import { metadataWithLogo, TokenMetadataSubmitter } from '../token-metadata-submitter.js';
 import {
   CARDANO_NETWORK_MAP,
   jsonSafe,
@@ -49,8 +49,11 @@ interface Input {
 
   // build-update. A revision replaces the metadata map wholesale, so every
   // field the launch should keep must be present, not just the changed ones.
+  // Or `logoUri` alone: the current map is read from the chain and only its
+  // logo replaced, which is what a logo update from a page means.
   callerAddress?: string;
   metadata?: Cip68FungibleMetadata;
+  logoUri?: string;
   currentTimestampMs?: number;
 
   // submit-update
@@ -112,8 +115,14 @@ async function main() {
   switch (input.action) {
     case 'build-update': {
       const callerAddress = requireField(input, 'callerAddress', input.action);
-      const metadata = requireField(input, 'metadata', input.action);
       const ts = requireTimestampMs(requireField(input, 'currentTimestampMs', input.action), 'currentTimestampMs');
+      let metadata = input.metadata;
+      if (!metadata) {
+        const logoUri = requireField(input, 'logoUri', input.action);
+        const current = await submitter().getCurrentMetadata();
+        if (!current) throw new Error('This launch has no metadata on chain to update.');
+        metadata = metadataWithLogo(current.metadata, logoUri);
+      }
       result = await submitter().buildUpdateMetadata({
         callerAddress,
         curveAddress: input.curveAddress,
