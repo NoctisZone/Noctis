@@ -244,8 +244,8 @@ describe('the batch a plan turns into', () => {
         { owner: BOB, index: 2, amount: 100n },
       ]),
     });
-    // Two fills and two lots of change, each tagged with its own order.
-    expect(tagIndexes(lastPlan())).toEqual([1n, 1n, 2n, 2n]);
+    // One output per order, each tagged with its own order.
+    expect(tagIndexes(lastPlan())).toEqual([1n, 2n]);
   });
 
   it('gives one owner’s two orders two separately tagged fills', async () => {
@@ -261,10 +261,57 @@ describe('the batch a plan turns into', () => {
     expect(new Set(tagIndexes(lastPlan()))).toEqual(new Set([1n, 2n]));
   });
 
-  it('returns each buyer’s unspent lovelace', async () => {
+  it('returns each buyer’s unspent lovelace in the same output as their tokens', async () => {
     const plan = buildPlan([{ owner: ALICE, index: 1, amount: 100n }]);
     await makeSubmitter().submitBatch(KEY, { curveUtxo: curveUtxo(), orderUtxos: [orderUtxo(1)], plan });
-    expect(lastPlan().payouts[1]?.assets.lovelace).toBe(plan.fills[0]?.change);
+    // One output: the buyer's own change is what pays its minimum ada, so the
+    // batcher no longer adds that from its own wallet on every buy.
+    expect(lastPlan().payouts).toHaveLength(1);
+    expect(lastPlan().payouts[0]?.assets[TOKEN_UNIT]).toBe(100n);
+    expect(lastPlan().payouts[0]?.assets.lovelace).toBe(plan.fills[0]?.change);
+  });
+
+  it('returns a partial seller’s unsold tokens with the proceeds, in one output', async () => {
+    const deposit = 2_500_000n;
+    const state = new CapAccumulator([{ key: hexToBytes(ALICE), total: 500n }]);
+    const plan = planBatch({
+      shape: 'linear',
+      curve: {
+        base_price: 100n,
+        max_price: 1000n,
+        curve_supply: 1000n,
+        tokens_sold: 500n,
+        total_raised: 0n,
+        creator_fees_accrued: 0n,
+        platform_fees_accrued: 0n,
+        wallet_cap: 500n,
+        cap_root: bytesToHex(state.root),
+        creator_pub_key_hash: '99'.repeat(28),
+      },
+      capState: state,
+      orders: [
+        {
+          txHash: ORDER_TX,
+          outputIndex: 1,
+          ownerKeyHashHex: ALICE,
+          isBuy: false,
+          amount: 100n,
+          minReceived: 0n,
+          maxSpend: 100n,
+          deadlineMs: 9_999_999n,
+          heldLovelace: deposit,
+          heldTokens: 130n,
+        },
+      ],
+      nowMs: 1_000n,
+      minPayoutLovelace: 1n,
+    });
+    const fill = plan.fills[0];
+    expect(fill?.change).toBe(30n);
+    await makeSubmitter().submitBatch(KEY, { curveUtxo: curveUtxo(), orderUtxos: [orderUtxo(1, deposit)], plan });
+    expect(lastPlan().payouts).toHaveLength(1);
+    expect(lastPlan().payouts[0]?.assets.lovelace).toBe((fill?.received ?? 0n) + deposit);
+    expect(lastPlan().payouts[0]?.assets[TOKEN_UNIT]).toBe(30n);
   });
 
   // curve_order counts only what arrives ABOVE the lovelace the order itself
@@ -345,7 +392,7 @@ describe('the batcher’s own fee', () => {
       batcherFeeLovelace: 250_000n,
     });
     expect(result.batcherFeeTotal).toBe(250_000n);
-    expect(lastPlan().payouts[1]?.assets.lovelace).toBe((plan.fills[0]?.change ?? 0n) - 250_000n);
+    expect(lastPlan().payouts[0]?.assets.lovelace).toBe((plan.fills[0]?.change ?? 0n) - 250_000n);
   });
 
   it('cannot take more than the change, so a greedy fee is capped not stolen', async () => {
@@ -356,9 +403,60 @@ describe('the batcher’s own fee', () => {
       plan,
       batcherFeeLovelace: 10_000_000_000n,
     });
+    // This order holds exactly its maxSpend, so the whole change is budget.
     expect(result.batcherFeeTotal).toBe(plan.fills[0]?.change);
-    // Nothing left over, so no change output is built at all.
+    // Nothing left over, so the one output carries the tokens alone.
     expect(lastPlan().payouts).toHaveLength(1);
+    expect(lastPlan().payouts[0]?.assets.lovelace).toBeUndefined();
+  });
+
+  // The site funds every buy with a reserve above maxSpend, and the order
+  // validator wants all of it back. A cut measured against the whole change
+  // took that reserve too, and a batch built that way fails on chain.
+  it('never reaches into the reserve an order holds above its maxSpend', async () => {
+    const reserve = 2_000_000n;
+    const plan = planBatch({
+      shape: 'linear',
+      curve: {
+        base_price: 100n,
+        max_price: 1000n,
+        curve_supply: 1000n,
+        tokens_sold: 0n,
+        total_raised: 0n,
+        creator_fees_accrued: 0n,
+        platform_fees_accrued: 0n,
+        wallet_cap: 500n,
+        cap_root: bytesToHex(CAP_EMPTY_ROOT),
+        creator_pub_key_hash: '99'.repeat(28),
+      },
+      capState: new CapAccumulator(),
+      orders: [
+        {
+          txHash: ORDER_TX,
+          outputIndex: 1,
+          ownerKeyHashHex: ALICE,
+          isBuy: true,
+          amount: 100n,
+          minReceived: 100n,
+          maxSpend: 500_000_000n - reserve,
+          deadlineMs: 9_999_999n,
+          heldLovelace: 500_000_000n,
+          heldTokens: 0n,
+        },
+      ],
+      nowMs: 1_000n,
+    });
+    const fill = plan.fills[0];
+    if (!fill) throw new Error('the order should fill');
+    const result = await makeSubmitter().submitBatch(KEY, {
+      curveUtxo: curveUtxo(),
+      orderUtxos: [orderUtxo(1)],
+      plan,
+      batcherFeeLovelace: 10_000_000_000n,
+    });
+    expect(result.batcherFeeTotal).toBe(fill.order.maxSpend - fill.gross);
+    // Exactly what curve_order asks back: everything above maxSpend.
+    expect(lastPlan().payouts[0]?.assets.lovelace).toBe(reserve);
   });
 
   it('takes nothing when asked for nothing', async () => {
@@ -369,7 +467,7 @@ describe('the batcher’s own fee', () => {
       plan,
     });
     expect(result.batcherFeeTotal).toBe(0n);
-    expect(lastPlan().payouts[1]?.assets.lovelace).toBe(plan.fills[0]?.change);
+    expect(lastPlan().payouts[0]?.assets.lovelace).toBe(plan.fills[0]?.change);
   });
 });
 

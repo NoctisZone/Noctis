@@ -17,7 +17,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Constr, credentialToAddress, Data } from '@lucid-evolution/lucid';
-import { DEFAULT_PROTOCOL_PARAMETERS, type UTxO as MeshUTxO } from '@meshsdk/core';
+import { DEFAULT_PROTOCOL_PARAMETERS, getOutputMinLovelace, type UTxO as MeshUTxO } from '@meshsdk/core';
 import { deserializeTx } from '@meshsdk/core-cst';
 import { describe, expect, it, vi } from 'vitest';
 import { MAX_ORDERS_PER_BATCH } from '../batch-planner.js';
@@ -220,6 +220,47 @@ describe('MeshCurveSpender', () => {
 
     const s = spender(TIER_B);
     await expect(s.build(buyPlan(s.scriptAddress), wallet)).rejects.toThrow();
+  });
+
+  // A batch pays each order's change in the same output as its fill, so the
+  // payout NAMES its lovelace, and Mesh supplies the ledger minimum only for an
+  // output that names none. One naming too little would go out as written and
+  // the node would refuse the whole batch.
+  it('raises a payout that names too little lovelace to the ledger minimum', async () => {
+    const s = spender(TIER_B);
+    const plan = buyPlan(s.scriptAddress);
+    plan.payouts = [{ address: WALLET_ADDRESS, assets: { [TOKEN_UNIT]: 100_000n, lovelace: 1n }, datumCbor: 'd87980' }];
+    const hex = await s.build(plan, fakeWallet());
+    const outputs = deserializeTx(hex)
+      .body()
+      .outputs()
+      .map((o) => o.toCore());
+    const payout = outputs.find((o) => o.value.assets?.get(TOKEN_UNIT as never) === 100_000n);
+    const minimum = getOutputMinLovelace({
+      address: WALLET_ADDRESS,
+      amount: [
+        { unit: TOKEN_UNIT, quantity: '100000' },
+        { unit: 'lovelace', quantity: '1' },
+      ],
+      datum: { type: 'Inline', data: { type: 'CBOR', content: 'd87980' } },
+    });
+    expect(minimum).toBeGreaterThan(1_000_000n);
+    expect(payout?.value.coins).toBe(minimum);
+  });
+
+  it('leaves a payout that names enough lovelace exactly as named', async () => {
+    const s = spender(TIER_B);
+    const plan = buyPlan(s.scriptAddress);
+    plan.payouts = [
+      { address: WALLET_ADDRESS, assets: { [TOKEN_UNIT]: 100_000n, lovelace: 5_000_000n }, datumCbor: 'd87980' },
+    ];
+    const hex = await s.build(plan, fakeWallet());
+    const outputs = deserializeTx(hex)
+      .body()
+      .outputs()
+      .map((o) => o.toCore());
+    const payout = outputs.find((o) => o.value.assets?.get(TOKEN_UNIT as never) === 100_000n);
+    expect(payout?.value.coins).toBe(5_000_000n);
   });
 
   it('refuses to build without collateral, saying what is missing', async () => {

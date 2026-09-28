@@ -37,7 +37,14 @@
 //     source rather than assumed, because the failure mode is a transaction
 //     the node rejects for a reason that names neither the output nor ada.
 
-import { type Asset, applyCborEncoding, MeshTxBuilder, type UTxO as MeshUTxO, resolveSlotNo } from '@meshsdk/core';
+import {
+  type Asset,
+  applyCborEncoding,
+  getOutputMinLovelace,
+  MeshTxBuilder,
+  type UTxO as MeshUTxO,
+  resolveSlotNo,
+} from '@meshsdk/core';
 import { deserializeTx } from '@meshsdk/core-cst';
 import {
   MESH_NETWORK_ID,
@@ -259,6 +266,33 @@ function toMesh(assets: PlanAssets): Asset[] {
 }
 
 /**
+ * A payout's assets in Mesh's shape, its lovelace raised to the ledger's
+ * minimum for the output it becomes when it names too little.
+ *
+ * Mesh fills the minimum in only for an output that names NO lovelace. One
+ * that names too little goes out as written, and the node then refuses the
+ * whole transaction (`BabbageOutputTooSmallUTxO`). A batch pays each order's
+ * change in the same output as its fill, so that lovelace is named, and an
+ * order that kept almost nothing back can fall short of the minimum. Raising
+ * it only ever pays the recipient more; the difference comes from the
+ * spender's own inputs through coin selection.
+ */
+export function payoutAssets(payout: PlanPayout): Asset[] {
+  const amount = toMesh(payout.assets);
+  const lovelace = amount.find((a) => a.unit === 'lovelace');
+  if (!lovelace) return amount;
+  const minimum = getOutputMinLovelace({
+    address: payout.address,
+    amount,
+    ...(payout.datumCbor
+      ? { datum: { type: 'Inline' as const, data: { type: 'CBOR' as const, content: payout.datumCbor } } }
+      : {}),
+  });
+  if (BigInt(lovelace.quantity) < minimum) lovelace.quantity = minimum.toString();
+  return amount;
+}
+
+/**
  * The wallet's UTXOs that are safe to spend for fees and change.
  *
  * A published reference script sits in an ordinary UTXO at an ordinary
@@ -428,7 +462,7 @@ export class MeshCurveSpender {
     );
 
     for (const payout of plan.payouts) {
-      tx.txOut(payout.address, toMesh(payout.assets));
+      tx.txOut(payout.address, payoutAssets(payout));
       if (payout.datumCbor) tx.txOutInlineDatumValue(payout.datumCbor, 'CBOR');
     }
 
@@ -527,7 +561,7 @@ export class MeshCurveSpender {
     );
 
     for (const payout of plan.payouts) {
-      tx.txOut(payout.address, toMesh(payout.assets));
+      tx.txOut(payout.address, payoutAssets(payout));
       if (payout.datumCbor) tx.txOutInlineDatumValue(payout.datumCbor, 'CBOR');
     }
 
@@ -674,7 +708,7 @@ export class MeshCurveSpender {
     );
 
     for (const payout of plan.payouts) {
-      tx.txOut(payout.address, toMesh(payout.assets));
+      tx.txOut(payout.address, payoutAssets(payout));
       if (payout.datumCbor) tx.txOutInlineDatumValue(payout.datumCbor, 'CBOR');
     }
 

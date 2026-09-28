@@ -9,9 +9,9 @@
 // The shape, and every part of it is checked on chain:
 //
 //   inputs    the curve (BatchTrades) + one per order (ApplyOrder)
-//   outputs   the curve's continuing state, then per order: the fill, and the
-//             change that order did not spend — each NAMING the order it
-//             settles
+//   outputs   the curve's continuing state, then ONE per order: the fill and
+//             the change that order did not spend, together, NAMING the order
+//             it settles
 //   signer    the batcher, whose key the curve datum's redeemer names
 //
 // **Every payout carries the order's own reference as its datum.** One owner
@@ -98,10 +98,10 @@ export interface SubmitBatchParams {
   /**
    * Lovelace the batcher keeps from each filled order, as its fee.
    *
-   * Bounded twice over: it cannot exceed the change that order produced, and
-   * the order's own `max_spend` already capped what could leave it at all.
-   * Zero is valid and means the batcher works for nothing but the curve's
-   * throughput.
+   * Taken from a buy only, and never more than the curve left of the order's
+   * own `max_spend`: the order validator wants everything above `max_spend`
+   * back, so that is all the batcher may touch. Zero is valid and means the
+   * batcher works for nothing but the curve's throughput.
    */
   batcherFeeLovelace?: bigint;
 }
@@ -113,16 +113,30 @@ export interface BatchResult {
   batcherFeeTotal: bigint;
 }
 
-function assetsOf(fill: PlannedFill, tokenPolicyId: string, tokenAssetName: string): { fill: Assets; change: Assets } {
-  const unit = toUnit(tokenPolicyId, tokenAssetName);
-  return fill.order.isBuy
-    ? // A buy is delivered tokens; its change is the lovelace it did not spend.
-      { fill: { [unit]: fill.received }, change: { lovelace: fill.change } }
-    : // A sell is paid its proceeds and, in the same output, the lovelace its own
-      // UTXO held — the deposit that carried the tokens. That deposit is the
-      // seller's and is not proceeds: curve_order counts only what arrives above
-      // it toward the seller's minimum. Its change is the tokens it did not sell.
-      { fill: { lovelace: fill.received + fill.order.heldLovelace }, change: { [unit]: fill.change } };
+/**
+ * Everything one order is owed, in ONE output: the fill and its change.
+ *
+ * Both validators add up what the outputs tagged with the order carry to its
+ * owner, so one output answers exactly as two did. Two things follow from
+ * it being one. The owner's own change pays the output's minimum ada, where a
+ * tokens-only output had the batcher add that from its own wallet on every
+ * buy. And every fill costs one output fewer, which is memory every validator
+ * in the batch spends folding over the outputs.
+ *
+ * `kept` is what the batcher takes from a buy's change; see submitBatchCore.
+ */
+function orderPayout(fill: PlannedFill, tokenUnit: string, kept: bigint): Assets {
+  if (fill.order.isBuy) {
+    // A buy is delivered tokens, with the lovelace it did not spend.
+    const back = fill.change - kept;
+    return back > 0n ? { [tokenUnit]: fill.received, lovelace: back } : { [tokenUnit]: fill.received };
+  }
+  // A sell is paid its proceeds and the lovelace its own UTXO held — the
+  // deposit that carried the tokens. That deposit is the seller's and is not
+  // proceeds: curve_order counts only what arrives above it toward the
+  // seller's minimum. With them, any tokens it did not sell.
+  const paid = fill.received + fill.order.heldLovelace;
+  return fill.change > 0n ? { lovelace: paid, [tokenUnit]: fill.change } : { lovelace: paid };
 }
 
 /**
@@ -256,22 +270,18 @@ export class BatcherSubmitter {
         f.order.ownerStake as Parameters<typeof ownerAddressFrom>[2],
       );
       const tag = settlementDatum({ txHash: f.order.txHash, outputIndex: f.order.outputIndex });
-      const parts = assetsOf(f, currentDatum.token_policy_id, currentDatum.token_asset_name);
 
-      // The fill. The curve looks for exactly this tag paying exactly this
-      // owner, and will not accept an output naming a different order.
-      payouts.push({ address: owner, assets: parts.fill, datumCbor: tag });
-
-      // The change, less whatever the batcher takes from it. The order
-      // validator requires the remainder to reach the owner, so a fee larger
-      // than the change is a transaction that fails rather than a theft.
-      const kept = f.order.isBuy ? min(fee, f.change) : 0n;
+      // What the batcher takes, from a buy only, and never more than the part
+      // of the order's budget the curve left: `maxSpend` less what the curve
+      // charged. The order validator wants everything the order held above
+      // `maxSpend` back, so a cut measured against the whole change could
+      // reach into that reserve and fail the whole batch.
+      const kept = f.order.isBuy ? min(fee, f.order.maxSpend - f.gross) : 0n;
       batcherFeeTotal += kept;
-      const changeLeft = f.order.isBuy ? f.change - kept : f.change;
-      if (changeLeft > 0n) {
-        const remaining: Assets = f.order.isBuy ? { lovelace: changeLeft } : { [tokenUnit]: changeLeft };
-        payouts.push({ address: owner, assets: remaining, datumCbor: tag });
-      }
+
+      // The curve looks for exactly this tag paying exactly this owner, and
+      // will not accept an output naming a different order.
+      payouts.push({ address: owner, assets: orderPayout(f, tokenUnit, kept), datumCbor: tag });
     }
 
     const batchPlan: CurveBatchPlan = {
