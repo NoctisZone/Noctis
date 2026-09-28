@@ -217,6 +217,7 @@ Notable changes to the Noctis Zone, by release. Internal development history pre
 
 ### Fixed
 
+- **Adding to a stake that has earned pays the 5 ADA charge**, as a claim or an exit does, so the transaction is accepted. The staking pool takes the charge whenever rewards are compounded, and the stake builder now includes it.
 - A server-side Midnight wallet now only banks a checkpoint of a sub-wallet
   that was standing still while the checkpoint was taken. A checkpoint records
   two things that have to describe the same moment, and taking one while the
