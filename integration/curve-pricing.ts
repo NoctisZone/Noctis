@@ -72,6 +72,26 @@ export function feeSlices(gross: bigint): {
   return { creatorFee, platformFee, feeTotal: creatorFee + platformFee };
 }
 
+/**
+ * Mirrors the quadratic curve's `raise_share`: the part of a range's curve
+ * value `gross` that the curve's raise holds for it — what a buy of that range
+ * banked, rounded DOWN. A sell gives back exactly this much, so selling can
+ * only return what buys put in.
+ */
+export function raiseShare(gross: bigint): bigint {
+  return (gross * (BPS_DENOMINATOR - CREATOR_BPS - PLATFORM_BPS)) / BPS_DENOMINATOR;
+}
+
+/**
+ * What a seller receives for a share of curve value `gross`: the raise's share
+ * of it, less the sell's own 1.5% fee — about 97% of the curve value. The fee
+ * is paid out of that share, never out of the raise, so a sell cannot shrink
+ * what graduation seeds the pool with.
+ */
+export function sellNet(gross: bigint): bigint {
+  return raiseShare(gross) - feeSlice(gross, CREATOR_BPS) - feeSlice(gross, PLATFORM_BPS);
+}
+
 // ----------------------------------------------------------------------------
 // The linear curve — linear, P(x) = base + (max - base) * x / supply
 // ----------------------------------------------------------------------------

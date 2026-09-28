@@ -243,6 +243,14 @@ equivalent slice deepens a pool nobody can claim.
 
 **Fee split verification:** 0.5 creator + 1.0 platform = 1.5 ✓
 
+**A sell pays its own fee** (`raise_share` in `bonding_curve_tier_b.ak`). A sell is
+priced from the same range a buy of it would pay. The curve gives back the share of
+that value its raise holds, which is 98.5%, what the buy banked, rounded down. The
+1.5% comes out of that share. The seller receives about 97% of the range's curve
+value, and the raise never funds anyone's fee, so selling during the curve cannot
+shrink what graduation seeds the pool with. A round trip costs the trader 3% plus the
+batcher fee, 1.5% on each leg.
+
 **Cardano:** The platform wallet covers team operational costs and funds the periodic NIGHT purchases that keep DUST topped up. Out of that same wallet's income the platform accumulates stablecoins — **confirmed 2026-07-10: USDM** (native Cardano stablecoin, no bridge risk — was already the documented default pending confirmation). No contract change needed: `treasury.compact` treats stablecoin conversion generically (an off-chain swap step), the same "no code change needed" status as a couple of other operational-detail items. Still genuinely open, narrower than the stablecoin choice itself: the exact DEX swap mechanism from ADA → USDM, custody wallet format, and on-chain disclosure format — operational deployment details, not separately tracked as their own issue yet.
 
 **Midnight Launch:** All fees arrive in NIGHT. The Treasury PSM must convert NIGHT → stablecoin on a schedule. The conversion mechanism and minimum batch size are open issues (see the Midnight Launch Trade Fee Currency and Conversion open issue). The platform wallet receives NIGHT directly — the same asset it already needs for DUST, which simplifies the ops cycle.
@@ -762,7 +770,9 @@ Twitter/X, Discord, LinkedIn, Telegram, Instagram, TikTok — displayed on launc
   base price, divided by the reserve is 1.2× the max price. The largest reserve that
   does is taken (a deeper pool), found by bisection over the exact discrete raise, so
   the target is a floor the pool never opens under: unclaimed DarkVeil tokens sell on
-  the curve and only push it up, and per-trade fee flooring moves it by lovelace. No
+  the curve and only push it up, a sell pays its own fee out of what its range banked
+  (see FEE SPLIT) so selling never draws the raise down, and every rounding resolves
+  in the raise's favour. No
   validator changed — the curve reads `lp_reserve_tokens` from its own datum and moves
   exactly that at graduation — and launches minted before the rule keep their datums.
   The wizard mirrors the arithmetic so its supply bar shows the reserve the datum
@@ -1197,7 +1207,7 @@ the 42,069 ADA graduation figure. First-party values:
 | Launch cost | **~6 ADA** flat (~15 ADA working balance to cover minting + contract deposit) | $10, flat across all tiers |
 | Starting market cap | 2,550 ADA | 3,000 ADA at `CURVE_BASE_PRICE_LOVELACE` |
 | Graduation | **69,000 ADA** market cap (26x) | 75,000 ADA (25x) |
-| Trade fee, curve phase | **1.3% + 0.5 ADA flat** — creator 0.3%, platform 1% | 1.5% + 0.5 ADA a buy, nothing on a sell — creator 0.5%, platform 1.0% |
+| Trade fee, curve phase | **1.3% + 0.5 ADA flat** — creator 0.3%, platform 1% | 1.5% each way, + 0.5 ADA a buy and no flat fee on a sell — creator 0.5%, platform 1.0% |
 | Trade fee, post-graduation | 1.3% — creator 1%, LP 0.15%, platform 0.15% | creator takes LP trading fees |
 | Graduation bonus to creator | **200 ADA** | none |
 | Creator/team allocation | **none — "no hidden team allocation"** | 5-10%, vested 90-365 days |

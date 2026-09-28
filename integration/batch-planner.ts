@@ -32,7 +32,15 @@
 // values.
 
 import { bytesToHex, CapAccumulator, capLeafFor, hexToBytes, recomputeCapRoot } from './cap-accumulator-tree.js';
-import { buyCost, CREATOR_BPS, type CurveShape, feeSlice, PLATFORM_BPS, sellProceeds } from './curve-pricing.js';
+import {
+  buyCost,
+  CREATOR_BPS,
+  type CurveShape,
+  feeSlice,
+  PLATFORM_BPS,
+  sellNet,
+  sellProceeds,
+} from './curve-pricing.js';
 
 /**
  * Least lovelace a settlement-tagged payout can hold, with headroom.
@@ -410,7 +418,9 @@ function planOnce(options: PlanBatchOptions, pricingSet: readonly CandidateOrder
       const gross = shareOf(order);
       const creatorFee = feeSlice(gross, CREATOR_BPS);
       const platformFee = feeSlice(gross, PLATFORM_BPS);
-      const net = gross - creatorFee - platformFee;
+      // A sell pays its own fee out of the share of its range the raise holds,
+      // exactly as the validator settles it.
+      const net = sellNet(gross);
       if (net < order.minReceived) {
         skip('below-min-received', `${net} at the batch average < ${order.minReceived}`);
         continue;

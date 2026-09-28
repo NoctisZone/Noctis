@@ -472,11 +472,10 @@ pub type BondingCurveTierBRedeemer {
     claimed_bits: ByteArray,
   }
   QueryState
-  /// Public sell — the reverse of BuyTokens. Same mechanism as the linear curve's
-  /// bonding_curve.ak SellTokens — see that file's own doc comment
-  /// for the full pricing-symmetry and value-conservation reasoning
-  /// (the same "total_raised can go negative after a round-trip, and that's
-  /// correct" invariant holds).
+  /// Public sell — the reverse of BuyTokens. Refused as a direct spend, as
+  /// BuyTokens is: a sell reaches the curve as an order in `BatchTrades`,
+  /// which prices it from the same range a buy would and takes its fee out of
+  /// the share of that range the raise holds (see `raise_share`).
   ///
   /// Entitlement is possession, as on the linear curve: the seller returns real tokens
   /// to the curve in the same transaction, so holding them is what qualifies
@@ -795,6 +794,16 @@ fn sell_proceeds(
 /// any remainder with the curve.
 fn fee_slice(gross: Int, bps: Int) -> Int {
   gross * bps / bps_denominator
+}
+
+/// The part of a range's curve value `gross` that the raise holds for it:
+/// what a buy of that range banked, rounded DOWN. A buy banks `gross` less
+/// its two floored fee slices, which is never below this, so a sell that
+/// gives back this much can only return what buys put in, however the trades
+/// were split. A sell's own fee is paid out of this share, not out of the
+/// raise, which is what keeps selling from shrinking what graduation seeds.
+fn raise_share(gross: Int) -> Int {
+  gross * ( bps_denominator - creator_bps - platform_bps ) / bps_denominator
 }
 
 /// This validator's own input — the one being spent.
@@ -1612,7 +1621,12 @@ validator bonding_curve_tier_b {
                 let gross = batch_sell_gross * order.amount / batch_sell_amount
                 let creator_fee = fee_slice(gross, creator_bps)
                 let platform_fee = fee_slice(gross, platform_bps)
-                let net = gross - creator_fee - platform_fee
+                // A sell pays its own fee. The raise gives up only the share a
+                // buy of this range banked, and the fee comes out of that share,
+                // so the seller receives about 97% of the range's curve value
+                // and the raise pays nobody's fee. Through the totals below the
+                // raise falls by exactly `raise_share(gross)`.
+                let net = raise_share(gross) - creator_fee - platform_fee
                 let cap_after = if order.cap_committed_before > order.amount {
                   order.cap_committed_before - order.amount
                 } else {
@@ -2118,13 +2132,13 @@ validator bonding_curve_tier_b {
             !datum.lp_seeded,
             !datum.staking_seeded,
             new_datum == expected_datum,
-            // Real, positive backing before a launch can call itself graduated
-            // — see the linear curve's own Graduate arm for the full reasoning. Enough
-            // SellTokens activity before the final buy can leave total_raised
-            // non-positive at 100% sell-through, and at zero both of the value
-            // checks below degrade into things any output satisfies. This tier
-            // has the same SellTokens redeemer and reaches the same state the
-            // same way, so it needs the same guard.
+            // Real, positive backing before a launch can call itself graduated.
+            // Trading cannot bring the raise to zero at 100% sell-through: a
+            // sell gives back only the share its range banked (`raise_share`),
+            // so the raise holds at least that share of every range still
+            // sold. The guard stays because at zero both value checks below
+            // would accept any output, and a launch sealed behind an LP with
+            // no ada in it is not something to leave to arithmetic alone.
             datum.total_raised > 0,
             graduation_funds_left_curve(
               self,
@@ -2645,8 +2659,8 @@ test chunked_exit_never_beats_a_single_lot() {
 }
 
 /// A buy and a sell of the same size at the same curve position quote the
-/// same range, so a round trip returns no more than it cost — before the
-/// 1.5% fee is applied on both legs.
+/// same range, so a round trip returns no more than it cost — before either
+/// leg's 1.5% fee.
 test a_round_trip_returns_no_more_than_it_cost() {
   let d = mock_datum(Active, 400)
   buy_cost(d, 400, 100) >= sell_proceeds(d, 400, 100)
@@ -4103,6 +4117,242 @@ test batch_prices_every_order_at_the_batch_average() {
       two_buy_orders(),
       [tok_out(0, #"de", 400), tok_out(1, #"df", 300)],
       two_buy_uniform_total(d),
+    ),
+  }
+}
+
+// ----------------------------------------------------------------------------
+// Sells in a batch — a sell pays its own fee
+// ----------------------------------------------------------------------------
+
+/// What one sell order of `amount` is credited under uniform pricing: its
+/// pro-rata slice of the batch's single sell range, rounded DOWN exactly as
+/// the validator rounds it.
+fn uniform_sell_share(
+  datum: BondingCurveTierBDatum,
+  orders: List<BatchOrder>,
+  amount: Int,
+) -> Int {
+  let batch_amount = list.foldl(orders, 0, fn(o, acc) { acc + o.amount })
+  let batch_gross = sell_proceeds(
+    datum,
+    datum.tokens_sold - batch_amount,
+    batch_amount,
+  )
+  batch_gross * amount / batch_amount
+}
+
+/// What a seller receives for a share of curve value `gross`.
+fn sell_net(gross: Int) -> Int {
+  raise_share(gross) - fee_slice(gross, creator_bps) - fee_slice(
+    gross,
+    platform_bps,
+  )
+}
+
+/// A seller's proceeds for the order at `index`, tagged with that order.
+fn lovelace_out(index: Int, owner: VerificationKeyHash, lovelace: Int) -> Output {
+  Output {
+    address: from_verification_key(owner),
+    value: assets.from_lovelace(lovelace),
+    datum: InlineDatum(order_ref_at(index)),
+    reference_script: None,
+  }
+}
+
+/// A curve that has sold 600 of its 1000 tokens, holding exactly what those
+/// 600 banked: `buy_cost(d, 0, 600)` is 124,639, of which 623 and 1,246 went
+/// to the fee counters.
+fn curve_at_600() -> BondingCurveTierBDatum {
+  BondingCurveTierBDatum {
+    ..mock_datum(Active, 600),
+    total_raised: 122_770,
+    creator_fees_accrued: 623,
+    platform_fees_accrued: 1_246,
+  }
+}
+
+/// 300 then 200 sold back, by wallets holding tokens they never bought from
+/// this curve, so each proves an empty cap slot and the root stays put.
+fn two_sell_orders() -> List<BatchOrder> {
+  batch_orders([(#"de", False, 300, 0), (#"df", False, 200, 0)])
+}
+
+/// Drives a batch of sell orders. The curve's own lovelace falls by
+/// `paid_out` and its datum takes `raise_debit` off the raise; the accepted
+/// fixture passes what the rule says, and each rejection changes one of them.
+fn run_sell_batch(
+  datum: BondingCurveTierBDatum,
+  orders: List<BatchOrder>,
+  seller_outputs: List<Output>,
+  paid_out: Int,
+  raise_debit: Int,
+) -> Bool {
+  let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
+  let own_address = from_verification_key(#"cc")
+  let base = 5_000_000
+  let returned = list.foldl(orders, 0, fn(o, acc) { acc + o.amount })
+  let fees_at = fn(bps) {
+    list.foldl(
+      orders,
+      0,
+      fn(o, fees) {
+        fees + fee_slice(uniform_sell_share(datum, orders, o.amount), bps)
+      },
+    )
+  }
+  let reserve = datum.curve_supply - datum.tokens_sold
+  let own_input = Input {
+    output_reference: own_ref,
+    output: Output {
+      address: own_address,
+      value: assets.merge(
+        mock_curve_nft(),
+        assets.merge(
+          assets.from_lovelace(base),
+          assets.from_asset(#"33", "tok", reserve),
+        ),
+      ),
+      datum: InlineDatum(datum),
+      reference_script: None,
+    },
+  }
+  let new_datum = BondingCurveTierBDatum {
+    ..datum,
+    tokens_sold: datum.tokens_sold - returned,
+    total_raised: datum.total_raised - raise_debit,
+    creator_fees_accrued: datum.creator_fees_accrued + fees_at(creator_bps),
+    platform_fees_accrued: datum.platform_fees_accrued + fees_at(platform_bps),
+    cap_root: cap_root(held_after(orders)),
+  }
+  let continuing = Output {
+    address: own_address,
+    value: assets.merge(
+      mock_curve_nft(),
+      assets.merge(
+        assets.from_lovelace(base - paid_out),
+        assets.from_asset(#"33", "tok", reserve + returned),
+      ),
+    ),
+    datum: InlineDatum(new_datum),
+    reference_script: None,
+  }
+  let self = Transaction {
+    ..transaction.placeholder,
+    inputs: list.concat([own_input], order_inputs(orders)),
+    outputs: list.concat([continuing], seller_outputs),
+    extra_signatories: [#"ba"],
+  }
+  bonding_curve_tier_b.spend(
+    Some(datum),
+    BatchTrades { orders, batcher_key_hash: #"ba" },
+    own_ref,
+    self,
+  )
+}
+
+/// POSITIVE half, figures pinned. The batch sells the range [100, 600), whose
+/// curve value is 114,342: 68,605 for the 300 and 45,736 for the 200. Each
+/// seller receives the share of their range the raise holds (98.5%, rounded
+/// down: 67,575 and 45,049) less their own 1.5% fee (1,029 and 685), so
+/// 66,546 and 44,364. The raise falls by 112,624, the fee counters rise by
+/// 1,714, and the curve pays out 110,910.
+test batch_sell_pays_its_own_fee() {
+  let d = curve_at_600()
+  and {
+    uniform_sell_share(d, two_sell_orders(), 300) == 68_605,
+    uniform_sell_share(d, two_sell_orders(), 200) == 45_736,
+    raise_share(68_605) == 67_575,
+    raise_share(45_736) == 45_049,
+    sell_net(68_605) == 66_546,
+    sell_net(45_736) == 44_364,
+    run_sell_batch(
+      d,
+      two_sell_orders(),
+      [lovelace_out(0, #"de", 66_546), lovelace_out(1, #"df", 44_364)],
+      110_910,
+      112_624,
+    ),
+  }
+}
+
+/// The accepted sell batch with ONE difference each. The raise may not give
+/// up the whole curve value (114,341, which would fund the sellers' fees out
+/// of it), and the curve may not pay out what sellers were owed when the
+/// raise funded their fees (112,627). The last line is that older settlement
+/// in full, payouts included, and it is refused as a whole.
+test batch_sell_cannot_draw_its_fee_from_the_raise() {
+  let d = curve_at_600()
+  let paid = [lovelace_out(0, #"de", 66_546), lovelace_out(1, #"df", 44_364)]
+  and {
+    !run_sell_batch(d, two_sell_orders(), paid, 110_910, 114_341),
+    !run_sell_batch(d, two_sell_orders(), paid, 112_627, 112_624),
+    !run_sell_batch(
+      d,
+      two_sell_orders(),
+      [lovelace_out(0, #"de", 67_576), lovelace_out(1, #"df", 45_051)],
+      112_627,
+      114_341,
+    ),
+  }
+}
+
+/// A seller's own floor binds against what they will actually receive.
+test batch_sell_min_received_binds_the_net() {
+  let d = curve_at_600()
+  let paid = [lovelace_out(0, #"de", 66_546), lovelace_out(1, #"df", 44_364)]
+  let asking = fn(floor) {
+    batch_orders([(#"de", False, 300, floor), (#"df", False, 200, 0)])
+  }
+  and {
+    run_sell_batch(d, asking(66_546), paid, 110_910, 112_624),
+    !run_sell_batch(d, asking(66_547), paid, 110_910, 112_624),
+  }
+}
+
+/// What the rule is for: selling back leaves the raise holding at least what
+/// the tokens still sold banked. After the batch above, 100 tokens remain
+/// sold, and a buy of [0, 100) banks 10,143; the raise holds 10,146. Under a
+/// sell that drew its fee from the raise it would hold 8,429.
+test selling_back_leaves_what_the_remaining_tokens_banked() {
+  let d = curve_at_600()
+  let first_hundred = buy_cost(d, 0, 100)
+  let banked = first_hundred - fee_slice(first_hundred, creator_bps) - fee_slice(
+    first_hundred,
+    platform_bps,
+  )
+  let after = d.total_raised - raise_share(68_605) - raise_share(45_736)
+  and {
+    banked == 10_143,
+    after == 10_146,
+    after >= banked,
+  }
+}
+
+/// The sell's share rounds DOWN and a buy's banking floors its fees, so
+/// however trades are split, a sell never gives up more than a buy of the
+/// same value put in, and splitting a sell never takes out more than
+/// selling it whole. 100,000 of curve value: the raise gives up 98,500, of
+/// which the seller keeps 97,000.
+test a_sell_gives_back_no_more_than_its_range_banked() {
+  let banked = fn(gross) {
+    gross - fee_slice(gross, creator_bps) - fee_slice(gross, platform_bps)
+  }
+  and {
+    raise_share(100_000) == 98_500,
+    sell_net(100_000) == 97_000,
+    raise_share(1) == 0,
+    sell_net(1) == 0,
+    // Where both fee slices floor down to zero, a buy banks all of it and a
+    // sell still gives up only 98.5% of it.
+    banked(99) == 99,
+    raise_share(99) == 97,
+    // Split sells never take out more than one sell of the same value.
+    raise_share(99) + raise_share(101) <= raise_share(200),
+    raise_share(67) + raise_share(67) + raise_share(66) <= raise_share(200),
+    list.all(
+      [1, 67, 99, 199, 200, 201, 999, 68_605, 45_736, 114_342],
+      fn(gross) { raise_share(gross) <= banked(gross) },
     ),
   }
 }
@@ -7122,13 +7372,12 @@ test tier_b_expire_curve_rejects_from_dv_claim_even_past_the_deadline() {
 }
 
 /// The passing graduation above with ONE difference: nothing was actually
-/// raised. Enough SellTokens activity before the final buy can leave
-/// total_raised at zero while tokens_sold still reaches curve_supply, and at
-/// zero both value checks stop meaning anything — the curve need only not
-/// decrease, and the LP need only receive at least nothing. What lands is a
-/// launch labelled Graduated behind an LP with no ada in it, locked for a
-/// year. The linear curve has refused this since the same audit; this tier reaches the
-/// state by the same route and now refuses it too.
+/// raised. Trading cannot reach this state, since a sell gives back only what
+/// its range banked, so the datum is written directly. At zero both value
+/// checks stop meaning anything — the curve need only not decrease, and the
+/// LP need only receive at least nothing — and what would land is a launch
+/// labelled Graduated behind an LP with no ada in it, locked for a year. The
+/// guard refuses it whatever route produced the datum.
 test tier_b_graduate_rejects_non_positive_total_raised() {
   let datum = BondingCurveTierBDatum { ..graduation_datum(), total_raised: 0 }
   let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }

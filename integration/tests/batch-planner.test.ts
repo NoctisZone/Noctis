@@ -25,7 +25,7 @@ import {
   shrinkBatchAfter,
 } from '../batch-planner.js';
 import { bytesToHex, CAP_EMPTY_ROOT, CapAccumulator, hexToBytes } from '../cap-accumulator-tree.js';
-import { buyCost, CREATOR_BPS, feeSlice, PLATFORM_BPS, sellProceeds } from '../curve-pricing.js';
+import { buyCost, CREATOR_BPS, feeSlice, PLATFORM_BPS, sellNet, sellProceeds } from '../curve-pricing.js';
 
 const CREATOR = '99'.repeat(28);
 const ALICE = 'aa'.repeat(28);
@@ -257,16 +257,48 @@ describe('planBatch — what it leaves out', () => {
   it('will not fill a sell whose proceeds fall short of its bound', () => {
     const state = new CapAccumulator([{ key: hexToBytes(ALICE), total: 500n }]);
     const c = curve({ tokens_sold: 500n, cap_root: bytesToHex(state.root) });
-    const gross = sellProceeds('linear', c, 400n, 100n);
-    const net = gross - feeSlice(gross, CREATOR_BPS) - feeSlice(gross, PLATFORM_BPS);
+    const net = sellNet(sellProceeds('linear', c, 400n, 100n));
+    const asking = (minReceived: bigint) =>
+      planBatch({
+        shape: 'linear',
+        curve: c,
+        capState: state,
+        orders: [order({ isBuy: false, amount: 100n, minReceived, maxSpend: 100n, heldTokens: 100n })],
+        nowMs: NOW,
+      });
+    expect(asking(net + 1n).skipped[0]?.reason).toBe('below-min-received');
+    // The control: a bound of exactly what the seller will receive fills.
+    expect(asking(net).fills[0]?.received).toBe(net);
+  });
+
+  // The same batch bonding_curve_tier_b.ak's own sell tests drive, so these
+  // figures are the validator's: [100, 600) sold back by two wallets is worth
+  // 114,342, each seller keeps 97% of their share, and the raise gives back
+  // only what the range banked.
+  it('settles a sell the way the curve does, paying its fee out of its own share', () => {
     const result = planBatch({
-      shape: 'linear',
-      curve: c,
-      capState: state,
-      orders: [order({ isBuy: false, amount: 100n, minReceived: net + 1n, maxSpend: 100n, heldTokens: 100n })],
+      shape: 'quadratic',
+      curve: curve({
+        tokens_sold: 600n,
+        total_raised: 122_770n,
+        creator_fees_accrued: 623n,
+        platform_fees_accrued: 1_246n,
+      }),
+      capState: new CapAccumulator(),
+      orders: [
+        order({ isBuy: false, amount: 300n, minReceived: 0n, maxSpend: 300n, heldTokens: 300n }),
+        order({ ownerKeyHashHex: BOB, isBuy: false, amount: 200n, minReceived: 0n, maxSpend: 200n, heldTokens: 200n }),
+      ],
       nowMs: NOW,
     });
-    expect(result.skipped[0]?.reason).toBe('below-min-received');
+    expect(result.fills.map((f) => [f.gross, f.received])).toEqual([
+      [68_605n, 66_546n],
+      [45_736n, 44_364n],
+    ]);
+    expect(result.curveLovelaceDelta).toBe(-110_910n);
+    expect(result.next.total_raised).toBe(10_146n);
+    expect(result.next.creator_fees_accrued).toBe(623n + 571n);
+    expect(result.next.platform_fees_accrued).toBe(1_246n + 1_143n);
   });
 
   // Found by a real Preprod rejection, not by reading the ledger spec: a

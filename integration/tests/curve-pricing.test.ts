@@ -18,6 +18,8 @@ import {
   feeSlice,
   feeSlices,
   PLATFORM_BPS,
+  raiseShare,
+  sellNet,
   sellProceeds,
   spotPrice,
 } from '../curve-pricing.js';
@@ -151,5 +153,36 @@ describe('fee slices', () => {
 
   it('take nothing from a trade too small to slice, rather than rounding up', () => {
     expect(feeSlices(31n).feeTotal).toBe(0n);
+  });
+});
+
+describe('a sell pays its own fee', () => {
+  // The figures bonding_curve_tier_b.ak's own sell tests pin: the raise gives
+  // back 98.5% of a range's curve value, rounded down, and the seller keeps
+  // that less the sell's 1.5%.
+  it('gives the seller about 97% of the curve value', () => {
+    expect(raiseShare(100_000n)).toBe(98_500n);
+    expect(sellNet(100_000n)).toBe(97_000n);
+  });
+
+  it('matches the validator on the shares of its two-seller batch', () => {
+    expect([raiseShare(68_605n), sellNet(68_605n)]).toEqual([67_575n, 66_546n]);
+    expect([raiseShare(45_736n), sellNet(45_736n)]).toEqual([45_049n, 44_364n]);
+  });
+
+  it('never gives back more than a buy of the same value banked', () => {
+    for (const gross of [1n, 67n, 99n, 199n, 200n, 201n, 999n, 68_605n, 114_342n]) {
+      expect(raiseShare(gross)).toBeLessThanOrEqual(gross - feeSlices(gross).feeTotal);
+    }
+    // Where both fee slices floor to zero, a buy banks all of it and a sell
+    // still gives back only 98.5% of it.
+    expect(feeSlices(99n).feeTotal).toBe(0n);
+    expect(raiseShare(99n)).toBe(97n);
+    expect(sellNet(1n)).toBe(0n);
+  });
+
+  it('takes out no more when a sell is split than when it is whole', () => {
+    expect(raiseShare(99n) + raiseShare(101n)).toBeLessThanOrEqual(raiseShare(200n));
+    expect(raiseShare(67n) * 2n + raiseShare(66n)).toBeLessThanOrEqual(raiseShare(200n));
   });
 });

@@ -210,9 +210,10 @@ export interface CurvePrices {
  * its DarkVeil reserve settles at the flat base price and every other token
  * sells on the curve. This is the floor of what graduation moves into the
  * pool: a DarkVeil token that goes unclaimed sells on the curve instead, at
- * no less than the base price, and a sell during the phase gives back what
- * its buy took, less the fee both legs pay. Each trade floors its two fee
- * slices on its own, which moves the real figure by lovelace, never more.
+ * no less than the base price, and a sell during the phase gives back only
+ * what its range banked, rounded down, paying its own fee out of that. Every
+ * rounding on the way resolves in the raise's favour, so the real figure sits
+ * at or above this one, by lovelace a trade.
  */
 export function netRaiseAtSellThrough(prices: CurvePrices, curveSupply: bigint, dvReserve: bigint): bigint {
   if (curveSupply <= 0n) {
