@@ -1197,7 +1197,7 @@ the 42,069 ADA graduation figure. First-party values:
 | Launch cost | **~6 ADA** flat (~15 ADA working balance to cover minting + contract deposit) | $10, flat across all tiers |
 | Starting market cap | 2,550 ADA | 3,000 ADA at `CURVE_BASE_PRICE_LOVELACE` |
 | Graduation | **69,000 ADA** market cap (26x) | 75,000 ADA (25x) |
-| Trade fee, curve phase | **1.3% + 0.5 ADA flat** — creator 0.3%, platform 1% | 1.5% + batcher (&le;1 ADA) — creator 0.5%, platform 1.0% |
+| Trade fee, curve phase | **1.3% + 0.5 ADA flat** — creator 0.3%, platform 1% | 1.5% + 0.5 ADA a buy, nothing on a sell — creator 0.5%, platform 1.0% |
 | Trade fee, post-graduation | 1.3% — creator 1%, LP 0.15%, platform 0.15% | creator takes LP trading fees |
 | Graduation bonus to creator | **200 ADA** | none |
 | Creator/team allocation | **none — "no hidden team allocation"** | 5-10%, vested 90-365 days |
@@ -1215,10 +1215,11 @@ the 42,069 ADA graduation figure. First-party values:
   Their 200 ADA graduation bonus is a one-off; ours is a permanent 0.1% compounding into an LP the
   creator ultimately controls, where theirs is burned. The old "double competitors" line is retired:
   it was true at 1.0% during the curve and is not true at 0.5%.
-- **Their flat 0.5 ADA per curve trade is regressive** and bites small buyers hard. Noctis's CURVE
-  batcher fee has a **ceiling, not a floor** — the order names a maximum and the batcher takes actual
-  cost or less, typically ~0.25 ADA, because one transaction fills many orders. On a 20 ADA trade
-  their real cost is ~3.8% against our ~2.75%.
+- **Their flat 0.5 ADA applies to every curve trade, buys and sells.** Noctis's curve batcher takes
+  0.5 ADA from each BUY and nothing from a sell (set 2026-09-28, to cover what a fill costs the
+  batcher: about 0.56 ADA a buy in a full batch). The order names a 1 ADA ceiling; the charge is the
+  platform's setting within it. So a buy costs 0.2 points more than theirs (a 20 ADA buy: 4.0% against
+  3.8%), a sell is cheaper than theirs below 250 ADA, and a round trip is cheaper below about 125 ADA.
 - **Post-graduation the comparison reverses on small trades, and the old "cheaper at every size" line
   was wrong** (corrected 2026-09-08, once a venue fill was measured). The venue fills ONE order per
   transaction, so its execution fee is 1.5 ADA an order rather than a shared quarter-ADA. Against
@@ -1237,8 +1238,9 @@ the 42,069 ADA graduation figure. First-party values:
   trivial beside theirs.
 
 **Fee comparison is no longer the attack surface it was.** At 2.0% it was the weakest line in the
-pitch; at 1.5% + a capped batcher, Noctis is cheaper than snek.fun on small trades (their flat
-0.5 ADA dominates there) and cheaper at every size after graduation. The platform's 1.0% funds a
+pitch; at 1.5% + 0.5 ADA a buy, Noctis is within 0.2 points of snek.fun on a buy and cheaper on
+a small sell or a small round trip. After graduation it is dearer below roughly 1,500 ADA a trade
+and cheaper above it (see the bullets above). The platform's 1.0% funds a
 stablecoin reserve, operations, and the NIGHT that pays users' Midnight gas for them. Community
 yield distribution remains a post-MVP upgrade.
 
