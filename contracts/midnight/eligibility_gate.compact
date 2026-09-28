@@ -2034,9 +2034,12 @@ export circuit updateAllowlistRoot(
     "Only a registered attestor can update allowlist"
   );
   assert(disclose(phase == LaunchPhase.DarkVeil), "Allowlist is fixed outside the DarkVeil phase");
+  // Registration is the only state the allowlist moves in: before it opens
+  // (NotStarted) as much as after it freezes, so the message names the rule
+  // rather than one of the two ways to break it.
   assert(
     disclose(dvState == DarkVeilState.Registration),
-    "Allowlist is fixed once registration freezes"
+    "Allowlist can change only while registration is open"
   );
   assert(blockTimeGte(disclose(currentTimestamp)), "currentTimestamp cannot be in the future");
   assert(

@@ -2272,7 +2272,19 @@ describe('eligibility_gate.compact — the allowlist is fixed outside the regist
     // registrantRoot over it, so the allowlist decides nothing from here on.
     const { contract, ctx } = deployAndStartDvBuying();
     expect(() => contract.circuits.updateAllowlistRoot(ctx, fakeBytes32(123), ALLOWLIST_EVIDENCE, 0n)).toThrow(
-      'Allowlist is fixed once registration freezes',
+      'Allowlist can change only while registration is open',
+    );
+  });
+
+  // The case that misled an operator at a rehearsal: the launch is in its
+  // DarkVeil phase but registration has not been opened yet. The refusal is
+  // right; the message used to say registration had frozen, which it had not.
+  it('rejects an update in the DarkVeil phase before registration opens, saying so', () => {
+    const d = deploy();
+    const r0 = d.contract.circuits.advancePhase(d.ctx, LaunchPhase.DarkVeil);
+    const ctx = nextContext(d.contractAddress, r0.context);
+    expect(() => d.contract.circuits.updateAllowlistRoot(ctx, fakeBytes32(123), ALLOWLIST_EVIDENCE, 0n)).toThrow(
+      'Allowlist can change only while registration is open',
     );
   });
 });
