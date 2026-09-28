@@ -290,7 +290,13 @@ export class VenueFiller {
    * cannot pay for itself fails here, where the message can say that, rather
    * than building a three-input transaction the pool will reject.
    */
-  async build(plan: VenueFillPlan, wallet: CurveSpendWallet): Promise<string> {
+  /**
+   * `payoutAddress` is where the executor's payment goes, which is this
+   * transaction's change; the wallet's own address when it is not given. A
+   * collateral return, where one is built, is addressed to the wallet, never
+   * to the payout, so the executor's collateral cannot follow its revenue.
+   */
+  async build(plan: VenueFillPlan, wallet: CurveSpendWallet, payoutAddress?: string): Promise<string> {
     if (this.poolRef && plan.pool.address !== this.poolRef.scriptAddress) {
       throw new Error(
         `The pool UTXO sits at ${plan.pool.address}, but this filler references a pool validator whose ` +
@@ -357,7 +363,8 @@ export class VenueFiller {
     )
       // Deliberately empty: see the doc comment. The order funds its own fill.
       .selectUtxosFrom([])
-      .changeAddress(changeAddress)
+      .changeAddress(payoutAddress ?? changeAddress)
+      .setCollateralReturnAddress(changeAddress)
       .setNetwork(this.config.network);
 
     const unsigned = await tx.complete();
@@ -395,7 +402,7 @@ export class VenueFiller {
   async buildSettled(
     makePlan: (executorFee: bigint) => VenueFillPlan,
     wallet: CurveSpendWallet,
-    opts: { executorPayoutLovelace?: bigint; probePaddingLovelace?: bigint } = {},
+    opts: { executorPayoutLovelace?: bigint; probePaddingLovelace?: bigint; payoutAddress?: string } = {},
   ): Promise<{ txHex: string; executorFee: bigint; networkFee: bigint }> {
     const payout = opts.executorPayoutLovelace ?? VENUE_MIN_EXECUTOR_PAYOUT_LOVELACE;
     const padding = opts.probePaddingLovelace ?? 5_000_000n;
@@ -409,10 +416,11 @@ export class VenueFiller {
         },
       },
       wallet,
+      opts.payoutAddress,
     );
     const networkFee = deserializeTx(probeHex).body().fee();
     const executorFee = networkFee + payout;
-    return { txHex: await this.build(makePlan(executorFee), wallet), executorFee, networkFee };
+    return { txHex: await this.build(makePlan(executorFee), wallet, opts.payoutAddress), executorFee, networkFee };
   }
 
   /** Builds, signs and submits a fill. Returns the transaction hash. */

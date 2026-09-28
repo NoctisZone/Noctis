@@ -130,6 +130,8 @@ interface Input {
   minOutputLovelace?: string;
   fillCostLovelace?: string;
   executorPayoutLovelace?: string;
+  /** batch: where the executor's payment goes; the executor's own address if unset. */
+  executorPayoutAddress?: string;
   maxFillsPerPool?: number;
   maxFillsPerRound?: number;
   /** batch: outputs the last round reported as `spent`, to skip while the index catches up. */
@@ -482,6 +484,7 @@ async function main() {
         minOutputLovelace,
         ...(fillCostLovelace !== undefined ? { fillCostLovelace } : {}),
         ...(input.executorPayoutLovelace ? { executorPayoutLovelace: BigInt(input.executorPayoutLovelace) } : {}),
+        ...(input.executorPayoutAddress ? { executorPayoutAddress: input.executorPayoutAddress } : {}),
         ...(input.maxFillsPerPool ? { maxFillsPerPool: input.maxFillsPerPool } : {}),
         ...(input.maxFillsPerRound ? { maxFillsPerRound: input.maxFillsPerRound } : {}),
         ...(input.recentlySpent?.length ? { recentlySpent: input.recentlySpent } : {}),

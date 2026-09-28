@@ -374,6 +374,26 @@ describe('what a fill costs, and who pays it', () => {
     expect(outputs[2]?.toCore().value.coins).toBe(executorFee - networkFee);
   });
 
+  it('pays the executor where it is told to', async () => {
+    // A live site sends execution revenue to the platform wallet, so the
+    // executor's own wallet is not split into an output per fill. Mesh adds no
+    // collateral return unless a total collateral is set, so none exists to
+    // follow the payout; the builder addresses one to the wallet regardless.
+    const PLATFORM_ADDRESS = credentialToAddress('Preprod', { type: 'Key', hash: '0f'.repeat(28) });
+    const AUTHORISED = 3_000_000n;
+    const { txHex, executorFee, networkFee } = await filler().buildSettled(
+      (fee) => plan(POOL_SORTS_FIRST, TRADE + 1_500_000n + AUTHORISED, 1_500_000n + (AUTHORISED - fee)),
+      fakeWallet(),
+      { payoutAddress: PLATFORM_ADDRESS },
+    );
+    const body = deserializeTx(txHex).body();
+    const outputs = body.outputs();
+    expect(outputs).toHaveLength(3);
+    expect(outputs[2]?.toCore().address).toBe(PLATFORM_ADDRESS);
+    expect(outputs[2]?.toCore().value.coins).toBe(executorFee - networkFee);
+    expect(body.collateralReturn()).toBeUndefined();
+  });
+
   it('still names the right inputs after settling', async () => {
     const AUTHORISED = 3_000_000n;
     const { txHex } = await filler().buildSettled(

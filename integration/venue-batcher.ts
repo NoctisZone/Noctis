@@ -137,6 +137,12 @@ export interface VenueBatcherConfig {
   fillCostLovelace?: bigint;
   /** What the executor keeps beyond the network fee. See `buildSettled`. */
   executorPayoutLovelace?: bigint;
+  /**
+   * Where the executor's payment goes. The platform wallet on a live site, so
+   * that revenue lands at the one address every fee does and the executor's
+   * own wallet is not split into an output per fill. Its own address if unset.
+   */
+  executorPayoutAddress?: string;
   /** Chained fills against one pool. Defaults to `VENUE_MAX_FILLS_PER_POOL`. */
   maxFillsPerPool?: number;
   /**
@@ -637,9 +643,12 @@ export class VenueBatcher {
     const { txHex, executorFee, networkFee } = await this.config.filler.buildSettled(
       makePlan,
       this.config.wallet,
-      this.config.executorPayoutLovelace === undefined
-        ? {}
-        : { executorPayoutLovelace: this.config.executorPayoutLovelace },
+      {
+        ...(this.config.executorPayoutLovelace === undefined
+          ? {}
+          : { executorPayoutLovelace: this.config.executorPayoutLovelace }),
+        ...(this.config.executorPayoutAddress ? { payoutAddress: this.config.executorPayoutAddress } : {}),
+      },
     );
     const txHash = await this.config.wallet.submitTx(await this.config.wallet.signTx(txHex));
 
@@ -699,9 +708,12 @@ export class VenueBatcher {
     const { txHex, executorFee, networkFee } = await this.config.filler.buildSettled(
       makePlan,
       this.config.wallet,
-      this.config.executorPayoutLovelace === undefined
-        ? {}
-        : { executorPayoutLovelace: this.config.executorPayoutLovelace },
+      {
+        ...(this.config.executorPayoutLovelace === undefined
+          ? {}
+          : { executorPayoutLovelace: this.config.executorPayoutLovelace }),
+        ...(this.config.executorPayoutAddress ? { payoutAddress: this.config.executorPayoutAddress } : {}),
+      },
     );
     const txHash = await this.config.wallet.submitTx(await this.config.wallet.signTx(txHex));
 
