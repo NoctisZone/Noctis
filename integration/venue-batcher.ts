@@ -98,6 +98,18 @@ const LUCID_NETWORK: Record<CurveNetwork, LucidNetwork> = {
  */
 export const VENUE_MAX_FILLS_PER_POOL = 10;
 
+/**
+ * How long an output a fill spent is assumed to linger in the index.
+ *
+ * Blockfrost lists a spent output for seconds to a minute after the block that
+ * spent it, and a round read in that window sees an order that is already
+ * filled and a pool output that no longer exists. Building on them is refused
+ * at evaluation, which costs a failed fill and ends that pool's chain for the
+ * round. Five minutes is generous: if a fill never landed, its order waits
+ * that long and is then filled as normal.
+ */
+export const VENUE_SPENT_MEMORY_MS = 5 * 60_000;
+
 export interface VenueBatcherConfig {
   provider: VenueChainProvider;
   filler: VenueFiller;
@@ -134,6 +146,14 @@ export interface VenueBatcherConfig {
    * the work it finds.
    */
   maxFillsPerRound?: number;
+  /**
+   * Order and pool outputs an earlier round spent, as `txHash#index`, which
+   * the index may still list. Orders among them, and orders whose pool output
+   * is among them, are declined rather than built against spent inputs. A
+   * `run` loop carries its own rounds' forward; a caller that runs one round a
+   * process passes what the last round reported in `spent`.
+   */
+  recentlySpent?: readonly string[];
 }
 
 /** A fill that reached the chain. */
@@ -196,6 +216,11 @@ export interface VenueBatcherRound {
   skipped: SkippedUtxo[];
   filled: number;
   failed: number;
+  /**
+   * Every order and pool output this round's fills spent, as `txHash#index`:
+   * what the next round should skip while the index catches up.
+   */
+  spent: string[];
 }
 
 function keyHashOf(address: string): string {
@@ -261,7 +286,13 @@ export class VenueBatcher {
    */
   private placements = new Map<string, VenueOrderPosition>();
 
-  constructor(private readonly config: VenueBatcherConfig) {}
+  /** Outputs spent by recent fills, and until when to keep skipping them. */
+  private spentUntil = new Map<string, number>();
+
+  constructor(private readonly config: VenueBatcherConfig) {
+    const until = Date.now() + VENUE_SPENT_MEMORY_MS;
+    for (const ref of config.recentlySpent ?? []) this.spentUntil.set(ref, until);
+  }
 
   /** Drops every cached placement, so the next round re-reads them all. */
   forgetPlacements(): void {
@@ -304,6 +335,16 @@ export class VenueBatcher {
     }
 
     const executorKeyHash = keyHashOf(await this.config.wallet.getChangeAddress());
+    const now = Date.now();
+    for (const [ref, until] of this.spentUntil) if (until <= now) this.spentUntil.delete(ref);
+    const stale = new Set(this.spentUntil.keys());
+    const spent: string[] = [];
+    const remember = (...refs: string[]) => {
+      for (const ref of refs) {
+        spent.push(ref);
+        this.spentUntil.set(ref, now + VENUE_SPENT_MEMORY_MS);
+      }
+    };
     const maxPerPool = this.config.maxFillsPerPool ?? VENUE_MAX_FILLS_PER_POOL;
     const maxPerRound = this.config.maxFillsPerRound;
 
@@ -345,6 +386,8 @@ export class VenueBatcher {
         const declined = this.declineReason({
           candidate: null,
           executorKeyHash,
+          staleOrder: stale.has(key),
+          stalePool: !poolNow.has(nft) && stale.has(orderKey(item.candidate.pool)),
           abandoned: abandoned.has(nft),
           poolDepth: depth.get(nft) ?? 0,
           maxPerPool,
@@ -369,6 +412,7 @@ export class VenueBatcher {
         }
         try {
           const result = await this.fillLiquidity(pool, order);
+          remember(key, orderKey(pool));
           poolNow.set(nft, result.nextPool);
           depth.set(nft, (depth.get(nft) ?? 0) + 1);
           filled += 1;
@@ -394,6 +438,8 @@ export class VenueBatcher {
       const declined = this.declineReason({
         candidate,
         executorKeyHash,
+        staleOrder: stale.has(key),
+        stalePool: !poolNow.has(nft) && stale.has(orderKey(candidate.pool)),
         abandoned: abandoned.has(nft),
         poolDepth: depth.get(nft) ?? 0,
         maxPerPool,
@@ -428,6 +474,7 @@ export class VenueBatcher {
 
       try {
         const result = await this.fillOne(pool, candidate.order, answer.largest, executorKeyHash);
+        remember(key, orderKey(pool));
         poolNow.set(nft, result.nextPool);
         depth.set(nft, (depth.get(nft) ?? 0) + 1);
         filled += 1;
@@ -484,6 +531,7 @@ export class VenueBatcher {
       skipped: round.skipped,
       filled,
       failed,
+      spent,
     };
   }
 
@@ -492,6 +540,10 @@ export class VenueBatcher {
     /** A swap candidate, or null for a liquidity request, which names no executors. */
     candidate: VenueFillCandidate | null;
     executorKeyHash: string;
+    /** An earlier round spent this order; the index has not caught up. */
+    staleOrder: boolean;
+    /** An earlier round spent the pool output this order was read against. */
+    stalePool: boolean;
     abandoned: boolean;
     poolDepth: number;
     maxPerPool: number;
@@ -500,6 +552,15 @@ export class VenueBatcher {
   }): string | null {
     if (args.candidate && !mayExecute(args.candidate.order.datum, args.executorKeyHash)) {
       return 'the order names permitted executors and this batcher is not one of them';
+    }
+    if (args.staleOrder) {
+      return 'an earlier round filled this order, and the index has not caught up with it yet';
+    }
+    if (args.stalePool) {
+      return (
+        'an earlier round spent the pool output this order was read against, so the pool is filled ' +
+        'again once the index shows the output that replaced it'
+      );
     }
     if (args.abandoned) {
       return (

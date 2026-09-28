@@ -132,6 +132,8 @@ interface Input {
   executorPayoutLovelace?: string;
   maxFillsPerPool?: number;
   maxFillsPerRound?: number;
+  /** batch: outputs the last round reported as `spent`, to skip while the index catches up. */
+  recentlySpent?: string[];
 
   /** `serve` only: how long to wait between rounds. */
   intervalMs?: number;
@@ -298,6 +300,7 @@ function roundSummary(round: VenueBatcherRound) {
     outcomes: round.outcomes.map(outcomeSummary),
     liquidityOutcomes: round.liquidityOutcomes.map(liquidityOutcomeSummary),
     skipped: round.skipped,
+    spent: round.spent,
   };
 }
 
@@ -481,6 +484,7 @@ async function main() {
         ...(input.executorPayoutLovelace ? { executorPayoutLovelace: BigInt(input.executorPayoutLovelace) } : {}),
         ...(input.maxFillsPerPool ? { maxFillsPerPool: input.maxFillsPerPool } : {}),
         ...(input.maxFillsPerRound ? { maxFillsPerRound: input.maxFillsPerRound } : {}),
+        ...(input.recentlySpent?.length ? { recentlySpent: input.recentlySpent } : {}),
       });
 
       if (input.action === 'batch') {

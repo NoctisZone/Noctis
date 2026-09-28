@@ -404,6 +404,57 @@ describe('what this batcher will not take on', () => {
   });
 });
 
+describe('outputs an earlier round spent', () => {
+  // Blockfrost lists a spent output for a while after the block that spent it.
+  // A round read in that window must not build on the order or the pool output
+  // an earlier round already used: the node refuses the fill at evaluation and
+  // the pool's chain ends for the round.
+  const POOL_REF = `${'01'.repeat(32)}#0`;
+
+  it('reports the order and pool outputs its fills spent', async () => {
+    const provider = providerWith([poolUtxo()], [orderUtxo('0a'.repeat(32), AFTER_MOVE_OK)]);
+    const round = await batcher({ provider, filler: fakeFiller().filler, wallet: fakeWallet() }).runRound();
+    expect(round.filled).toBe(1);
+    expect(round.spent).toEqual([`${'0a'.repeat(32)}#0`, POOL_REF]);
+  });
+
+  it('declines an order an earlier round filled, while the index still lists it', async () => {
+    const provider = providerWith([poolUtxo()], [orderUtxo('0a'.repeat(32), AFTER_MOVE_OK)]);
+    const { filler, plans } = fakeFiller();
+    const round = await batcher({
+      provider,
+      filler,
+      wallet: fakeWallet(),
+      recentlySpent: [`${'0a'.repeat(32)}#0`],
+    }).runRound();
+    expect(plans).toHaveLength(0);
+    const only = round.outcomes[0];
+    expect(only?.status === 'declined' && only.reason).toMatch(/earlier round filled this order/);
+  });
+
+  it('declines a new order whose pool output an earlier round spent', async () => {
+    const provider = providerWith([poolUtxo()], [orderUtxo('0b'.repeat(32), AFTER_MOVE_OK)]);
+    const { filler, plans } = fakeFiller();
+    const round = await batcher({ provider, filler, wallet: fakeWallet(), recentlySpent: [POOL_REF] }).runRound();
+    expect(plans).toHaveLength(0);
+    const only = round.outcomes[0];
+    expect(only?.status === 'declined' && only.reason).toMatch(/spent the pool output/);
+  });
+
+  it('carries its own spent outputs into the next round of a loop', async () => {
+    // The same stale book read twice: the second round must not fill again.
+    const provider = providerWith([poolUtxo()], [orderUtxo('0a'.repeat(32), AFTER_MOVE_OK)]);
+    const { filler, plans } = fakeFiller();
+    const b = batcher({ provider, filler, wallet: fakeWallet() });
+    const first = await b.runRound();
+    const second = await b.runRound();
+    expect(first.filled).toBe(1);
+    expect(second.filled).toBe(0);
+    expect(plans).toHaveLength(1);
+    expect(second.outcomes[0]?.status).toBe('declined');
+  });
+});
+
 describe('remembering where orders were placed', () => {
   it('does not look the same transaction up twice across rounds', async () => {
     const provider = providerWith([poolUtxo()], [orderUtxo('0a'.repeat(32), AFTER_MOVE_OK)]);
