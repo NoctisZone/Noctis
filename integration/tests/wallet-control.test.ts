@@ -2,7 +2,7 @@
 // signature to.
 
 import { createHash } from 'node:crypto';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { buildBinds, proveWalletControl, proveWalletControlFrom, withProofQuery } from '../widget/wallet-control.js';
 
 // A real preprod reward address (hex) and its bech32 form, so the derivation
@@ -12,6 +12,17 @@ const REWARD_HEX = `e0${'ab'.repeat(28)}`;
 afterEach(() => {
   vi.unstubAllGlobals();
 });
+
+// `proveWalletControl` loads Lucid on first use, through a dynamic import, so
+// the widget bundle does not carry it until a wallet actually signs. The first
+// test to reach it paid that cold load, WASM included, inside its own 5 s
+// budget, and in a full parallel run, with every worker loading WASM at once,
+// the load alone ran past it: the test failed in company and passed alone.
+// Loading it once here, under a budget sized for a cold load, leaves each test
+// timing only its own work.
+beforeAll(async () => {
+  await import('@lucid-evolution/lucid');
+}, 60_000);
 
 function stubNonce(payloadHex = 'deadbeef') {
   const calls: { url: string; body: unknown }[] = [];
