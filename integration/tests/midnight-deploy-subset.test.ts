@@ -193,17 +193,43 @@ describe('deferCircuitsForDeploy', () => {
 
 const ZK_BUILD = 'contracts/midnight/compiled_realzk/eligibility_gate';
 
+// A block advertises 50,000 writable bytes, but ONE transaction may use only
+// 37,500 of them. Measured against the node rather than read: deploys of 14
+// circuits (40,326 bytes) and more were refused with 1010, "would exhaust the
+// block limits", while 8 circuits (25,620) went through. A test against 50,000
+// passes a deferral list the chain will refuse.
+const TX_WRITE_BUDGET = 37_500;
+
+// The deferral list a launch's deploy actually names: the front half of the
+// DarkVeil sequence deploys, so registration can open the moment the contract
+// lands, and these follow by maintenance update, one verifier key each, before
+// the settlement half runs. Priced here because it is what goes on chain.
+const DEPLOY_DEFERRED = [
+  'cancelBuyCommit',
+  'cancelDarkVeil',
+  'claimBondRefund',
+  'claimDisputedBond',
+  'claimRatioBondRefund',
+  'disputeRegistrantExclusion',
+  'expireDarkVeil',
+  'finalizeDvSettlement',
+  'markDarkVeilFailed',
+  'rebutRegistrantExclusion',
+  'recordDarkVeilSettlement',
+  'sweepForfeitedBond',
+];
+
 describe('a deploy built from the trimmed state', () => {
   const keysPresent = existsSync(join(process.cwd(), '..', ZK_BUILD, 'keys'));
 
-  it.skipIf(!keysPresent)("is priced within one block's write budget", async () => {
+  it.skipIf(!keysPresent)('is priced within what one transaction may write', async () => {
     const { ContractDeploy, ContractOperation, ContractState, Intent, LedgerParameters, Transaction } = await import(
       '@midnight-ntwrk/ledger-v8'
     );
     const base = join(process.cwd(), '..', ZK_BUILD);
     const { Contract } = await import(pathToFileURL(join(base, 'contract/index.js')).href);
 
-    const { contract: Subset } = deferCircuitsForDeploy(Contract, DEFERRED);
+    const { contract: Subset } = deferCircuitsForDeploy(Contract, DEPLOY_DEFERRED);
     const trimmed: ContractState = build(Subset).currentContractState;
 
     const priced = (state: ContractState) => {
@@ -220,9 +246,7 @@ describe('a deploy built from the trimmed state', () => {
     const params = LedgerParameters.initialParameters();
     const tx = priced(trimmed);
 
-    // Preprod publishes the same 50,000-byte write budget as the ledger's own
-    // initial parameters; both were read directly rather than assumed.
-    expect(Number(tx.cost(params).bytesWritten)).toBeLessThan(50_000);
+    expect(Number(tx.cost(params).bytesWritten)).toBeLessThan(TX_WRITE_BUDGET);
     // A price at all is the real assertion: fees() throws when a transaction
     // cannot fit in a block, which is how this surfaces at deploy time.
     expect(tx.fees(params)).toBeGreaterThan(0n);
@@ -247,7 +271,7 @@ describe('a deploy built from the trimmed state', () => {
     const intent = Intent.new(new Date(Date.now() + 3_600_000)).addDeploy(new ContractDeploy(ledgerState));
     const tx = Transaction.fromParts('undeployed', undefined, undefined, intent);
 
-    expect(Number(tx.cost(LedgerParameters.initialParameters()).bytesWritten)).toBeGreaterThan(50_000);
+    expect(Number(tx.cost(LedgerParameters.initialParameters()).bytesWritten)).toBeGreaterThan(TX_WRITE_BUDGET);
   });
 });
 
