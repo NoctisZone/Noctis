@@ -44,6 +44,10 @@ for (const v of blueprint.validators) {
 /**
  * Measured 2026-08-08. Update in the same commit that moves one. Newest first.
  *
+ * vesting +6, 2026-09-30: a creator's allocation releases nothing until its
+ * whole period has run, then all of it at once. The other ten validators are
+ * byte for byte identical.
+ *
  * bonding_curve_tier_b +13, 2026-09-28: a sell pays its own fee. The raise
  * gives back only the share of a range that a buy of it banked, rounded down,
  * and the sell's 1.5% comes out of that share. 15,904 against the 16,052 B
@@ -359,7 +363,7 @@ const RECORDED: Record<string, number> = {
   nhop_challenge: 3_285,
   staking_pool: 5_835,
   token_metadata: 5_024,
-  vesting: 5_867,
+  vesting: 5_873,
   zk_anchor: 2_613,
 };
 
@@ -392,7 +396,7 @@ const RECORDED_HASHES: Record<string, string> = {
   nhop_challenge: '0d70cb4bcea572833ea9367f569e71042ada1e34f218c1677ad245fb',
   staking_pool: '1f4afea6652972deb367192ff26207c0a599b5f1ed0683a45cd41cdd',
   token_metadata: '9f996561e6b63e84156171fd4039b13d7606f61470c1a1c0ecf5310a',
-  vesting: 'd6d1ce3fff91223a4533429c110a72c1359c89fc79dc29831496c63d',
+  vesting: '1742efd4b53c4d1f3a7eb60dffaeb59c91fed9d9319a45d020b2aafe',
   zk_anchor: '95750d0fe26787711f9937916194681047e15d8652f13a0b65b382e4',
 };
 

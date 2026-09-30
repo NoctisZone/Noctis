@@ -209,9 +209,9 @@ export class TierAClaimsSubmitter {
 
   /**
    * @param claimAmount  Token quantity to claim — caller must supply a
-   *   value that satisfies the contract's own vested_to_date math
-   *   (token_allocation * elapsed_ms / vest_ms), computed off-chain the
-   *   same way the validator computes it on-chain.
+   *   value that satisfies the contract's own vested_to_date rule: nothing
+   *   before vest_start_timestamp + vest_days, the whole token_allocation
+   *   from then on.
    * @param currentTimestampMs  MILLISECONDS — see file header. Must fall
    *   inside the transaction's validity range, which this builder sets.
    */

@@ -1,8 +1,8 @@
 // ============================================================================
 // Noctis Zone — Cardano L1 Vesting Contract (Aiken)
-// The linear curve only
+// Cardano Launch creator vesting
 // ============================================================================
-// The linear curve's counterpart to contracts/midnight/vesting.compact (both launch types).
+// The Cardano counterpart to contracts/midnight/vesting.compact.
 // Controls the release schedule of the creator's TOKEN allocation (5-10% of
 // total supply) — separate from bonding_curve.ak's fee-claim circuits
 // (ClaimCreatorFees), which handles the
@@ -18,10 +18,10 @@
 //   - No tokens release before graduation, regardless of elapsed time —
 //     vesting only starts once StartVesting is called (governor, at
 //     graduation).
-//   - Linear daily release: claimable = token_allocation * elapsedSeconds /
-//     vestSeconds. Unlike vesting.compact (which has to cross-multiply to
-//     avoid division in a ZK circuit), Aiken/Plutus has no such
-//     restriction, so this uses plain integer division.
+//   - Nothing releases until the period ends. The whole allocation becomes
+//     claimable once vest_days have passed since StartVesting, and not one
+//     token before. A community takeover passed at any point in the period
+//     therefore finds the whole allocation still held here.
 //
 // CTO (Community Takeover Opportunity):
 //   If a SilenceLockTrigger proposal passes via cto_governance.ak, unvested
@@ -518,8 +518,13 @@ validator vesting {
           // right.
           let elapsed_ms = current_timestamp - datum.vest_start_timestamp
           let vest_ms = datum.vest_days * 86_400_000
-          // Plain division is fine on Cardano — no ZK-circuit restriction.
-          let vested_to_date = datum.token_allocation * elapsed_ms / vest_ms
+          // A cliff: nothing is claimable until the whole period has run, and
+          // then the whole allocation is.
+          let vested_to_date = if elapsed_ms >= vest_ms {
+            datum.token_allocation
+          } else {
+            0
+          }
           let new_total_claimed = datum.claimed_tokens + claim_amount
           let next_state = if new_total_claimed == datum.token_allocation {
             FullyClaimed
@@ -999,12 +1004,13 @@ test start_vesting_succeeds_with_governor_signature() {
   )
 }
 
-test claim_vested_succeeds_for_amount_within_vested_total() {
-  // 90-day vest, 45 days elapsed (half), so up to half the allocation is
-  // claimable: 100_000_000 / 2 = 50_000_000. own_input/continuing_output
-  // hold the REAL full token_allocation (realistic pre-funded
-  // balance, same lesson learned elsewhere: a zero-value placeholder can't exercise
-  // vesting_tokens_retained's real relative-decrease check).
+test claim_vested_succeeds_once_the_period_has_ended() {
+  // 90-day vest, 90 days elapsed: the whole allocation is claimable, and a
+  // creator may take part of it. own_input/continuing_output hold the REAL
+  // full token_allocation (realistic pre-funded balance: a zero-value
+  // placeholder can't exercise vesting_tokens_retained's real
+  // relative-decrease check). The rejection tests below are this
+  // transaction with one thing changed.
   let datum = mock_datum(Vesting, 0)
   let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
   let own_address = from_verification_key(#"cc")
@@ -1038,7 +1044,7 @@ test claim_vested_succeeds_for_amount_within_vested_total() {
     datum: InlineDatum(own_ref),
     reference_script: None,
   }
-  let current_timestamp = 45 * 86_400_000
+  let current_timestamp = 90 * 86_400_000
   let self = Transaction {
     ..transaction.placeholder,
     inputs: [own_input],
@@ -1100,12 +1106,16 @@ test claim_vested_fails_when_continuing_output_drained() {
     datum: InlineDatum(own_ref),
     reference_script: None,
   }
-  let current_timestamp = 45 * 86_400_000
+  let current_timestamp = 90 * 86_400_000
   let self = Transaction {
     ..transaction.placeholder,
     inputs: [own_input],
     outputs: [continuing_output, delivery_output],
     extra_signatories: [#"11"],
+    validity_range: interval.between(
+      current_timestamp - 100,
+      current_timestamp + 100,
+    ),
   }
 
   !vesting.spend(
@@ -1157,12 +1167,16 @@ test claim_vested_fails_without_creator_signature() {
     datum: InlineDatum(own_ref),
     reference_script: None,
   }
-  let current_timestamp = 45 * 86_400_000
+  let current_timestamp = 90 * 86_400_000
   let self = Transaction {
     ..transaction.placeholder,
     inputs: [own_input],
     outputs: [continuing_output, delivery_output],
     extra_signatories: [],
+    validity_range: interval.between(
+      current_timestamp - 100,
+      current_timestamp + 100,
+    ),
   }
 
   !vesting.spend(
@@ -1173,48 +1187,84 @@ test claim_vested_fails_without_creator_signature() {
   )
 }
 
-test claim_vested_fails_for_amount_exceeding_vested_total() {
+/// A claim of `claim_amount` at `at`, from a fully funded 90-day,
+/// 100_000_000 vest that started at 0: signed by the creator, inside a narrow
+/// validity range around `at`, with the rest kept in the continuing output.
+/// Everything is right but the moment, so the tests below vary only that.
+fn run_claim(claim_amount: Int, at: Int) -> Bool {
   let datum = mock_datum(Vesting, 0)
   let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
   let own_address = from_verification_key(#"cc")
-  let creator_address = from_verification_key(#"11")
   let own_input = Input {
     output_reference: own_ref,
     output: Output {
       address: own_address,
-      value: mock_thread_nft(),
+      value: assets.merge(
+        mock_thread_nft(),
+        assets.from_asset(#"33", "tok", 100_000_000),
+      ),
       datum: InlineDatum(datum),
       reference_script: None,
     },
   }
-  // Attempting to claim more than the 50% vested at the 45-day mark
-  let claim_amount = 60_000_000
-  let new_datum = VestingDatum { ..datum, claimed_tokens: claim_amount }
+  let next_state = if claim_amount == 100_000_000 {
+    FullyClaimed
+  } else {
+    Vesting
+  }
+  let new_datum = VestingDatum {
+    ..datum,
+    claimed_tokens: claim_amount,
+    vesting_state: next_state,
+  }
   let continuing_output = Output {
     address: own_address,
-    value: mock_thread_nft(),
+    value: assets.merge(
+      mock_thread_nft(),
+      assets.from_asset(#"33", "tok", 100_000_000 - claim_amount),
+    ),
     datum: InlineDatum(new_datum),
     reference_script: None,
   }
   let delivery_output = Output {
-    address: creator_address,
+    address: from_verification_key(#"11"),
     value: assets.from_asset(#"33", "tok", claim_amount),
     datum: InlineDatum(own_ref),
     reference_script: None,
   }
-  let current_timestamp = 45 * 86_400_000
   let self = Transaction {
     ..transaction.placeholder,
     inputs: [own_input],
     outputs: [continuing_output, delivery_output],
+    extra_signatories: [#"11"],
+    validity_range: interval.between(at - 100, at + 100),
   }
-
-  !vesting.spend(
+  vesting.spend(
     Some(datum),
-    ClaimVested { claim_amount, current_timestamp },
+    ClaimVested { claim_amount, current_timestamp: at },
     own_ref,
     self,
   )
+}
+
+/// The end of `run_claim`'s 90-day period, in milliseconds.
+const vest_end_ms: Int = 7_776_000_000
+
+test claim_vested_releases_nothing_half_way() {
+  // A linear release would allow 50_000_000 here. Not one token is claimable.
+  !run_claim(1, 45 * 86_400_000)
+}
+
+test claim_vested_releases_nothing_a_millisecond_before_the_end() {
+  !run_claim(1, vest_end_ms - 1)
+}
+
+test claim_vested_releases_the_whole_allocation_at_the_end() {
+  run_claim(100_000_000, vest_end_ms)
+}
+
+test claim_vested_allows_part_of_the_allocation_after_the_end() {
+  run_claim(40_000_000, vest_end_ms + 86_400_000)
 }
 
 test claim_vested_fails_before_start_vesting() {
@@ -1816,15 +1866,22 @@ test claim_vested_fails_while_cto_triggered() {
     datum: InlineDatum(own_ref),
     reference_script: None,
   }
+  // After the end, signed, in a narrow range: only the takeover refuses it.
+  let current_timestamp = 90 * 86_400_000
   let self = Transaction {
     ..transaction.placeholder,
     inputs: [own_input],
     outputs: [continuing_output, delivery_output],
+    extra_signatories: [#"11"],
+    validity_range: interval.between(
+      current_timestamp - 100,
+      current_timestamp + 100,
+    ),
   }
 
   !vesting.spend(
     Some(datum),
-    ClaimVested { claim_amount, current_timestamp: 45 * 86_400_000 },
+    ClaimVested { claim_amount, current_timestamp },
     own_ref,
     self,
   )
@@ -2088,12 +2145,10 @@ test cancel_launch_rejects_after_vesting_started() {
 // would sail through. Claiming the entire allocation would NOT catch that --
 // it is refused either way -- and a boundary written in terms of vest_days
 // scales with the mistake and never sees it at all.
-test claim_vested_rejects_a_million_an_hour_into_a_ninety_day_vest() {
-  // 90-day vest, 45 days elapsed (half), so up to half the allocation is
-  // claimable: 100_000_000 / 2 = 50_000_000. own_input/continuing_output
-  // hold the REAL full token_allocation (realistic pre-funded
-  // balance, same lesson learned elsewhere: a zero-value placeholder can't exercise
-  // vesting_tokens_retained's real relative-decrease check).
+test claim_vested_rejects_a_claim_three_hours_into_a_ninety_day_vest() {
+  // Three hours into a 90-day vest nothing is claimable. Pins the
+  // millisecond scale: a period measured with a divisor in seconds would end
+  // two hours and ten minutes after the start and release everything here.
   let datum = mock_datum(Vesting, 0)
   let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
   let own_address = from_verification_key(#"cc")
@@ -2127,7 +2182,7 @@ test claim_vested_rejects_a_million_an_hour_into_a_ninety_day_vest() {
     datum: InlineDatum(own_ref),
     reference_script: None,
   }
-  let current_timestamp = 3_600_000
+  let current_timestamp = 3 * 3_600_000
   let self = Transaction {
     ..transaction.placeholder,
     inputs: [own_input],

@@ -128,10 +128,10 @@ const pool_ref = OutputReference { transaction_id: #"00", output_index: 0 }
 
 const vesting_ref = OutputReference { transaction_id: #"00", output_index: 1 }
 
-/// 45 days into a 90-day vest: half the allocation is vested, so a
-/// `settled_amount` claim is well within schedule and nothing about this
+/// The day a 90-day vest ends: the whole allocation is claimable, so a
+/// `settled_amount` claim is within schedule and nothing about this
 /// transaction is unusual apart from the two spends sharing a payout.
-const claim_time = 45 * 86_400_000
+const claim_time = 90 * 86_400_000
 
 /// One transaction spending BOTH contracts' state UTXOs, with the payout
 /// outputs the caller supplies. Everything else — both continuing outputs,

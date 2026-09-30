@@ -405,7 +405,7 @@ Private forever:
 | Bonding Curve PSM | **C only** | Price discovery, fee routing, graduation, cumulative 5% cap enforcement (both DarkVeil and public phases), NIGHT-denominated. Merged with Eligibility Gate + DarkVeil for Midnight Launch — see note above. Cardano Launch's version of the curve itself is a Cardano contract — see below. |
 | Eligibility Gate PSM | B + C | ZK proof verification for all 5 registration checks. Merged with DarkVeil into one Cardano Launch contract (Phase 2, 2026-07-11); merged into the Bonding Curve PSM for Midnight Launch — see notes above. |
 | Creator Fee Escrow PSM | B + C | 1.0% fee accumulation, monthly release, silence lock, CTO redirect. For **Cardano Launch**, this PSM never actually accrued a real ADA fee for the DarkVeil phase — Compact could never enforce that ADA payment, so "Stream A1" as originally described was aspirational, not implemented. With the resolution above, **all** Cardano Launch creator fees (DarkVeil claim + public buy) now accrue in one place: the Cardano curve contract's own balance (formerly "Stream A2") — see the CREATOR FEE ESCROW section's updated note. Midnight Launch is unaffected — its whole curve stays on Midnight, so this PSM's fee accrual there is real. |
-| Vesting PSM | B + C | Creator token cliff, linear release, CTO freeze |
+| Vesting PSM | B + C | Creator token cliff: nothing releases before the period ends, then all of it (Cardano's `vesting.ak`; Midnight's PSM follows when a Midnight Launch is built). CTO freeze |
 | Treasury PSM | B + C | Fee routing, stablecoin accumulation, DUST delegation |
 | Midnight LP Escrow PSM | **C only** | 365-day LP lock on Midnight DEX; equivalent of Cardano LP Escrow but on Midnight — **TBD: depends on Midnight DEX availability, see the Midnight Launch Graduation and DEX open issue** |
 | Midnight Token PSM | **C only** | Manages Midnight-native fungible token issuance and transfers — **TBD: depends on Midnight token standard confirmation, see the Midnight Fungible Token Standard open issue** |
@@ -789,7 +789,10 @@ Twitter/X, Discord, LinkedIn, Telegram, Instagram, TikTok — displayed on launc
 ### Vesting
 - No tokens release before graduation regardless of elapsed time
 - Creator selects 90–365 days at launch creation (no default — forced active selection)
-- Release: Linear daily (`total_allocation / vest_days` per day)
+- Release: a cliff (decided 2026-09-27, in `vesting.ak` from 2026-09-30). Nothing is claimable until
+  the whole period has run from graduation, then the whole allocation is. It is part of the takeover
+  protection: a CTO vote passed at any point in the period finds the whole allocation still in the
+  contract. Launches minted before the change keep the schedule their own datum's validator enforces
 - ZK proof published: creator held 0 tokens at DarkVeil open
 
 ---
@@ -1178,7 +1181,8 @@ The complete Noctis whitepaper (Version 1) is the authoritative reference for al
 - Curve fee split: 0.5 creator + 1.0 platform = **1.5% total** ✓
 - Supply: 5 creator + 21.5 LP + 73.5 curve (the 15 DarkVeil reserve inside it) = **100%** ✓ *(the LP reserve is sized at mint since 2026-09-23 so the pool opens at 1.2× the graduation price; it was a fixed 20 before)*
 - Launch fee, every launch type: **$10 USD** (ADA or NIGHT equiv.) — whole to the platform wallet ✓
-- Vesting: 50M ÷ 180 days = **277,778/day** = **~8,333,333/month** ✓
+- Vesting: 50M over 180 days is **50M on day 180 and nothing before it** — a cliff since 2026-09-30.
+  The whitepaper's 277,778-a-day worked example describes the linear release the cliff replaced
 - LP seeding: the pool receives **the LP reserve + the whole net-of-fee raise**, and the
   reserve is sized so it opens at 1.2× the graduation price rather than balanced at it — see LP SEEDING. The whitepaper's
   `15,000 ADA = 150M × 0.0001` line states what a *balanced* pool would need, which is not

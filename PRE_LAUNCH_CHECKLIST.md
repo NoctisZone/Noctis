@@ -137,7 +137,7 @@ Human sign-off gate. Three stages: website live, preprod contracts, mainnet.
 - [ ] LP enters escrow → 365-day lock confirmed → no withdraw() possible
 - [ ] Creator fee escrow accumulating correctly (1.0% of trades) — **on the Cardano Bonding Curve Cardano Launch contract itself, not a Midnight PSM** (the Creator Fee Escrow PSM never holds a real Cardano Launch fee)
 - [ ] Creator claims fee via `ClaimCreatorFees` on the Cardano curve contract → correct amount
-- [ ] Vesting starts at graduation → daily release correct (`total_allocation / vest_days`), timestamp bound to real chain time
+- [ ] Vesting starts at graduation → nothing claimable before the period ends, the whole allocation claimable from its last day, timestamp bound to real chain time
 
 ---
 
