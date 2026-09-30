@@ -50,6 +50,7 @@ function round(outcomes: VenueFillOutcome[], skipped: VenueBatcherRound['skipped
   return {
     outcomes,
     liquidityOutcomes: [],
+    withdrawOutcomes: [],
     skipped,
     filled: outcomes.filter((o) => o.status === 'filled').length,
     failed: outcomes.filter((o) => o.status === 'failed').length,

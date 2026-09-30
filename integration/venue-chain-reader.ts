@@ -52,6 +52,11 @@ import {
 } from './venue-liquidity.js';
 import { type VenuePoolConfigData, VenuePoolConfigSchema } from './venue-pool.js';
 import {
+  type VenueRoyaltyWithdrawConfigData,
+  VenueRoyaltyWithdrawConfigSchema,
+  type VenueWithdrawOrderUtxo,
+} from './venue-royalty-withdraw.js';
+import {
   type VenueOrderPosition,
   type VenuePoolUtxo,
   type VenueSwapConfigData,
@@ -327,6 +332,65 @@ export async function readVenueLiquidityOrders(
   return { orders, skipped };
 }
 
+/**
+ * The royalty-withdraw requests at their address, with the pool each names.
+ *
+ * Whether one can be filled needs its signature checked against the pool as
+ * it stands, which the batcher does when it reaches it: another withdraw
+ * earlier in the same round moves the pool's nonce, and with it the answer.
+ */
+export async function readVenueWithdrawOrders(
+  provider: VenueChainProvider,
+  args: {
+    withdrawAddress: string;
+    knownPools: readonly string[];
+    positions?: Map<string, VenueOrderPosition>;
+  },
+): Promise<{ orders: VenueWithdrawOrderUtxo[]; skipped: SkippedUtxo[] }> {
+  const known = new Set(args.knownPools);
+  const positions = args.positions ?? new Map<string, VenueOrderPosition>();
+  const orders: VenueWithdrawOrderUtxo[] = [];
+  const skipped: SkippedUtxo[] = [];
+  for (const utxo of await provider.getAddressUtxosAll(args.withdrawAddress)) {
+    const at = { txHash: utxo.tx_hash, outputIndex: utxo.output_index };
+    if (!utxo.inline_datum) {
+      skipped.push({ ...at, reason: 'no inline datum — a withdraw request states its terms inline' });
+      continue;
+    }
+    let datum: VenueRoyaltyWithdrawConfigData;
+    try {
+      datum = Data.from(utxo.inline_datum, VenueRoyaltyWithdrawConfigSchema);
+    } catch (error) {
+      skipped.push({ ...at, reason: `datum is not a withdraw request: ${(error as Error).message}` });
+      continue;
+    }
+    const nft = venueUnitOf(datum.withdraw_data.pool_nft);
+    if (!known.has(nft)) {
+      skipped.push({ ...at, reason: `names pool ${nft}, which is not one of the pools this reader found` });
+      continue;
+    }
+    if (!positions.has(utxo.tx_hash)) {
+      const position = await provider.getTxPosition(utxo.tx_hash);
+      positions.set(utxo.tx_hash, { blockHeight: position.block_height, txIndexInBlock: position.index });
+    }
+    orders.push({
+      txHash: utxo.tx_hash,
+      outputIndex: utxo.output_index,
+      address: utxo.address,
+      assets: assetsOf(utxo),
+      datum,
+      placedAt: positions.get(utxo.tx_hash),
+    });
+  }
+  return { orders, skipped };
+}
+
+/** One royalty-withdraw request and the pool it names. */
+export interface VenueWithdrawCandidate {
+  order: VenueWithdrawOrderUtxo;
+  pool: VenuePoolUtxo;
+}
+
 /** One deposit or redeem to fill, and the pool it meets. */
 export interface VenueLiquidityCandidate {
   order: VenueLiquidityOrderUtxo;
@@ -365,6 +429,11 @@ export interface VenueFillRound {
   liquidity: VenueLiquidityCandidate[];
   /** Deposit and redeem requests nobody can fill, each with why. */
   liquidityUnfillable: VenueUnfillableLiquidityOrder[];
+  /**
+   * Royalty-withdraw requests and the pools they name, in chain order. Empty
+   * unless the round was given the withdraw request address.
+   */
+  withdrawals: VenueWithdrawCandidate[];
   /** Everything the reader declined on the way, pools and orders alike. */
   skipped: SkippedUtxo[];
 }
@@ -395,6 +464,8 @@ export async function readVenueFillRound(
     /** The deposit and redeem request addresses. Without them the round reads swaps only. */
     depositAddress?: string;
     redeemAddress?: string;
+    /** The royalty-withdraw request address. Without it the round reads no withdraws. */
+    withdrawAddress?: string;
     /** Needed to judge a liquidity request: its reward address, and an output's minimum. */
     network?: LucidNetwork;
     minOutputLovelace?: bigint;
@@ -462,11 +533,28 @@ export async function readVenueFillRound(
     }
   }
 
+  const withdrawals: VenueWithdrawCandidate[] = [];
+  let withdrawSkipped: SkippedUtxo[] = [];
+  if (args.withdrawAddress) {
+    const read = await readVenueWithdrawOrders(provider, {
+      withdrawAddress: args.withdrawAddress,
+      knownPools: [...byNft.keys()],
+      positions: args.positions,
+    });
+    withdrawSkipped = read.skipped;
+    for (const order of venueFillSequence(read.orders)) {
+      const pool = byNft.get(venueUnitOf(order.datum.withdraw_data.pool_nft));
+      /* c8 ignore next -- the reader already set aside requests naming no known pool. */
+      if (pool) withdrawals.push({ order, pool });
+    }
+  }
+
   return {
     candidates,
     unfillable,
     liquidity,
     liquidityUnfillable,
-    skipped: [...poolsRead.skipped, ...ordersRead.skipped, ...liquiditySkipped],
+    withdrawals,
+    skipped: [...poolsRead.skipped, ...ordersRead.skipped, ...liquiditySkipped, ...withdrawSkipped],
   };
 }

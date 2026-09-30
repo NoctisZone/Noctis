@@ -54,6 +54,7 @@
 // ============================================================================
 
 import { Data, getAddressDetails, type Network as LucidNetwork } from '@lucid-evolution/lucid';
+import { deserializeTx } from '@meshsdk/core-cst';
 import type { CurveNetwork, CurveSpendWallet } from './mesh-curve-spend.js';
 import {
   readVenueFillRound,
@@ -61,10 +62,12 @@ import {
   type VenueChainProvider,
   type VenueFillCandidate,
   type VenueLiquidityCandidate,
+  type VenueWithdrawCandidate,
 } from './venue-chain-reader.js';
 import type { VenueFiller, VenueFillPlan } from './venue-fill-submitter.js';
 import { planVenueLiquidityFill, type VenueLiquidityOrderUtxo, venueLiquidityFillable } from './venue-liquidity.js';
 import { VenuePoolConfigSchema } from './venue-pool.js';
+import { planVenueRoyaltyWithdrawFill, type VenueWithdrawOrderUtxo } from './venue-royalty-withdraw.js';
 import {
   planVenueSwapFill,
   type VenueOrderPosition,
@@ -129,6 +132,12 @@ export interface VenueBatcherConfig {
    */
   depositAddress?: string;
   redeemAddress?: string;
+  /**
+   * The royalty-withdraw request address. Set, the batcher fills creators'
+   * requests to take their pool royalty, in the same chain order as everything
+   * else. The filler then needs the withdraw scripts too.
+   */
+  withdrawAddress?: string;
   /** The factory's minting policy — what makes a pool a pool. Required. */
   factoryPolicyId: string;
   /** The protocol's minimum for an output, from the protocol parameters. */
@@ -213,11 +222,29 @@ export type VenueLiquidityOutcome =
     }
   | { status: 'unfillable' | 'declined' | 'failed'; order: VenueLiquidityOrderUtxo; reason: string };
 
+/**
+ * What happened to one royalty-withdraw request. `unfillable` means no
+ * executor can fill it as the pool stands, most often because it was signed
+ * before another withdrawal moved the pool's nonce; its placer can refund it.
+ */
+export type VenueWithdrawOutcome =
+  | {
+      status: 'filled';
+      order: VenueWithdrawOrderUtxo;
+      txHash: string;
+      /** The request's fee, all of which the executor keeps; the network fee is paid out of it. */
+      exFeeTaken: bigint;
+      networkFee: bigint;
+    }
+  | { status: 'unfillable' | 'declined' | 'failed'; order: VenueWithdrawOrderUtxo; reason: string };
+
 export interface VenueBatcherRound {
   /** One per order read, in the order fills are obliged to follow. */
   outcomes: VenueFillOutcome[];
   /** One per deposit or redeem request read, in the same chain order. */
   liquidityOutcomes: VenueLiquidityOutcome[];
+  /** One per royalty-withdraw request read, in the same chain order. */
+  withdrawOutcomes: VenueWithdrawOutcome[];
   /** UTXOs at either address the reader declined, each with a reason. */
   skipped: SkippedUtxo[];
   filled: number;
@@ -247,7 +274,8 @@ function orderKey(order: { txHash: string; outputIndex: number }): string {
 /** One piece of the round's work, whichever kind of order it is. */
 type RoundWork =
   | { kind: 'swap'; candidate: VenueFillCandidate; outputIndex: number; placedAt?: VenueOrderPosition }
-  | { kind: 'liquidity'; candidate: VenueLiquidityCandidate; outputIndex: number; placedAt?: VenueOrderPosition };
+  | { kind: 'liquidity'; candidate: VenueLiquidityCandidate; outputIndex: number; placedAt?: VenueOrderPosition }
+  | { kind: 'withdraw'; candidate: VenueWithdrawCandidate; outputIndex: number; placedAt?: VenueOrderPosition };
 
 /**
  * Runs rounds of fills against the venue.
@@ -323,12 +351,14 @@ export class VenueBatcher {
       positions: this.placements,
       ...(this.config.depositAddress ? { depositAddress: this.config.depositAddress } : {}),
       ...(this.config.redeemAddress ? { redeemAddress: this.config.redeemAddress } : {}),
+      ...(this.config.withdrawAddress ? { withdrawAddress: this.config.withdrawAddress } : {}),
       network: LUCID_NETWORK[this.config.network],
       minOutputLovelace: this.config.minOutputLovelace,
     });
 
     const outcomes = new Map<string, VenueFillOutcome>();
     const liquidityOutcomes = new Map<string, VenueLiquidityOutcome>();
+    const withdrawOutcomes = new Map<string, VenueWithdrawOutcome>();
     for (const entry of round.liquidityUnfillable) {
       liquidityOutcomes.set(orderKey(entry.order), { status: 'unfillable', order: entry.order, reason: entry.reason });
     }
@@ -382,9 +412,86 @@ export class VenueBatcher {
           ...(candidate.order.placedAt ? { placedAt: candidate.order.placedAt } : {}),
         }),
       ),
+      ...round.withdrawals.map(
+        (candidate): RoundWork => ({
+          kind: 'withdraw',
+          candidate,
+          outputIndex: candidate.order.outputIndex,
+          ...(candidate.order.placedAt ? { placedAt: candidate.order.placedAt } : {}),
+        }),
+      ),
     ]);
 
     for (const item of work) {
+      if (item.kind === 'withdraw') {
+        const { order } = item.candidate;
+        const key = orderKey(order);
+        const nft = venueUnitOf(order.datum.withdraw_data.pool_nft);
+        const declined = this.declineReason({
+          candidate: null,
+          executorKeyHash,
+          staleOrder: stale.has(key),
+          stalePool: !poolNow.has(nft) && stale.has(orderKey(item.candidate.pool)),
+          abandoned: abandoned.has(nft),
+          poolDepth: depth.get(nft) ?? 0,
+          maxPerPool,
+          roundDepth: filled,
+          maxPerRound,
+        });
+        if (declined) {
+          withdrawOutcomes.set(key, { status: 'declined', order, reason: declined });
+          continue;
+        }
+        const pool = poolNow.get(nft) ?? item.candidate.pool;
+        let plan: VenueFillPlan;
+        let nextPool: VenuePoolUtxo;
+        try {
+          const fill = await planVenueRoyaltyWithdrawFill({
+            pool,
+            request: order,
+            network: LUCID_NETWORK[this.config.network],
+            minOutputLovelace: this.config.minOutputLovelace,
+          });
+          plan = {
+            kind: 'withdraw',
+            pool: { txHash: pool.txHash, outputIndex: pool.outputIndex, address: pool.address, assets: pool.assets },
+            order: {
+              txHash: order.txHash,
+              outputIndex: order.outputIndex,
+              address: order.address,
+              assets: order.assets,
+            },
+            poolOutput: { address: pool.address, assets: fill.poolAssets, datumCbor: fill.nextDatumCbor },
+            successorOutput: { address: fill.reward.address, assets: fill.reward.assets },
+            royaltySignatureHashed: fill.hashed,
+          };
+          nextPool = { ...pool, assets: fill.poolAssets, datum: fill.nextDatum };
+        } catch (error) {
+          withdrawOutcomes.set(key, { status: 'unfillable', order, reason: describeThrown(error) });
+          continue;
+        }
+        try {
+          const txHex = await this.config.filler.build(plan, this.config.wallet, this.config.executorPayoutAddress);
+          const txHash = await this.config.wallet.submitTx(await this.config.wallet.signTx(txHex));
+          remember(key, orderKey(pool));
+          poolNow.set(nft, { ...nextPool, txHash, outputIndex: 0 });
+          depth.set(nft, (depth.get(nft) ?? 0) + 1);
+          filled += 1;
+          withdrawOutcomes.set(key, {
+            status: 'filled',
+            order,
+            txHash,
+            exFeeTaken: order.datum.withdraw_data.ex_fee,
+            networkFee: deserializeTx(txHex).body().fee(),
+          });
+        } catch (error) {
+          abandoned.add(nft);
+          failed += 1;
+          withdrawOutcomes.set(key, { status: 'failed', order, reason: describeThrown(error) });
+        }
+        continue;
+      }
+
       if (item.kind === 'liquidity') {
         const { order } = item.candidate;
         const key = orderKey(order);
@@ -511,8 +618,9 @@ export class VenueBatcher {
       ...round.liquidity.map((candidate) => candidate.order),
       ...round.liquidityUnfillable.map((entry) => entry.order),
     ]);
+    const everyWithdraw = venueFillSequence(round.withdrawals.map((candidate) => candidate.order));
     // Only the transactions still holding orders or requests are worth remembering.
-    const resting = new Set([...everyOrder, ...everyRequest].map((order) => order.txHash));
+    const resting = new Set([...everyOrder, ...everyRequest, ...everyWithdraw].map((order) => order.txHash));
     this.placements = new Map([...this.placements].filter(([txHash]) => resting.has(txHash)));
 
     return {
@@ -530,6 +638,16 @@ export class VenueBatcher {
         if (!outcome) {
           throw new Error(
             `Request ${orderKey(request)} was read this round and reported in none of the four outcomes.`,
+          );
+        }
+        return outcome;
+      }),
+      withdrawOutcomes: everyWithdraw.map((request) => {
+        const outcome = withdrawOutcomes.get(orderKey(request));
+        /* c8 ignore next 5 -- every withdraw request was read into exactly one bucket above. */
+        if (!outcome) {
+          throw new Error(
+            `Withdraw request ${orderKey(request)} was read this round and reported in none of the four outcomes.`,
           );
         }
         return outcome;

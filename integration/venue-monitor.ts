@@ -127,6 +127,10 @@ function poolsTouched(round: VenueBatcherRound): number {
     const nft = outcome.order.datum.pool_nft;
     if (nft) seen.add(`${nft.policy}${nft.name}`);
   }
+  for (const outcome of round.withdrawOutcomes ?? []) {
+    const nft = outcome.order.datum.withdraw_data.pool_nft;
+    seen.add(`${nft.policy}${nft.name}`);
+  }
   return seen.size;
 }
 
@@ -167,8 +171,9 @@ export class VenueMonitor {
   /** A round that completed — however it went. Wire to the batcher's `onRound`. */
   observeRound(round: VenueBatcherRound, nowMs: number): VenueAlert[] {
     const alerts: VenueAlert[] = [];
-    // Deposits and redeems are orders too: a failed one pages like a failed swap.
-    const every = [...round.outcomes, ...(round.liquidityOutcomes ?? [])];
+    // Deposits, redeems and royalty withdraws are orders too: a failed one
+    // pages like a failed swap.
+    const every = [...round.outcomes, ...(round.liquidityOutcomes ?? []), ...(round.withdrawOutcomes ?? [])];
     const counts = countOutcomes(every);
     const pools = poolsTouched(round);
 

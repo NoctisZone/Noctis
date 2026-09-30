@@ -49,12 +49,14 @@ import {
   type VenueBatcherRound,
   type VenueFillOutcome,
   type VenueLiquidityOutcome,
+  type VenueWithdrawOutcome,
 } from '../venue-batcher.js';
 import { readVenueFillRound, readVenuePools, type VenueChainProvider } from '../venue-chain-reader.js';
 import { VENUE_FILL_EXECUTION_UNITS, VenueFiller, type VenueScriptSource } from '../venue-fill-submitter.js';
 import { VENUE_DEPOSIT_ORDER_TITLE, VENUE_REDEEM_ORDER_TITLE } from '../venue-liquidity.js';
 import { readVenueMarket } from '../venue-market-reader.js';
 import { VENUE_FACTORY_TITLE } from '../venue-pool.js';
+import { VENUE_ROYALTY_WITHDRAW_TITLE, VENUE_WITHDRAW_ORDER_TITLE } from '../venue-royalty-withdraw.js';
 import { venueUnitOf } from '../venue-swap.js';
 import {
   CARDANO_NETWORK_MAP,
@@ -125,6 +127,24 @@ interface Input {
    */
   depositReferenceScript?: ReferenceScriptPointer;
   redeemReferenceScript?: ReferenceScriptPointer;
+
+  /**
+   * `batch` and `serve`: also fill creators' royalty-withdraw requests.
+   *
+   * Off unless set, because a withdraw draws zero from the royalty-withdraw
+   * script's reward address, and until that script's stake credential is
+   * registered on chain every such fill is refused. A refused fill ends its
+   * pool's chain for the round, so leaving this on before registration would
+   * hold back every swap placed after a withdraw request.
+   */
+  royaltyWithdraws?: boolean;
+  /**
+   * Where the royalty-withdraw request validator and the withdraw script are
+   * published, if they are. Without pointers both travel in the transaction,
+   * 4.7 KB together, which fits.
+   */
+  withdrawReferenceScript?: ReferenceScriptPointer;
+  royaltyWithdrawReferenceScript?: ReferenceScriptPointer;
 
   /** Tunables. Every one of these has a documented default in the batcher. */
   minOutputLovelace?: string;
@@ -295,12 +315,31 @@ function liquidityOutcomeSummary(outcome: VenueLiquidityOutcome) {
   return { order, kind: outcome.order.kind, pool, status: outcome.status, reason: outcome.reason };
 }
 
+/** A royalty-withdraw outcome, flattened the same way. */
+function withdrawOutcomeSummary(outcome: VenueWithdrawOutcome) {
+  const order = `${outcome.order.txHash}#${outcome.order.outputIndex}`;
+  const pool = venueUnitOf(outcome.order.datum.withdraw_data.pool_nft);
+  if (outcome.status === 'filled') {
+    return {
+      order,
+      kind: 'withdraw',
+      pool,
+      status: outcome.status,
+      txHash: outcome.txHash,
+      exFeeTaken: outcome.exFeeTaken,
+      networkFee: outcome.networkFee,
+    };
+  }
+  return { order, kind: 'withdraw', pool, status: outcome.status, reason: outcome.reason };
+}
+
 function roundSummary(round: VenueBatcherRound) {
   return {
     filled: round.filled,
     failed: round.failed,
     outcomes: round.outcomes.map(outcomeSummary),
     liquidityOutcomes: round.liquidityOutcomes.map(liquidityOutcomeSummary),
+    withdrawOutcomes: round.withdrawOutcomes.map(withdrawOutcomeSummary),
     skipped: round.skipped,
     spent: round.spent,
   };
@@ -327,11 +366,17 @@ async function main() {
   // the deployed ones, and their addresses are derived like the swap order's.
   const depositCbor = venueBlueprintCbor(VENUE_DEPOSIT_ORDER_TITLE);
   const redeemCbor = venueBlueprintCbor(VENUE_REDEEM_ORDER_TITLE);
+  // The withdraw request takes no parameter either. The withdraw script does:
+  // it is applied with the request validator's hash, so its bytes come from the
+  // applied set, like the pool's.
+  const withdrawCbor = venueBlueprintCbor(VENUE_WITHDRAW_ORDER_TITLE);
+  const royaltyWithdraw = loadAppliedVenueValidator(__dirname, VENUE_ROYALTY_WITHDRAW_TITLE);
 
   const poolAddress = validatorToAddress(lucidNetwork, { type: 'PlutusV3', script: pool.compiledCode } as never);
   const orderAddress = validatorToAddress(lucidNetwork, { type: 'PlutusV3', script: orderCbor } as never);
   const depositAddress = validatorToAddress(lucidNetwork, { type: 'PlutusV3', script: depositCbor } as never);
   const redeemAddress = validatorToAddress(lucidNetwork, { type: 'PlutusV3', script: redeemCbor } as never);
+  const withdrawAddress = validatorToAddress(lucidNetwork, { type: 'PlutusV3', script: withdrawCbor } as never);
   const factoryPolicyId = factory.hash;
 
   const provider = emptyWhenUnused(new BlockfrostClient({ apiKey: input.blockfrostProjectId, network: input.network }));
@@ -340,7 +385,15 @@ async function main() {
   // Addresses are part of every answer, including a failing one: a round that
   // finds nothing and a round pointed somewhere empty look identical without
   // them.
-  const where = { poolAddress, orderAddress, depositAddress, redeemAddress, factoryPolicyId, poolHash: pool.hash };
+  const where = {
+    poolAddress,
+    orderAddress,
+    depositAddress,
+    redeemAddress,
+    withdrawAddress,
+    factoryPolicyId,
+    poolHash: pool.hash,
+  };
   const minOutputLovelace = input.minOutputLovelace ? BigInt(input.minOutputLovelace) : DEFAULT_MIN_OUTPUT_LOVELACE;
 
   let result: unknown;
@@ -367,6 +420,7 @@ async function main() {
         factoryPolicyId,
         depositAddress,
         redeemAddress,
+        withdrawAddress,
         network: lucidNetwork,
         minOutputLovelace,
         ...(fillCostLovelace !== undefined ? { fillCostLovelace } : {}),
@@ -393,6 +447,13 @@ async function main() {
           order: `${u.order.txHash}#${u.order.outputIndex}`,
           kind: u.order.kind,
           reason: u.reason,
+        })),
+        withdrawals: round.withdrawals.map((c) => ({
+          order: `${c.order.txHash}#${c.order.outputIndex}`,
+          pool: `${c.pool.txHash}#${c.pool.outputIndex}`,
+          poolNft: venueUnitOf(c.order.datum.withdraw_data.pool_nft),
+          takeX: c.order.datum.withdraw_data.withdraw_royalty_x,
+          takeY: c.order.datum.withdraw_data.withdraw_royalty_y,
         })),
         skipped: round.skipped,
       };
@@ -447,6 +508,7 @@ async function main() {
           [orderAddress]: 'ORDER BOOK',
           [depositAddress]: 'DEPOSIT REQUESTS',
           [redeemAddress]: 'REDEEM REQUESTS',
+          [withdrawAddress]: 'ROYALTY WITHDRAW REQUESTS',
         },
         pools: market.pools,
         skipped: market.skipped,
@@ -462,6 +524,8 @@ async function main() {
         orderScript: scriptSource(orderCbor, input.orderReferenceScript),
         depositScript: scriptSource(depositCbor, input.depositReferenceScript),
         redeemScript: scriptSource(redeemCbor, input.redeemReferenceScript),
+        withdrawScript: scriptSource(withdrawCbor, input.withdrawReferenceScript),
+        royaltyWithdrawScript: scriptSource(royaltyWithdraw.compiledCode, input.royaltyWithdrawReferenceScript),
         provider: new BlockfrostProvider(input.blockfrostProjectId),
         // Declared, not measured. A round chains its fills: each spends the
         // pool output the fill before it made, which is not on chain yet, and
@@ -480,6 +544,7 @@ async function main() {
         orderAddress,
         depositAddress,
         redeemAddress,
+        ...(input.royaltyWithdraws ? { withdrawAddress } : {}),
         factoryPolicyId,
         minOutputLovelace,
         ...(fillCostLovelace !== undefined ? { fillCostLovelace } : {}),

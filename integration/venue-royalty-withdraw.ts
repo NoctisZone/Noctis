@@ -245,7 +245,10 @@ function readCoseSign1(hex: string): {
     else reader.skipValue();
   }
   reader.readEndMap();
-  const payload = reader.peekState() === CborReaderState.Null ? (reader.readNull(), null) : reader.readByteString();
+  // A detached payload is `null`: the wallet signed it without repeating it.
+  let payload: Uint8Array | null = null;
+  if (reader.peekState() === CborReaderState.Null) reader.readNull();
+  else payload = reader.readByteString();
   const signature = reader.readByteString();
   return { protectedBytes, hashed, payload, signature };
 }
@@ -257,11 +260,13 @@ function readCoseKeyX(hex: string): Uint8Array {
   for (let i = 0; entries === null || i < entries; i += 1) {
     if (entries === null && reader.peekState() === CborReaderState.EndMap) break;
     const state = reader.peekState();
-    const label =
-      state === CborReaderState.UnsignedInteger || state === CborReaderState.NegativeInteger
-        ? Number(reader.readInt())
-        : (reader.skipValue(), Number.NaN);
-    if (label === COSE_KEY_X) return reader.readByteString();
+    if (state !== CborReaderState.UnsignedInteger && state !== CborReaderState.NegativeInteger) {
+      // A text label: not one COSE_Key uses for the key bytes.
+      reader.skipValue();
+      reader.skipValue();
+      continue;
+    }
+    if (Number(reader.readInt()) === COSE_KEY_X) return reader.readByteString();
     reader.skipValue();
   }
   throw new Error('The wallet returned a key with no public key in it.');

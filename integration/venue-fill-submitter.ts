@@ -38,6 +38,7 @@
 // the two, so it comes from the executor's wallet as usual.
 // ============================================================================
 
+import { credentialToRewardAddress } from '@lucid-evolution/lucid';
 import { applyCborEncoding, MeshTxBuilder, type UTxO as MeshUTxO } from '@meshsdk/core';
 import { deserializeTx } from '@meshsdk/core-cst';
 import type {
@@ -52,21 +53,28 @@ import {
   type ReferenceScriptPointer,
   type ResolvedReferenceScript,
   resolveReferenceScript,
+  scriptHashOf,
 } from './reference-script.js';
 import { venueApplyRedeemer } from './venue-liquidity.js';
+import { venueRoyaltyWithdrawRedeemer } from './venue-royalty-withdraw.js';
 import { VENUE_POOL_ACTION, venueFillRedeemer, venuePoolRedeemer } from './venue-swap.js';
 
 /**
  * What an order asks of the pool. A swap trades against it; a deposit or a
- * redeem moves its liquidity, under the pool's own arm for each.
+ * redeem moves its liquidity; a withdraw pays the creator their royalty. Each
+ * runs under the pool's own arm for it.
  */
-export type VenueFillKind = 'swap' | 'deposit' | 'redeem';
+export type VenueFillKind = 'swap' | 'deposit' | 'redeem' | 'withdraw';
 
 const POOL_ACTION_FOR: Record<VenueFillKind, number> = {
   swap: VENUE_POOL_ACTION.Swap,
   deposit: VENUE_POOL_ACTION.Deposit,
   redeem: VENUE_POOL_ACTION.Redeem,
+  withdraw: VENUE_POOL_ACTION.WithdrawRoyalty,
 };
+
+/** The chains Lucid names differently from Mesh. */
+const LUCID_NETWORK = { preview: 'Preview', preprod: 'Preprod', mainnet: 'Mainnet' } as const;
 
 /**
  * What one fill really costs to run, measured rather than asked for.
@@ -83,6 +91,20 @@ const POOL_ACTION_FOR: Record<VenueFillKind, number> = {
  * goes around it. Re-measure when either validator changes.
  */
 export const VENUE_FILL_EXECUTION_UNITS = { mem: 730_000, steps: 250_000_000 } as const;
+
+/**
+ * What the royalty-withdraw script is declared to cost, when budgets are
+ * declared rather than measured.
+ *
+ * It verifies an Ed25519 signature and rebuilds the pool's whole datum, so it
+ * costs more than a swap's scripts and cannot share their budget. Its Aiken
+ * tests, which include building their own fixtures, put a full claim at
+ * 1.00M–1.33M memory and 371M–470M steps, the dearest being a claim signed
+ * through a CIP-30 wallet, whose message is longer. This is about half as much
+ * again. The pool's action 4 and the request's `Apply` (348K memory, 107M
+ * steps) stay within `VENUE_FILL_EXECUTION_UNITS`.
+ */
+export const VENUE_ROYALTY_WITHDRAW_EXECUTION_UNITS = { mem: 2_000_000, steps: 700_000_000 } as const;
 
 /**
  * The least an executor can be paid by one fill, in lovelace.
@@ -113,6 +135,20 @@ export interface VenueFillerConfig {
   depositScript?: VenueScriptSource;
   /** The redeem-request validator. Needed only to fill redeems. */
   redeemScript?: VenueScriptSource;
+  /** The royalty-withdraw request validator. Needed only to fill withdraws. */
+  withdrawScript?: VenueScriptSource;
+  /**
+   * The royalty-withdraw script, applied with the request validator's hash.
+   * The pool's action 4 requires a withdrawal at it, and it is what checks the
+   * creator's signature. Needed only to fill withdraws.
+   */
+  royaltyWithdrawScript?: VenueScriptSource;
+  /**
+   * The royalty-withdraw script's own declared budget. When `executionUnits`
+   * is set and this is not, `VENUE_ROYALTY_WITHDRAW_EXECUTION_UNITS` applies;
+   * the swap budget is too small for it.
+   */
+  royaltyWithdrawExecutionUnits?: { mem: number; steps: number };
   provider: CurveSpendProvider;
   /**
    * Budgets to declare instead of measuring — the same deliberate escape the
@@ -148,6 +184,12 @@ export interface VenueFillPlan {
   successorOutput: VenueFillOutput;
   /** Key hashes the transaction must declare — an order naming executors needs one. */
   requiredSignerHashes?: string[];
+  /**
+   * A withdraw's signature form, which the withdraw script's redeemer states:
+   * whether the creator signed the payload or its blake2b-224 hash. Required
+   * for a withdraw and ignored otherwise.
+   */
+  royaltySignatureHashed?: boolean;
 }
 
 /** Lovelace and assets, in Mesh's shape. */
@@ -228,6 +270,7 @@ function assertInputsWhereClaimed(
 export class VenueFiller {
   private readonly poolRef?: ResolvedReferenceScript;
   private readonly orderRefs: Partial<Record<VenueFillKind, ResolvedReferenceScript>> = {};
+  private readonly royaltyWithdrawRef?: ResolvedReferenceScript;
 
   constructor(private readonly config: VenueFillerConfig) {
     const networkId = MESH_NETWORK_ID[config.network];
@@ -238,18 +281,39 @@ export class VenueFiller {
         networkId,
       );
     }
-    for (const kind of ['swap', 'deposit', 'redeem'] as const) {
+    for (const kind of ['swap', 'deposit', 'redeem', 'withdraw'] as const) {
       const source = this.orderSource(kind);
       if (source && 'referenceScript' in source) {
         this.orderRefs[kind] = resolveReferenceScript(source.compiledScriptCbor, source.referenceScript, networkId);
       }
     }
+    const royalty = config.royaltyWithdrawScript;
+    if (royalty && 'referenceScript' in royalty) {
+      this.royaltyWithdrawRef = resolveReferenceScript(royalty.compiledScriptCbor, royalty.referenceScript, networkId);
+    }
+  }
+
+  /**
+   * The royalty-withdraw script's reward address, which a withdraw draws zero
+   * from so the script runs. Its stake credential has to be registered on
+   * chain once before any withdraw can fill.
+   */
+  royaltyWithdrawRewardAddress(): string {
+    const source = this.config.royaltyWithdrawScript;
+    if (!source) {
+      throw new Error('This filler was not given the royalty-withdraw script, so it cannot fill a withdraw.');
+    }
+    const hash =
+      this.royaltyWithdrawRef?.scriptHash ??
+      scriptHashOf('embeddedScriptCbor' in source ? source.embeddedScriptCbor : source.compiledScriptCbor);
+    return credentialToRewardAddress(LUCID_NETWORK[this.config.network], { type: 'Script', hash });
   }
 
   /** The validator that locks one kind of order, if this filler was given it. */
   private orderSource(kind: VenueFillKind): VenueScriptSource | undefined {
     if (kind === 'deposit') return this.config.depositScript;
     if (kind === 'redeem') return this.config.redeemScript;
+    if (kind === 'withdraw') return this.config.withdrawScript;
     return this.config.orderScript;
   }
 
@@ -279,6 +343,38 @@ export class VenueFiller {
     }
     /* c8 ignore next 2 -- unreachable: a source is one shape or the other. */
     throw new Error(`No script source for the ${which}.`);
+  }
+
+  /**
+   * The withdrawal a withdraw fill makes: zero, from the royalty-withdraw
+   * script, which is what makes that script run. Its redeemer names the same
+   * two input positions the pool's and the request's do.
+   */
+  private attachRoyaltyWithdrawal(tx: MeshTxBuilder, plan: VenueFillPlan, poolInIx: number, orderInIx: number): void {
+    if (plan.royaltySignatureHashed === undefined) {
+      throw new Error(
+        'A withdraw plan must say whether the creator signed the payload or its hash; the withdraw script is ' +
+          'told which, and a wrong answer fails its signature check.',
+      );
+    }
+    const source = this.config.royaltyWithdrawScript;
+    tx.withdrawalPlutusScriptV3().withdrawal(this.royaltyWithdrawRewardAddress(), '0');
+    if (this.royaltyWithdrawRef) {
+      tx.withdrawalTxInReference(
+        this.royaltyWithdrawRef.txHash,
+        this.royaltyWithdrawRef.outputIndex,
+        String(this.royaltyWithdrawRef.rawSizeBytes),
+        this.royaltyWithdrawRef.scriptHash,
+      );
+    } else if (source && 'embeddedScriptCbor' in source) {
+      tx.withdrawalScript(applyCborEncoding(source.embeddedScriptCbor));
+    }
+    tx.withdrawalRedeemerValue(
+      venueRoyaltyWithdrawRedeemer(poolInIx, orderInIx, plan.royaltySignatureHashed),
+      'CBOR',
+      this.config.royaltyWithdrawExecutionUnits ??
+        (this.config.executionUnits ? VENUE_ROYALTY_WITHDRAW_EXECUTION_UNITS : undefined),
+    );
   }
 
   /**
@@ -352,6 +448,8 @@ export class VenueFiller {
       tx.txOut(output.address, toMesh(output.assets));
       if (output.datumCbor) tx.txOutInlineDatumValue(output.datumCbor, 'CBOR');
     }
+
+    if (kind === 'withdraw') this.attachRoyaltyWithdrawal(tx, plan, poolInIx, orderInIx);
 
     for (const hash of plan.requiredSignerHashes ?? []) tx.requiredSignerHash(hash);
 
