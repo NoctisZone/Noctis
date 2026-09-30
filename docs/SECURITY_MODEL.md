@@ -24,7 +24,7 @@
 
 1. **Privacy by default** — All user data is private unless explicitly disclosed
 2. **No withdraw on LP** — By design. LP tokens cannot be extracted, only migrated after lock expiry
-3. **Forced vesting** — Creator must choose 90-365 days. No default. No instant liquidity.
+3. **Forced vesting** — Creator must choose 90-365 days. No default. Nothing releases until the period ends.
 4. **Cumulative cap enforcement** — 5% per-wallet limit tracked across DarkVeil + public phases, enforced inline at the point of purchase (not via a separate, independently-callable circuit — see 3.2)
 5. **Governor accountability** — Admin key is witness-derived, domain-separated, and all actions are on-chain
 6. **Fail-safe cancellation** — DarkVeil and bonding curve can be cancelled with bond/principal refunds

@@ -44,6 +44,15 @@ for (const v of blueprint.validators) {
 /**
  * Measured 2026-08-08. Update in the same commit that moves one. Newest first.
  *
+ * vesting +2,973, lp_escrow +2,019, cto_governance +210, 2026-09-30: a
+ * takeover's second vote on the creator's frozen allocation. Governance gains
+ * three proposal types (into the pool paired with ADA, into the staking pool,
+ * or kept in vesting), vesting carries the vote out and makes it final, and
+ * the escrow pairs the tokens at the pool's own ratio and restarts its lock.
+ * cto_sybil_challenge, nhop_challenge and token_metadata +74 each only decode
+ * the three new types. The curve reads the governance record by position and
+ * does not move.
+ *
  * bonding_curve_tier_b -817, 2026-09-30: the curve reads the governance record
  * by position (noctis/cto_governance_view) instead of structurally checking the
  * whole record. The thread NFT it already checks proves the record genuine, and
@@ -362,15 +371,15 @@ for (const v of blueprint.validators) {
  */
 const RECORDED: Record<string, number> = {
   bonding_curve_tier_b: 15_087,
-  cto_governance: 8_157,
-  cto_sybil_challenge: 3_383,
+  cto_governance: 8_367,
+  cto_sybil_challenge: 3_457,
   curve_order: 4_544,
   launch_token_policy: 419,
-  lp_escrow: 8_178,
-  nhop_challenge: 3_285,
+  lp_escrow: 10_197,
+  nhop_challenge: 3_359,
   staking_pool: 5_835,
-  token_metadata: 5_024,
-  vesting: 5_873,
+  token_metadata: 5_098,
+  vesting: 8_846,
   zk_anchor: 2_613,
 };
 
@@ -395,15 +404,15 @@ const RECORDED: Record<string, number> = {
  */
 const RECORDED_HASHES: Record<string, string> = {
   bonding_curve_tier_b: '433b9ce09e21a04fe711eed8d5d1020563eacb614c8f58bffc6eb415',
-  cto_governance: '2acc12d791956e7da4c72c2cf1c4a8ceee74b9d7e33973cc973fa022',
-  cto_sybil_challenge: 'f08befe8c02028948af4d01dfc27121bfdd7dd6582e582fd5a216441',
+  cto_governance: '894ebfc0e82136139053b290f405e1eb1c54a2a24c83bb98965340eb',
+  cto_sybil_challenge: '5f008c1306d25d435d69ee541da68bc9a7f3036ffb616a553be8c969',
   curve_order: 'db34df4b2be92eea1458fc11248255f1ef3ecad93d47196f934d7397',
   launch_token_policy: 'd77d785500b7bb5a80bdf8104651b13e59d546d222ce7ab22bb60965',
-  lp_escrow: '0c93febe5966945efac06debcc4b6acab376c3c3cda6836cf12db687',
-  nhop_challenge: '0d70cb4bcea572833ea9367f569e71042ada1e34f218c1677ad245fb',
+  lp_escrow: '8d93ea5a27a9bbb3387bf3542c482faf9d8fee82cbcbb7c6b2bd9676',
+  nhop_challenge: '6ee0182f918173af74c52880e537529f7fc678f5f9859294f4015f90',
   staking_pool: '1f4afea6652972deb367192ff26207c0a599b5f1ed0683a45cd41cdd',
-  token_metadata: '9f996561e6b63e84156171fd4039b13d7606f61470c1a1c0ecf5310a',
-  vesting: '1742efd4b53c4d1f3a7eb60dffaeb59c91fed9d9319a45d020b2aafe',
+  token_metadata: 'c73dc215c4ee09d18837c19198bb1ac8bd69ff7ae97b5e77132bd94f',
+  vesting: '2a250e76ea43376281c66114555362868d336498d8852b0bd6781d1c',
   zk_anchor: '95750d0fe26787711f9937916194681047e15d8652f13a0b65b382e4',
 };
 

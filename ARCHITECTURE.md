@@ -637,9 +637,9 @@ Community takeover (CTO) governance, shared infrastructure across every launch t
 │ EXECUTED — same tx:           │                   
 │ • Fee escrow + LP trading     │                   
 │   fees → CTO wallet           │                   
-│ • Unvested creator tokens     │                   
-│   frozen → community          │                   
-│   treasury, never burned      │                   
+│ • Creator's vesting frozen,   │                   
+│   never burned; a 2nd vote    │                   
+│   decides where it goes       │                   
 │ • Already-claimed/vested:     │                   
 │   unaffected                  │                   
 └───────────────────────────────┘                   
@@ -654,6 +654,8 @@ Community takeover (CTO) governance, shared infrastructure across every launch t
 ```
 
 **Reading this diagram:** the ballot itself (Midnight) and the anchor/enforcement (Cardano L1) are deliberately two different trust boundaries, not one contract wearing two hats — `castVote`'s weight check trusts a governor-published Merkle root the same way `eligibility_gate.compact`'s allowlist does (the Cardano staking pool no longer works this way — see the Staking Rewards Pool section), and `AnchorVoteResult` doesn't re-verify the ballot's cryptography, it verifies a real bond was paid and gives the community a real window to catch a lie. The anchor step is intentionally **permissionless** (open relay) rather than platform-only — a platform-only relay could suppress or delay a legitimate community takeover simply by not anchoring, which would reintroduce exactly the centralization risk CTO governance exists to prevent. `ExecuteProposal` is permissionless too, for the same reason; the 24-hour challenge window is what makes that safe rather than an invitation to forge results, since anyone with a fabricated anchor has to put a real bond at risk first. The "EXECUTED" effects listed inside the PASSED box are wired across every contract that holds a creator-facing revenue or token stream — before that fix, none of the three bonding curve contracts, Creator Fee Escrow, Vesting, or LP Escrow actually redirected anything when a vote passed, regardless of what the ballot tally said.
+
+**The second vote on a frozen allocation (2026-09-30):** a passed takeover freezes the creator's allocation rather than moving it. A separate vote, no sooner than the ballot cooldown allows, sends all of it to one destination: the launch's pool paired with community ADA at the pool's own ratio (the LP escrow's lock restarts), the staking pool, or vesting until the original schedule ends, then released only by passed allocation votes. `vesting.ak`'s `ExecuteDisposition` carries it out and makes it final, so a later dissolve does not return the tokens. See CLAUDE.md's CTO GOVERNANCE section.
 
 **How enforcement authenticates a passed vote:** the four downstream Cardano validators that enforce a passed vote — `bonding_curve_tier_b.ak`, `lp_escrow.ak`, `vesting.ak`, `token_metadata.ak` — do not re-run the ballot. They read the `cto_governance.ak` UTXO as a **reference input** and act on the outcome recorded in its datum. Because a Cardano reference input is never spent, that record is authenticated by a **per-launch governance thread NFT** rather than by address: the policy is a governor-signature native script, and the asset name is the `launch_id`, so a given launch's governance record is bound to that launch specifically. Every downstream check requires the referenced UTXO to carry exactly one of that NFT, and `cto_governance.ak` preserves the NFT in its continuing output on every spend — including its permissionless redeemers. Covered by dedicated regression tests. **Remaining build work:** the CTO deploy flow must mint that NFT into the genesis governance UTXO — part of the not-yet-built CTO deploy/submitter layer.
 

@@ -51,20 +51,28 @@
 //   proposal can only ever fund one payout.
 // ============================================================================
 
+use aiken/builtin
 use aiken/collection/list
+use aiken/collection/pairs
 use aiken/crypto.{VerificationKeyHash}
 use aiken/interval.{Interval, IntervalBoundType}
 use cardano/address.{Address, Credential, from_verification_key}
 use cardano/assets.{AssetName, PolicyId}
 use cardano/transaction.{
-  InlineDatum, Input, Output, OutputReference, Transaction,
+  InlineDatum, Input, NoDatum, Output, OutputReference, ScriptPurpose, Spend,
+  Transaction,
 }
 use cto_governance.{
-  CtoGovernanceDatum, DissolveCTOProposal, Executed, FundAllocation, Passed,
-  ProposalAnchor, ProposalType, SilenceLockTrigger,
+  CTOTriggered, CtoGovernanceDatum, DissolveCTOProposal, Executed,
+  FundAllocation, Passed, ProposalAnchor, ProposalType, SilenceLockTrigger,
+  VestingToLp, VestingToStaking, VestingToTreasury,
 }
+use lp_escrow
+use noctis/clock
 use noctis/settlement
+use noctis/staking_pool_datum.{StakingPoolDatum}
 use noctis/thread_nft
+use staking_pool
 
 /// Fix (2026-07-19, full-suite security audit): CRITICAL finding —
 /// this file previously had ZERO usages of validity_range/interval
@@ -105,6 +113,11 @@ pub type VestingState {
   FullyClaimed
   CTOFrozen
   Cancelled
+  /// A takeover's second vote has decided where the allocation goes, and it
+  /// is final: a later vote to dissolve the takeover does not return it.
+  /// Whatever stayed here is released only by passed `FundAllocation` votes,
+  /// and not before the original schedule ends.
+  Disposed
 }
 
 pub type VestingDatum {
@@ -182,6 +195,12 @@ pub type VestingRedeemer {
   ClaimCancelledAllocation
   /// Read-only query, no state change, no authorization required
   QueryState
+  /// Carries out a passed, executed vote on where a frozen allocation goes
+  /// (`VestingToLp`, `VestingToStaking` or `VestingToTreasury`). Anyone may
+  /// submit it: the vote is the authorization, and each destination is held
+  /// to what the vote named. Appended last so every earlier redeemer keeps
+  /// its index.
+  ExecuteDisposition
 }
 
 // ============================================================================
@@ -417,6 +436,173 @@ fn vesting_tokens_retained(
   ) + claim_amount
 }
 
+/// When the schedule releases the allocation: vest_days after it started.
+fn vesting_ends_at(datum: VestingDatum) -> Int {
+  datum.vest_start_timestamp + datum.vest_days * 86_400_000
+}
+
+/// The launch's tokens an input holds.
+fn tokens_held(input: Input, datum: VestingDatum) -> Int {
+  assets.quantity_of(
+    input.output.value,
+    datum.token_policy_id,
+    datum.token_asset_name,
+  )
+}
+
+/// This contract's own input and continuing output.
+fn own_input_and_output(
+  self: Transaction,
+  own_ref: OutputReference,
+) -> (Input, Output) {
+  expect Some(own_input) = list.find(
+    self.inputs,
+    fn(input) { input.output_reference == own_ref },
+  )
+  let own_address = own_input.output.address
+  expect Some(own_output) = list.find(
+    self.outputs,
+    fn(output) { output.address == own_address },
+  )
+  (own_input, own_output)
+}
+
+/// How many of the launch's tokens leave this contract in the transaction.
+fn tokens_leaving(
+  self: Transaction,
+  own_ref: OutputReference,
+  datum: VestingDatum,
+) -> Int {
+  let (own_input, own_output) = own_input_and_output(self, own_ref)
+  tokens_held(own_input, datum) - assets.quantity_of(
+    own_output.value,
+    datum.token_policy_id,
+    datum.token_asset_name,
+  )
+}
+
+/// The continuing output holds everything the input did except `moved` of
+/// the launch's tokens: no ADA, NFT or other asset goes with them.
+fn keeps_all_but(
+  self: Transaction,
+  own_ref: OutputReference,
+  datum: VestingDatum,
+  moved: Int,
+) -> Bool {
+  let (own_input, own_output) = own_input_and_output(self, own_ref)
+  own_output.value == assets.add(
+    own_input.output.value,
+    datum.token_policy_id,
+    datum.token_asset_name,
+    0 - moved,
+  )
+}
+
+/// `staking_pool.TopUpPool`'s constructor position. Pinned by a test below.
+const staking_top_up_index = 3
+
+/// `lp_escrow.AddDisposedLiquidity`'s constructor position. Pinned by a test
+/// below.
+const lp_escrow_add_disposed_liquidity_index = 10
+
+/// The staking arm's destination: the launch's staking pool, found by its
+/// thread NFT, takes exactly `moved`.
+fn staking_pool_funded(
+  self: Transaction,
+  datum: VestingDatum,
+  community_wallet: VerificationKeyHash,
+  runway_days: Int,
+  moved: Int,
+) -> Bool {
+  let pool_nft = thread_nft.thread_asset_name(
+    thread_nft.role_staking_pool,
+    datum.launch_id,
+  )
+  let carries_pool_nft = fn(value) {
+    assets.quantity_of(value, datum.thread_nft_policy, pool_nft) == 1
+  }
+  when
+    list.find(self.inputs, fn(input) { carries_pool_nft(input.output.value) })
+  is {
+    // The launch has a pool. Spent under its own TopUpPool for exactly this
+    // amount, which moves the tokens in at the pool's own daily rate.
+    Some(pool_input) -> {
+      expect Some(pool_redeemer) = pairs.get_first(
+        self.redeemers,
+        Spend(pool_input.output_reference),
+      )
+      pool_redeemer == builtin.constr_data(
+        staking_top_up_index,
+        [builtin.i_data(moved)],
+      )
+    }
+    // It has none. The vote's runway opens one here: it carries the thread
+    // NFT the governor mints for it, holds exactly this amount, and starts in
+    // the state a funded pool opens with, paying its eventual remainder to
+    // the community wallet rather than the creator.
+    None -> {
+      expect Some(pool_output) = list.find(
+        self.outputs,
+        fn(output) { carries_pool_nft(output.value) },
+      )
+      expect InlineDatum(raw_pool) = pool_output.datum
+      expect pool: StakingPoolDatum = raw_pool
+      and {
+        staking_pool_datum.terms_are_real(
+          moved,
+          runway_days,
+          staking_pool_datum.max_unstake_lock_ms,
+        ),
+        assets.quantity_of(self.mint, datum.thread_nft_policy, pool_nft) == 1,
+        assets.quantity_of(
+          pool_output.value,
+          datum.token_policy_id,
+          datum.token_asset_name,
+        ) == moved,
+        // The pool starts earning from now, so now has to be narrow.
+        validity_range_is_narrow(self.validity_range, max_validity_range_width),
+        pool == staking_pool_datum.genesis(
+          datum.launch_id,
+          community_wallet,
+          datum.token_policy_id,
+          datum.token_asset_name,
+          datum.thread_nft_policy,
+          moved,
+          runway_days,
+          clock.lower_bound(self.validity_range),
+          datum.governor_pub_key_hash,
+          staking_pool_datum.max_unstake_lock_ms,
+        ),
+      }
+    }
+  }
+}
+
+/// The LP arm's destination: the launch's LP escrow, found by its thread NFT,
+/// is spent under its own arm for this. That arm holds the deposit to the
+/// pool's ratio and to the ADA the vote named, and restarts the escrow's lock.
+fn lp_escrow_takes_the_liquidity(self: Transaction, datum: VestingDatum) -> Bool {
+  let escrow_nft = thread_nft.thread_asset_name(
+    thread_nft.role_lp_escrow,
+    datum.launch_id,
+  )
+  expect Some(escrow_input) = list.find(
+    self.inputs,
+    fn(input) {
+      assets.quantity_of(
+        input.output.value,
+        datum.thread_nft_policy,
+        escrow_nft,
+      ) == 1
+    },
+  )
+  expect Some(escrow_redeemer) = pairs.get_first(
+    self.redeemers,
+    Spend(escrow_input.output_reference),
+  )
+  builtin.un_constr_data(escrow_redeemer).1st == lp_escrow_add_disposed_liquidity_index
+}
+
 /// State authentication (2026-08-03 audit) — the launch's own thread NFT must be present on the UTXO being
 /// spent AND on the continuing output. See noctis/thread_nft, and the linear curve's
 /// bonding_curve.ak thread_nft_intact, for the full reasoning: every
@@ -628,6 +814,9 @@ validator vesting {
             // DissolveCTOProposal instead of a bare governor signature.
             cto_vote_verified(self, datum, DissolveCTOProposal, None),
             datum.cto_triggered,
+            // Only a frozen allocation goes back to its schedule. Once a vote
+            // has disposed of it, dissolving the takeover leaves it where it is.
+            datum.vesting_state == CTOFrozen,
             new_datum == VestingDatum {
               ..datum,
               cto_triggered: False,
@@ -682,7 +871,13 @@ validator vesting {
             // fund a second payout — see the datum field's own doc comment.
             executed.anchor_timestamp > datum.last_claimed_allocation_timestamp,
             datum.cto_triggered,
-            datum.vesting_state == CTOFrozen,
+            or {
+              datum.vesting_state == CTOFrozen,
+              datum.vesting_state == Disposed,
+            },
+            // A taken-over allocation stays locked until its original
+            // schedule would have released it, whoever it now belongs to.
+            clock.past(self.validity_range, vesting_ends_at(datum)),
             amount > 0,
             community_allocation_delivered(
               self,
@@ -745,6 +940,72 @@ validator vesting {
         // allocation. See that file's own comment on this exact line for the
         // full explanation.
         QueryState -> False
+
+        ExecuteDisposition -> {
+          expect Some(cto_ref_input) = list.find(
+            self.reference_inputs,
+            fn(input) {
+              input.output.address.payment_credential == datum.cto_governance_credential
+            },
+          )
+          expect InlineDatum(cto_raw_datum) = cto_ref_input.output.datum
+          expect cto_datum: CtoGovernanceDatum = cto_raw_datum
+          expect Some(executed) = cto_datum.last_executed_proposal
+          let moved = tokens_leaving(self, own_ref, datum)
+          let new_datum = own_continuing_datum(self, own_ref)
+
+          and {
+            // The launch's real governance record: the NFT is what proves it,
+            // as in ClaimCommunityAllocation.
+            assets.quantity_of(
+              cto_ref_input.output.value,
+              datum.thread_nft_policy,
+              thread_nft.thread_asset_name(
+                thread_nft.role_cto_governance,
+                datum.launch_id,
+              ),
+            ) == 1,
+            cto_datum.launch_id == datum.launch_id,
+            // The takeover still holds. A dissolved one, or a record whose
+            // community wallet the governor's emergency brake has cleared,
+            // decides nothing.
+            cto_datum.cto_state == CTOTriggered,
+            cto_datum.community_wallet_hash != #"",
+            executed.outcome == Passed,
+            executed.execution_status == Executed,
+            datum.cto_triggered,
+            // Once: the allocation leaves the frozen state for good.
+            datum.vesting_state == CTOFrozen,
+            new_datum == VestingDatum { ..datum, vesting_state: Disposed },
+            // Only the launch's tokens leave, and only as many as the arm
+            // below accounts for.
+            keeps_all_but(self, own_ref, datum, moved),
+            when executed.proposal_type is {
+              // Nothing moves: the treasury terms are this contract's own.
+              VestingToTreasury -> moved == 0
+              // The whole allocation, into the launch's staking pool.
+              VestingToStaking -> and {
+                  moved > 0,
+                  moved == tokens_held(own_input, datum),
+                  staking_pool_funded(
+                    self,
+                    datum,
+                    cto_datum.community_wallet_hash,
+                    executed.allocation_amount,
+                    moved,
+                  ),
+                }
+              // What the vote's ADA matches, into the launch's pool. The LP
+              // escrow's own arm holds the deposit to the pool's ratio and to
+              // that ADA; whatever it does not match stays here.
+              VestingToLp -> and {
+                  moved > 0,
+                  lp_escrow_takes_the_liquidity(self, datum),
+                }
+              _ -> False
+            },
+          }
+        }
       },
     }
   }
@@ -1511,6 +1772,7 @@ test claim_community_allocation_succeeds_with_real_anchored_fund_allocation() {
     inputs: [own_input],
     reference_inputs: [cto_ref_input],
     outputs: [continuing_output, delivery_output],
+    validity_range: interval.after(vest_end_ms),
   }
 
   vesting.spend(Some(datum), ClaimCommunityAllocation, own_ref, self)
@@ -1592,6 +1854,7 @@ test claim_community_allocation_rejects_forged_governance_utxo_without_nft() {
     inputs: [own_input],
     reference_inputs: [forged_ref_input],
     outputs: [continuing_output, delivery_output],
+    validity_range: interval.after(vest_end_ms),
   }
 
   !vesting.spend(Some(datum), ClaimCommunityAllocation, own_ref, self)
@@ -1644,6 +1907,7 @@ test claim_community_allocation_rejects_without_reference_input() fail {
     ..transaction.placeholder,
     inputs: [own_input],
     outputs: [continuing_output, delivery_output],
+    validity_range: interval.after(vest_end_ms),
   }
 
   vesting.spend(Some(datum), ClaimCommunityAllocation, own_ref, self)
@@ -1709,6 +1973,7 @@ test claim_community_allocation_rejects_replayed_proposal() {
     inputs: [own_input],
     reference_inputs: [cto_ref_input],
     outputs: [continuing_output, delivery_output],
+    validity_range: interval.after(vest_end_ms),
   }
 
   !vesting.spend(Some(datum), ClaimCommunityAllocation, own_ref, self)
@@ -1774,6 +2039,7 @@ test claim_community_allocation_rejects_wrong_recipient() {
     inputs: [own_input],
     reference_inputs: [cto_ref_input],
     outputs: [continuing_output, delivery_output],
+    validity_range: interval.after(vest_end_ms),
   }
 
   !vesting.spend(Some(datum), ClaimCommunityAllocation, own_ref, self)
@@ -1833,6 +2099,7 @@ test claim_community_allocation_rejects_if_not_cto_triggered() {
     inputs: [own_input],
     reference_inputs: [cto_ref_input],
     outputs: [continuing_output, delivery_output],
+    validity_range: interval.after(vest_end_ms),
   }
 
   !vesting.spend(Some(datum), ClaimCommunityAllocation, own_ref, self)
@@ -2388,6 +2655,433 @@ test claim_community_allocation_rejects_while_the_wallet_is_frozen() {
       mock_cto_ref_input(from_verification_key(#"aa"), frozen_record),
     ],
     outputs: [continuing_output, delivery_output],
+    validity_range: interval.after(vest_end_ms),
   }
   !vesting.spend(Some(datum), ClaimCommunityAllocation, own_ref, self)
+}
+
+// ============================================================================
+// ExecuteDisposition: carrying out a takeover's second vote
+// ============================================================================
+
+/// A frozen allocation of 100_000_000 under a takeover whose community wallet
+/// is #"ee".
+fn frozen_datum() -> VestingDatum {
+  VestingDatum {
+    ..mock_datum(CTOFrozen, 0),
+    cto_triggered: True,
+    community_treasury_wallet: #"ee",
+  }
+}
+
+/// The governance record once the disposition vote executed: the takeover in
+/// force, wallet #"ee", and a `proposal_type` vote naming `amount` last.
+fn disposition_record(
+  proposal_type: ProposalType,
+  amount: Int,
+) -> CtoGovernanceDatum {
+  CtoGovernanceDatum {
+    ..mock_cto_governance_datum(
+      #"01",
+      Some(
+        ProposalAnchor {
+          ..mock_proposal_anchor(proposal_type, Passed, Executed, #""),
+          allocation_amount: amount,
+        },
+      ),
+    ),
+    cto_state: CTOTriggered,
+    community_wallet_hash: #"ee",
+  }
+}
+
+/// A disposition of `datum`'s allocation: its input, the record as a
+/// reference, and a continuing output keeping `moved` fewer tokens, marked
+/// Disposed; plus whatever the destination adds.
+fn run_disposition(
+  datum: VestingDatum,
+  record: CtoGovernanceDatum,
+  moved: Int,
+  extra_inputs: List<Input>,
+  extra_outputs: List<Output>,
+  redeemers: Pairs<ScriptPurpose, Data>,
+  mint: assets.Value,
+  range: Interval,
+) -> Bool {
+  let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
+  let continuing = vesting_output(
+    VestingDatum { ..datum, vesting_state: Disposed },
+    assets.add(vesting_value_with_allocation(), #"33", "tok", 0 - moved),
+  )
+  let self = Transaction {
+    ..transaction.placeholder,
+    inputs: [vesting_input(datum, own_ref), ..extra_inputs],
+    reference_inputs: [mock_cto_ref_input(from_verification_key(#"aa"), record)],
+    outputs: [continuing, ..extra_outputs],
+    redeemers,
+    mint,
+    validity_range: range,
+  }
+  vesting.spend(Some(datum), ExecuteDisposition, own_ref, self)
+}
+
+fn treasury(record: CtoGovernanceDatum, moved: Int) -> Bool {
+  run_disposition(
+    frozen_datum(),
+    record,
+    moved,
+    [],
+    [],
+    [],
+    assets.zero,
+    interval.everything,
+  )
+}
+
+test disposition_to_treasury_keeps_the_allocation_here() {
+  treasury(disposition_record(VestingToTreasury, 0), 0)
+}
+
+test disposition_to_treasury_moves_nothing() {
+  !treasury(disposition_record(VestingToTreasury, 0), 1)
+}
+
+test disposition_happens_once() {
+  !run_disposition(
+    VestingDatum { ..frozen_datum(), vesting_state: Disposed },
+    disposition_record(VestingToTreasury, 0),
+    0,
+    [],
+    [],
+    [],
+    assets.zero,
+    interval.everything,
+  )
+}
+
+test disposition_needs_the_takeover_in_force() {
+  !treasury(
+    CtoGovernanceDatum {
+      ..disposition_record(VestingToTreasury, 0),
+      cto_state: cto_governance.CTODissolved,
+    },
+    0,
+  )
+}
+
+test disposition_needs_a_disposition_vote() {
+  !treasury(disposition_record(FundAllocation, 0), 0)
+}
+
+test disposition_refuses_a_cleared_community_wallet() {
+  !treasury(
+    CtoGovernanceDatum {
+      ..disposition_record(VestingToTreasury, 0),
+      community_wallet_hash: #"",
+    },
+    0,
+  )
+}
+
+test disposition_needs_an_executed_vote() {
+  !treasury(
+    CtoGovernanceDatum {
+      ..disposition_record(VestingToTreasury, 0),
+      last_executed_proposal: Some(
+        mock_proposal_anchor(
+          VestingToTreasury,
+          Passed,
+          cto_governance.PendingExecution,
+          #"",
+        ),
+      ),
+    },
+    0,
+  )
+}
+
+// -- Staking: the launch already has a pool --------------------------------
+
+fn staking_nft() -> assets.Value {
+  assets.from_asset(
+    #"c0ffee",
+    thread_nft.thread_asset_name(thread_nft.role_staking_pool, #"01"),
+    1,
+  )
+}
+
+const pool_ref = OutputReference { transaction_id: #"50", output_index: 0 }
+
+fn existing_pool_input() -> Input {
+  Input {
+    output_reference: pool_ref,
+    output: Output {
+      address: from_verification_key(#"55"),
+      value: assets.merge(staking_nft(), assets.from_asset(#"33", "tok", 7)),
+      datum: NoDatum,
+      reference_script: None,
+    },
+  }
+}
+
+fn to_existing_pool(moved: Int, pool_redeemer: Data) -> Bool {
+  run_disposition(
+    frozen_datum(),
+    disposition_record(VestingToStaking, 0),
+    moved,
+    [existing_pool_input()],
+    [],
+    [Pair(Spend(pool_ref), pool_redeemer)],
+    assets.zero,
+    interval.everything,
+  )
+}
+
+fn top_up(amount: Int) -> Data {
+  let redeemer: Data = staking_pool.TopUpPool { amount }
+  redeemer
+}
+
+test disposition_to_an_existing_pool_tops_it_up() {
+  to_existing_pool(100_000_000, top_up(100_000_000))
+}
+
+test disposition_to_an_existing_pool_tops_up_the_whole_amount() {
+  !to_existing_pool(100_000_000, top_up(99_999_999))
+}
+
+test disposition_to_an_existing_pool_must_be_a_top_up() {
+  let close: Data = staking_pool.ClosePool
+  !to_existing_pool(100_000_000, close)
+}
+
+test disposition_to_staking_moves_the_whole_allocation() {
+  !to_existing_pool(99_999_999, top_up(99_999_999))
+}
+
+/// The redeemer position vesting checks is TopUpPool's.
+test staking_top_up_index_is_the_real_one() {
+  builtin.un_constr_data(top_up(1)).1st == staking_top_up_index
+}
+
+// -- Staking: the vote opens a pool ----------------------------------------
+
+const opened_at = 1_000_000
+
+fn new_pool(
+  creator: VerificationKeyHash,
+  runway_days: Int,
+  tokens: Int,
+) -> Output {
+  Output {
+    address: from_verification_key(#"55"),
+    value: assets.merge(staking_nft(), assets.from_asset(#"33", "tok", tokens)),
+    datum: InlineDatum(
+      staking_pool_datum.genesis(
+        #"01",
+        creator,
+        #"33",
+        "tok",
+        #"c0ffee",
+        tokens,
+        runway_days,
+        opened_at,
+        #"22",
+        staking_pool_datum.max_unstake_lock_ms,
+      ),
+    ),
+    reference_script: None,
+  }
+}
+
+fn to_new_pool(
+  vote_runway: Int,
+  pool: Output,
+  mint: assets.Value,
+  range: Interval,
+) -> Bool {
+  run_disposition(
+    frozen_datum(),
+    disposition_record(VestingToStaking, vote_runway),
+    100_000_000,
+    [],
+    [pool],
+    [],
+    mint,
+    range,
+  )
+}
+
+fn narrow() -> Interval {
+  interval.between(opened_at, opened_at + 100)
+}
+
+test disposition_opens_a_pool_with_the_votes_runway() {
+  to_new_pool(1095, new_pool(#"ee", 1095, 100_000_000), staking_nft(), narrow())
+}
+
+test disposition_opens_a_pool_at_the_votes_runway_only() {
+  !to_new_pool(
+    1095,
+    new_pool(#"ee", 1825, 100_000_000),
+    staking_nft(),
+    narrow(),
+  )
+}
+
+test disposition_opens_a_pool_that_pays_the_community() {
+  !to_new_pool(
+    1095,
+    new_pool(#"11", 1095, 100_000_000),
+    staking_nft(),
+    narrow(),
+  )
+}
+
+test disposition_opens_a_pool_only_with_a_minted_nft() {
+  !to_new_pool(1095, new_pool(#"ee", 1095, 100_000_000), assets.zero, narrow())
+}
+
+test disposition_opens_a_pool_only_from_now() {
+  !to_new_pool(
+    1095,
+    new_pool(#"ee", 1095, 100_000_000),
+    staking_nft(),
+    interval.between(opened_at, opened_at + 86_400_000),
+  )
+}
+
+test disposition_opens_a_pool_only_with_a_runway() {
+  !to_new_pool(0, new_pool(#"ee", 1095, 100_000_000), staking_nft(), narrow())
+}
+
+// -- LP ----------------------------------------------------------------------
+
+const escrow_ref = OutputReference { transaction_id: #"e5", output_index: 0 }
+
+fn escrow_input() -> Input {
+  Input {
+    output_reference: escrow_ref,
+    output: Output {
+      address: from_verification_key(#"e5"),
+      value: assets.from_asset(
+        #"c0ffee",
+        thread_nft.thread_asset_name(thread_nft.role_lp_escrow, #"01"),
+        1,
+      ),
+      datum: NoDatum,
+      reference_script: None,
+    },
+  }
+}
+
+fn to_lp(moved: Int, escrow_redeemer: Data) -> Bool {
+  run_disposition(
+    frozen_datum(),
+    disposition_record(VestingToLp, 4_500_000_000),
+    moved,
+    [escrow_input()],
+    [],
+    [Pair(Spend(escrow_ref), escrow_redeemer)],
+    assets.zero,
+    interval.everything,
+  )
+}
+
+test disposition_to_lp_goes_through_the_escrows_arm() {
+  to_lp(
+    40_000_000,
+    builtin.constr_data(lp_escrow_add_disposed_liquidity_index, []),
+  )
+}
+
+test disposition_to_lp_needs_the_escrows_arm() {
+  // HarvestFees, position 8, moves nothing into the pool.
+  !to_lp(40_000_000, builtin.constr_data(8, [builtin.i_data(1)]))
+}
+
+test disposition_to_lp_moves_something() {
+  !to_lp(0, builtin.constr_data(lp_escrow_add_disposed_liquidity_index, []))
+}
+
+// -- After a disposition -----------------------------------------------------
+
+test dissolve_cto_leaves_a_disposed_allocation() {
+  let datum = VestingDatum { ..frozen_datum(), vesting_state: Disposed }
+  let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
+  let record = mock_cto_governance_datum(
+    #"01",
+    Some(mock_proposal_anchor(DissolveCTOProposal, Passed, Executed, #"")),
+  )
+  let self = Transaction {
+    ..transaction.placeholder,
+    inputs: [vesting_input(datum, own_ref)],
+    reference_inputs: [mock_cto_ref_input(from_verification_key(#"aa"), record)],
+    outputs: [
+      vesting_output(
+        VestingDatum { ..datum, cto_triggered: False, vesting_state: Vesting },
+        vesting_value_with_allocation(),
+      ),
+    ],
+  }
+  !vesting.spend(Some(datum), DissolveCTO, own_ref, self)
+}
+
+/// A community release of `amount` from `datum` to #"ee", valid from `from`.
+fn release(datum: VestingDatum, amount: Int, from: Int) -> Bool {
+  let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
+  let executed = ProposalAnchor {
+    ..mock_proposal_anchor(FundAllocation, Passed, Executed, #"ee"),
+    allocation_amount: amount,
+  }
+  let self = Transaction {
+    ..transaction.placeholder,
+    inputs: [vesting_input(datum, own_ref)],
+    reference_inputs: [
+      mock_cto_ref_input(
+        from_verification_key(#"aa"),
+        mock_cto_governance_datum(#"01", Some(executed)),
+      ),
+    ],
+    outputs: [
+      vesting_output(
+        VestingDatum { ..datum, last_claimed_allocation_timestamp: 500 },
+        assets.add(vesting_value_with_allocation(), #"33", "tok", 0 - amount),
+      ),
+      Output {
+        address: from_verification_key(#"ee"),
+        value: assets.from_asset(#"33", "tok", amount),
+        datum: InlineDatum(own_ref),
+        reference_script: None,
+      },
+    ],
+    validity_range: interval.after(from),
+  }
+  vesting.spend(Some(datum), ClaimCommunityAllocation, own_ref, self)
+}
+
+test community_release_of_a_disposed_allocation_after_the_end() {
+  release(
+    VestingDatum { ..frozen_datum(), vesting_state: Disposed },
+    30_000_000,
+    vest_end_ms,
+  )
+}
+
+test community_release_waits_for_the_end_of_the_schedule() {
+  !release(frozen_datum(), 30_000_000, vest_end_ms - 1)
+}
+
+test community_release_of_a_disposed_allocation_waits_too() {
+  !release(
+    VestingDatum { ..frozen_datum(), vesting_state: Disposed },
+    30_000_000,
+    vest_end_ms - 1,
+  )
+}
+
+/// The redeemer position vesting checks is AddDisposedLiquidity's.
+test lp_escrow_add_disposed_liquidity_index_is_the_real_one() {
+  let redeemer: Data = lp_escrow.AddDisposedLiquidity { timestamp: 0 }
+  builtin.un_constr_data(redeemer).1st == lp_escrow_add_disposed_liquidity_index
 }

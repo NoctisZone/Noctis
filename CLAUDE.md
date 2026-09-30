@@ -614,8 +614,25 @@ Implemented in both `contracts/midnight/cto_governance.compact` (real enforcemen
 ### What a Passed Vote Does (automatically)
 1. Creator fee escrow future payments → CTO wallet
 2. LP trading fees → CTO wallet
-3. Unvested creator tokens → frozen, redirected to community treasury (NOT burned)
+3. The creator's allocation still in vesting → frozen (NOT burned). A second vote decides where it goes (see below)
 4. Already-claimed fees and already-vested tokens: **unaffected**
+
+### The disposition vote: what becomes of a frozen allocation (2026-09-30)
+A takeover freezes the creator's allocation. A **second vote**, no sooner than the 90-day ballot
+cooldown after the takeover's own, sends **all of it to one destination**, and the decision is
+**final**: a later vote to dissolve the takeover does not return it. The first vote can still be
+dissolved while the creator might come back, which is why the decision waits for a second one.
+
+| Destination | Proposal type | What happens |
+|---|---|---|
+| The launch's pool | `VestingToLp` | The vote names an amount of ADA from the community wallet. That ADA goes into the pool with as many of the tokens as it buys at the pool's own ratio, so the price is not pushed down. Every LP token the deposit mints goes into the LP escrow, whose 365-day lock restarts. Tokens the ADA does not match stay in vesting on the treasury terms. Signed by the community wallet |
+| The staking pool | `VestingToStaking` | The whole allocation tops up the launch's pool at its own daily rate, so it pays for longer. A launch with no pool gets one, with a 1,095–1,825-day runway named in the vote and its eventual remainder paid to the community wallet |
+| The community treasury | `VestingToTreasury` | The allocation stays in vesting until the original schedule would have released it, then leaves only by passed `FundAllocation` votes |
+
+Whatever the destination, a frozen allocation is never released before its original end date.
+Enforced by `vesting.ak` (`ExecuteDisposition`, the `Disposed` state), `lp_escrow.ak`
+(`AddDisposedLiquidity`) and `cto_governance.ak` (the three proposal types, anchored only while a
+takeover holds). The Midnight ballot (`cto_governance.compact`) carries the same three types.
 
 > **CTO fee-redirect fix (2026-07-12):** item 1 above was previously unenforced everywhere — none of the three bonding curve contracts (`bonding_curve.ak` linear, `bonding_curve_tier_b.ak` Cardano Launch, `bonding_curve.compact` Midnight Launch) had any CTO concept at all, so a passed SilenceLockTrigger vote never actually redirected the bonding-curve trade fee, regardless of what `creator_escrow.compact`'s own CTO logic did (it holds no real fees for either tier — see the DarkVeil claim settlement finding above). Fixed by adding the same `cto_triggered`/community-wallet pattern `lp_escrow.ak` already used for Stream B (the `HarvestFees` resolution above) to all three curve contracts: a governor-only `TriggerCTO`/`DissolveCTO` redeemer (or `triggerCTO`/`dissolveCTO` circuit for Midnight Launch), and the creator-fee claim (`ClaimCreatorFees`/`withdrawFees`) now pays out to the community wallet once triggered, the creator otherwise. `integration/midnight-client.ts`'s `executeCtoProposal` now also calls `bondingCurve.triggerCTO` (Midnight Launch only — Cardano Launch's Cardano curve trigger is a separate, off-chain-orchestrated call, not wired into that helper). Item 2 (LP trading fees) was already correctly enforced via `lp_escrow.ak`'s `HarvestFees`.
 

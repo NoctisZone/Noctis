@@ -187,6 +187,7 @@ export const VestingStateSchema = Data.Enum([
   Data.Literal('FullyClaimed'),
   Data.Literal('CTOFrozen'),
   Data.Literal('Cancelled'),
+  Data.Literal('Disposed'),
 ]);
 
 export const VestingDatumShape = Data.Object({

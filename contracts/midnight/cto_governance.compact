@@ -119,7 +119,13 @@ export enum ProposalType {
   FundAllocation,        // Allocate community treasury funds
   DexMigration,          // Migrate LP to a new DEX
   WhitelistUpdate,       // Add/remove DEX from whitelist
-  DissolveCTO            // Dissolve CTO (return control to creator if they return)
+  DissolveCTO,           // Dissolve CTO (return control to creator if they return)
+  // A takeover's second vote on the creator's frozen allocation, one
+  // destination for all of it, final once executed. Same order and meaning as
+  // cto_governance.ak's ProposalType, where the vote is carried out.
+  VestingToLp,           // Into the launch's pool, paired with allocationAmount of ADA
+  VestingToStaking,      // Into the staking pool; allocationAmount = a new pool's runway in days, 0 for an existing pool
+  VestingToTreasury      // Kept in vesting until the schedule ends, then released by FundAllocation votes
 }
 
 // Note (2026-07-21, Low): `Pending` is never assigned anywhere in
@@ -1066,6 +1072,27 @@ export circuit createProposal(
     assert(disclose(ctoState == CtoState.CTOTriggered), "CTO not active");
   }
 
+  // A creator's frozen allocation is decided only while a takeover holds it,
+  // with the same terms cto_governance.ak checks when the result is anchored.
+  if (
+    disclose(
+      proposalType == ProposalType.VestingToLp ||
+      proposalType == ProposalType.VestingToStaking ||
+      proposalType == ProposalType.VestingToTreasury
+    )
+  ) {
+    assert(disclose(ctoState == CtoState.CTOTriggered), "CTO not active");
+  }
+  if (disclose(proposalType == ProposalType.VestingToLp)) {
+    assert(disclose(allocationAmount > 0), "VestingToLp must name the ADA to pair");
+  }
+  if (disclose(proposalType == ProposalType.VestingToStaking)) {
+    assert(
+      disclose(allocationAmount == 0 || (allocationAmount >= 1095 && allocationAmount <= 1825)),
+      "a new staking pool's runway must be 1095 to 1825 days"
+    );
+  }
+
   // Derive proposer identity
   const sk = getUserSecret();
   const proposer = deriveUserPublicKey(sk, launchId);
@@ -1393,7 +1420,10 @@ export circuit executeProposal(
     disclose(
       proposal.proposalType == ProposalType.FundAllocation ||
       proposal.proposalType == ProposalType.DexMigration ||
-      proposal.proposalType == ProposalType.WhitelistUpdate
+      proposal.proposalType == ProposalType.WhitelistUpdate ||
+      proposal.proposalType == ProposalType.VestingToLp ||
+      proposal.proposalType == ProposalType.VestingToStaking ||
+      proposal.proposalType == ProposalType.VestingToTreasury
     )
   ) {
     assert(disclose(ctoState == CtoState.CTOTriggered), "CTO state changed since this proposal passed");

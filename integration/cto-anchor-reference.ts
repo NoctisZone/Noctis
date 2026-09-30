@@ -48,6 +48,9 @@ export const PROPOSAL_TYPE_TAG = {
   DexMigration: 2,
   WhitelistUpdate: 3,
   DissolveCTOProposal: 4,
+  VestingToLp: 5,
+  VestingToStaking: 6,
+  VestingToTreasury: 7,
 } as const;
 export type ProposalTypeName = keyof typeof PROPOSAL_TYPE_TAG;
 

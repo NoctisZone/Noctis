@@ -80,16 +80,18 @@
 use aiken/collection/list
 use aiken/crypto.{VerificationKeyHash}
 use aiken/interval.{Interval, IntervalBoundType}
+use aiken/math
 use cardano/address.{
   Address, Credential, from_script, from_verification_key, with_delegation_key,
 }
 use cardano/assets.{AssetName, PolicyId}
 use cardano/transaction.{
-  InlineDatum, Input, Output, OutputReference, Transaction,
+  InlineDatum, Input, NoDatum, Output, OutputReference, Transaction,
 }
 use cto_governance.{
-  CtoGovernanceDatum, DissolveCTOProposal, Executed, Passed, ProposalAnchor,
-  ProposalType, SilenceLockTrigger,
+  CTOTriggered, CtoGovernanceDatum, DissolveCTOProposal, Executed, Passed,
+  ProposalAnchor, ProposalType, SilenceLockTrigger, VestingToLp,
+  VestingToTreasury,
 }
 use noctis/clock
 use noctis/lp_escrow_datum.{
@@ -98,6 +100,7 @@ use noctis/lp_escrow_datum.{
 }
 use noctis/settlement
 use noctis/thread_nft
+use noctis/venue_pool_view as venue
 
 /// Same finding/fix as the linear curve's bonding_curve.ak — see that file's
 /// own comment on `validity_range_is_narrow` for the full explanation.
@@ -174,6 +177,14 @@ pub type LpEscrowRedeemer {
   HarvestFees { harvested_amount: Int }
   /// Read-only query, no state change, no authorization required
   QueryState
+  /// A takeover's passed `VestingToLp` vote carried out: the creator's frozen
+  /// tokens go into the launch's pool paired with the ADA the vote named, at
+  /// the pool's own ratio, and every LP token the deposit mints comes here.
+  /// The lock restarts at `timestamp`, so the position cannot migrate for a
+  /// full lock period from the day the community added to it. Signed by the
+  /// community wallet, whose ADA it is. Appended last so every earlier
+  /// redeemer keeps its index.
+  AddDisposedLiquidity { timestamp: Int }
 }
 
 // ============================================================================
@@ -308,6 +319,23 @@ fn is_authorized(datum: LpEscrowDatum, self: Transaction) -> Bool {
     self.extra_signatories,
     datum.community_wallet_hash,
   ) && community_wallet_live(self, datum)
+}
+
+/// This contract's own input and continuing output.
+fn own_input_and_output(
+  self: Transaction,
+  own_ref: OutputReference,
+) -> (Input, Output) {
+  expect Some(own_input) = list.find(
+    self.inputs,
+    fn(input) { input.output_reference == own_ref },
+  )
+  let own_address = own_input.output.address
+  expect Some(own_output) = list.find(
+    self.outputs,
+    fn(output) { output.address == own_address },
+  )
+  (own_input, own_output)
 }
 
 /// Find this validator's own continuing output (same address as the input
@@ -1007,6 +1035,157 @@ validator lp_escrow {
         // that file's own comment on this exact line for the full
         // explanation.
         QueryState -> False
+
+        AddDisposedLiquidity { timestamp } -> {
+          expect Some(cto_ref_input) = list.find(
+            self.reference_inputs,
+            fn(input) {
+              input.output.address.payment_credential == datum.cto_governance_credential
+            },
+          )
+          expect InlineDatum(cto_raw_datum) = cto_ref_input.output.datum
+          expect cto_datum: CtoGovernanceDatum = cto_raw_datum
+          expect Some(executed) = cto_datum.last_executed_proposal
+
+          // The pool: its NFT is minted by the venue factory under the same
+          // policy as this position's LP token, so only the launch's genuine
+          // pool carries it.
+          let pool_nft = thread_nft.thread_asset_name(
+            thread_nft.role_pool,
+            datum.launch_id,
+          )
+          let is_pool = fn(value) {
+            assets.quantity_of(value, datum.lp_token_policy_id, pool_nft) == 1
+          }
+          expect Some(pool_input) = list.find(
+            self.inputs,
+            fn(input) { is_pool(input.output.value) },
+          )
+          expect Some(pool_output) = list.find(
+            self.outputs,
+            fn(output) { is_pool(output.value) },
+          )
+          expect InlineDatum(config) = pool_input.output.datum
+          let (token_policy, token_name) = venue.pool_y(config)
+          let pool_before = pool_input.output.value
+          let pool_after = pool_output.value
+
+          // The reserves as the pool itself reads them: holdings less its two
+          // fee slots, and liquidity as the cap less the LP it still holds.
+          let rx = assets.lovelace_of(pool_before) - venue.treasury_x(config) - venue.royalty_x(
+            config,
+          )
+          let ry = assets.quantity_of(pool_before, token_policy, token_name) - venue.treasury_y(
+            config,
+          ) - venue.royalty_y(config)
+          let lq0 = venue.max_lq_cap - assets.quantity_of(
+            pool_before,
+            datum.lp_token_policy_id,
+            datum.lp_token_name,
+          )
+          let dx = assets.lovelace_of(pool_after) - assets.lovelace_of(
+            pool_before,
+          )
+          let dy = assets.quantity_of(pool_after, token_policy, token_name) - assets.quantity_of(
+            pool_before,
+            token_policy,
+            token_name,
+          )
+
+          // The creator's allocation, found by the launch's vesting thread NFT:
+          // what it gives up is what the pool takes in.
+          let vesting_nft = thread_nft.thread_asset_name(
+            thread_nft.role_vesting,
+            datum.launch_id,
+          )
+          let is_vesting = fn(value) {
+            assets.quantity_of(value, datum.thread_nft_policy, vesting_nft) == 1
+          }
+          expect Some(vesting_input) = list.find(
+            self.inputs,
+            fn(input) { is_vesting(input.output.value) },
+          )
+          expect Some(vesting_output) = list.find(
+            self.outputs,
+            fn(output) { is_vesting(output.value) },
+          )
+          let held = assets.quantity_of(
+            vesting_input.output.value,
+            token_policy,
+            token_name,
+          )
+          let moved = held - assets.quantity_of(
+            vesting_output.value,
+            token_policy,
+            token_name,
+          )
+
+          let (own_before, own_after) = own_input_and_output(self, own_ref)
+          let dlq = assets.quantity_of(
+            own_after.value,
+            datum.lp_token_policy_id,
+            datum.lp_token_name,
+          ) - assets.quantity_of(
+            own_before.output.value,
+            datum.lp_token_policy_id,
+            datum.lp_token_name,
+          )
+          let new_datum = own_continuing_datum(self, own_ref)
+
+          and {
+            // The launch's real governance record, carrying the executed vote.
+            assets.quantity_of(
+              cto_ref_input.output.value,
+              datum.thread_nft_policy,
+              thread_nft.thread_asset_name(
+                thread_nft.role_cto_governance,
+                datum.launch_id,
+              ),
+            ) == 1,
+            cto_datum.launch_id == datum.launch_id,
+            cto_datum.cto_state == CTOTriggered,
+            executed.proposal_type == VestingToLp,
+            executed.outcome == Passed,
+            executed.execution_status == Executed,
+            // The community wallet's ADA, so its signature.
+            list.has(self.extra_signatories, cto_datum.community_wallet_hash),
+            datum.lp_state == Locked,
+            // The pool is this position's pool.
+            venue.pool_lq(config) == (
+              datum.lp_token_policy_id,
+              datum.lp_token_name,
+            ),
+            // Exactly the ADA the vote named goes in, beside exactly what the
+            // allocation gives up.
+            dx == executed.allocation_amount,
+            dy == moved,
+            moved > 0,
+            // As many tokens as that ADA buys at the pool's ratio, or the
+            // whole allocation if it buys more: never enough to move the price
+            // down.
+            moved == math.min(held, dx * ry / rx),
+            // Every LP token the deposit can mint, and all of it here.
+            dlq > 0,
+            dlq == math.min(dx * lq0 / rx, dy * lq0 / ry),
+            own_after.value == assets.add(
+              own_before.output.value,
+              datum.lp_token_policy_id,
+              datum.lp_token_name,
+              dlq,
+            ),
+            // The lock restarts now.
+            interval.contains(self.validity_range, timestamp),
+            validity_range_is_narrow(
+              self.validity_range,
+              max_validity_range_width,
+            ),
+            new_datum == LpEscrowDatum {
+              ..datum,
+              lock_timestamp: timestamp,
+              lp_token_amount: datum.lp_token_amount + dlq,
+            },
+          }
+        }
       },
     }
   }
@@ -4011,4 +4190,251 @@ test harvest_fees_rejects_a_frozen_community_wallet() {
       reference_inputs: [escrow_silence_record(#"ee", False)],
     },
   )
+}
+
+// ============================================================================
+// AddDisposedLiquidity: a takeover's VestingToLp vote carried out
+// ============================================================================
+
+/// The venue pool datum's layout, field for field (`SingleRoyaltyPoolConfig`
+/// in the venue package, whose own test pins the same positions against the
+/// real type).
+type TestAsset {
+  policy: ByteArray,
+  name: ByteArray,
+}
+
+type TestPoolConfig {
+  pool_nft: TestAsset,
+  pool_x: TestAsset,
+  pool_y: TestAsset,
+  pool_lq: TestAsset,
+  fee_num: Int,
+  treasury_fee: Int,
+  royalty_fee: Int,
+  treasury_x: Int,
+  treasury_y: Int,
+  royalty_x: Int,
+  royalty_y: Int,
+  dao_policy: List<Data>,
+  treasury_address: ByteArray,
+  royalty_pub_key: ByteArray,
+  nonce: Int,
+}
+
+fn test_pool_nft_name() -> ByteArray {
+  thread_nft.thread_asset_name(thread_nft.role_pool, #"01")
+}
+
+/// Fee slots 100 and 200 lovelace, 50 and 70 tokens.
+fn test_pool_config() -> TestPoolConfig {
+  TestPoolConfig {
+    pool_nft: TestAsset { policy: #"33", name: test_pool_nft_name() },
+    pool_x: TestAsset { policy: #"", name: #"" },
+    pool_y: TestAsset { policy: #"77", name: "tok" },
+    pool_lq: TestAsset { policy: #"33", name: "lp" },
+    fee_num: 99_000,
+    treasury_fee: 100,
+    royalty_fee: 1_000,
+    treasury_x: 100,
+    treasury_y: 50,
+    royalty_x: 200,
+    royalty_y: 70,
+    dao_policy: [],
+    treasury_address: #"",
+    royalty_pub_key: #"",
+    nonce: 0,
+  }
+}
+
+test venue_view_reads_the_pool_fields_it_names() {
+  let config: Data = test_pool_config()
+  and {
+    venue.pool_y(config) == (#"77", "tok"),
+    venue.pool_lq(config) == (#"33", "lp"),
+    venue.treasury_x(config) == 100,
+    venue.treasury_y(config) == 50,
+    venue.royalty_x(config) == 200,
+    venue.royalty_y(config) == 70,
+  }
+}
+
+fn pool_value(lovelace: Int, tokens: Int, lq_held: Int) -> assets.Value {
+  assets.from_lovelace(lovelace)
+    |> assets.add(#"33", test_pool_nft_name(), 1)
+    |> assets.add(#"77", "tok", tokens)
+    |> assets.add(#"33", "lp", lq_held)
+}
+
+/// 10,000 ADA and 200,000,000 tokens net of the fee slots, with 1,000,000,000
+/// LP in circulation.
+const gross_lovelace = 10_000_000_300
+
+const gross_tokens = 200_000_120
+
+const circulating_lq = 1_000_000_000
+
+type AddCase {
+  vote: ProposalType,
+  vote_amount: Int,
+  dx: Int,
+  moved: Int,
+  dlq_pool: Int,
+  dlq_escrow: Int,
+  signer: ByteArray,
+  relock: Bool,
+}
+
+/// 500 ADA buys 10,000,000 tokens at 20,000 a ADA, and the deposit mints
+/// 50,000,000 LP: 500 / 10,000 and 10,000,000 / 200,000,000 of the
+/// 1,000,000,000 circulating.
+fn honest() -> AddCase {
+  AddCase {
+    vote: VestingToLp,
+    vote_amount: 500_000_000,
+    dx: 500_000_000,
+    moved: 10_000_000,
+    dlq_pool: 50_000_000,
+    dlq_escrow: 50_000_000,
+    signer: #"ee",
+    relock: True,
+  }
+}
+
+const add_now = 5_000_000
+
+fn run_add(case: AddCase) -> Bool {
+  let datum = mock_datum(Locked, 1_000)
+  let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
+  let own_address = from_verification_key(#"cc")
+  let own_value = assets.add(mock_thread_nft(), #"33", "lp", 1_000)
+  let own_input = Input {
+    output_reference: own_ref,
+    output: Output {
+      address: own_address,
+      value: own_value,
+      datum: InlineDatum(datum),
+      reference_script: None,
+    },
+  }
+  let lock_timestamp = if case.relock {
+    add_now
+  } else {
+    datum.lock_timestamp
+  }
+  let own_output = Output {
+    address: own_address,
+    value: assets.add(own_value, #"33", "lp", case.dlq_escrow),
+    datum: InlineDatum(
+      LpEscrowDatum {
+        ..datum,
+        lock_timestamp,
+        lp_token_amount: datum.lp_token_amount + case.dlq_escrow,
+      },
+    ),
+    reference_script: None,
+  }
+  let config: Data = test_pool_config()
+  let pool_input = Input {
+    output_reference: OutputReference { transaction_id: #"50", output_index: 0 },
+    output: Output {
+      address: from_verification_key(#"50"),
+      value: pool_value(
+        gross_lovelace,
+        gross_tokens,
+        venue.max_lq_cap - circulating_lq,
+      ),
+      datum: InlineDatum(config),
+      reference_script: None,
+    },
+  }
+  let pool_output = Output {
+    address: from_verification_key(#"50"),
+    value: pool_value(
+      gross_lovelace + case.dx,
+      gross_tokens + case.moved,
+      venue.max_lq_cap - circulating_lq - case.dlq_pool,
+    ),
+    datum: InlineDatum(config),
+    reference_script: None,
+  }
+  let vesting_nft = assets.from_asset(
+    #"c0ffee",
+    thread_nft.thread_asset_name(thread_nft.role_vesting, #"01"),
+    1,
+  )
+  let vesting_input = Input {
+    output_reference: OutputReference { transaction_id: #"70", output_index: 0 },
+    output: Output {
+      address: from_verification_key(#"70"),
+      value: assets.add(vesting_nft, #"77", "tok", 100_000_000),
+      datum: NoDatum,
+      reference_script: None,
+    },
+  }
+  let vesting_output = Output {
+    address: from_verification_key(#"70"),
+    value: assets.add(vesting_nft, #"77", "tok", 100_000_000 - case.moved),
+    datum: NoDatum,
+    reference_script: None,
+  }
+  let record = CtoGovernanceDatum {
+    ..mock_cto_governance_datum(
+      #"01",
+      Some(
+        ProposalAnchor {
+          ..mock_proposal_anchor(case.vote, Passed, Executed, #""),
+          allocation_amount: case.vote_amount,
+        },
+      ),
+    ),
+    cto_state: CTOTriggered,
+    community_wallet_hash: #"ee",
+  }
+  let self = Transaction {
+    ..transaction.placeholder,
+    inputs: [own_input, pool_input, vesting_input],
+    reference_inputs: [mock_cto_ref_input(from_verification_key(#"aa"), record)],
+    outputs: [own_output, pool_output, vesting_output],
+    extra_signatories: [case.signer],
+    validity_range: interval.between(add_now, add_now + 100),
+  }
+  lp_escrow.spend(
+    Some(datum),
+    AddDisposedLiquidity { timestamp: add_now },
+    own_ref,
+    self,
+  )
+}
+
+test add_disposed_liquidity_pairs_at_the_pools_ratio() {
+  run_add(honest())
+}
+
+test add_disposed_liquidity_needs_the_community_wallet() {
+  !run_add(AddCase { ..honest(), signer: #"11" })
+}
+
+test add_disposed_liquidity_pairs_exactly_the_votes_ada() {
+  !run_add(AddCase { ..honest(), vote_amount: 600_000_000 })
+}
+
+test add_disposed_liquidity_never_moves_the_price_down() {
+  !run_add(AddCase { ..honest(), moved: 10_000_001 })
+}
+
+test add_disposed_liquidity_takes_what_the_ada_buys() {
+  !run_add(AddCase { ..honest(), moved: 9_999_999, dlq_escrow: 49_999_995 })
+}
+
+test add_disposed_liquidity_takes_every_lp_token() {
+  !run_add(AddCase { ..honest(), dlq_escrow: 49_999_999 })
+}
+
+test add_disposed_liquidity_needs_a_vesting_to_lp_vote() {
+  !run_add(AddCase { ..honest(), vote: VestingToTreasury })
+}
+
+test add_disposed_liquidity_restarts_the_lock() {
+  !run_add(AddCase { ..honest(), relock: False })
 }

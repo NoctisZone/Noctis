@@ -2178,3 +2178,162 @@ describe('cto_governance.compact — the creator can write their own silence clo
     ).toThrow('Creator not silent long enough');
   });
 });
+
+describe('cto_governance.compact — the second vote on a taken-over creator allocation', () => {
+  // The takeover passed and executed, the 90-day cooldown served and a fresh
+  // snapshot published: the state every disposition vote starts from.
+  function afterTakeover() {
+    const voterFills = MANY_VOTER_FILLS.slice(0, 6);
+    const d = deploy();
+    const { ctx: snapCtx, witnessesFor } = publishBalanceSnapshot(
+      d,
+      voterFills.map((fill) => ({ fill, balance: CREATOR_VOTE_CAP })),
+    );
+    const createTime = SILENCE_THRESHOLD;
+    const rCreate = d.contract.circuits.createProposal(
+      nextContextAtTime(d.contractAddress, snapCtx, Number(createTime)),
+      ProposalType.SilenceLockTrigger,
+      fakeBytes32(50),
+      createTime,
+      fakeBytes32(0),
+      0n,
+      fakeBytes32(0),
+      fakeBytes32(70),
+      BREAK_GLASS_BOND_MIN,
+    );
+    const takeoverId = rCreate.result as Uint8Array;
+    let ctx = nextContext(d.contractAddress, rCreate.context);
+    let t = createTime;
+    for (const fill of voterFills) {
+      t += 1n;
+      const voter = new Contract<PrivateState>(witnessesFor(fill));
+      const r = voter.circuits.castVote(nextContextAtTime(d.contractAddress, ctx, Number(t)), takeoverId, true, t);
+      ctx = nextContext(d.contractAddress, r.context);
+    }
+    const finalizeTime = createTime + BALLOT_DURATION + 1n;
+    const rFin = d.contract.circuits.finalizeProposal(
+      nextContextAtTime(d.contractAddress, ctx, Number(finalizeTime)),
+      takeoverId,
+      finalizeTime,
+    );
+    ctx = nextContext(d.contractAddress, rFin.context);
+    const rExec = d.contract.circuits.executeProposal(ctx, takeoverId);
+    ctx = nextContext(d.contractAddress, rExec.context);
+    expect(ledger(ctx.currentQueryContext.state).ctoState).toBe(CtoState.CTOTriggered);
+
+    const secondTime = finalizeTime + 7_776_000n + 1n;
+    const tree = buildBalanceSnapshotTree(
+      voterFills.map((fill) => ({
+        voterKey: deriveUserPublicKey(fakeBytes32(fill), LAUNCH_ID),
+        balance: CREATOR_VOTE_CAP,
+        heldSinceTimestamp: 0n,
+      })),
+    );
+    // Two attestors, as publishBalanceSnapshot does: the root is written only
+    // when the second lands, and only a takeover trigger may rest on an old one.
+    const rSnap1 = d.contract.circuits.updateBalanceSnapshot(
+      nextContextAtTime(d.contractAddress, ctx, Number(secondTime)),
+      tree.root,
+      secondTime,
+    );
+    const second = new Contract<PrivateState>(makeWitnesses(VOTER_FILL, 0n, EMPTY_PROOF, 0n, ATTESTOR_2_FILL));
+    const rSnap2 = second.circuits.updateBalanceSnapshot(
+      nextContextAtTime(d.contractAddress, nextContext(d.contractAddress, rSnap1.context), Number(secondTime)),
+      tree.root,
+      secondTime,
+    );
+    ctx = nextContext(d.contractAddress, rSnap2.context);
+    const secondWitnesses = (fill: number): Witnesses<PrivateState> =>
+      makeWitnesses(fill, CREATOR_VOTE_CAP, tree.getProof(voterFills.indexOf(fill)), 0n);
+    return { d, ctx, secondTime, voterFills, secondWitnesses };
+  }
+
+  function propose(at: ReturnType<typeof afterTakeover>, type: ProposalType, amount: bigint) {
+    return at.d.contract.circuits.createProposal(
+      nextContextAtTime(at.d.contractAddress, at.ctx, Number(at.secondTime)),
+      type,
+      fakeBytes32(60),
+      at.secondTime,
+      fakeBytes32(0),
+      amount,
+      fakeBytes32(0),
+      fakeBytes32(0),
+      BREAK_GLASS_BOND_MIN,
+    );
+  }
+
+  it('rejects a disposition vote while no takeover is in force', () => {
+    const voterFills = MANY_VOTER_FILLS.slice(0, 6);
+    const d = deploy();
+    const { ctx } = publishBalanceSnapshot(
+      d,
+      voterFills.map((fill) => ({ fill, balance: CREATOR_VOTE_CAP })),
+    );
+    for (const type of [ProposalType.VestingToLp, ProposalType.VestingToStaking, ProposalType.VestingToTreasury]) {
+      expect(() =>
+        d.contract.circuits.createProposal(
+          nextContextAtTime(d.contractAddress, ctx, Number(SILENCE_THRESHOLD)),
+          type,
+          fakeBytes32(60),
+          SILENCE_THRESHOLD,
+          fakeBytes32(0),
+          500_000_000n,
+          fakeBytes32(0),
+          fakeBytes32(0),
+          BREAK_GLASS_BOND_MIN,
+        ),
+      ).toThrow(/CTO not active/);
+    }
+  });
+
+  it('accepts keeping the allocation in vesting once a takeover is in force', () => {
+    expect(() => propose(afterTakeover(), ProposalType.VestingToTreasury, 0n)).not.toThrow();
+  });
+
+  it('accepts pairing the allocation into the pool with the ADA named', () => {
+    expect(() => propose(afterTakeover(), ProposalType.VestingToLp, 500_000_000n)).not.toThrow();
+  });
+
+  it('rejects pairing with no ADA named', () => {
+    expect(() => propose(afterTakeover(), ProposalType.VestingToLp, 0n)).toThrow(/VestingToLp must name/);
+  });
+
+  it('accepts a top-up of an existing pool and a new pool at either end of the runway range', () => {
+    expect(() => propose(afterTakeover(), ProposalType.VestingToStaking, 0n)).not.toThrow();
+    expect(() => propose(afterTakeover(), ProposalType.VestingToStaking, 1095n)).not.toThrow();
+    expect(() => propose(afterTakeover(), ProposalType.VestingToStaking, 1825n)).not.toThrow();
+  });
+
+  it('rejects a new pool runway outside the range', () => {
+    const at = afterTakeover();
+    expect(() => propose(at, ProposalType.VestingToStaking, 1094n)).toThrow(/runway must be 1095 to 1825/);
+    expect(() => propose(at, ProposalType.VestingToStaking, 1826n)).toThrow(/runway must be 1095 to 1825/);
+  });
+
+  it('carries a passed disposition vote through to execution while the takeover holds', () => {
+    const at = afterTakeover();
+    const rCreate = propose(at, ProposalType.VestingToTreasury, 0n);
+    const id = rCreate.result as Uint8Array;
+    let ctx = nextContext(at.d.contractAddress, rCreate.context);
+    let t = at.secondTime;
+    for (const fill of at.voterFills) {
+      t += 1n;
+      const voter = new Contract<PrivateState>(at.secondWitnesses(fill));
+      const r = voter.circuits.castVote(nextContextAtTime(at.d.contractAddress, ctx, Number(t)), id, true, t);
+      ctx = nextContext(at.d.contractAddress, r.context);
+    }
+    const finalizeTime = at.secondTime + BALLOT_DURATION + 1n;
+    const rFin = at.d.contract.circuits.finalizeProposal(
+      nextContextAtTime(at.d.contractAddress, ctx, Number(finalizeTime)),
+      id,
+      finalizeTime,
+    );
+    ctx = nextContext(at.d.contractAddress, rFin.context);
+    expect(ledger(ctx.currentQueryContext.state).proposals.lookup(id).state).toBe(ProposalState.Passed);
+    const rExec = at.d.contract.circuits.executeProposal(ctx, id);
+    const after = ledger(rExec.context.currentQueryContext.state);
+    expect(after.proposals.lookup(id).state).toBe(ProposalState.Executed);
+    // The disposition leaves the takeover where it was.
+    expect(after.ctoState).toBe(CtoState.CTOTriggered);
+  });
+});

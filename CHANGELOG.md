@@ -14,6 +14,12 @@ Notable changes to the Noctis Zone, by release. Internal development history pre
 ### Changed
 
 - **A curve sell pays its own fee.** A sell gives back the share of its range's value that the curve's raise holds, 98.5% or what a buy of that range banked, and its 1.5% fee comes out of that share. The seller receives about 97% of the range's curve value, and selling can never draw down what graduation seeds the pool with, so the pool opens at no less than the price the LP reserve was sized for. A round trip costs 1.5% on each leg. The batch planner quotes sells the same way. This moves the curve's script hash.
+- **A vote on what becomes of a taken-over creator's tokens.** After a takeover freezes a creator's allocation, a second vote, no sooner than the ballot cooldown allows, sends all of it to one destination:
+  - into the launch's pool, paired with ADA the community wallet supplies at the pool's own ratio, with the LP escrow's lock restarting;
+  - into the launch's staking pool at its own rate, opening a pool with the runway the vote names if the launch has none;
+  - or kept in vesting until the original schedule ends, after which only passed community votes release it.
+
+  The decision is final: a later vote to dissolve the takeover does not return the tokens. This moves the governance, vesting and LP escrow scripts' hashes, and those of the three scripts that read the governance record.
 - **Creator vesting is a cliff.** A creator's allocation releases nothing until its whole vesting period has run from graduation, then all of it at once. A community takeover passed at any point in the period finds the whole allocation still in the contract. Launches minted before the change keep the schedule their own validator enforces. This moves the vesting script's hash.
 - **Each filled curve order is paid in one output**: what it bought or sold, with what came back, together. The buyer's own change pays that output's minimum ADA, where the batcher used to add it from its own wallet on every buy, and each fill costs one output fewer. The batcher's cut from an order never reaches the reserve an order holds above its maximum spend.
 - **A creator-fee or platform-fee claim too small for the ledger is refused before it is built**, with the amount that would be enough, instead of being signed and then refused by the network.

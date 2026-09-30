@@ -58,6 +58,9 @@ export const ProposalTypeSchema = Data.Enum([
   Data.Literal('DexMigration'),
   Data.Literal('WhitelistUpdate'),
   Data.Literal('DissolveCTOProposal'),
+  Data.Literal('VestingToLp'),
+  Data.Literal('VestingToStaking'),
+  Data.Literal('VestingToTreasury'),
 ]);
 export type ProposalTypeData = Data.Static<typeof ProposalTypeSchema>;
 

@@ -131,7 +131,7 @@ See [ROADMAP.md](ROADMAP.md) for the full current status — this is a snapshot,
 | Curve trade fee | 1.5% + batcher | 0.5% creator / 1.0% platform — one wallet, no split |
 | Post-graduation fee | 1.2% + batcher | 1.0% creator / 0.1% platform / 0.1% compounded into the pool |
 | LP lock | 365 days | No withdraw ever |
-| Creator vesting | 90–365 days | No default — forced active selection |
+| Creator vesting | 90–365 days | No default — forced active selection; released in full at the end |
 
 Full constants in [CLAUDE.md](CLAUDE.md).
 

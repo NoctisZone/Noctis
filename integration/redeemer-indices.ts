@@ -89,6 +89,7 @@ export const LP_ESCROW_REDEEMER = {
   CancelLaunch: 7,
   HarvestFees: 8,
   QueryState: 9,
+  AddDisposedLiquidity: 10,
 } as const;
 
 /** `contracts/cardano/validators/staking_pool.ak`. */
@@ -117,6 +118,7 @@ export const VESTING_REDEEMER = {
   CancelLaunch: 5,
   ClaimCancelledAllocation: 6,
   QueryState: 7,
+  ExecuteDisposition: 8,
 } as const;
 
 /** `contracts/cardano/validators/zk_anchor.ak`. */

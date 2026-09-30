@@ -100,7 +100,30 @@ pub type ProposalType {
   DexMigration
   WhitelistUpdate
   DissolveCTOProposal
+  /// What becomes of a taken-over creator's allocation, decided by a second
+  /// vote after the takeover's own. One destination for the whole allocation,
+  /// and final once executed. Each is anchored only while a takeover is in
+  /// force, and the ballot cooldown puts it at least 90 days after the one
+  /// that passed the takeover.
+  ///
+  /// Into the launch's pool, paired with `allocation_amount` lovelace from
+  /// the community wallet at the pool's own ratio; whatever the ADA does not
+  /// match stays in vesting on the treasury terms below. The LP escrow's lock
+  /// restarts.
+  VestingToLp
+  /// Into the launch's staking pool at its own daily rate. A launch with no
+  /// pool gets one, whose runway is `allocation_amount` days.
+  VestingToStaking
+  /// Kept in vesting until the original schedule ends, then released only by
+  /// passed `FundAllocation` votes.
+  VestingToTreasury
 }
+
+/// The runway a vote may give a staking pool it creates, in days: the same
+/// range a creator chooses from at launch.
+pub const disposition_runway_min_days = 1095
+
+pub const disposition_runway_max_days = 1825
 
 /// Proposal outcome
 pub type ProposalOutcome {
@@ -606,6 +629,9 @@ fn proposal_type_tag(t: ProposalType) -> Int {
     DexMigration -> 2
     WhitelistUpdate -> 3
     DissolveCTOProposal -> 4
+    VestingToLp -> 5
+    VestingToStaking -> 6
+    VestingToTreasury -> 7
   }
 }
 
@@ -953,6 +979,24 @@ validator cto_governance {
               FundAllocation ->
                 allocation_amount > 0 && allocation_recipient_hash != #""
               SilenceLockTrigger -> allocation_recipient_hash != #""
+              // A creator's allocation is decided only while a takeover
+              // holds it frozen.
+              VestingToLp -> and {
+                  datum.cto_state == CTOTriggered,
+                  allocation_amount > 0,
+                }
+              VestingToStaking -> and {
+                  datum.cto_state == CTOTriggered,
+                  // 0 tops up the launch's existing pool at its own rate.
+                  or {
+                    allocation_amount == 0,
+                    and {
+                      allocation_amount >= disposition_runway_min_days,
+                      allocation_amount <= disposition_runway_max_days,
+                    },
+                  },
+                }
+              VestingToTreasury -> datum.cto_state == CTOTriggered
               _ -> True
             },
             // CRITICAL fix: a real relayer bond is now required and
@@ -3721,4 +3765,144 @@ test view_enum_positions_are_the_real_ones() {
     tag(executed) == cto_view.executed,
     tag(pending) != cto_view.executed,
   }
+}
+
+// ============================================================================
+// Anchoring a vote on what becomes of a taken-over creator's allocation
+// ============================================================================
+
+/// The known-good anchoring spend, for a `proposal_type` vote naming `amount`,
+/// against a record in `cto_state`. Differs from `anchor_spend_with_lp_ref`
+/// only in those three, so a rejection is one of them.
+fn anchor_disposition(
+  cto_state: CtoAnchorState,
+  proposal_type: ProposalType,
+  amount: Int,
+) -> Bool {
+  let datum = CtoGovernanceDatum {
+    ..mock_datum(None),
+    cto_state,
+    community_wallet_hash: #"ee",
+  }
+  let start_timestamp = eligible_start
+  let end_timestamp = eligible_start + 500
+  let anchor_timestamp = eligible_start + 500
+  let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
+  let own_address = from_verification_key(#"cc")
+  let own_input = Input {
+    output_reference: own_ref,
+    output: Output {
+      address: own_address,
+      value: assets.merge(mock_cto_nft_value(), assets.from_lovelace(2_000_000)),
+      datum: InlineDatum(datum),
+      reference_script: None,
+    },
+  }
+  let proposal = with_derived_reference(
+    datum,
+    ProposalAnchor {
+      ..mock_anchor_base(start_timestamp, end_timestamp, anchor_timestamp),
+      proposal_type,
+      allocation_amount: amount,
+    },
+  )
+  let new_datum = CtoGovernanceDatum {
+    ..datum,
+    active_proposal: Some(proposal),
+    proposal_count: datum.proposal_count + 1,
+    pending_relayer_bond: 25_000_000,
+    pending_relayer_key_hash: #"33",
+    last_ballot_end_timestamp: end_timestamp,
+  }
+  let self = Transaction {
+    ..transaction.placeholder,
+    inputs: [own_input],
+    reference_inputs: [mock_lp_ref_input(mock_grad_ts)],
+    outputs: [
+      Output {
+        address: own_address,
+        value: cto_out_value(27_000_000),
+        datum: InlineDatum(new_datum),
+        reference_script: None,
+      },
+    ],
+    validity_range: interval.between(
+      anchor_timestamp - 100,
+      anchor_timestamp + 100,
+    ),
+  }
+  let redeemer = AnchorVoteResult {
+    proposal_type,
+    description_hash: #"aa",
+    proposal_id: mock_proposal_id(),
+    yes_votes: 60_000,
+    no_votes: 10_000,
+    voter_count: 15,
+    creator_yes_votes: 0,
+    creator_no_votes: 0,
+    outcome: Passed,
+    start_timestamp,
+    end_timestamp,
+    anchor_timestamp,
+    target_dex_credential: None,
+    allocation_amount: amount,
+    allocation_recipient_hash: #"ff",
+    relayer_credential_hash: #"33",
+    relayer_bond: 25_000_000,
+  }
+  cto_governance.spend(Some(datum), redeemer, own_ref, self)
+}
+
+test anchor_accepts_keeping_a_frozen_allocation_in_vesting() {
+  anchor_disposition(CTOTriggered, VestingToTreasury, 0)
+}
+
+test anchor_accepts_pairing_a_frozen_allocation_into_the_pool() {
+  anchor_disposition(CTOTriggered, VestingToLp, 500_000_000)
+}
+
+test anchor_rejects_pairing_with_no_ada() {
+  !anchor_disposition(CTOTriggered, VestingToLp, 0)
+}
+
+test anchor_accepts_topping_up_an_existing_pool() {
+  anchor_disposition(CTOTriggered, VestingToStaking, 0)
+}
+
+test anchor_accepts_a_new_pool_at_either_end_of_the_runway_range() {
+  and {
+    anchor_disposition(
+      CTOTriggered,
+      VestingToStaking,
+      disposition_runway_min_days,
+    ),
+    anchor_disposition(
+      CTOTriggered,
+      VestingToStaking,
+      disposition_runway_max_days,
+    ),
+  }
+}
+
+test anchor_rejects_a_runway_outside_the_launch_range() {
+  and {
+    !anchor_disposition(
+      CTOTriggered,
+      VestingToStaking,
+      disposition_runway_min_days - 1,
+    ),
+    !anchor_disposition(
+      CTOTriggered,
+      VestingToStaking,
+      disposition_runway_max_days + 1,
+    ),
+  }
+}
+
+test anchor_rejects_a_disposition_without_a_takeover() {
+  !anchor_disposition(PreCTO, VestingToTreasury, 0)
+}
+
+test anchor_rejects_a_disposition_after_a_dissolve() {
+  !anchor_disposition(CTODissolved, VestingToTreasury, 0)
 }
