@@ -206,10 +206,18 @@ export interface CurveBatchPlan {
   /** The order UTXOs, each spent with the embedded order validator. */
   orderInputs: Array<{ utxo: PlanScriptUtxo; redeemerCbor: string }>;
   /**
-   * The order validator, raw compiled CBOR. Wrapped before use. Carried once,
-   * for the order spends and for the withdrawal that runs its batch check.
+   * The order validator, raw compiled CBOR. Wrapped before use. Serves the
+   * order spends and the withdrawal that runs its batch check: named by
+   * `orderReferenceScript` when that is given, carried once otherwise.
    */
   orderScriptCbor: string;
+  /**
+   * Where the order validator is published. Naming it rather than carrying it
+   * keeps some 5.2 KB out of the transaction, which is room for one more order
+   * (see MAX_ORDERS_PER_BATCH). Checked against `orderScriptCbor` before use,
+   * so a pointer left over from an earlier build refuses rather than misbuilds.
+   */
+  orderReferenceScript?: ReferenceScriptPointer;
   continuing: { datumCbor: string; assets: PlanAssets };
   payouts: PlanPayout[];
   requiredSignerHashes: string[];
@@ -566,24 +574,48 @@ export class MeshCurveSpender {
       .txInInlineDatumPresent()
       .txInRedeemerValue(plan.redeemerCbor, 'CBOR', this.config.executionUnits);
 
-    // The orders: the validator is small enough to carry, and carrying it
-    // avoids a second reference UTXO to publish and keep current.
+    // The orders: named by their published reference when there is one, which
+    // leaves room for one more order, and carried otherwise.
+    const orderRef = plan.orderReferenceScript
+      ? resolveReferenceScript(plan.orderScriptCbor, plan.orderReferenceScript, MESH_NETWORK_ID[this.config.network])
+      : null;
     const orderScript = applyCborEncoding(plan.orderScriptCbor);
     for (const input of plan.orderInputs) {
-      tx.spendingPlutusScriptV3()
-        .txIn(input.utxo.txHash, input.utxo.outputIndex, toMesh(input.utxo.assets), input.utxo.address, 0)
-        .txInScript(orderScript)
-        .txInInlineDatumPresent()
-        .txInRedeemerValue(input.redeemerCbor, 'CBOR');
+      tx.spendingPlutusScriptV3().txIn(
+        input.utxo.txHash,
+        input.utxo.outputIndex,
+        toMesh(input.utxo.assets),
+        input.utxo.address,
+        0,
+      );
+      if (orderRef) {
+        tx.spendingTxInReference(
+          orderRef.txHash,
+          orderRef.outputIndex,
+          String(orderRef.rawSizeBytes),
+          orderRef.scriptHash,
+        );
+      } else {
+        tx.txInScript(orderScript);
+      }
+      tx.txInInlineDatumPresent().txInRedeemerValue(input.redeemerCbor, 'CBOR');
     }
 
     // What every order's spend asks for: zero withdrawn from the order
     // validator's own reward address, which runs its batch check once over all
-    // of them. The script is the one the spends already carry.
-    tx.withdrawalPlutusScriptV3()
-      .withdrawal(orderRewardAddress(plan.orderScriptCbor, this.config.network), '0')
-      .withdrawalScript(orderScript)
-      .withdrawalRedeemerValue(ORDER_BATCH_CHECK_REDEEMER, 'CBOR');
+    // of them, from the same script the spends use.
+    tx.withdrawalPlutusScriptV3().withdrawal(orderRewardAddress(plan.orderScriptCbor, this.config.network), '0');
+    if (orderRef) {
+      tx.withdrawalTxInReference(
+        orderRef.txHash,
+        orderRef.outputIndex,
+        String(orderRef.rawSizeBytes),
+        orderRef.scriptHash,
+      );
+    } else {
+      tx.withdrawalScript(orderScript);
+    }
+    tx.withdrawalRedeemerValue(ORDER_BATCH_CHECK_REDEEMER, 'CBOR');
 
     tx.txOut(this.ref.scriptAddress, toMesh(plan.continuing.assets)).txOutInlineDatumValue(
       plan.continuing.datumCbor,

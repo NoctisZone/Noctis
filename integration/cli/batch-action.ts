@@ -15,7 +15,15 @@
 // ============================================================================
 
 import { Blockfrost, Lucid } from '@lucid-evolution/lucid';
-import { type BatchPlan, type CandidateOrder, isScriptRefusal, planBatch, shrinkBatchAfter } from '../batch-planner.js';
+import {
+  type BatchPlan,
+  type CandidateOrder,
+  isScriptRefusal,
+  MAX_ORDERS_PER_BATCH,
+  MAX_ORDERS_PER_BATCH_CARRIED,
+  planBatch,
+  shrinkBatchAfter,
+} from '../batch-planner.js';
 import { BatcherSubmitter } from '../batcher-submitter.js';
 import { capAccumulatorFromHex } from '../cap-accumulator-tree.js';
 import { selectLaunchUtxo } from '../launch-utxo-lookup.js';
@@ -49,6 +57,11 @@ interface Input {
    * of everything else, and with the curve embedded it does not fit.
    */
   curveReferenceScript: { txHash: string; outputIndex: number; scriptHash: string };
+  /**
+   * Where `curve_order.ak` is published. Optional: named, a batch has room
+   * for MAX_ORDERS_PER_BATCH orders; carried, for one fewer.
+   */
+  orderReferenceScript?: { txHash: string; outputIndex: number; scriptHash: string };
   /** Required for `submit` — the key the batch redeemer names as its batcher. */
   batcherMnemonic?: string;
   /** The scheduled batcher's way in: the platform's custody stores an
@@ -119,6 +132,7 @@ async function main() {
     curveScriptCbor,
     orderScriptCbor,
     curveReferenceScript: requireField(input, 'curveReferenceScript'),
+    ...(input.orderReferenceScript ? { orderReferenceScript: input.orderReferenceScript } : {}),
   });
 
   // The curve, through the same authenticated lookup every submitter uses:
@@ -154,6 +168,9 @@ async function main() {
   // Orders a validator refused on their own this tick, by reference.
   const excluded = new Map<string, string>();
   const refOf = (o: { txHash: string; outputIndex: number }) => `${o.txHash}#${o.outputIndex}`;
+  // How many orders fit depends on whether the order validator is named or
+  // carried; an explicit maxOrders overrides either.
+  const defaultMaxOrders = input.orderReferenceScript ? MAX_ORDERS_PER_BATCH : MAX_ORDERS_PER_BATCH_CARRIED;
   const planWith = (maxOrders?: number) =>
     planBatch({
       shape: 'quadratic',
@@ -161,7 +178,7 @@ async function main() {
       capState: capAccumulatorFromHex(input.capState ?? []),
       orders: candidates.filter((c) => !excluded.has(refOf(c))),
       nowMs: BigInt(input.nowMs ?? Date.now()),
-      ...(maxOrders ? { maxOrders } : {}),
+      maxOrders: maxOrders ?? defaultMaxOrders,
     });
   const summarise = (plan: BatchPlan) => ({
     curveUtxo: `${found.utxo.txHash}#${found.utxo.outputIndex}`,
@@ -170,6 +187,7 @@ async function main() {
     // nothing to fill: one read in place of a full plan.
     orderAddress: orders.orderAddress,
     openOrders: candidates.length,
+    orderScriptReferenced: Boolean(input.orderReferenceScript),
     fills: plan.fills.map((f) => ({
       order: `${f.order.txHash}#${f.order.outputIndex}`,
       owner: f.order.ownerKeyHashHex,

@@ -89,6 +89,12 @@ export interface BatcherSubmitterConfig {
    * arrangement that fits — the curve has to be named rather than carried.
    */
   curveReferenceScript: ReferenceScriptPointer;
+  /**
+   * Where `curve_order.ak` is published. Optional, unlike the curve's: without
+   * it the order validator is carried in the transaction, which fits one order
+   * fewer (MAX_ORDERS_PER_BATCH_CARRIED against MAX_ORDERS_PER_BATCH).
+   */
+  orderReferenceScript?: ReferenceScriptPointer;
 }
 
 export interface SubmitBatchParams {
@@ -240,6 +246,7 @@ export class BatcherSubmitter {
       curveAddress: this.curveAddress,
       orderAddress: this.orderAddress,
       orderScriptCbor: this.config.orderScriptCbor,
+      ...(this.config.orderReferenceScript ? { orderReferenceScript: this.config.orderReferenceScript } : {}),
       batcherKeyHash: keyHashOf(batcherAddress),
       params,
     });
@@ -272,8 +279,10 @@ export interface BatchTransactionInputs {
   network: LucidNetwork;
   curveAddress: string;
   orderAddress: string;
-  /** `curve_order.ak`'s compiled script, carried for the spends and the withdrawal. */
+  /** `curve_order.ak`'s compiled script, for the spends and the withdrawal. */
   orderScriptCbor: string;
+  /** Where that script is published; carried when absent. */
+  orderReferenceScript?: ReferenceScriptPointer;
   /** The batcher's payment key hash, which the redeemer names and the curve requires. */
   batcherKeyHash: string;
   params: SubmitBatchParams;
@@ -295,7 +304,8 @@ export function batchTransactionPlan(inputs: BatchTransactionInputs): {
   plan: CurveBatchPlan;
   batcherFeeTotal: bigint;
 } {
-  const { tier, network, curveAddress, orderAddress, orderScriptCbor, batcherKeyHash, params } = inputs;
+  const { tier, network, curveAddress, orderAddress, orderScriptCbor, orderReferenceScript, batcherKeyHash, params } =
+    inputs;
   const { plan, curveUtxo } = params;
   const fee = params.batcherFeeLovelace ?? 0n;
 
@@ -364,6 +374,7 @@ export function batchTransactionPlan(inputs: BatchTransactionInputs): {
       redeemerCbor: Data.to(new Constr(REDEEMER_APPLY_ORDER, [])),
     })),
     orderScriptCbor,
+    ...(orderReferenceScript ? { orderReferenceScript } : {}),
     continuing: {
       datumCbor: encodeCurve(tier, nextCurveDatum(currentDatum, plan)),
       assets: nextCurveAssets(curveUtxo, plan, tokenUnit),

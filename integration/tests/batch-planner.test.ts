@@ -20,6 +20,7 @@ import {
   type CandidateOrder,
   isScriptRefusal,
   MAX_ORDERS_PER_BATCH,
+  MAX_ORDERS_PER_BATCH_CARRIED,
   type PlannerCurve,
   planBatch,
   shrinkBatchAfter,
@@ -368,14 +369,15 @@ describe('planBatch — what it leaves out', () => {
   });
 
   // The number itself is measured, not chosen: curve-batch-evaluated.test.ts
-  // runs the real curve and order validators over the batch the batcher sends,
-  // and five orders are the most that leave the batcher's wallet room.
+  // runs the real curve and order validators over the batch the batcher sends:
+  // six with the order validator named by its reference, five with it carried.
   //
   // Pinned as a literal so changing it is a deliberate act that fails a test.
   // An offline evaluation is not a node, so this stays a tripwire saying
   // "re-measure" when either validator changes, and again on mainnet.
   it('keeps the ceiling at what was measured, or makes you say so', () => {
-    expect(MAX_ORDERS_PER_BATCH).toBe(5);
+    expect(MAX_ORDERS_PER_BATCH).toBe(6);
+    expect(MAX_ORDERS_PER_BATCH_CARRIED).toBe(5);
   });
 
   // This one is real: it fails if the planner stops applying a default at all,

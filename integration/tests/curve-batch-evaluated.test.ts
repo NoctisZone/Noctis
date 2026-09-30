@@ -14,7 +14,12 @@ import { Data, type UTxO } from '@lucid-evolution/lucid';
 import type { UTxO as MeshUTxO } from '@meshsdk/core';
 import { deserializeTx } from '@meshsdk/core-cst';
 import { describe, expect, it } from 'vitest';
-import { type CandidateOrder, MAX_ORDERS_PER_BATCH, planBatch } from '../batch-planner.js';
+import {
+  type CandidateOrder,
+  MAX_ORDERS_PER_BATCH,
+  MAX_ORDERS_PER_BATCH_CARRIED,
+  planBatch,
+} from '../batch-planner.js';
 import { batchTransactionPlan } from '../batcher-submitter.js';
 import { CapAccumulator } from '../cap-accumulator-tree.js';
 import {
@@ -174,11 +179,21 @@ interface Measured {
   redeemers: Array<{ tag: string; memory: number }>;
 }
 
+/** Where the order validator is published, when a batch names it. */
+const ORDER_REF = referenceOutput(ORDER, 0xc3);
+
+/** Whether a batch names the order validator by its reference or carries it. */
+type OrderScript = 'referenced' | 'carried';
+
 /**
  * Plans, assembles, builds and evaluates a batch of `n` buys. `tamper` edits
  * the transaction plan before it is built, for the batches that must fail.
  */
-async function batchOf(n: number, tamper?: (plan: CurveBatchPlan) => void): Promise<Measured> {
+async function batchOf(
+  n: number,
+  orderScript: OrderScript,
+  tamper?: (plan: CurveBatchPlan) => void,
+): Promise<Measured> {
   const orders = Array.from({ length: n }, (_, i) => order(i));
   const plan = planBatch({
     shape: 'quadratic',
@@ -196,10 +211,13 @@ async function batchOf(n: number, tamper?: (plan: CurveBatchPlan) => void): Prom
     curveAddress: at(CURVE),
     orderAddress: at(ORDER),
     orderScriptCbor: ORDER,
+    ...(orderScript === 'referenced'
+      ? { orderReferenceScript: { txHash: ORDER_REF.input.txHash, outputIndex: 0, scriptHash: scriptHashOf(ORDER) } }
+      : {}),
     batcherKeyHash: BATCHER,
     params: { curveUtxo: CURVE_UTXO, orderUtxos: orders.map((o) => o.utxo), plan },
   });
-  const known = [COLLATERAL, FUNDS, CURVE_REF, mesh(CURVE_UTXO), ...orders.map((o) => mesh(o.utxo))];
+  const known = [COLLATERAL, FUNDS, CURVE_REF, ORDER_REF, mesh(CURVE_UTXO), ...orders.map((o) => mesh(o.utxo))];
   const spender = new MeshCurveSpender({
     network: 'preprod',
     compiledScriptCbor: CURVE,
@@ -223,20 +241,31 @@ async function batchOf(n: number, tamper?: (plan: CurveBatchPlan) => void): Prom
   };
 }
 
-const sizes = [1, 2, 4, MAX_ORDERS_PER_BATCH, MAX_ORDERS_PER_BATCH + 1];
-const measured = new Map<number, Measured>();
-for (const n of new Set(sizes)) measured.set(n, await batchOf(n));
-const at_ = (n: number) => measured.get(n) as Measured;
+const measured = new Map<string, Measured>();
+const runs: [OrderScript, number][] = [
+  ['referenced', 1],
+  ['referenced', 2],
+  ['referenced', 4],
+  ['referenced', MAX_ORDERS_PER_BATCH],
+  ['referenced', MAX_ORDERS_PER_BATCH + 1],
+  ['carried', 4],
+  ['carried', MAX_ORDERS_PER_BATCH_CARRIED],
+  ['carried', MAX_ORDERS_PER_BATCH_CARRIED + 1],
+];
+for (const [mode, n] of runs) {
+  if (!measured.has(`${mode}:${n}`)) measured.set(`${mode}:${n}`, await batchOf(n, mode));
+}
+const batch = (mode: OrderScript, n: number) => measured.get(`${mode}:${n}`) as Measured;
 
 describe('a batch the real validators accept', () => {
   it('carries one redeemer per script input and one for the order check', () => {
     // The curve, each order, and the zero withdrawal that runs the check.
-    expect(at_(4).redeemers).toHaveLength(1 + 4 + 1);
-    for (const r of at_(4).redeemers) expect(r.memory).toBeGreaterThan(0);
+    expect(batch('referenced', 4).redeemers).toHaveLength(1 + 4 + 1);
+    for (const r of batch('referenced', 4).redeemers) expect(r.memory).toBeGreaterThan(0);
   });
 
   it('withdraws zero from the order validator’s own reward address', () => {
-    const withdrawals = deserializeTx(at_(4).txHex).body().withdrawals();
+    const withdrawals = deserializeTx(batch('referenced', 4).txHex).body().withdrawals();
     expect(withdrawals ? [...withdrawals.entries()] : []).toEqual([[orderRewardAddress(ORDER, 'preprod'), 0n]]);
     expect(ORDER_BATCH_CHECK_REDEEMER).toBe('d87980');
   });
@@ -247,7 +276,7 @@ describe('a batch the real validators accept', () => {
   // cut below what the order's max_spend leaves them.
   it('is refused when it keeps more of an order than the order may spend', async () => {
     await expect(
-      batchOf(2, (plan) => {
+      batchOf(2, 'referenced', (plan) => {
         const first = plan.payouts[0];
         if (!first) throw new Error('no payout to tamper with');
         first.assets = { ...first.assets, lovelace: 9_000_000n };
@@ -255,8 +284,15 @@ describe('a batch the real validators accept', () => {
     ).rejects.toThrow(/Tx evaluation failed/);
   });
 
-  it('carries the order validator once, however many orders it spends', () => {
-    expect(deserializeTx(at_(4).txHex).witnessSet().plutusV3Scripts()?.size()).toBe(1);
+  it('names the order validator once, by its reference, however many orders it spends', () => {
+    const tx = deserializeTx(batch('referenced', 4).txHex);
+    expect(tx.witnessSet().plutusV3Scripts()?.size() ?? 0).toBe(0);
+    const refs = [...(tx.body().referenceInputs()?.values() ?? [])].map((i) => `${i.transactionId()}#${i.index()}`);
+    expect(refs.sort()).toEqual([`${CURVE_REF.input.txHash}#0`, `${ORDER_REF.input.txHash}#0`].sort());
+  });
+
+  it('carries it once when no reference is given', () => {
+    expect(deserializeTx(batch('carried', 4).txHex).witnessSet().plutusV3Scripts()?.size()).toBe(1);
   });
 
   // The quantity the change is for. Before it, each order's own spend read
@@ -264,22 +300,31 @@ describe('a batch the real validators accept', () => {
   // with the square of the count: 3.1M for one order, 15.59M for four, and
   // five refused. Now what an order adds is its own share and no more.
   it('costs about the same again for each order it adds', () => {
-    const perOrder = (at_(4).memory - at_(2).memory) / 2;
-    const firstStep = at_(2).memory - at_(1).memory;
+    const perOrder = (batch('referenced', 4).memory - batch('referenced', 2).memory) / 2;
+    const firstStep = batch('referenced', 2).memory - batch('referenced', 1).memory;
     expect(Math.abs(perOrder - firstStep) / firstStep).toBeLessThan(0.1);
   });
 
-  it(`fits ${MAX_ORDERS_PER_BATCH} orders under the ledger’s limits`, () => {
-    expect(fits(at_(MAX_ORDERS_PER_BATCH))).toBe(true);
+  // Each constant is the LARGEST batch that fits its way of building, so the
+  // planner's first guess is right and no tick spends an attempt on a batch
+  // the node refuses.
+  it(`fits ${MAX_ORDERS_PER_BATCH} orders with the order validator named`, () => {
+    expect(fits(batch('referenced', MAX_ORDERS_PER_BATCH))).toBe(true);
   });
 
-  // The constant is the LARGEST batch that fits, so the planner's first guess
-  // is right and no tick spends an attempt on a batch the node refuses. The
-  // next one is held back by size, not memory: the order validator travels
-  // in every batch, and a batch one order larger leaves the batcher's wallet
-  // too little room.
-  it(`does not fit ${MAX_ORDERS_PER_BATCH + 1}`, () => {
-    const over = at_(MAX_ORDERS_PER_BATCH + 1);
+  // Named, the next order is held back by memory.
+  it(`does not fit ${MAX_ORDERS_PER_BATCH + 1} that way, for memory`, () => {
+    expect(batch('referenced', MAX_ORDERS_PER_BATCH + 1).memory).toBeGreaterThanOrEqual(MAX_TX_MEMORY);
+  });
+
+  it(`fits ${MAX_ORDERS_PER_BATCH_CARRIED} with it carried`, () => {
+    expect(fits(batch('carried', MAX_ORDERS_PER_BATCH_CARRIED))).toBe(true);
+  });
+
+  // Carried, it is held back by size: the validator travels in every batch,
+  // and one order more leaves the batcher's wallet too little room.
+  it(`does not fit ${MAX_ORDERS_PER_BATCH_CARRIED + 1} that way, for size`, () => {
+    const over = batch('carried', MAX_ORDERS_PER_BATCH_CARRIED + 1);
     expect(fits(over)).toBe(false);
     expect(over.memory).toBeLessThan(MAX_TX_MEMORY);
   });

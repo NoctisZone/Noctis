@@ -141,13 +141,12 @@ export interface BatchPlan {
  *
  * Measured, not estimated: `tests/curve-batch-evaluated.test.ts` builds the
  * batch the batcher sends and runs the real curve and order validators over
- * it. Each order now adds about the same again, some 2.5M of memory, because
- * the order validator checks the whole batch once rather than once per order.
- * Five orders from base addresses take 13.1M of Preprod's 17,500,000 and
- * 14,322 of 16,384 bytes. Six would take 15.6M, which fits, but 15,936 bytes,
- * which leaves the batcher's own wallet under 450 bytes: SIZE binds first,
- * because the order validator travels in every batch. Referencing it instead
- * of carrying it would free about 5.2 KB and make memory the limit, at six.
+ * it. Each order adds about the same again, some 2.5M of memory, because the
+ * order validator checks the whole batch once rather than once per order.
+ *
+ * With the order validator named by its published reference, six orders from
+ * base addresses take 15.6M of Preprod's 17,500,000 and 10,765 of 16,384
+ * bytes; seven take 18.2M, so MEMORY binds.
  *
  * Still a count rather than a computed budget. A batch refused anyway is
  * re-planned smaller (see shrinkBatchAfter), so this is the first guess rather
@@ -156,7 +155,15 @@ export interface BatchPlan {
  *
  * Re-measure if the curve or order validator changes, and on mainnet.
  */
-export const MAX_ORDERS_PER_BATCH = 5;
+export const MAX_ORDERS_PER_BATCH = 6;
+
+/**
+ * The same, when no reference to the order validator is published and each
+ * batch carries it. Six would still fit in memory, but at 15,936 bytes they
+ * leave the batcher's own wallet inputs and change under 450: SIZE binds, at
+ * five (14,322 bytes, 13.1M).
+ */
+export const MAX_ORDERS_PER_BATCH_CARRIED = 5;
 
 /**
  * When a submitted batch is refused whole, the next size to try — or null when
