@@ -367,15 +367,15 @@ describe('planBatch — what it leaves out', () => {
     expect(result.skipped[0]?.reason).toBe('exceeds-remaining-supply');
   });
 
-  // The number itself came from Preprod, not from a fixture: on the quadratic
-  // curve four orders used 15.59M memory and five were refused
-  // `ExUnitsTooBigUTxO` at 21.2M against a 17,500,000 cap.
+  // The number itself is measured, not chosen: curve-batch-evaluated.test.ts
+  // runs the real curve and order validators over the batch the batcher sends,
+  // and five orders are the most that leave the batcher's wallet room.
   //
   // Pinned as a literal so changing it is a deliberate act that fails a test.
-  // Nothing offline can tell whether 4 is RIGHT — only a node can — so this is
-  // a tripwire saying "re-measure", not a proof.
+  // An offline evaluation is not a node, so this stays a tripwire saying
+  // "re-measure" when either validator changes, and again on mainnet.
   it('keeps the ceiling at what was measured, or makes you say so', () => {
-    expect(MAX_ORDERS_PER_BATCH).toBe(4);
+    expect(MAX_ORDERS_PER_BATCH).toBe(5);
   });
 
   // This one is real: it fails if the planner stops applying a default at all,

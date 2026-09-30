@@ -1,17 +1,21 @@
 // ============================================================================
-// Noctis Zone — register the venue's withdraw scripts (CLI)
+// Noctis Zone — register the withdraw scripts (CLI)
 // ============================================================================
-// Registers the reward address of each named venue withdraw script, once per
+// Registers the reward address of each named withdraw script, once per
 // network, so the transactions that draw zero from it are accepted. Skips any
 // the chain already has, so it is safe to run again. See
 // venue-stake-registration.ts for why the deposit cannot be reclaimed.
+//
+// Three are the venue's. The fourth, `curveOrder`, is the launch package's
+// order validator, whose batch check every curve batch runs by withdrawing
+// zero from it: no batch can be built until it is registered.
 //
 // Input, one JSON object on stdin (never argv, which other processes can read):
 //   network                 'preprod' | 'preview' | 'mainnet'
 //   blockfrostProjectId
 //   payerSkeyExtendedHex + payerAddress, or payerMnemonic
-//   scripts                 any of 'royaltyWithdraw' | 'treasury' | 'redirect';
-//                           default ['royaltyWithdraw']
+//   scripts                 any of 'royaltyWithdraw' | 'treasury' | 'redirect' |
+//                           'curveOrder'; default ['royaltyWithdraw']
 //   dryRun                  price it without signing or submitting
 //
 // Output, one JSON object on stdout.
@@ -20,19 +24,43 @@
 import { BlockfrostProvider, MeshWallet } from '@meshsdk/core';
 import { KeyCurveSpendWallet } from '../key-curve-spend-wallet.js';
 import type { CurveNetwork, CurveSpendWallet } from '../mesh-curve-spend.js';
-import { MESH_NETWORK_ID } from '../reference-script.js';
+import { MESH_NETWORK_ID, scriptHashOf } from '../reference-script.js';
 import { VENUE_ROYALTY_WITHDRAW_TITLE } from '../venue-royalty-withdraw.js';
 import { registerVenueStakeScripts } from '../venue-stake-registration.js';
-import { jsonSafe, loadAppliedVenueValidator, parseJsonStdin, readStdin, requireField } from './cli-io.js';
+import {
+  jsonSafe,
+  loadAppliedVenueValidator,
+  loadPlutusBlueprint,
+  loadValidatorCbor,
+  parseJsonStdin,
+  readStdin,
+  requireField,
+} from './cli-io.js';
 
 declare const __dirname: string;
 
-const SCRIPT_TITLES = {
+/** The venue's, whose applied bytes are in its deployment record. */
+const VENUE_SCRIPT_TITLES = {
   royaltyWithdraw: VENUE_ROYALTY_WITHDRAW_TITLE,
   treasury: 'royalty_pool/treasury.treasury.withdraw',
   redirect: 'royalty_pool/redirect.redirect.withdraw',
 } as const;
-type ScriptName = keyof typeof SCRIPT_TITLES;
+/** The launch package's, which take no parameters and are in its blueprint. */
+const LAUNCH_SCRIPT_TITLES = {
+  curveOrder: 'curve_order.curve_order.withdraw',
+} as const;
+type VenueScriptName = keyof typeof VENUE_SCRIPT_TITLES;
+type LaunchScriptName = keyof typeof LAUNCH_SCRIPT_TITLES;
+type ScriptName = VenueScriptName | LaunchScriptName;
+
+function scriptHashFor(name: ScriptName): string {
+  if (name in LAUNCH_SCRIPT_TITLES) {
+    return scriptHashOf(
+      loadValidatorCbor(loadPlutusBlueprint(__dirname), LAUNCH_SCRIPT_TITLES[name as LaunchScriptName]),
+    );
+  }
+  return loadAppliedVenueValidator(__dirname, VENUE_SCRIPT_TITLES[name as VenueScriptName]).hash;
+}
 
 interface Input {
   network: CurveNetwork;
@@ -72,11 +100,11 @@ async function main() {
   const network = requireField(input, 'network');
   const projectId = requireField(input, 'blockfrostProjectId');
   const names = input.scripts?.length ? input.scripts : (['royaltyWithdraw'] as ScriptName[]);
+  const known = [...Object.keys(VENUE_SCRIPT_TITLES), ...Object.keys(LAUNCH_SCRIPT_TITLES)];
   for (const name of names) {
-    if (!(name in SCRIPT_TITLES))
-      throw new Error(`Unknown script "${name}". Known: ${Object.keys(SCRIPT_TITLES).join(', ')}.`);
+    if (!known.includes(name)) throw new Error(`Unknown script "${name}". Known: ${known.join(', ')}.`);
   }
-  const scriptHashes = names.map((name) => loadAppliedVenueValidator(__dirname, SCRIPT_TITLES[name]).hash);
+  const scriptHashes = names.map(scriptHashFor);
 
   const provider = new BlockfrostProvider(projectId);
   const result = await registerVenueStakeScripts({

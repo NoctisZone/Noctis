@@ -6,7 +6,9 @@
 // draws on, and the redirect a passed takeover draws on. Each runs because a
 // transaction withdraws zero from its reward address, and the ledger refuses a
 // withdrawal from a reward address that has not been registered. So each has
-// to be registered once, on each network, before its first use.
+// to be registered once, on each network, before its first use. The launch
+// package's order validator is registered the same way: every curve batch
+// withdraws zero from it to run its check over the batch's orders.
 //
 // **The certificate is the legacy stake registration**, the one that needs no
 // witness from the credential it registers. None of these scripts has a

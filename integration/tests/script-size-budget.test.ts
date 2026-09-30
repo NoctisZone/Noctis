@@ -44,6 +44,12 @@ for (const v of blueprint.validators) {
 /**
  * Measured 2026-08-08. Update in the same commit that moves one. Newest first.
  *
+ * curve_order +655, 2026-09-30: a batch is checked once. An order spent into a
+ * batch asks only for the order script's own zero withdrawal, and the
+ * withdraw handler checks every order the transaction spends in one pass, so
+ * a batch's cost grows with its orders rather than with their square. The
+ * other validators are byte for byte identical.
+ *
  * cto_governance +83, 2026-09-30: a ballot's cooldown starts when its result
  * settles, executed or expired, and any holder may clear a settled result so
  * the next can be recorded. The other validators are byte for byte identical.
@@ -382,7 +388,7 @@ const RECORDED: Record<string, number> = {
   bonding_curve_tier_b: 15_121,
   cto_governance: 8_450,
   cto_sybil_challenge: 3_457,
-  curve_order: 4_544,
+  curve_order: 5_199,
   launch_token_policy: 419,
   lp_escrow: 10_197,
   nhop_challenge: 3_359,
@@ -415,7 +421,7 @@ const RECORDED_HASHES: Record<string, string> = {
   bonding_curve_tier_b: 'f0799314b3a48270198d22cfcec6677eab498fbb208c4eed225b283b',
   cto_governance: '9e8837e92cc5db377ee2e56a2ee71d99548c4672f8391b286808aadf',
   cto_sybil_challenge: '5f008c1306d25d435d69ee541da68bc9a7f3036ffb616a553be8c969',
-  curve_order: 'db34df4b2be92eea1458fc11248255f1ef3ecad93d47196f934d7397',
+  curve_order: 'ab46bdc463b730d0434d5d63b93006cf4a4133f7ba0daa8079086f1e',
   launch_token_policy: 'd77d785500b7bb5a80bdf8104651b13e59d546d222ce7ab22bb60965',
   lp_escrow: '8d93ea5a27a9bbb3387bf3542c482faf9d8fee82cbcbb7c6b2bd9676',
   nhop_challenge: '6ee0182f918173af74c52880e537529f7fc678f5f9859294f4015f90',

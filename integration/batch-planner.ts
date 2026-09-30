@@ -139,23 +139,24 @@ export interface BatchPlan {
 /**
  * Most orders one batch can carry.
  *
- * The binding limit is EXECUTION MEMORY, not transaction size, and it grows
- * faster than the order count: every order's own spend reads the whole
- * transaction, so each order added makes every other order dearer. Measured on
- * Preprod against the quadratic curve (2026-09-25), memory per batch: one order
- * 3.1M, two 6.5M, four 15.59M, five 21.2M — refused `ExUnitsTooBigUTxO`
- * against a 17,500,000 cap, with steps at three quarters of theirs. Buys and
- * sells cost the same.
+ * Measured, not estimated: `tests/curve-batch-evaluated.test.ts` builds the
+ * batch the batcher sends and runs the real curve and order validators over
+ * it. Each order now adds about the same again, some 2.5M of memory, because
+ * the order validator checks the whole batch once rather than once per order.
+ * Five orders from base addresses take 13.1M of Preprod's 17,500,000 and
+ * 14,322 of 16,384 bytes. Six would take 15.6M, which fits, but 15,936 bytes,
+ * which leaves the batcher's own wallet under 450 bytes: SIZE binds first,
+ * because the order validator travels in every batch. Referencing it instead
+ * of carrying it would free about 5.2 KB and make memory the limit, at six.
  *
- * Still a count rather than a computed budget: per-order cost also moves with
- * the cap proof each order carries, which lengthens as more wallets trade. A
- * batch refused anyway is re-planned smaller (see shrinkBatchAfter), so this is
- * the first guess rather than the only guard — but a guess that is too high
- * costs every tick an extra attempt, so it stays at what was measured to fit.
+ * Still a count rather than a computed budget. A batch refused anyway is
+ * re-planned smaller (see shrinkBatchAfter), so this is the first guess rather
+ * than the only guard, but a guess that is too high costs every tick an extra
+ * attempt, so it stays at what was measured to fit.
  *
- * Re-measure if the curve or order validator changes.
+ * Re-measure if the curve or order validator changes, and on mainnet.
  */
-export const MAX_ORDERS_PER_BATCH = 4;
+export const MAX_ORDERS_PER_BATCH = 5;
 
 /**
  * When a submitted batch is refused whole, the next size to try — or null when

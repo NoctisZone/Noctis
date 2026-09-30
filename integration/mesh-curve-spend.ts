@@ -44,6 +44,7 @@ import {
   MeshTxBuilder,
   type UTxO as MeshUTxO,
   resolveSlotNo,
+  serializeRewardAddress,
 } from '@meshsdk/core';
 import { deserializeTx } from '@meshsdk/core-cst';
 import {
@@ -204,12 +205,33 @@ export interface CurveBatchPlan {
   redeemerCbor: string;
   /** The order UTXOs, each spent with the embedded order validator. */
   orderInputs: Array<{ utxo: PlanScriptUtxo; redeemerCbor: string }>;
-  /** The order validator, raw compiled CBOR. Wrapped before use. */
+  /**
+   * The order validator, raw compiled CBOR. Wrapped before use. Carried once,
+   * for the order spends and for the withdrawal that runs its batch check.
+   */
   orderScriptCbor: string;
   continuing: { datumCbor: string; assets: PlanAssets };
   payouts: PlanPayout[];
   requiredSignerHashes: string[];
   validity?: { fromMs: number; toMs: number };
+}
+
+/**
+ * The redeemer the order validator's batch check runs under. The check reads
+ * nothing from it: everything it holds the batch to is in the transaction.
+ */
+export const ORDER_BATCH_CHECK_REDEEMER = 'd87980';
+
+/**
+ * The reward address a batch withdraws zero from, which is what runs the order
+ * validator's check over every order the batch spends.
+ *
+ * It has to be registered on each network before the first batch. The ledger
+ * refuses a withdrawal from an unregistered reward address, so until then no
+ * batch can be built, and every order can still be cancelled.
+ */
+export function orderRewardAddress(orderScriptCbor: string, network: CurveNetwork): string {
+  return serializeRewardAddress(scriptHashOf(orderScriptCbor), true, MESH_NETWORK_ID[network]);
 }
 
 /**
@@ -554,6 +576,14 @@ export class MeshCurveSpender {
         .txInInlineDatumPresent()
         .txInRedeemerValue(input.redeemerCbor, 'CBOR');
     }
+
+    // What every order's spend asks for: zero withdrawn from the order
+    // validator's own reward address, which runs its batch check once over all
+    // of them. The script is the one the spends already carry.
+    tx.withdrawalPlutusScriptV3()
+      .withdrawal(orderRewardAddress(plan.orderScriptCbor, this.config.network), '0')
+      .withdrawalScript(orderScript)
+      .withdrawalRedeemerValue(ORDER_BATCH_CHECK_REDEEMER, 'CBOR');
 
     tx.txOut(this.ref.scriptAddress, toMesh(plan.continuing.assets)).txOutInlineDatumValue(
       plan.continuing.datumCbor,

@@ -9,6 +9,8 @@
 // The shape, and every part of it is checked on chain:
 //
 //   inputs    the curve (BatchTrades) + one per order (ApplyOrder)
+//   withdraw  zero from the order validator's reward address, which runs its
+//             check over every order at once; each order's spend asks for it
 //   outputs   the curve's continuing state, then ONE per order: the fill and
 //             the change that order did not spend, together, NAMING the order
 //             it settles
@@ -232,86 +234,17 @@ export class BatcherSubmitter {
     batcherWallet: CurveSpendWallet,
     params: SubmitBatchParams,
   ): Promise<BatchResult> {
-    const { plan, curveUtxo } = params;
-    const fee = params.batcherFeeLovelace ?? 0n;
-
-    if (plan.fills.length === 0) {
-      throw new Error('Nothing to batch: the plan filled no orders. An empty batch moves the curve for nothing.');
-    }
-
-    const batcherKeyHash = keyHashOf(batcherAddress);
-
-    const currentDatum = this.decodeCurve(curveUtxo);
-    const tokenUnit = toUnit(currentDatum.token_policy_id, currentDatum.token_asset_name);
-
-    // Each fill names an order UTXO; that UTXO has to be one of the inputs.
-    const byRef = new Map(params.orderUtxos.map((u) => [`${u.txHash}#${u.outputIndex}`, u]));
-    const spentOrders: UTxO[] = [];
-    for (const f of plan.fills) {
-      const key = `${f.order.txHash}#${f.order.outputIndex}`;
-      const utxo = byRef.get(key);
-      if (!utxo) {
-        throw new Error(`The plan fills order ${key}, but no UTXO for it was supplied.`);
-      }
-      spentOrders.push(utxo);
-    }
-
-    // The outputs, decided before anything is built so the fee arithmetic is
-    // in one place: per fill, what the owner receives and what comes back.
-    const payouts: CurveBatchPlan['payouts'] = [];
-    let batcherFeeTotal = 0n;
-    for (const f of plan.fills) {
-      // The address the order was placed FROM, staking part included — a fill
-      // paid to the bare enterprise address is the owner's and unspendable by
-      // an ordinary wallet. See ownerAddressFrom.
-      const owner = ownerAddressFrom(
-        f.order.ownerKeyHashHex,
-        this.config.network,
-        f.order.ownerStake as Parameters<typeof ownerAddressFrom>[2],
-      );
-      const tag = settlementDatum({ txHash: f.order.txHash, outputIndex: f.order.outputIndex });
-
-      // What the batcher takes, from a buy only, and never more than the part
-      // of the order's budget the curve left: `maxSpend` less what the curve
-      // charged. The order validator wants everything the order held above
-      // `maxSpend` back, so a cut measured against the whole change could
-      // reach into that reserve and fail the whole batch.
-      const kept = f.order.isBuy ? min(fee, f.order.maxSpend - f.gross) : 0n;
-      batcherFeeTotal += kept;
-
-      // The curve looks for exactly this tag paying exactly this owner, and
-      // will not accept an output naming a different order.
-      payouts.push({ address: owner, assets: orderPayout(f, tokenUnit, kept), datumCbor: tag });
-    }
-
-    const batchPlan: CurveBatchPlan = {
-      scriptUtxo: {
-        txHash: curveUtxo.txHash,
-        outputIndex: curveUtxo.outputIndex,
-        address: this.curveAddress,
-        assets: curveUtxo.assets,
-      },
-      redeemerCbor: Data.to(this.batchRedeemer(plan, batcherKeyHash)),
-      orderInputs: spentOrders.map((utxo) => ({
-        utxo: {
-          txHash: utxo.txHash,
-          outputIndex: utxo.outputIndex,
-          address: this.orderAddress,
-          assets: utxo.assets,
-        },
-        redeemerCbor: Data.to(new Constr(REDEEMER_APPLY_ORDER, [])),
-      })),
+    const { plan, batcherFeeTotal } = batchTransactionPlan({
+      tier: this.config.tier,
+      network: this.config.network,
+      curveAddress: this.curveAddress,
+      orderAddress: this.orderAddress,
       orderScriptCbor: this.config.orderScriptCbor,
-      continuing: {
-        datumCbor: this.encodeCurve(this.nextCurveDatum(currentDatum, plan)),
-        assets: this.nextCurveAssets(curveUtxo, plan, tokenUnit),
-      },
-      payouts,
-      requiredSignerHashes: [batcherKeyHash],
-    };
-
-    const txHash = await this.spender.submitBatch(batchPlan, batcherWallet);
-    return { txHash, ordersFilled: plan.fills.length, batcherFeeTotal };
+      batcherKeyHash: keyHashOf(batcherAddress),
+      params,
+    });
+    const txHash = await this.spender.submitBatch(plan, batcherWallet);
+    return { txHash, ordersFilled: params.plan.fills.length, batcherFeeTotal };
   }
 
   /** The batcher's own wallet, in the shape the referenced builder takes. */
@@ -331,65 +264,173 @@ export class BatcherSubmitter {
       key: { type: 'mnemonic', words: mnemonic.trim().split(/\s+/) },
     }) as unknown as CurveSpendWallet;
   }
+}
 
-  /** `BatchTrades { orders, batcher_key_hash }`, hand-built at its real index. */
-  private batchRedeemer(plan: BatchPlan, batcherKeyHash: string): Constr<Data> {
-    const orders = plan.fills.map((f) =>
-      batchOrderToPlutus({
-        ownerKeyHashHex: f.order.ownerKeyHashHex,
-        orderRef: { txHash: f.order.txHash, outputIndex: f.order.outputIndex },
-        isBuy: f.order.isBuy,
-        amount: f.order.amount,
-        minReceived: f.order.minReceived,
-        capCommittedBefore: f.capCommittedBefore,
-        capProof: f.capProof,
-      }),
+/** What a batch transaction is assembled from. */
+export interface BatchTransactionInputs {
+  tier: BatchTier;
+  network: LucidNetwork;
+  curveAddress: string;
+  orderAddress: string;
+  /** `curve_order.ak`'s compiled script, carried for the spends and the withdrawal. */
+  orderScriptCbor: string;
+  /** The batcher's payment key hash, which the redeemer names and the curve requires. */
+  batcherKeyHash: string;
+  params: SubmitBatchParams;
+}
+
+/**
+ * The transaction a plan describes, decided without touching the chain: which
+ * UTXOs it spends under which redeemers, what each owner is paid and how the
+ * curve moves. Kept apart from the submitter so a test can hand it to the real
+ * validators exactly as a batch would.
+ *
+ * The plan is taken as given — it was produced against the same curve datum
+ * this transaction spends, and re-deriving it here would only introduce a
+ * second opinion. What this checks is that the plan and the UTXOs handed in
+ * actually correspond, because a mismatch there produces a transaction that
+ * fails for reasons naming neither.
+ */
+export function batchTransactionPlan(inputs: BatchTransactionInputs): {
+  plan: CurveBatchPlan;
+  batcherFeeTotal: bigint;
+} {
+  const { tier, network, curveAddress, orderAddress, orderScriptCbor, batcherKeyHash, params } = inputs;
+  const { plan, curveUtxo } = params;
+  const fee = params.batcherFeeLovelace ?? 0n;
+
+  if (plan.fills.length === 0) {
+    throw new Error('Nothing to batch: the plan filled no orders. An empty batch moves the curve for nothing.');
+  }
+
+  const currentDatum = decodeCurve(tier, curveUtxo);
+  const tokenUnit = toUnit(currentDatum.token_policy_id, currentDatum.token_asset_name);
+
+  // Each fill names an order UTXO; that UTXO has to be one of the inputs.
+  const byRef = new Map(params.orderUtxos.map((u) => [`${u.txHash}#${u.outputIndex}`, u]));
+  const spentOrders: UTxO[] = [];
+  for (const f of plan.fills) {
+    const key = `${f.order.txHash}#${f.order.outputIndex}`;
+    const utxo = byRef.get(key);
+    if (!utxo) {
+      throw new Error(`The plan fills order ${key}, but no UTXO for it was supplied.`);
+    }
+    spentOrders.push(utxo);
+  }
+
+  // The outputs, decided before anything is built so the fee arithmetic is
+  // in one place: per fill, what the owner receives and what comes back.
+  const payouts: CurveBatchPlan['payouts'] = [];
+  let batcherFeeTotal = 0n;
+  for (const f of plan.fills) {
+    // The address the order was placed FROM, staking part included — a fill
+    // paid to the bare enterprise address is the owner's and unspendable by
+    // an ordinary wallet. See ownerAddressFrom.
+    const owner = ownerAddressFrom(
+      f.order.ownerKeyHashHex,
+      network,
+      f.order.ownerStake as Parameters<typeof ownerAddressFrom>[2],
     );
-    return new Constr(REDEEMER_BATCH_TRADES[this.config.tier], [orders as unknown as Data, batcherKeyHash as Data]);
+    const tag = settlementDatum({ txHash: f.order.txHash, outputIndex: f.order.outputIndex });
+
+    // What the batcher takes, from a buy only, and never more than the part
+    // of the order's budget the curve left: `maxSpend` less what the curve
+    // charged. The order validator wants everything the order held above
+    // `maxSpend` back, so a cut measured against the whole change could
+    // reach into that reserve and fail the whole batch.
+    const kept = f.order.isBuy ? min(fee, f.order.maxSpend - f.gross) : 0n;
+    batcherFeeTotal += kept;
+
+    // The curve looks for exactly this tag paying exactly this owner, and
+    // will not accept an output naming a different order.
+    payouts.push({ address: owner, assets: orderPayout(f, tokenUnit, kept), datumCbor: tag });
   }
 
-  /**
-   * The curve's continuing value.
-   *
-   * Built from what the curve actually holds plus the plan's own deltas — the
-   * validator compares its output against its input the same way, so deriving
-   * this from anything else would be a second opinion that has to agree.
-   */
-  private nextCurveAssets(curveUtxo: UTxO, plan: BatchPlan, tokenUnit: string): Assets {
-    const next: Assets = { ...curveUtxo.assets };
-    next.lovelace = (next.lovelace ?? 0n) + plan.curveLovelaceDelta;
-    next[tokenUnit] = (next[tokenUnit] ?? 0n) - plan.curveTokensSoldDelta;
-    return next;
-  }
+  const batchPlan: CurveBatchPlan = {
+    scriptUtxo: {
+      txHash: curveUtxo.txHash,
+      outputIndex: curveUtxo.outputIndex,
+      address: curveAddress,
+      assets: curveUtxo.assets,
+    },
+    redeemerCbor: Data.to(batchRedeemer(tier, plan, batcherKeyHash)),
+    orderInputs: spentOrders.map((utxo) => ({
+      utxo: {
+        txHash: utxo.txHash,
+        outputIndex: utxo.outputIndex,
+        address: orderAddress,
+        assets: utxo.assets,
+      },
+      redeemerCbor: Data.to(new Constr(REDEEMER_APPLY_ORDER, [])),
+    })),
+    orderScriptCbor,
+    continuing: {
+      datumCbor: encodeCurve(tier, nextCurveDatum(currentDatum, plan)),
+      assets: nextCurveAssets(curveUtxo, plan, tokenUnit),
+    },
+    payouts,
+    requiredSignerHashes: [batcherKeyHash],
+  };
+  return { plan: batchPlan, batcherFeeTotal };
+}
 
-  private nextCurveDatum(
-    current: BondingCurveDatumData | BondingCurveTierBDatumData,
-    plan: BatchPlan,
-  ): BondingCurveDatumData | BondingCurveTierBDatumData {
-    const graduated = plan.next.tokens_sold === current.curve_supply;
-    return {
-      ...current,
-      tokens_sold: plan.next.tokens_sold,
-      total_raised: plan.next.total_raised,
-      creator_fees_accrued: plan.next.creator_fees_accrued,
-      platform_fees_accrued: plan.next.platform_fees_accrued,
-      curve_state: graduated ? 'Graduated' : current.curve_state,
-      cap_root: plan.next.cap_root,
-    } as BondingCurveDatumData | BondingCurveTierBDatumData;
-  }
+/** `BatchTrades { orders, batcher_key_hash }`, hand-built at its real index. */
+function batchRedeemer(tier: BatchTier, plan: BatchPlan, batcherKeyHash: string): Constr<Data> {
+  const orders = plan.fills.map((f) =>
+    batchOrderToPlutus({
+      ownerKeyHashHex: f.order.ownerKeyHashHex,
+      orderRef: { txHash: f.order.txHash, outputIndex: f.order.outputIndex },
+      isBuy: f.order.isBuy,
+      amount: f.order.amount,
+      minReceived: f.order.minReceived,
+      capCommittedBefore: f.capCommittedBefore,
+      capProof: f.capProof,
+    }),
+  );
+  return new Constr(REDEEMER_BATCH_TRADES[tier], [orders as unknown as Data, batcherKeyHash as Data]);
+}
 
-  private decodeCurve(utxo: UTxO): BondingCurveDatumData | BondingCurveTierBDatumData {
-    if (!utxo.datum) throw new Error('The curve UTXO carries no inline datum.');
-    return this.config.tier === 'A'
-      ? Data.from<BondingCurveDatumData>(utxo.datum, BondingCurveDatumSchema)
-      : Data.from<BondingCurveTierBDatumData>(utxo.datum, BondingCurveTierBDatumSchema);
-  }
+/**
+ * The curve's continuing value.
+ *
+ * Built from what the curve actually holds plus the plan's own deltas — the
+ * validator compares its output against its input the same way, so deriving
+ * this from anything else would be a second opinion that has to agree.
+ */
+function nextCurveAssets(curveUtxo: UTxO, plan: BatchPlan, tokenUnit: string): Assets {
+  const next: Assets = { ...curveUtxo.assets };
+  next.lovelace = (next.lovelace ?? 0n) + plan.curveLovelaceDelta;
+  next[tokenUnit] = (next[tokenUnit] ?? 0n) - plan.curveTokensSoldDelta;
+  return next;
+}
 
-  private encodeCurve(datum: BondingCurveDatumData | BondingCurveTierBDatumData): string {
-    return this.config.tier === 'A'
-      ? Data.to<BondingCurveDatumData>(datum as BondingCurveDatumData, BondingCurveDatumSchema)
-      : Data.to<BondingCurveTierBDatumData>(datum as BondingCurveTierBDatumData, BondingCurveTierBDatumSchema);
-  }
+function nextCurveDatum(
+  current: BondingCurveDatumData | BondingCurveTierBDatumData,
+  plan: BatchPlan,
+): BondingCurveDatumData | BondingCurveTierBDatumData {
+  const graduated = plan.next.tokens_sold === current.curve_supply;
+  return {
+    ...current,
+    tokens_sold: plan.next.tokens_sold,
+    total_raised: plan.next.total_raised,
+    creator_fees_accrued: plan.next.creator_fees_accrued,
+    platform_fees_accrued: plan.next.platform_fees_accrued,
+    curve_state: graduated ? 'Graduated' : current.curve_state,
+    cap_root: plan.next.cap_root,
+  } as BondingCurveDatumData | BondingCurveTierBDatumData;
+}
+
+function decodeCurve(tier: BatchTier, utxo: UTxO): BondingCurveDatumData | BondingCurveTierBDatumData {
+  if (!utxo.datum) throw new Error('The curve UTXO carries no inline datum.');
+  return tier === 'A'
+    ? Data.from<BondingCurveDatumData>(utxo.datum, BondingCurveDatumSchema)
+    : Data.from<BondingCurveTierBDatumData>(utxo.datum, BondingCurveTierBDatumSchema);
+}
+
+function encodeCurve(tier: BatchTier, datum: BondingCurveDatumData | BondingCurveTierBDatumData): string {
+  return tier === 'A'
+    ? Data.to<BondingCurveDatumData>(datum as BondingCurveDatumData, BondingCurveDatumSchema)
+    : Data.to<BondingCurveTierBDatumData>(datum as BondingCurveTierBDatumData, BondingCurveTierBDatumSchema);
 }
 
 function min(a: bigint, b: bigint): bigint {
