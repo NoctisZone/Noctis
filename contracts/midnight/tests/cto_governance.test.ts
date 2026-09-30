@@ -2298,9 +2298,17 @@ describe('cto_governance.compact — the second vote on a taken-over creator all
     expect(() => propose(afterTakeover(), ProposalType.VestingToLp, 0n)).toThrow(/VestingToLp must name/);
   });
 
-  it('accepts a top-up of an existing pool and a new pool at either end of the runway range', () => {
+  // One case per test: each builds a whole takeover first, and three in one
+  // test ran past the default timeout on a CI runner.
+  it('accepts a top-up of an existing pool', () => {
     expect(() => propose(afterTakeover(), ProposalType.VestingToStaking, 0n)).not.toThrow();
+  });
+
+  it('accepts a new pool at the shortest runway', () => {
     expect(() => propose(afterTakeover(), ProposalType.VestingToStaking, 1095n)).not.toThrow();
+  });
+
+  it('accepts a new pool at the longest runway', () => {
     expect(() => propose(afterTakeover(), ProposalType.VestingToStaking, 1825n)).not.toThrow();
   });
 
