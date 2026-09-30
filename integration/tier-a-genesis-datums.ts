@@ -278,10 +278,10 @@ export interface BuildGenesisDatumsInput {
    */
   bondPayoutPubKeyHashHex: string;
   /**
-   * Ballot window width in seconds (CLAUDE.md CTO_VOTE_WINDOW_HRS = 72).
-   * Defaults to 259200. An anchored vote result must describe a window
-   * exactly this wide, so a launch running a different ballot length has to
-   * set it here.
+   * Ballot window width in seconds, as the Midnight ballot runs it (CLAUDE.md
+   * CTO_VOTE_WINDOW_HRS = 72). Defaults to 259200. The record stores it in
+   * milliseconds. An anchored vote result must describe a window exactly this
+   * wide, so a launch running a different ballot length has to set it here.
    */
   ballotDurationSeconds?: number;
   // CTO constants (CLAUDE.md) — defaults match cto_governance.ak's own
@@ -734,7 +734,10 @@ export async function buildGenesisDatums(input: BuildGenesisDatumsInput) {
     pending_relayer_key_hash: '',
     payout_pub_key_hash: input.bondPayoutPubKeyHashHex,
     thread_nft_policy: threadNftPolicyId,
-    ballot_duration: BigInt(ballotDurationSeconds),
+    // Milliseconds, like every time on this record. The Midnight ballot runs in
+    // seconds; the relayer carries its window across as milliseconds, and the
+    // anchor holds that window to exactly this width.
+    ballot_duration: BigInt(ballotDurationSeconds) * 1000n,
     // No ballot has run at genesis, so there is nothing to cool down from and
     // a launch's first one is never held back. The validator reads 0 as
     // exactly that rather than as a timestamp in 1970.

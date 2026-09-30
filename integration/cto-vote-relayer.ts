@@ -158,12 +158,28 @@ export interface MidnightProposalLike {
   voterCount: bigint;
   creatorYesVotes: bigint;
   creatorNoVotes: bigint;
+  /** POSIX seconds, as the Midnight ballot keeps time. */
   startTimestamp: bigint;
+  /** POSIX seconds, as the Midnight ballot keeps time. */
   endTimestamp: bigint;
   allocationAmount: bigint;
   allocationRecipient: Uint8Array;
   /** Only meaningful for DexMigration/WhitelistUpdate — see this file's header for the ScriptCredential-always encoding decision. */
   targetDexAddr: Uint8Array;
+}
+
+/**
+ * A Midnight ballot time, in POSIX seconds, as the Cardano governance record
+ * keeps it: milliseconds. Every time on that record is compared with a
+ * transaction's validity range, the launch's graduation time and the ballot
+ * cooldown, all milliseconds. A value already at millisecond scale is refused
+ * rather than scaled twice.
+ */
+export function midnightSecondsToCardanoMs(seconds: bigint): bigint {
+  if (seconds < 0n || seconds >= 1_000_000_000_000n) {
+    throw new Error(`${seconds} is not a Midnight ballot time in seconds.`);
+  }
+  return seconds * 1000n;
 }
 
 export interface BuiltVoteResult {
@@ -246,8 +262,10 @@ export function buildVoteResultFromProposal(
     creatorYesVotes: proposal.creatorYesVotes,
     creatorNoVotes: proposal.creatorNoVotes,
     outcome,
-    startTimestamp: proposal.startTimestamp,
-    endTimestamp: proposal.endTimestamp,
+    // The bundle above keeps the ballot's own seconds, for anyone checking it
+    // against Midnight; the anchor keeps the record's milliseconds.
+    startTimestamp: midnightSecondsToCardanoMs(proposal.startTimestamp),
+    endTimestamp: midnightSecondsToCardanoMs(proposal.endTimestamp),
     anchorTimestamp,
     targetDexCredential,
     allocationAmount: proposal.allocationAmount,

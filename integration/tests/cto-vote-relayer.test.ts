@@ -1,11 +1,16 @@
+import { Data } from '@lucid-evolution/lucid';
 import { describe, expect, it } from 'vitest';
 import { ProposalState, ProposalType } from '../../contracts/midnight/compiled/cto_governance/contract/index.js';
+import { CtoGovernanceDatumSchema } from '../cardano-cto-anchor-submitter.js';
 import {
   buildVoteResultFromProposal,
   computeCtoVoteProofBundleHash,
   type MidnightProposalLike,
+  midnightSecondsToCardanoMs,
   toCardanoProposalType,
 } from '../cto-vote-relayer.js';
+import { buildGenesisDatums } from '../tier-a-genesis-datums.js';
+import { BLUEPRINT } from './support/takeover-chain.js';
 
 function fakeBytes(fill: number): Uint8Array {
   return new Uint8Array(32).fill(fill);
@@ -212,5 +217,68 @@ describe('cto-vote-relayer.ts — computeCtoVoteProofBundleHash', () => {
     });
     expect(hash).toBeInstanceOf(Uint8Array);
     expect(hash.length).toBe(32);
+  });
+});
+
+describe('cto-vote-relayer.ts — the ballot window crosses from seconds to milliseconds', () => {
+  // A real ballot: Midnight stamps it in POSIX seconds, 72 hours wide.
+  const START_S = 1_790_000_000n;
+  const END_S = START_S + 259_200n;
+
+  it('anchors the window in milliseconds and keeps the Midnight seconds in the bundle', () => {
+    const result = buildVoteResultFromProposal(
+      fakeProposal({ startTimestamp: START_S, endTimestamp: END_S }),
+      'aa',
+      'bb',
+      'cc',
+    );
+    expect(result.params.startTimestamp).toBe(1_790_000_000_000n);
+    expect(result.params.endTimestamp).toBe(1_790_259_200_000n);
+    expect(result.bundle.startTimestamp).toBe('1790000000');
+    expect(result.bundle.endTimestamp).toBe('1790259200');
+  });
+
+  it('describes a window exactly as wide as the one a launch records at mint', async () => {
+    const genesis = await buildGenesisDatums({
+      blueprint: BLUEPRINT as never,
+      network: 'preprod',
+      tier: 'B',
+      creatorPubKeyHashHex: '11'.repeat(28),
+      governorPubKeyHashHex: '22'.repeat(28),
+      bondPayoutPubKeyHashHex: '44'.repeat(28),
+      tokenPolicyIdHex: 'bb'.repeat(28),
+      tokenBaseNameHex: Buffer.from('WIDTH').toString('hex'),
+      tokenName: 'Width',
+      tokenDescription: 'A launch whose ballot window is measured.',
+      threadNftPolicyIdHex: 'a1'.repeat(28),
+      poolNftPolicyIdHex: 'a2'.repeat(28),
+      basePrice: 3,
+      maxPrice: 75,
+      creatorAllocPct: 5,
+      vestDays: 180,
+    });
+    const record = Data.from(genesis.datums.ctoGovernance, CtoGovernanceDatumSchema);
+    const { params } = buildVoteResultFromProposal(
+      fakeProposal({ startTimestamp: START_S, endTimestamp: END_S }),
+      'aa',
+      'bb',
+      'cc',
+    );
+    // Both sides in milliseconds: the record compares this window with the
+    // graduation time and the cooldown, which are.
+    expect(record.ballot_duration).toBe(259_200_000n);
+    expect(params.endTimestamp - params.startTimestamp).toBe(record.ballot_duration);
+  });
+
+  it('refuses a time already at millisecond scale rather than scaling it twice', () => {
+    expect(() => midnightSecondsToCardanoMs(1_790_000_000_000n)).toThrow(/not a Midnight ballot time/);
+    expect(() =>
+      buildVoteResultFromProposal(
+        fakeProposal({ startTimestamp: 1_790_000_000_000n, endTimestamp: 1_790_259_200_000n }),
+        'aa',
+        'bb',
+        'cc',
+      ),
+    ).toThrow(/not a Midnight ballot time/);
   });
 });
