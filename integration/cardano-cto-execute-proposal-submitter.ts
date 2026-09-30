@@ -158,6 +158,8 @@ export class CardanoCtoExecuteProposalSubmitter {
       community_wallet_hash: newCommunityWalletHash,
       active_proposal: executedProposal,
       last_executed_proposal: executedProposal,
+      // The ballot ran its course: the cooldown before the next starts here.
+      last_ballot_end_timestamp: proposal.end_timestamp,
     };
 
     // No value moves — the continuing output keeps the anchor UTXO's own

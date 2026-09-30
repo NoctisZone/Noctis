@@ -213,7 +213,7 @@ pub type CtoGovernanceDatum {
   // Proposal history count
   proposal_count: Int,
   // Fix: set (never cleared) by ExecuteProposal, independent
-  // of active_proposal — which ClearProposal (governor-only) can wipe.
+  // of active_proposal — which ClearProposal can wipe once settled.
   // Without this, a governor could let a vote pass, then call
   // ClearProposal before any downstream TriggerCTO/DissolveCTO reference-
   // input check ever ran against it, silently erasing the only on-chain
@@ -301,10 +301,14 @@ pub type CtoGovernanceDatum {
   // starts a cooldown too, which is exactly what a repeat challenger would
   // otherwise exploit: fail, clear, and immediately try again.
   //
-  // Written on every anchor, from the ballot's own end_timestamp. Read by the
-  // next anchor, which must describe a ballot starting a full cooldown later.
-  // 0 is the genesis value and means "no ballot yet", so a launch's first one
-  // is never held back.
+  // Written when a ballot's result is SETTLED — executed, or expired unexecuted
+  // after its 30-day window — from the ballot's own end_timestamp, never when
+  // the result is merely recorded. Every result that ran its course settles one
+  // of those two ways before the slot can be cleared, a failed ballot included,
+  // so every such ballot starts a cooldown; a result the governor voids never
+  // ran its course and holds nothing back. Read by the next anchor, which must
+  // describe a ballot starting a full cooldown later. 0 is the genesis value and
+  // means "no ballot yet", so a launch's first one is never held back.
   last_ballot_end_timestamp: Int,
 }
 
@@ -351,7 +355,8 @@ pub type CtoGovernanceRedeemer {
   ExecuteProposal { current_timestamp: Int }
   /// Mark proposal as expired (if not executed within 30 days)
   ExpireProposal { current_timestamp: Int }
-  /// Clear the active proposal (after execution or expiry)
+  /// Clear the active proposal once it has settled (executed or expired)
+  /// and its relayer bond has been paid out. Permissionless.
   ClearProposal
   /// Emergency: the governor STOPS payouts to a community wallet believed
   /// compromised. It cannot choose where they go instead.
@@ -944,10 +949,9 @@ validator cto_governance {
             proposal_count: datum.proposal_count + 1,
             pending_relayer_bond: relayer_bond,
             pending_relayer_key_hash: relayer_credential_hash,
-            // Recorded here rather than on execution, so a ballot that failed
-            // — or one that passed and was never executed — still starts the
-            // cooldown. This is the field the NEXT anchor is measured against.
-            last_ballot_end_timestamp: end_timestamp,
+            // last_ballot_end_timestamp is carried through untouched: the
+            // cooldown starts when this result settles (ExecuteProposal or
+            // ExpireProposal), not when it is recorded.
           }
           let new_datum = own_continuing_datum(self, own_ref)
 
@@ -1075,6 +1079,8 @@ validator cto_governance {
               // Enforcement: permanent record for downstream reference-
               // input checks — see the field's own doc comment above.
               last_executed_proposal: Some(executed_proposal),
+              // The ballot ran its course: the cooldown starts from its end.
+              last_ballot_end_timestamp: proposal.end_timestamp,
             },
           }
         }
@@ -1172,6 +1178,9 @@ validator cto_governance {
             new_datum == CtoGovernanceDatum {
               ..datum,
               active_proposal: Some(expired_proposal),
+              // Failed, or passed and never executed: either way the ballot
+              // ran, so the cooldown starts from its end.
+              last_ballot_end_timestamp: proposal.end_timestamp,
             },
             // Marking a proposal expired settles nothing. The relayer's bond
             // stays here for ReclaimRelayerBond, which is the only path that
@@ -1180,13 +1189,15 @@ validator cto_governance {
           }
         }
 
+        // Permissionless. Only a settled record can be cleared, with its bond
+        // already paid out, and clearing touches nothing but the slot, so any
+        // holder may free it for the next ballot's result.
         ClearProposal -> {
           expect Some(proposal) = datum.active_proposal
           let new_datum = own_continuing_datum(self, own_ref)
           and {
-            list.has(self.extra_signatories, datum.governor_credential_hash),
             proposal.execution_status == Executed || proposal.execution_status == Expired,
-            // Fix: without this, a governor could ClearProposal (which
+            // Fix: without this, a caller could ClearProposal (which
             // resets active_proposal to None) BEFORE the relayer calls
             // ReclaimRelayerBond — which itself requires `datum.
             // active_proposal` to be Some — permanently stranding a
@@ -1562,6 +1573,7 @@ fn anchor_spend_with_window_and_grad(
     anchor_timestamp,
     mock_lp_ref_input(lp_lock_timestamp),
     None,
+    None,
   )
 }
 
@@ -1583,6 +1595,7 @@ fn anchor_spend_with_planted_reference(
     eligible_start + 500,
     mock_lp_ref_input(mock_grad_ts),
     Some(planted),
+    None,
   )
 }
 
@@ -1597,6 +1610,7 @@ fn anchor_spend_with_foreign_lp_datum(datum: CtoGovernanceDatum) -> Bool {
     eligible_start + 500,
     mock_lp_ref_input_foreign_datum(),
     None,
+    None,
   )
 }
 
@@ -1607,6 +1621,7 @@ fn anchor_spend_with_lp_ref(
   anchor_timestamp: Int,
   lp_ref: Input,
   reference_override: Option<ByteArray>,
+  recorded_last_end: Option<Int>,
 ) -> Bool {
   let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
   let own_address = from_verification_key(#"cc")
@@ -1635,10 +1650,14 @@ fn anchor_spend_with_lp_ref(
     proposal_count: datum.proposal_count + 1,
     pending_relayer_bond: 25_000_000,
     pending_relayer_key_hash: #"33",
-    // The anchor records the ballot's end as the cooldown's start. Spelled
-    // out here rather than spread from `datum`, so if the validator stopped
-    // writing it these fixtures would disagree with what it produces.
-    last_ballot_end_timestamp: end_timestamp,
+    // Recording a result leaves the cooldown where it was: it starts when the
+    // result settles. Spelled out rather than spread from `datum`, so a
+    // validator that wrote the ballot's end here would fail this equality.
+    // `recorded_last_end` lets one test write it anyway, and be refused.
+    last_ballot_end_timestamp: when recorded_last_end is {
+      None -> datum.last_ballot_end_timestamp
+      Some(written) -> written
+    },
   }
   let continuing_output = Output {
     address: own_address,
@@ -1780,23 +1799,268 @@ test anchor_accepts_a_second_ballot_once_the_cooldown_has_elapsed() {
   )
 }
 
-// THE COOLDOWN IS WRITTEN FOR EVERY OUTCOME, and it is the structure of
-// `AnchorVoteResult` that guarantees it: `last_ballot_end_timestamp` is set
-// inside `expected_datum`, one unconditional record construction with no
-// branch above it. Every path that anchors a result writes it. That matters
-// because a cooldown recorded only for ballots that PASSED would let a
-// challenger fail, clear the slot and retry at once, grinding a community
-// that has already answered until turnout drops.
+// THE COOLDOWN STARTS WHEN A RESULT SETTLES, whatever its outcome. A recorded
+// result that ran its course leaves the slot only by `ExecuteProposal` (it
+// passed) or `ExpireProposal` (it failed, or passed and was never executed),
+// and `ClearProposal` refuses anything unsettled, so every such ballot writes
+// the cooldown before the next result can be recorded. That matters because a
+// cooldown recorded only for ballots that PASSED would let a challenger fail,
+// clear the slot and retry at once, grinding a community that has already
+// answered until turnout drops. A result the governor voids never ran its
+// course and moves nothing: the cooldown stays measured from the last ballot
+// that did.
 //
-// The tests above pin the boundary rather than that guarantee, and the reason
-// is worth recording so nobody adds a weaker one believing it helps. Every
-// anchor fixture here uses `SilenceLockTrigger`, which `trigger_ok` requires
-// to have passed — so a rejected-outcome fixture is refused before the
-// cooldown is ever consulted, and a test built on one would go green for a
-// reason unrelated to its name. That is the redundant-rejection-reason trap
-// this codebase has hit before. Should a future change give these fixtures a
-// proposal type that may legitimately fail, the test worth adding is: anchor
-// a failed ballot, then assert its successor inside the cooldown is refused.
+// Every fixture below differs from its passing control by the one value the
+// continuing datum records.
+
+/// The control's twin, writing the ballot's end the moment it is recorded.
+test anchor_rejects_starting_the_cooldown_when_recorded() {
+  !anchor_spend_with_lp_ref(
+    mock_datum(None),
+    eligible_start,
+    eligible_start + 500,
+    eligible_start + 500,
+    mock_lp_ref_input(mock_grad_ts),
+    None,
+    Some(eligible_start + 500),
+  )
+}
+
+/// A passed result executed ten days after it was recorded, by nobody in
+/// particular, with the continuing datum recording `recorded_last_end`.
+fn execute_recording(recorded_last_end: Int) -> Bool {
+  let proposal = mock_proposal(Passed, PendingExecution, 1000)
+  let datum = mock_datum(Some(proposal))
+  let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
+  let own_address = from_verification_key(#"cc")
+  let own_input = Input {
+    output_reference: own_ref,
+    output: Output {
+      address: own_address,
+      value: mock_cto_nft_value(),
+      datum: InlineDatum(datum),
+      reference_script: None,
+    },
+  }
+  let executed_proposal = ProposalAnchor {
+    ..proposal,
+    execution_status: Executed,
+  }
+  let new_datum = CtoGovernanceDatum {
+    ..datum,
+    cto_state: CTOTriggered,
+    community_wallet_hash: #"ff",
+    active_proposal: Some(executed_proposal),
+    last_executed_proposal: Some(executed_proposal),
+    last_ballot_end_timestamp: recorded_last_end,
+  }
+  let current_timestamp = 1000 + 864_000_000
+  let self = Transaction {
+    ..transaction.placeholder,
+    inputs: [own_input],
+    outputs: [
+      Output {
+        address: own_address,
+        value: mock_cto_nft_value(),
+        datum: InlineDatum(new_datum),
+        reference_script: None,
+      },
+    ],
+    validity_range: interval.between(
+      current_timestamp - 100,
+      current_timestamp + 100,
+    ),
+  }
+  cto_governance.spend(
+    Some(datum),
+    ExecuteProposal { current_timestamp },
+    own_ref,
+    self,
+  )
+}
+
+test execute_starts_the_cooldown_from_the_ballot_end() {
+  // mock_proposal's ballot closed at 500.
+  execute_recording(500)
+}
+
+test execute_rejects_leaving_the_cooldown_unrecorded() {
+  !execute_recording(0)
+}
+
+/// A result left unexecuted past its 30-day window, marked expired, with the
+/// continuing datum recording `recorded_last_end`.
+fn expire_recording(outcome: ProposalOutcome, recorded_last_end: Int) -> Bool {
+  let proposal = mock_proposal(outcome, PendingExecution, 1000)
+  let datum = mock_datum(Some(proposal))
+  let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
+  let own_address = from_verification_key(#"cc")
+  let own_input = Input {
+    output_reference: own_ref,
+    output: Output {
+      address: own_address,
+      value: mock_cto_nft_value(),
+      datum: InlineDatum(datum),
+      reference_script: None,
+    },
+  }
+  let new_datum = CtoGovernanceDatum {
+    ..datum,
+    active_proposal: Some(
+      ProposalAnchor { ..proposal, execution_status: Expired },
+    ),
+    last_ballot_end_timestamp: recorded_last_end,
+  }
+  let current_timestamp = 1000 + 2_678_400_000
+  let self = Transaction {
+    ..transaction.placeholder,
+    inputs: [own_input],
+    outputs: [
+      Output {
+        address: own_address,
+        value: mock_cto_nft_value(),
+        datum: InlineDatum(new_datum),
+        reference_script: None,
+      },
+    ],
+    validity_range: interval.between(
+      current_timestamp - 100,
+      current_timestamp + 100,
+    ),
+  }
+  cto_governance.spend(
+    Some(datum),
+    ExpireProposal { current_timestamp },
+    own_ref,
+    self,
+  )
+}
+
+/// A failed ballot settles by expiring, and starts the cooldown as it does.
+test expire_starts_the_cooldown_for_a_failed_ballot() {
+  expire_recording(Failed, 500)
+}
+
+test expire_rejects_leaving_a_failed_ballots_cooldown_unrecorded() {
+  !expire_recording(Failed, 0)
+}
+
+test expire_starts_the_cooldown_for_a_passed_ballot_left_unexecuted() {
+  expire_recording(Passed, 500)
+}
+
+/// The governor voids a pending result an hour after it was recorded. The
+/// launch's previous ballot closed at 123; the voided one claims to have
+/// closed at 500. The continuing datum records `recorded_last_end`.
+fn void_recording(recorded_last_end: Int) -> Bool {
+  let proposal = mock_proposal(Passed, PendingExecution, 1000)
+  let datum =
+    CtoGovernanceDatum {
+      ..mock_datum_with_bond(Some(proposal), 25_000_000),
+      last_ballot_end_timestamp: 123,
+    }
+  let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
+  let own_address = from_verification_key(#"cc")
+  let own_input = Input {
+    output_reference: own_ref,
+    output: Output {
+      address: own_address,
+      value: assets.merge(
+        mock_cto_nft_value(),
+        assets.from_lovelace(27_000_000),
+      ),
+      datum: InlineDatum(datum),
+      reference_script: None,
+    },
+  }
+  let new_datum = CtoGovernanceDatum {
+    ..datum,
+    active_proposal: Some(
+      ProposalAnchor { ..proposal, execution_status: Expired },
+    ),
+    pending_relayer_bond: 0,
+    pending_relayer_key_hash: #"",
+    last_ballot_end_timestamp: recorded_last_end,
+  }
+  let current_timestamp = 1000 + 3_600_000
+  let self = Transaction {
+    ..transaction.placeholder,
+    inputs: [own_input],
+    outputs: [
+      Output {
+        address: own_address,
+        value: cto_out_value(2_000_000),
+        datum: InlineDatum(new_datum),
+        reference_script: None,
+      },
+      Output {
+        address: from_verification_key(#"55"),
+        value: assets.from_lovelace(25_000_000),
+        datum: InlineDatum(own_ref),
+        reference_script: None,
+      },
+    ],
+    validity_range: interval.between(
+      current_timestamp - 100,
+      current_timestamp + 100,
+    ),
+    extra_signatories: [#"22"],
+  }
+  cto_governance.spend(
+    Some(datum),
+    VoidPendingProposal { current_timestamp },
+    own_ref,
+    self,
+  )
+}
+
+test void_leaves_the_cooldown_where_it_was() {
+  void_recording(123)
+}
+
+test void_rejects_starting_a_cooldown_from_the_voided_ballot() {
+  !void_recording(500)
+}
+
+/// Clearing a record in `status`, bond already settled, with no signature.
+fn clear_with_status(status: ExecutionStatus) -> Bool {
+  let proposal = mock_proposal(Passed, status, 1000)
+  let datum = mock_datum(Some(proposal))
+  let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
+  let own_address = from_verification_key(#"cc")
+  let self = Transaction {
+    ..transaction.placeholder,
+    inputs: [
+      Input {
+        output_reference: own_ref,
+        output: Output {
+          address: own_address,
+          value: mock_cto_nft_value(),
+          datum: InlineDatum(datum),
+          reference_script: None,
+        },
+      },
+    ],
+    outputs: [
+      Output {
+        address: own_address,
+        value: mock_cto_nft_value(),
+        datum: InlineDatum(CtoGovernanceDatum { ..datum, active_proposal: None }),
+        reference_script: None,
+      },
+    ],
+  }
+  cto_governance.spend(Some(datum), ClearProposal, own_ref, self)
+}
+
+test clear_proposal_succeeds_for_an_expired_record() {
+  clear_with_status(Expired)
+}
+
+/// A result still inside its execution window keeps the slot.
+test clear_proposal_rejects_an_unsettled_record() {
+  !clear_with_status(PendingExecution)
+}
 
 test anchor_rejects_graduation_time_from_another_launch() {
   // Same known-good anchor, with the escrow reference input swapped for one
@@ -1991,10 +2255,10 @@ test anchor_vote_result_succeeds_with_quorum_met() {
     proposal_count: 1,
     pending_relayer_bond: 25_000_000,
     pending_relayer_key_hash: #"33",
-    // The ballot's end becomes the cooldown's start. Spelled out rather
-    // than spread from `datum`, so a validator that stopped writing it
-    // would fail this equality instead of quietly agreeing.
-    last_ballot_end_timestamp: eligible_start + 500,
+    // Recording a result leaves the cooldown where it was: it starts when the
+    // result settles. Spelled out rather than spread from `datum`, so a
+    // validator that wrote the ballot's end here would fail this equality.
+    last_ballot_end_timestamp: datum.last_ballot_end_timestamp,
   }
   let continuing_output = Output {
     address: own_address,
@@ -2060,10 +2324,10 @@ test anchor_vote_result_rejects_dropping_thread_nft() {
     proposal_count: 1,
     pending_relayer_bond: 25_000_000,
     pending_relayer_key_hash: #"33",
-    // The ballot's end becomes the cooldown's start. Spelled out rather
-    // than spread from `datum`, so a validator that stopped writing it
-    // would fail this equality instead of quietly agreeing.
-    last_ballot_end_timestamp: eligible_start + 500,
+    // Recording a result leaves the cooldown where it was: it starts when the
+    // result settles. Spelled out rather than spread from `datum`, so a
+    // validator that wrote the ballot's end here would fail this equality.
+    last_ballot_end_timestamp: datum.last_ballot_end_timestamp,
   }
   // The continuing output DROPS the NFT — plain lovelace only. The lovelace
   // bond arithmetic still balances (27M == 2M + 25M), so ONLY the missing
@@ -2127,10 +2391,10 @@ test anchor_vote_result_rejects_wrong_launch_nft() {
     proposal_count: 1,
     pending_relayer_bond: 25_000_000,
     pending_relayer_key_hash: #"33",
-    // The ballot's end becomes the cooldown's start. Spelled out rather
-    // than spread from `datum`, so a validator that stopped writing it
-    // would fail this equality instead of quietly agreeing.
-    last_ballot_end_timestamp: eligible_start + 500,
+    // Recording a result leaves the cooldown where it was: it starts when the
+    // result settles. Spelled out rather than spread from `datum`, so a
+    // validator that wrote the ballot's end here would fail this equality.
+    last_ballot_end_timestamp: datum.last_ballot_end_timestamp,
   }
   // Right NFT policy, WRONG asset_name (another launch's id `#"02"`, not this
   // launch's `#"01"`) — quantity_of(value, policy, #"01") == 1 is False.
@@ -2193,10 +2457,10 @@ test anchor_vote_result_rejects_underfunded_bond() {
     proposal_count: 1,
     pending_relayer_bond: 1_000_000,
     pending_relayer_key_hash: #"33",
-    // The ballot's end becomes the cooldown's start. Spelled out rather
-    // than spread from `datum`, so a validator that stopped writing it
-    // would fail this equality instead of quietly agreeing.
-    last_ballot_end_timestamp: eligible_start + 500,
+    // Recording a result leaves the cooldown where it was: it starts when the
+    // result settles. Spelled out rather than spread from `datum`, so a
+    // validator that wrote the ballot's end here would fail this equality.
+    last_ballot_end_timestamp: datum.last_ballot_end_timestamp,
   }
   let continuing_output = Output {
     address: own_address,
@@ -2257,10 +2521,10 @@ test anchor_vote_result_rejects_unpaid_bond() {
     proposal_count: 1,
     pending_relayer_bond: 25_000_000,
     pending_relayer_key_hash: #"33",
-    // The ballot's end becomes the cooldown's start. Spelled out rather
-    // than spread from `datum`, so a validator that stopped writing it
-    // would fail this equality instead of quietly agreeing.
-    last_ballot_end_timestamp: eligible_start + 500,
+    // Recording a result leaves the cooldown where it was: it starts when the
+    // result settles. Spelled out rather than spread from `datum`, so a
+    // validator that wrote the ballot's end here would fail this equality.
+    last_ballot_end_timestamp: datum.last_ballot_end_timestamp,
   }
   let continuing_output = Output {
     address: own_address,
@@ -2563,6 +2827,7 @@ test execute_proposal_succeeds_by_governor_within_window() {
     community_wallet_hash: #"ff",
     active_proposal: Some(executed_proposal),
     last_executed_proposal: Some(executed_proposal),
+    last_ballot_end_timestamp: proposal.end_timestamp,
   }
   let continuing_output = Output {
     address: own_address,
@@ -2620,6 +2885,7 @@ test execute_proposal_rejects_before_challenge_window_elapsed() {
     community_wallet_hash: #"ff",
     active_proposal: Some(executed_proposal),
     last_executed_proposal: Some(executed_proposal),
+    last_ballot_end_timestamp: proposal.end_timestamp,
   }
   let continuing_output = Output {
     address: own_address,
@@ -2670,6 +2936,7 @@ test execute_proposal_fails_after_window_expired() {
     ..datum,
     active_proposal: Some(executed_proposal),
     last_executed_proposal: Some(executed_proposal),
+    last_ballot_end_timestamp: proposal.end_timestamp,
   }
   let continuing_output = Output {
     address: own_address,
@@ -2728,6 +2995,7 @@ test execute_proposal_rejects_within_challenge_window_even_for_stranger() {
     community_wallet_hash: #"ff",
     active_proposal: Some(executed_proposal),
     last_executed_proposal: Some(executed_proposal),
+    last_ballot_end_timestamp: proposal.end_timestamp,
   }
   let continuing_output = Output {
     address: own_address,
@@ -2778,6 +3046,7 @@ test expire_proposal_succeeds_after_window() {
   let new_datum = CtoGovernanceDatum {
     ..datum,
     active_proposal: Some(expired_proposal),
+    last_ballot_end_timestamp: proposal.end_timestamp,
   }
   let continuing_output = Output {
     address: own_address,
@@ -2832,6 +3101,7 @@ test expire_proposal_rejects_wide_validity_range() {
   let new_datum = CtoGovernanceDatum {
     ..datum,
     active_proposal: Some(expired_proposal),
+    last_ballot_end_timestamp: proposal.end_timestamp,
   }
   let continuing_output = Output {
     address: own_address,
@@ -2877,6 +3147,7 @@ test expire_proposal_fails_before_window() {
   let new_datum = CtoGovernanceDatum {
     ..datum,
     active_proposal: Some(expired_proposal),
+    last_ballot_end_timestamp: proposal.end_timestamp,
   }
   let continuing_output = Output {
     address: own_address,
@@ -3202,10 +3473,9 @@ test reclaim_relayer_bond_rejects_when_nothing_pending() {
   !cto_governance.spend(Some(datum), ReclaimRelayerBond, own_ref, self)
 }
 
-// Closes the ClearProposal/ReclaimRelayerBond fund-stranding race —
-// the governor must not be able to wipe active_proposal (which
-// ReclaimRelayerBond needs to read) while a relayer bond is still
-// unsettled.
+// Closes the ClearProposal/ReclaimRelayerBond fund-stranding race — nobody
+// may wipe active_proposal (which ReclaimRelayerBond needs to read) while a
+// relayer bond is still unsettled.
 test clear_proposal_rejects_with_pending_relayer_bond() {
   let proposal = mock_proposal(Passed, Executed, 1000)
   let datum = mock_datum_with_bond(Some(proposal), 25_000_000)
@@ -3232,12 +3502,12 @@ test clear_proposal_rejects_with_pending_relayer_bond() {
     inputs: [own_input],
     reference_inputs: [mock_lp_ref_input(mock_grad_ts)],
     outputs: [continuing_output],
-    extra_signatories: [#"22"],
   }
 
   !cto_governance.spend(Some(datum), ClearProposal, own_ref, self)
 }
 
+/// Anyone may clear a settled record: the passing control carries no signature.
 test clear_proposal_succeeds_once_bond_settled() {
   let proposal = mock_proposal(Passed, Executed, 1000)
   let datum = mock_datum(Some(proposal))
@@ -3264,7 +3534,6 @@ test clear_proposal_succeeds_once_bond_settled() {
     inputs: [own_input],
     reference_inputs: [mock_lp_ref_input(mock_grad_ts)],
     outputs: [continuing_output],
-    extra_signatories: [#"22"],
   }
 
   cto_governance.spend(Some(datum), ClearProposal, own_ref, self)
@@ -3313,10 +3582,10 @@ test anchor_vote_result_rejects_unattended_ballot_claiming_failure() {
     proposal_count: 1,
     pending_relayer_bond: 25_000_000,
     pending_relayer_key_hash: #"33",
-    // The ballot's end becomes the cooldown's start. Spelled out rather
-    // than spread from `datum`, so a validator that stopped writing it
-    // would fail this equality instead of quietly agreeing.
-    last_ballot_end_timestamp: eligible_start + 500,
+    // Recording a result leaves the cooldown where it was: it starts when the
+    // result settles. Spelled out rather than spread from `datum`, so a
+    // validator that wrote the ballot's end here would fail this equality.
+    last_ballot_end_timestamp: datum.last_ballot_end_timestamp,
   }
   let continuing_output = Output {
     address: own_address,
@@ -3575,6 +3844,7 @@ test expire_proposal_rejects_a_value_drain() {
   let new_datum = CtoGovernanceDatum {
     ..datum,
     active_proposal: Some(expired_proposal),
+    last_ballot_end_timestamp: proposal.end_timestamp,
   }
   let continuing_output = Output {
     address: own_address,
@@ -3625,7 +3895,6 @@ test clear_proposal_rejects_a_value_drain() {
     inputs: [own_input],
     reference_inputs: [mock_lp_ref_input(mock_grad_ts)],
     outputs: [continuing_output],
-    extra_signatories: [#"22"],
   }
   !cto_governance.spend(Some(datum), ClearProposal, own_ref, self)
 }
@@ -3812,7 +4081,7 @@ fn anchor_disposition(
     proposal_count: datum.proposal_count + 1,
     pending_relayer_bond: 25_000_000,
     pending_relayer_key_hash: #"33",
-    last_ballot_end_timestamp: end_timestamp,
+    last_ballot_end_timestamp: datum.last_ballot_end_timestamp,
   }
   let self = Transaction {
     ..transaction.placeholder,

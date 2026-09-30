@@ -44,6 +44,10 @@ for (const v of blueprint.validators) {
 /**
  * Measured 2026-08-08. Update in the same commit that moves one. Newest first.
  *
+ * cto_governance +83, 2026-09-30: a ballot's cooldown starts when its result
+ * settles, executed or expired, and any holder may clear a settled result so
+ * the next can be recorded. The other validators are byte for byte identical.
+ *
  * bonding_curve_tier_b +34, 2026-09-30: a private buyer's claim pays out only to
  * the claimant's own payment key, as a batch fill pays its owner. 15,121
  * against the 16,052 B publish limit leaves 931 B. The other validators are
@@ -376,7 +380,7 @@ for (const v of blueprint.validators) {
  */
 const RECORDED: Record<string, number> = {
   bonding_curve_tier_b: 15_121,
-  cto_governance: 8_367,
+  cto_governance: 8_450,
   cto_sybil_challenge: 3_457,
   curve_order: 4_544,
   launch_token_policy: 419,
@@ -409,7 +413,7 @@ const RECORDED: Record<string, number> = {
  */
 const RECORDED_HASHES: Record<string, string> = {
   bonding_curve_tier_b: 'f0799314b3a48270198d22cfcec6677eab498fbb208c4eed225b283b',
-  cto_governance: '894ebfc0e82136139053b290f405e1eb1c54a2a24c83bb98965340eb',
+  cto_governance: '9e8837e92cc5db377ee2e56a2ee71d99548c4672f8391b286808aadf',
   cto_sybil_challenge: '5f008c1306d25d435d69ee541da68bc9a7f3036ffb616a553be8c969',
   curve_order: 'db34df4b2be92eea1458fc11248255f1ef3ecad93d47196f934d7397',
   launch_token_policy: 'd77d785500b7bb5a80bdf8104651b13e59d546d222ce7ab22bb60965',
