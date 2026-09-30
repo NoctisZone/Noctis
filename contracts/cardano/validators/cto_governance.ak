@@ -949,10 +949,10 @@ validator cto_governance {
             proposal_count: datum.proposal_count + 1,
             pending_relayer_bond: relayer_bond,
             pending_relayer_key_hash: relayer_credential_hash,
-            // last_ballot_end_timestamp is carried through untouched: the
-            // cooldown starts when this result settles (ExecuteProposal or
-            // ExpireProposal), not when it is recorded.
           }
+          // last_ballot_end_timestamp is carried through untouched: the
+          // cooldown starts when this result settles (ExecuteProposal or
+          // ExpireProposal), not when it is recorded.
           let new_datum = own_continuing_datum(self, own_ref)
 
           and {
@@ -1954,11 +1954,10 @@ test expire_starts_the_cooldown_for_a_passed_ballot_left_unexecuted() {
 /// closed at 500. The continuing datum records `recorded_last_end`.
 fn void_recording(recorded_last_end: Int) -> Bool {
   let proposal = mock_proposal(Passed, PendingExecution, 1000)
-  let datum =
-    CtoGovernanceDatum {
-      ..mock_datum_with_bond(Some(proposal), 25_000_000),
-      last_ballot_end_timestamp: 123,
-    }
+  let datum = CtoGovernanceDatum {
+    ..mock_datum_with_bond(Some(proposal), 25_000_000),
+    last_ballot_end_timestamp: 123,
+  }
   let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
   let own_address = from_verification_key(#"cc")
   let own_input = Input {
@@ -2045,7 +2044,9 @@ fn clear_with_status(status: ExecutionStatus) -> Bool {
       Output {
         address: own_address,
         value: mock_cto_nft_value(),
-        datum: InlineDatum(CtoGovernanceDatum { ..datum, active_proposal: None }),
+        datum: InlineDatum(
+          CtoGovernanceDatum { ..datum, active_proposal: None },
+        ),
         reference_script: None,
       },
     ],
