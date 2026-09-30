@@ -66,6 +66,12 @@ export function toCardanoProposalType(t: MidnightProposalType): ProposalTypeData
       return 'WhitelistUpdate';
     case MidnightProposalType.DissolveCTO:
       return 'DissolveCTOProposal';
+    case MidnightProposalType.VestingToLp:
+      return 'VestingToLp';
+    case MidnightProposalType.VestingToStaking:
+      return 'VestingToStaking';
+    case MidnightProposalType.VestingToTreasury:
+      return 'VestingToTreasury';
     default:
       throw new Error(`Unknown Midnight ProposalType: ${t}`);
   }
@@ -168,7 +174,7 @@ export interface BuiltVoteResult {
 
 /**
  * Pure conversion — no I/O. Validates the proposal has finalized, then
- * builds the proof bundle + submitter params for all 5 proposal types.
+ * builds the proof bundle + submitter params for every proposal type.
  * Throws (never returns a partial/invalid result) on an unfinalized
  * proposal.
  */

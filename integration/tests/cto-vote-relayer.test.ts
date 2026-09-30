@@ -37,6 +37,9 @@ describe('cto-vote-relayer.ts — toCardanoProposalType', () => {
     expect(toCardanoProposalType(ProposalType.DexMigration)).toBe('DexMigration');
     expect(toCardanoProposalType(ProposalType.WhitelistUpdate)).toBe('WhitelistUpdate');
     expect(toCardanoProposalType(ProposalType.DissolveCTO)).toBe('DissolveCTOProposal');
+    expect(toCardanoProposalType(ProposalType.VestingToLp)).toBe('VestingToLp');
+    expect(toCardanoProposalType(ProposalType.VestingToStaking)).toBe('VestingToStaking');
+    expect(toCardanoProposalType(ProposalType.VestingToTreasury)).toBe('VestingToTreasury');
   });
 });
 
@@ -105,6 +108,33 @@ describe('cto-vote-relayer.ts — buildVoteResultFromProposal (pure)', () => {
     });
     const result = buildVoteResultFromProposal(proposal, 'aa', 'bb', 'cc');
     expect(result.params.proposalType).toBe('DissolveCTOProposal');
+  });
+
+  it('carries a disposition vote through with the figure it named', () => {
+    const lp = buildVoteResultFromProposal(
+      fakeProposal({ proposalType: ProposalType.VestingToLp, allocationAmount: 4_500_000_000n }),
+      'aa',
+      'bb',
+      'cc',
+    );
+    expect(lp.params.proposalType).toBe('VestingToLp');
+    expect(lp.params.allocationAmount).toBe(4_500_000_000n);
+    expect(lp.params.targetDexCredential).toBeNull();
+    const runway = buildVoteResultFromProposal(
+      fakeProposal({ proposalType: ProposalType.VestingToStaking, allocationAmount: 1_095n }),
+      'aa',
+      'bb',
+      'cc',
+    );
+    expect(runway.params.proposalType).toBe('VestingToStaking');
+    expect(runway.params.allocationAmount).toBe(1_095n);
+    const treasury = buildVoteResultFromProposal(
+      fakeProposal({ proposalType: ProposalType.VestingToTreasury }),
+      'aa',
+      'bb',
+      'cc',
+    );
+    expect(treasury.params.proposalType).toBe('VestingToTreasury');
   });
 
   it('sets targetDexCredential to null for the 3 non-DEX proposal types', () => {

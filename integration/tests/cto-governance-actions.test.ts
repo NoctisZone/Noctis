@@ -147,6 +147,30 @@ describe('resolveProposalArgs', () => {
     );
   });
 
+  it('holds a disposition vote to the terms the contract asserts', () => {
+    expect(() => resolveProposalArgs({ ...BASE, proposalType: 'VestingToLp' })).toThrow(/VestingToLp needs/);
+    const lp = resolveProposalArgs({ ...BASE, proposalType: 'VestingToLp', allocationAmount: '4500000000' });
+    expect(lp.proposalType).toBe(ProposalType.VestingToLp);
+    expect(lp.allocationAmount).toBe(4_500_000_000n);
+
+    // 0 tops up the launch's existing pool; otherwise a new pool's runway.
+    expect(resolveProposalArgs({ ...BASE, proposalType: 'VestingToStaking' }).allocationAmount).toBe(0n);
+    for (const days of ['1095', '1825']) {
+      expect(
+        resolveProposalArgs({ ...BASE, proposalType: 'VestingToStaking', allocationAmount: days }).proposalType,
+      ).toBe(ProposalType.VestingToStaking);
+    }
+    for (const days of ['1', '1094', '1826']) {
+      expect(() => resolveProposalArgs({ ...BASE, proposalType: 'VestingToStaking', allocationAmount: days })).toThrow(
+        /1095 to 1825 days/,
+      );
+    }
+
+    expect(resolveProposalArgs({ ...BASE, proposalType: 'VestingToTreasury' }).proposalType).toBe(
+      ProposalType.VestingToTreasury,
+    );
+  });
+
   it('refuses an unknown type by name', () => {
     expect(() => resolveProposalArgs({ ...BASE, proposalType: 'Takeover' })).toThrow(/proposalType must be one of/);
   });

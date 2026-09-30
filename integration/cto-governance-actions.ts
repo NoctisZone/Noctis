@@ -124,6 +124,9 @@ export const PROPOSAL_TYPE_NAMES = [
   'DexMigration',
   'WhitelistUpdate',
   'DissolveCTO',
+  'VestingToLp',
+  'VestingToStaking',
+  'VestingToTreasury',
 ] as const;
 export type ProposalTypeName = (typeof PROPOSAL_TYPE_NAMES)[number];
 
@@ -134,7 +137,12 @@ export interface ProposalInput {
   description?: string;
   /** DexMigration / WhitelistUpdate: the target, 32 bytes hex. */
   targetDexAddrHex?: string;
-  /** FundAllocation: amount and recipient. */
+  /**
+   * FundAllocation: the amount, with `allocationRecipientHex`.
+   * VestingToLp: the lovelace the community wallet pairs with the tokens.
+   * VestingToStaking: a new pool's runway in days, or 0 to top up the
+   * launch's existing pool.
+   */
   allocationAmount?: string | number;
   allocationRecipientHex?: string;
   /** SilenceLockTrigger: the wallet the community takes over with. */
@@ -153,6 +161,10 @@ export interface ResolvedProposal {
   proposedCommunityWallet: Uint8Array;
   bondAmount: bigint;
 }
+
+/** The runway a disposition vote may give a staking pool it creates, in days. */
+export const DISPOSITION_RUNWAY_MIN_DAYS = 1095n;
+export const DISPOSITION_RUNWAY_MAX_DAYS = 1825n;
 
 const ZERO32 = new Uint8Array(32);
 const isZero = (b: Uint8Array) => b.every((x) => x === 0);
@@ -221,6 +233,26 @@ export function resolveProposalArgs(input: ProposalInput, breakGlassBondMin?: bi
       if (isZero(targetDexAddr)) throw new Error(`${name} needs targetDexAddrHex.`);
       break;
     case 'DissolveCTO':
+      break;
+    // A takeover's second vote, held to the terms the contract asserts. That
+    // a takeover holds is the contract's to check against its own state.
+    case 'VestingToLp':
+      if (allocationAmount === 0n) {
+        throw new Error('VestingToLp needs allocationAmount: the lovelace the community wallet pairs with the tokens.');
+      }
+      break;
+    case 'VestingToStaking':
+      if (
+        allocationAmount !== 0n &&
+        (allocationAmount < DISPOSITION_RUNWAY_MIN_DAYS || allocationAmount > DISPOSITION_RUNWAY_MAX_DAYS)
+      ) {
+        throw new Error(
+          `VestingToStaking's allocationAmount is a new pool's runway, ${DISPOSITION_RUNWAY_MIN_DAYS} to ` +
+            `${DISPOSITION_RUNWAY_MAX_DAYS} days, or 0 to top up the launch's existing pool; got ${allocationAmount}.`,
+        );
+      }
+      break;
+    case 'VestingToTreasury':
       break;
   }
 
