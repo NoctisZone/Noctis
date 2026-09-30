@@ -491,7 +491,8 @@ const ACTIONS: Action[] = [
   },
   {
     name: 'claim creator fees',
-    datum: { ...activeDatum(), creator_fees_accrued: 5_000_000n },
+    // The claim is the creator's to sign, and this fixture's one real key signs it.
+    datum: { ...activeDatum(), creator_pub_key_hash: GOVERNOR.keyHash, creator_fees_accrued: 5_000_000n },
     run: (s) => s.claimCreatorFees(GOVERNOR.extendedHex, GOVERNOR_ADDRESS, 2_000_000n),
     signer: GOVERNOR_ADDRESS,
     payouts: 1,

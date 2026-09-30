@@ -561,12 +561,50 @@ describe('LucidTierBCurveSubmitter.claimCreatorFees (two-directional value check
   it('claimCreatorFeesWithWallet signs via fromAPI/withWallet instead of a decrypted extended key', async () => {
     const { builder } = makeFakeTxBuilder();
     const walletApi = { __marker: 'creator-wallet' };
-    const submitter = makeSubmitter(builder, [{ datum: baseDatum({ creator_fees_accrued: 10_000_000n }), assets: {} }]);
+    const submitter = makeSubmitter(
+      builder,
+      [{ datum: baseDatum({ creator_fees_accrued: 10_000_000n }), assets: {} }],
+      addrFor(CREATOR_KEY_HASH),
+    );
     await expect(
       submitter.claimCreatorFeesWithWallet(walletApi as never, 2_000_000n, PLATFORM_CHARGE_LOVELACE),
     ).resolves.toEqual({
       txHash: 'tier-b-tx-1',
     });
+  });
+
+  // The curve pays its own creator, or the community wallet once a takeover
+  // holds, and checks that against its datum. A wallet that is neither gets a
+  // sentence naming who can claim instead of a bare script failure.
+  it('refuses a fee claim from a wallet the launch does not pay, naming who it does', async () => {
+    const { builder } = makeFakeTxBuilder();
+    const walletApi = { __marker: 'someone-else' };
+    const submitter = makeSubmitter(
+      builder,
+      [{ datum: baseDatum({ creator_fees_accrued: 10_000_000n }), assets: {} }],
+      addrFor(fakeKeyHash(0x11)),
+    );
+    await expect(
+      submitter.claimCreatorFeesWithWallet(walletApi as never, 2_000_000n, PLATFORM_CHARGE_LOVELACE),
+    ).rejects.toThrow(/names 9{56} as its creator/);
+
+    const taken = makeSubmitter(
+      makeFakeTxBuilder().builder,
+      [
+        {
+          datum: baseDatum({
+            creator_fees_accrued: 10_000_000n,
+            cto_triggered: true,
+            community_pub_key_hash: fakeKeyHash(0x55),
+          }),
+          assets: {},
+        },
+      ],
+      addrFor(CREATOR_KEY_HASH),
+    );
+    await expect(
+      taken.claimCreatorFeesWithWallet(walletApi as never, 2_000_000n, PLATFORM_CHARGE_LOVELACE),
+    ).rejects.toThrow(/names 5{56} as its community wallet/);
   });
 });
 

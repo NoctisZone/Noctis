@@ -49,21 +49,23 @@ import type {
   WalletApi,
 } from '@lucid-evolution/lucid';
 import { Blockfrost, Constr, Data, getAddressDetails, Lucid, toUnit, validatorToAddress } from '@lucid-evolution/lucid';
-// Mesh, and the two modules below that build on it, belong to referenced
-// mode: signing with a mnemonic or a stored private key, which is a
-// server-side path by definition — refuseBrowserWalletWhenReferenced() turns
-// a browser wallet away from it explicitly, and referencedParts() returns
-// early unless a `referenceScript` pointer is configured, which no browser
-// caller sets.
+// Mesh, and the modules below that build on it, belong to referenced mode,
+// which is taken only when a `referenceScript` pointer is configured. Most of
+// it signs with a mnemonic or a stored private key, server-side. The one
+// browser action it serves is the creator's fee claim, signed by the
+// creator's connected wallet through cip30-curve-spend-wallet.ts; the other
+// browser actions turn a wallet away from it through
+// refuseBrowserWalletWhenReferenced().
 //
-// The browser widget reaches this file through the DarkVeil claim flow, so
-// the widget build resolves these three specifiers to an empty module rather
-// than pulling Mesh's own node:crypto and node:stream into a bundle that
-// cannot have them. See webpack.widgets.config.cjs's darkveil-widget alias
-// block. Keep any new server-only dependency in that block too, or the
-// widget build stops resolving.
+// The DarkVeil widget reaches this file without a pointer, so its build
+// resolves these specifiers to an empty module rather than pulling Mesh's own
+// node:crypto and node:stream into a bundle that cannot have them. See
+// webpack.widgets.config.cjs's darkveil-widget alias block. Keep any new
+// server-only dependency in that block too, or the widget build stops
+// resolving.
 import { BlockfrostProvider, getOutputMinLovelace, MeshWallet } from '@meshsdk/core';
 import { buildCapTradeFields, type CapAccumulator } from './cap-accumulator-tree.js';
+import { type Cip30Api, Cip30CurveSpendWallet } from './cip30-curve-spend-wallet.js';
 import { setBit, testBit } from './claim-bitmap.js';
 import {
   CREATOR_BPS,
@@ -356,11 +358,11 @@ export class LucidTierBCurveSubmitter {
   /**
    * Refuses a browser-wallet action while a reference pointer is configured.
    *
-   * A CIP-30 wallet reaches this codebase as an object Mesh's builder is not
-   * connected to — wiring that is the Launch Wizard's own task. Falling back to
-   * the embedding path instead would be worse than refusing: on this tier the
-   * validator alone is most of the transaction cap, so what it produces is not
-   * a slower transaction but one that cannot be submitted at all.
+   * The creator's fee claim is connected, through Cip30CurveSpendWallet; the
+   * actions that call this are not yet. Falling back to the embedding path
+   * instead would be worse than refusing: on this tier the validator alone is
+   * most of the transaction cap, so what it produces is not a slower
+   * transaction but one that cannot be submitted at all.
    */
   private refuseBrowserWalletWhenReferenced(action: string): void {
     if (!this.referencesScript) return;
@@ -418,6 +420,19 @@ export class LucidTierBCurveSubmitter {
         submitter: parts.provider,
         key: { type: 'mnemonic', words: mnemonic.trim().split(/\s+/) },
       }) as unknown as CurveSpendWallet,
+    };
+  }
+
+  /**
+   * Prepares referenced mode for an action the creator signs in the browser:
+   * their connected wallet funds, signs and submits the spend Mesh builds.
+   */
+  private prepareReferencedFromWallet(walletApi: WalletApi): void {
+    const parts = this.referencedParts();
+    if (!parts) return;
+    this.referenced = {
+      spender: parts.spender,
+      wallet: new Cip30CurveSpendWallet(walletApi as unknown as Cip30Api),
     };
   }
 
@@ -1053,10 +1068,14 @@ export class LucidTierBCurveSubmitter {
     amount: bigint,
     platformClaimFeeLovelace: bigint = PLATFORM_CHARGE_LOVELACE,
   ): Promise<{ txHash: string }> {
-    this.refuseBrowserWalletWhenReferenced('fee claim');
     const lucid = await this.lucidPromise;
     lucid.selectWallet.fromAPI(walletApi);
-    const signerAddress = await lucid.wallet().address();
+    this.prepareReferencedFromWallet(walletApi);
+    // The change address, which is where CIP-30 wallets pay themselves and
+    // the address the referenced builder funds from.
+    const signerAddress = this.referenced
+      ? await this.referenced.wallet.getChangeAddress()
+      : await lucid.wallet().address();
 
     const { curveUtxo, spend } = await this.claimCreatorFeesCore(
       lucid,
@@ -1091,6 +1110,14 @@ export class LucidTierBCurveSubmitter {
     if (amount > currentDatum.creator_fees_accrued) {
       throw new Error(`amount ${amount} exceeds creator_fees_accrued ${currentDatum.creator_fees_accrued}.`);
     }
+    // Paid to the creator, or to the community wallet once a takeover holds:
+    // the curve checks its own datum, so any other signer fails as a bare
+    // script error. Said here instead, by name.
+    this.requireSigner(
+      currentDatum.cto_triggered ? currentDatum.community_pub_key_hash : currentDatum.creator_pub_key_hash,
+      signerAddress,
+      currentDatum.cto_triggered ? 'community wallet' : 'creator',
+    );
 
     // No split: the platform runs one wallet, so the whole claim fee accrues
     // to the single platform line.
