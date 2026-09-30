@@ -3,18 +3,23 @@ import { describe, expect, it } from 'vitest';
 import { ProposalState, ProposalType } from '../../contracts/midnight/compiled/cto_governance/contract/index.js';
 import { CtoGovernanceDatumSchema } from '../cardano-cto-anchor-submitter.js';
 import {
+  anchoredBallotOf,
   buildVoteResultFromProposal,
   computeCtoVoteProofBundleHash,
   type MidnightProposalLike,
   midnightSecondsToCardanoMs,
   toCardanoProposalType,
 } from '../cto-vote-relayer.js';
+import { cardanoKeyHashToBallotField } from '../cto-wallet-field.js';
 import { buildGenesisDatums } from '../tier-a-genesis-datums.js';
 import { BLUEPRINT } from './support/takeover-chain.js';
 
 function fakeBytes(fill: number): Uint8Array {
   return new Uint8Array(32).fill(fill);
 }
+
+const COMMUNITY = 'c2'.repeat(28);
+const RECIPIENT = 'a2'.repeat(28);
 
 function fakeProposal(overrides: Partial<MidnightProposalLike> = {}): MidnightProposalLike {
   return {
@@ -29,7 +34,8 @@ function fakeProposal(overrides: Partial<MidnightProposalLike> = {}): MidnightPr
     startTimestamp: 1000n,
     endTimestamp: 2000n,
     allocationAmount: 0n,
-    allocationRecipient: fakeBytes(2),
+    allocationRecipient: cardanoKeyHashToBallotField(RECIPIENT),
+    proposedCommunityWallet: cardanoKeyHashToBallotField(COMMUNITY),
     targetDexAddr: fakeBytes(3),
     ...overrides,
   };
@@ -59,9 +65,9 @@ describe('cto-vote-relayer.ts — buildVoteResultFromProposal (pure)', () => {
     expect(() => buildVoteResultFromProposal(proposal, 'aa', 'bb', 'cc')).toThrow(/has not finalized/i);
   });
 
-  it('rejects an already-Executed proposal (finalization check only accepts Passed/Failed)', () => {
+  it('records a proposal already executed on Midnight as passed, since only a passed one can be', () => {
     const proposal = fakeProposal({ state: ProposalState.Executed });
-    expect(() => buildVoteResultFromProposal(proposal, 'aa', 'bb', 'cc')).toThrow(/has not finalized/i);
+    expect(buildVoteResultFromProposal(proposal, 'aa', 'bb', 'cc').params.outcome).toBe('Passed');
   });
 
   it('accepts DexMigration and encodes targetDexAddr as a ScriptCredential', () => {
@@ -280,5 +286,41 @@ describe('cto-vote-relayer.ts — the ballot window crosses from seconds to mill
         'cc',
       ),
     ).toThrow(/not a Midnight ballot time/);
+  });
+});
+
+describe('cto-vote-relayer.ts — whom an execution pays', () => {
+  it('takes a takeover community wallet from the field the proposal pinned it in', () => {
+    const ballot = anchoredBallotOf(fakeProposal({ proposalType: ProposalType.SilenceLockTrigger }), 'aa');
+    expect(ballot.allocationRecipientHashHex).toBe(COMMUNITY);
+  });
+
+  it('takes a fund allocation recipient from its own field', () => {
+    const ballot = anchoredBallotOf(
+      fakeProposal({ proposalType: ProposalType.FundAllocation, allocationAmount: 5n }),
+      'aa',
+    );
+    expect(ballot.allocationRecipientHashHex).toBe(RECIPIENT);
+  });
+
+  it('names no payee for a type whose execution pays nobody', () => {
+    for (const proposalType of [
+      ProposalType.DissolveCTO,
+      ProposalType.VestingToLp,
+      ProposalType.VestingToStaking,
+      ProposalType.VestingToTreasury,
+    ]) {
+      expect(anchoredBallotOf(fakeProposal({ proposalType }), 'aa').allocationRecipientHashHex).toBe('');
+    }
+  });
+
+  it('refuses a wallet field that does not hold a Cardano key hash', () => {
+    const full = new Uint8Array(32).fill(0xc2);
+    expect(() =>
+      anchoredBallotOf(
+        fakeProposal({ proposalType: ProposalType.SilenceLockTrigger, proposedCommunityWallet: full }),
+        'aa',
+      ),
+    ).toThrow(/does not hold a Cardano payment key hash/);
   });
 });

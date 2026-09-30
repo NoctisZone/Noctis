@@ -46,6 +46,8 @@ import type {
   VoteResultParams,
 } from './cardano-cto-anchor-submitter.js';
 import { MIN_RELAYER_BOND_LOVELACE } from './cardano-cto-anchor-submitter.js';
+import type { AnchoredBallot } from './cto-anchor-reference.js';
+import { cardanoKeyHashFromBallotField } from './cto-wallet-field.js';
 
 function bytesToHex(bytes: Uint8Array): string {
   return Array.from(bytes)
@@ -164,6 +166,8 @@ export interface MidnightProposalLike {
   endTimestamp: bigint;
   allocationAmount: bigint;
   allocationRecipient: Uint8Array;
+  /** The wallet a SilenceLockTrigger takes over with, pinned when the proposal was created. */
+  proposedCommunityWallet: Uint8Array;
   /** Only meaningful for DexMigration/WhitelistUpdate — see this file's header for the ScriptCredential-always encoding decision. */
   targetDexAddr: Uint8Array;
 }
@@ -180,6 +184,62 @@ export function midnightSecondsToCardanoMs(seconds: bigint): bigint {
     throw new Error(`${seconds} is not a Midnight ballot time in seconds.`);
   }
   return seconds * 1000n;
+}
+
+/**
+ * Whom a ballot's execution pays, as the Cardano record keeps it: the wallet a
+ * takeover names, or a fund allocation's recipient, as a 28-byte payment key
+ * hash; empty for every other type. Each is read from the field the Midnight
+ * proposal pinned it in when it was created.
+ */
+export function cardanoPayeeOf(proposal: MidnightProposalLike): string {
+  switch (proposal.proposalType) {
+    case MidnightProposalType.SilenceLockTrigger:
+      return cardanoKeyHashFromBallotField(proposal.proposedCommunityWallet, 'The proposed community wallet');
+    case MidnightProposalType.FundAllocation:
+      return cardanoKeyHashFromBallotField(proposal.allocationRecipient, 'The allocation recipient');
+    default:
+      return '';
+  }
+}
+
+/**
+ * A settled Midnight ballot as the Cardano governance record takes it: its
+ * outcome, its window in milliseconds, and its payee as a key hash. Pure; this
+ * is what a browser hands to the Cardano side to record.
+ *
+ * Midnight's `state` carries the outcome: Passed or Failed once finalized, and
+ * Executed once a passed proposal has been carried out on Midnight, which
+ * requires it to have passed. Anything earlier has no outcome yet.
+ */
+export function anchoredBallotOf(proposal: MidnightProposalLike, proposalIdHex: string): AnchoredBallot {
+  const settled =
+    proposal.state === ProposalState.Passed ||
+    proposal.state === ProposalState.Failed ||
+    proposal.state === ProposalState.Executed;
+  if (!settled) {
+    throw new Error(
+      `Proposal ${proposalIdHex} has not finalized yet (state is not Passed, Failed or Executed) — call finalizeProposal on Midnight first`,
+    );
+  }
+  const isDexRelated =
+    proposal.proposalType === MidnightProposalType.DexMigration ||
+    proposal.proposalType === MidnightProposalType.WhitelistUpdate;
+  return {
+    proposalType: toCardanoProposalType(proposal.proposalType),
+    descriptionHashHex: bytesToHex(proposal.descriptionHash),
+    yesVotes: proposal.yesVotes,
+    noVotes: proposal.noVotes,
+    voterCount: proposal.voterCount,
+    creatorYesVotes: proposal.creatorYesVotes,
+    creatorNoVotes: proposal.creatorNoVotes,
+    outcome: proposal.state === ProposalState.Failed ? 'Failed' : 'Passed',
+    startTimestamp: midnightSecondsToCardanoMs(proposal.startTimestamp),
+    endTimestamp: midnightSecondsToCardanoMs(proposal.endTimestamp),
+    targetDexCredential: isDexRelated ? { kind: 'Script', hashHex: bytesToHex(proposal.targetDexAddr) } : null,
+    allocationAmount: proposal.allocationAmount,
+    allocationRecipientHashHex: cardanoPayeeOf(proposal),
+  };
 }
 
 export interface BuiltVoteResult {
@@ -209,34 +269,17 @@ export function buildVoteResultFromProposal(
   // enforced floor. Defaults to that floor; callers may post more.
   relayerBondLovelace: bigint = MIN_RELAYER_BOND_LOVELACE,
 ): BuiltVoteResult {
-  if (proposal.state !== ProposalState.Passed && proposal.state !== ProposalState.Failed) {
-    throw new Error(
-      `Proposal ${proposalIdHex} has not finalized yet (state is neither Passed nor Failed) — call finalizeProposal on Midnight first`,
-    );
-  }
-
-  const cardanoProposalType = toCardanoProposalType(proposal.proposalType);
-  const isDexRelated =
-    proposal.proposalType === MidnightProposalType.DexMigration ||
-    proposal.proposalType === MidnightProposalType.WhitelistUpdate;
-  const targetDexCredential: VoteResultParams['targetDexCredential'] = isDexRelated
-    ? { ScriptCredential: [bytesToHex(proposal.targetDexAddr)] }
-    : null;
-  // Real semantic difference between the two sides, not a naming quirk:
-  // Midnight's Proposal struct has NO separate outcome field — `state`
-  // itself (Pending/Active/Passed/Failed/Executed) directly encodes
-  // pass/fail as a state (confirmed against cto_governance.compact's own
-  // struct declaration). Cardano's ProposalAnchor splits this into two
-  // independent fields (outcome AND execution_status) — bridged here by
-  // deriving Cardano's `outcome` from Midnight's `state` (already asserted
-  // above to be Passed or Failed at this point).
-  const outcome: ProposalOutcomeData = proposal.state === ProposalState.Passed ? 'Passed' : 'Failed';
+  const ballot = anchoredBallotOf(proposal, proposalIdHex);
+  // Midnight's Proposal has no separate outcome field — `state` carries it;
+  // Cardano's ProposalAnchor keeps outcome and execution status apart.
+  // anchoredBallotOf bridges the two.
+  const outcome: ProposalOutcomeData = ballot.outcome;
 
   const bundle: CtoVoteProofBundle = {
     launchId: launchIdHex,
     proposalId: proposalIdHex,
-    proposalType: cardanoProposalType,
-    descriptionHash: bytesToHex(proposal.descriptionHash),
+    proposalType: ballot.proposalType,
+    descriptionHash: ballot.descriptionHashHex,
     yesVotes: proposal.yesVotes.toString(),
     noVotes: proposal.noVotes.toString(),
     voterCount: proposal.voterCount.toString(),
@@ -245,12 +288,12 @@ export function buildVoteResultFromProposal(
     outcome,
     startTimestamp: proposal.startTimestamp.toString(),
     endTimestamp: proposal.endTimestamp.toString(),
-    targetDexAddrHex: isDexRelated ? bytesToHex(proposal.targetDexAddr) : '',
+    targetDexAddrHex: ballot.targetDexCredential ? ballot.targetDexCredential.hashHex : '',
   };
   const proofBundleHash = computeCtoVoteProofBundleHash(bundle);
 
   const params: VoteResultParams = {
-    proposalType: cardanoProposalType,
+    proposalType: ballot.proposalType,
     descriptionHash: proposal.descriptionHash,
     // The ballot is named; the reference is not supplied. cto_governance.ak
     // derives that itself from its own datum, and the submitter recomputes it
@@ -264,12 +307,12 @@ export function buildVoteResultFromProposal(
     outcome,
     // The bundle above keeps the ballot's own seconds, for anyone checking it
     // against Midnight; the anchor keeps the record's milliseconds.
-    startTimestamp: midnightSecondsToCardanoMs(proposal.startTimestamp),
-    endTimestamp: midnightSecondsToCardanoMs(proposal.endTimestamp),
+    startTimestamp: ballot.startTimestamp,
+    endTimestamp: ballot.endTimestamp,
     anchorTimestamp,
-    targetDexCredential,
-    allocationAmount: proposal.allocationAmount,
-    allocationRecipientHash: bytesToHex(proposal.allocationRecipient),
+    targetDexCredential: ballot.targetDexCredential ? { ScriptCredential: [ballot.targetDexCredential.hashHex] } : null,
+    allocationAmount: ballot.allocationAmount,
+    allocationRecipientHash: ballot.allocationRecipientHashHex,
     relayerCredentialHash: relayerCredentialHashHex,
     relayerBondLovelace,
   };

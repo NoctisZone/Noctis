@@ -14,6 +14,7 @@ import {
   TIMESTAMP_FUTURE_TOLERANCE_SECONDS,
   TIMESTAMP_STALE_LIMIT_SECONDS,
 } from '../cto-governance-actions.js';
+import { cardanoKeyHashFromBallotField } from '../cto-wallet-field.js';
 
 const hex = (byte: number) => byte.toString(16).padStart(2, '0').repeat(32);
 
@@ -109,6 +110,24 @@ describe('resolveProposalArgs', () => {
     // Untouched fields are the contract's "unused" zero bytes, not garbage.
     expect(ok.targetDexAddr.every((b) => b === 0)).toBe(true);
     expect(ok.allocationAmount).toBe(0n);
+  });
+
+  it('places a Cardano payment key hash in a wallet field, the way the relayer reads it back', () => {
+    const keyHash = 'c2'.repeat(28);
+    const takeover = resolveProposalArgs({
+      ...BASE,
+      proposalType: 'SilenceLockTrigger',
+      proposedCommunityWalletHex: keyHash,
+    });
+    expect(Buffer.from(takeover.proposedCommunityWallet).toString('hex')).toBe(`${keyHash}00000000`);
+    expect(cardanoKeyHashFromBallotField(takeover.proposedCommunityWallet)).toBe(keyHash);
+    const allocation = resolveProposalArgs({
+      ...BASE,
+      proposalType: 'FundAllocation',
+      allocationAmount: '10',
+      allocationRecipientHex: keyHash,
+    });
+    expect(cardanoKeyHashFromBallotField(allocation.allocationRecipient)).toBe(keyHash);
   });
 
   it('FundAllocation needs a positive amount and a recipient', () => {

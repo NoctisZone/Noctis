@@ -61,6 +61,12 @@ export interface CtoProposalSummary {
   voterCount: string;
   creatorYesVotes: string;
   creatorNoVotes: string;
+  /** The ADA a VestingToLp pairs, a VestingToStaking runway, or a FundAllocation amount. */
+  allocationAmount: string;
+  allocationRecipientHex: string;
+  /** The wallet a SilenceLockTrigger takes over with. */
+  proposedCommunityWalletHex: string;
+  targetDexAddrHex: string;
   balanceSnapshotRootHex: string;
   bond: string | null;
 }
@@ -100,6 +106,10 @@ export function summarizeCtoProposal(idHex: string, p: Proposal, bond: bigint | 
     voterCount: p.voterCount.toString(),
     creatorYesVotes: p.creatorYesVotes.toString(),
     creatorNoVotes: p.creatorNoVotes.toString(),
+    allocationAmount: p.allocationAmount.toString(),
+    allocationRecipientHex: hex(p.allocationRecipient),
+    proposedCommunityWalletHex: hex(p.proposedCommunityWallet),
+    targetDexAddrHex: hex(p.targetDexAddr),
     balanceSnapshotRootHex: hex(p.balanceSnapshotRoot),
     bond: bond === null ? null : bond.toString(),
   };

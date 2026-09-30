@@ -13,6 +13,7 @@
 
 import { createHash } from 'node:crypto';
 import { ProposalType } from '../contracts/midnight/compiled/cto_governance/contract/index.js';
+import { cardanoKeyHashToBallotField } from './cto-wallet-field.js';
 import { fromHex32 } from './eligibility-gate-deploy-args.js';
 
 export type CtoAction =
@@ -144,8 +145,13 @@ export interface ProposalInput {
    * launch's existing pool.
    */
   allocationAmount?: string | number;
+  /**
+   * FundAllocation: the recipient. A Cardano Launch names a 28-byte payment
+   * key hash, stored in the ballot's 32-byte field (see cto-wallet-field.ts);
+   * 32 bytes are taken as they are.
+   */
   allocationRecipientHex?: string;
-  /** SilenceLockTrigger: the wallet the community takes over with. */
+  /** SilenceLockTrigger: the wallet the community takes over with, as `allocationRecipientHex`. */
   proposedCommunityWalletHex?: string;
   /** NIGHT atomic units, at least the contract's breakGlassBondMin. Taken from the proposer's wallet. */
   bondAmount: string | number;
@@ -172,6 +178,13 @@ const isZero = (b: Uint8Array) => b.every((x) => x === 0);
 function optionalHex32(value: string | undefined, label: string): Uint8Array {
   if (value === undefined || value === '') return ZERO32;
   return fromHex32(value, label);
+}
+
+/** A wallet field: a Cardano payment key hash (28 bytes) is placed in it, 32 bytes are taken as they are. */
+function optionalWallet(value: string | undefined, label: string): Uint8Array {
+  if (value === undefined || value === '') return ZERO32;
+  const clean = value.startsWith('0x') ? value.slice(2) : value;
+  return clean.length === 56 ? cardanoKeyHashToBallotField(clean, label) : fromHex32(value, label);
 }
 
 function toBigInt(value: string | number | undefined, label: string): bigint {
@@ -210,8 +223,8 @@ export function resolveProposalArgs(input: ProposalInput, breakGlassBondMin?: bi
   }
 
   const targetDexAddr = optionalHex32(input.targetDexAddrHex, 'targetDexAddrHex');
-  const allocationRecipient = optionalHex32(input.allocationRecipientHex, 'allocationRecipientHex');
-  const proposedCommunityWallet = optionalHex32(input.proposedCommunityWalletHex, 'proposedCommunityWalletHex');
+  const allocationRecipient = optionalWallet(input.allocationRecipientHex, 'allocationRecipientHex');
+  const proposedCommunityWallet = optionalWallet(input.proposedCommunityWalletHex, 'proposedCommunityWalletHex');
   const allocationAmount = toBigInt(input.allocationAmount, 'allocationAmount');
 
   switch (name) {
