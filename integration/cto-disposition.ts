@@ -33,33 +33,17 @@
 // ============================================================================
 
 import { Constr, Data } from '@lucid-evolution/lucid';
-import {
-  type Asset,
-  applyCborEncoding,
-  MeshTxBuilder,
-  type UTxO as MeshUTxO,
-  resolveNativeScriptHash,
-  resolveSlotNo,
-} from '@meshsdk/core';
-import { toNativeScript } from '@meshsdk/core-cst';
 import { bytesToHex } from '@noble/hashes/utils.js';
 import { type CtoGovernanceDatumData, CtoGovernanceDatumSchema } from './cardano-cto-anchor-submitter.js';
 import {
-  type CurveNetwork,
-  type CurveSpendProvider,
-  type CurveSpendWallet,
-  type PlanAssets,
-  type PlanScriptUtxo,
-  spendableForFees,
-  type TxCoSigner,
-} from './mesh-curve-spend.js';
+  type DatumUtxo,
+  readByUnit,
+  type TakeoverOutput,
+  type TakeoverSpend,
+  type TakeoverTxPlan,
+} from './cto-takeover-tx.js';
+import type { PlanAssets } from './mesh-curve-spend.js';
 import { LP_ESCROW_REDEEMER, STAKING_POOL_REDEEMER, VESTING_REDEEMER } from './redeemer-indices.js';
-import {
-  MESH_NETWORK_ID,
-  type ReferenceScriptPointer,
-  resolveReferenceScript,
-  scriptAddressOf,
-} from './reference-script.js';
 import { STAKE_EMPTY_ROOT } from './stake-accumulator-tree.js';
 import { advance, validityRangeFor } from './staking-math.js';
 import {
@@ -73,18 +57,13 @@ import {
   venueAssetName,
 } from './tier-a-schemas.js';
 import { VENUE_MAX_LQ_CAP, type VenuePoolConfigData, VenuePoolConfigSchema } from './venue-pool.js';
-import { VENUE_POOL_ACTION, venuePoolRedeemer } from './venue-swap.js';
+import { VENUE_POOL_ACTION } from './venue-swap.js';
 
 export type DispositionKind = 'VestingToTreasury' | 'VestingToStaking' | 'VestingToLp';
 export const DISPOSITION_KINDS: readonly DispositionKind[] = ['VestingToTreasury', 'VestingToStaking', 'VestingToLp'];
 
 /** `staking_pool_datum.max_unstake_lock_ms`: the lock a pool a vote opens is given. */
 export const DISPOSITION_POOL_UNSTAKE_LOCK_MS = 604_800_000n;
-
-/** A script UTXO with its decoded inline datum. */
-export interface DatumUtxo<D> extends PlanScriptUtxo {
-  datum: D;
-}
 
 /**
  * What the transactions read and spend. The governance record and vesting are
@@ -99,39 +78,9 @@ export interface VestingTakeoverState {
   venuePool?: DatumUtxo<VenuePoolConfigData>;
 }
 
-export type DispositionScriptRole = 'vesting' | 'stakingPool' | 'lpEscrow' | 'venuePool';
-
-/** One script input, and the redeemer it is spent with. */
-export interface DispositionSpend {
-  role: DispositionScriptRole;
-  utxo: PlanScriptUtxo;
-  /**
-   * CBOR hex, or the venue pool's action: its redeemer names the pool's own
-   * INPUT position, which only exists once the funding inputs are chosen.
-   */
-  redeemer: { cbor: string } | { venuePoolAction: number };
-}
-
-export interface DispositionOutput {
-  address: string;
-  /** Lovelace absent: the builder pays the protocol minimum for this output. */
-  assets: PlanAssets;
-  datumCbor: string;
-}
-
-/** A transaction on the vesting allocation, described without a transaction library. */
-export interface VestingTakeoverPlan {
+/** A transaction on the vesting allocation. */
+export interface VestingTakeoverPlan extends TakeoverTxPlan {
   action: 'freeze' | DispositionKind;
-  spends: DispositionSpend[];
-  /** The governance record, read and never spent. */
-  referenceInputs: PlanScriptUtxo[];
-  outputs: DispositionOutput[];
-  /** A new staking pool's thread NFT, under the governor's native policy. */
-  mint?: { governorKeyHash: string; assetNameHex: string };
-  requiredSignerHashes: string[];
-  validity?: { fromMs: number; toMs: number };
-  /** Lovelace the paying wallet puts into the transaction beyond the fee: the LP arm's pairing ADA. */
-  fundingLovelace: bigint;
   /** The launch's tokens that leave vesting. */
   moved: bigint;
   /** The LP arm's deposit, as the pool and the escrow will read it. */
@@ -140,17 +89,17 @@ export interface VestingTakeoverPlan {
   staking?: { created: false; exhausted: boolean } | { created: true; runwayDays: bigint; emissionPerDay: bigint };
 }
 
-const tokenUnit = (d: Pick<VestingDatumData, 'token_policy_id' | 'token_asset_name'>) =>
+export const tokenUnit = (d: Pick<VestingDatumData, 'token_policy_id' | 'token_asset_name'>) =>
   d.token_policy_id + d.token_asset_name;
 
-const threadUnit = (policy: string, role: Parameters<typeof threadNftAssetName>[0], launchIdHex: string) =>
+export const threadUnit = (policy: string, role: Parameters<typeof threadNftAssetName>[0], launchIdHex: string) =>
   policy + threadNftAssetName(role, launchIdHex);
 
-function sameCredential(a: VestingDatumData['cto_governance_credential'], scriptHash: string): boolean {
+export function sameCredential(a: VestingDatumData['cto_governance_credential'], scriptHash: string): boolean {
   return JSON.stringify(a) === JSON.stringify({ ScriptCredential: [scriptHash] });
 }
 
-function withQuantity(assets: PlanAssets, unit: string, delta: bigint): PlanAssets {
+export function withQuantity(assets: PlanAssets, unit: string, delta: bigint): PlanAssets {
   const next = { ...assets, [unit]: (assets[unit] ?? 0n) + delta };
   if (next[unit] === 0n) delete next[unit];
   return next;
@@ -273,12 +222,12 @@ export function planDisposition(
 
   const held = state.vesting.assets[tokenUnit(v)] ?? 0n;
   const disposed: VestingDatumData = { ...v, vesting_state: 'Disposed' };
-  const vestingSpend = (): DispositionSpend => ({
+  const vestingSpend = (): TakeoverSpend => ({
     role: 'vesting',
     utxo: state.vesting,
     redeemer: { cbor: Data.to(new Constr(VESTING_REDEEMER.ExecuteDisposition, [])) },
   });
-  const vestingOutput = (moved: bigint): DispositionOutput => ({
+  const vestingOutput = (moved: bigint): TakeoverOutput => ({
     address: state.vesting.address,
     assets: withQuantity(state.vesting.assets, tokenUnit(v), -moved),
     datumCbor: Data.to(disposed, VestingDatumSchema),
@@ -471,224 +420,8 @@ export function planDisposition(
 }
 
 // ---------------------------------------------------------------------------
-// Building
-// ---------------------------------------------------------------------------
-
-/** A validator, carried in the transaction or named by a published reference. */
-export interface DispositionScriptSource {
-  /** Raw compiled CBOR, from the blueprint (or the applied record for the venue pool). */
-  compiledScriptCbor: string;
-  referenceScript?: ReferenceScriptPointer;
-}
-
-export interface VestingTakeoverBuilderConfig {
-  network: CurveNetwork;
-  /** Fetcher, and the script evaluator unless `executionUnits` is set. */
-  provider: CurveSpendProvider;
-  scripts: Partial<Record<DispositionScriptRole, DispositionScriptSource>>;
-  /** Budgets to declare instead of evaluating: an operator's choice, never a default. */
-  executionUnits?: { mem: number; steps: number };
-}
-
-function toMesh(assets: PlanAssets): Asset[] {
-  return Object.entries(assets)
-    .filter(([, quantity]) => quantity !== 0n)
-    .map(([unit, quantity]) => ({ unit, quantity: quantity.toString() }));
-}
-
-/** Lovelace of fees and change the funding inputs carry beyond what the plan pays in. */
-export const DISPOSITION_FEE_HEADROOM_LOVELACE = 5_000_000n;
-
-/**
- * The paying wallet's inputs, chosen here rather than by the builder.
- *
- * The venue pool's redeemer names its own position among the inputs, and a
- * builder that picks the funding inputs itself decides that position after the
- * redeemer was written. Choosing them first makes the position knowable.
- */
-export function chooseFundingInputs(utxos: readonly MeshUTxO[], needLovelace: bigint): MeshUTxO[] {
-  const lovelaceOf = (u: MeshUTxO) => BigInt(u.output.amount.find((a) => a.unit === 'lovelace')?.quantity ?? '0');
-  const sorted = [...utxos].sort((a, b) =>
-    lovelaceOf(b) > lovelaceOf(a) ? 1 : lovelaceOf(b) < lovelaceOf(a) ? -1 : 0,
-  );
-  const chosen: MeshUTxO[] = [];
-  let total = 0n;
-  for (const u of sorted) {
-    if (total >= needLovelace) break;
-    chosen.push(u);
-    total += lovelaceOf(u);
-  }
-  if (total < needLovelace) {
-    throw new Error(
-      `The paying wallet holds ${total} lovelace it can spend, and this transaction needs ${needLovelace}.`,
-    );
-  }
-  return chosen;
-}
-
-const inputKey = (u: { txHash: string; outputIndex: number }) => `${u.txHash}#${u.outputIndex}`;
-
-/** Position of `target` among `inputs` once the ledger sorts them. */
-function sortedPosition(
-  inputs: ReadonlyArray<{ txHash: string; outputIndex: number }>,
-  target: { txHash: string; outputIndex: number },
-): number {
-  const sorted = [...inputs].sort((a, b) =>
-    a.txHash === b.txHash ? a.outputIndex - b.outputIndex : a.txHash < b.txHash ? -1 : 1,
-  );
-  return sorted.findIndex((i) => inputKey(i) === inputKey(target));
-}
-
-/** Builds a vesting takeover transaction, unsigned. */
-export async function buildVestingTakeover(
-  plan: VestingTakeoverPlan,
-  wallet: CurveSpendWallet,
-  config: VestingTakeoverBuilderConfig,
-): Promise<string> {
-  const networkId = MESH_NETWORK_ID[config.network];
-  const [changeAddress, walletUtxos, collateral] = await Promise.all([
-    wallet.getChangeAddress(),
-    wallet.getUtxos(),
-    wallet.getCollateral(),
-  ]);
-  const collateralUtxo = collateral[0];
-  if (!collateralUtxo) {
-    throw new Error(
-      'The paying wallet has no collateral UTXO. A Plutus spend needs one: a pure-ada UTXO the wallet sets aside.',
-    );
-  }
-  const funding = chooseFundingInputs(
-    spendableForFees(walletUtxos, collateralUtxo),
-    plan.fundingLovelace + DISPOSITION_FEE_HEADROOM_LOVELACE,
-  );
-  const allInputs = [...plan.spends.map((s) => s.utxo), ...funding.map((u) => u.input)];
-
-  const tx = new MeshTxBuilder({
-    fetcher: config.provider as never,
-    submitter: config.provider as never,
-    ...(config.executionUnits ? {} : { evaluator: config.provider as never }),
-    verbose: false,
-  });
-
-  for (const spend of plan.spends) {
-    const source = config.scripts[spend.role];
-    if (!source) throw new Error(`No ${spend.role} validator was given, so its input cannot be spent.`);
-    tx.spendingPlutusScriptV3().txIn(
-      spend.utxo.txHash,
-      spend.utxo.outputIndex,
-      toMesh(spend.utxo.assets),
-      spend.utxo.address,
-      0,
-    );
-    if (source.referenceScript) {
-      const ref = resolveReferenceScript(source.compiledScriptCbor, source.referenceScript, networkId);
-      if (spend.utxo.address !== ref.scriptAddress) {
-        throw new Error(
-          `The ${spend.role} UTXO sits at ${spend.utxo.address}, but its reference pointer holds a script whose ` +
-            `address is ${ref.scriptAddress}.`,
-        );
-      }
-      tx.spendingTxInReference(ref.txHash, ref.outputIndex, String(ref.rawSizeBytes), ref.scriptHash);
-    } else {
-      if (spend.utxo.address !== scriptAddressOf(source.compiledScriptCbor, networkId)) {
-        throw new Error(`The ${spend.role} UTXO does not sit at the address of the ${spend.role} validator given.`);
-      }
-      tx.txInScript(applyCborEncoding(source.compiledScriptCbor));
-    }
-    const redeemer =
-      'cbor' in spend.redeemer
-        ? spend.redeemer.cbor
-        : venuePoolRedeemer(spend.redeemer.venuePoolAction, sortedPosition(allInputs, spend.utxo));
-    tx.txInInlineDatumPresent().txInRedeemerValue(redeemer, 'CBOR', config.executionUnits);
-  }
-
-  for (const u of funding) tx.txIn(u.input.txHash, u.input.outputIndex, u.output.amount, u.output.address);
-  for (const ref of plan.referenceInputs) tx.readOnlyTxInReference(ref.txHash, ref.outputIndex);
-
-  if (plan.mint) {
-    const policy = { type: 'sig' as const, keyHash: plan.mint.governorKeyHash };
-    tx.mint('1', resolveNativeScriptHash(policy), plan.mint.assetNameHex).mintingScript(
-      toNativeScript(policy).toCbor(),
-    );
-  }
-
-  for (const output of plan.outputs) {
-    tx.txOut(output.address, toMesh(output.assets)).txOutInlineDatumValue(output.datumCbor, 'CBOR');
-  }
-  for (const hash of plan.requiredSignerHashes) tx.requiredSignerHash(hash);
-  if (plan.validity) {
-    tx.invalidBefore(Number(resolveSlotNo(config.network, plan.validity.fromMs)));
-    tx.invalidHereafter(Number(resolveSlotNo(config.network, plan.validity.toMs)));
-  }
-  tx.txInCollateral(
-    collateralUtxo.input.txHash,
-    collateralUtxo.input.outputIndex,
-    collateralUtxo.output.amount,
-    collateralUtxo.output.address,
-  )
-    .selectUtxosFrom([])
-    .changeAddress(changeAddress)
-    .setNetwork(config.network);
-
-  return tx.complete();
-}
-
-/**
- * Builds, signs and submits. `coSigners` add the signatures the plan declares
- * beyond the paying wallet's own, such as the governor's on a new pool.
- */
-export async function submitVestingTakeover(
-  plan: VestingTakeoverPlan,
-  wallet: CurveSpendWallet,
-  config: VestingTakeoverBuilderConfig,
-  coSigners: readonly TxCoSigner[] = [],
-): Promise<string> {
-  let signed = await wallet.signTx(await buildVestingTakeover(plan, wallet, config));
-  for (const coSigner of coSigners) signed = await coSigner.signTx(signed);
-  return wallet.submitTx(signed);
-}
-
-// ---------------------------------------------------------------------------
 // Reading
 // ---------------------------------------------------------------------------
-
-type BlockfrostUtxo = {
-  tx_hash: string;
-  output_index: number;
-  address: string;
-  amount: Array<{ unit: string; quantity: string }>;
-  inline_datum: string | null;
-};
-
-/** The one output at `address` holding `unit`, with its datum decoded; undefined when there is none. */
-async function readByUnit<D>(
-  get: (path: string) => Promise<unknown>,
-  address: string,
-  unit: string,
-  schema: D,
-  what: string,
-): Promise<DatumUtxo<D> | undefined> {
-  let found: BlockfrostUtxo[];
-  try {
-    found = (await get(`addresses/${address}/utxos/${unit}`)) as BlockfrostUtxo[];
-  } catch (err) {
-    if (/\b404\b/.test(String(err))) return undefined;
-    throw err;
-  }
-  if (!Array.isArray(found) || found.length === 0) return undefined;
-  if (found.length > 1) throw new Error(`More than one output at the ${what} address holds ${unit}.`);
-  const utxo = found[0] as BlockfrostUtxo;
-  if (!utxo.inline_datum) throw new Error(`The ${what} output carries no inline datum.`);
-  const assets: PlanAssets = {};
-  for (const { unit: u, quantity } of utxo.amount) assets[u] = (assets[u] ?? 0n) + BigInt(quantity);
-  return {
-    txHash: utxo.tx_hash,
-    outputIndex: utxo.output_index,
-    address: utxo.address,
-    assets,
-    datum: Data.from(utxo.inline_datum, schema),
-  };
-}
 
 /**
  * Reads a launch's vesting, governance record and, when asked, the outputs a

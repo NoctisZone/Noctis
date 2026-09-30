@@ -6,16 +6,8 @@
 // and the venue pool, exactly as the blueprint and the applied record hold
 // them. A test passes only if every script in the transaction accepts it.
 
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
-import { credentialToAddress, Data } from '@lucid-evolution/lucid';
-import {
-  applyCborEncoding,
-  DEFAULT_PROTOCOL_PARAMETERS,
-  type UTxO as MeshUTxO,
-  resolveNativeScriptHash,
-} from '@meshsdk/core';
-import { deserializeTx, OfflineEvaluatorScalus, toScriptRef } from '@meshsdk/core-cst';
+import { Data } from '@lucid-evolution/lucid';
+import { resolveNativeScriptHash } from '@meshsdk/core';
 import { bytesToHex } from '@noble/hashes/utils.js';
 import { describe, expect, it } from 'vitest';
 import {
@@ -24,16 +16,14 @@ import {
   type ProposalAnchorData,
 } from '../cardano-cto-anchor-submitter.js';
 import {
-  buildVestingTakeover,
-  type DatumUtxo,
-  type DispositionScriptSource,
   planDisposition,
   planVestingFreeze,
   type VestingTakeoverPlan,
   type VestingTakeoverState,
 } from '../cto-disposition.js';
-import type { CurveSpendWallet, PlanAssets } from '../mesh-curve-spend.js';
-import { MAX_TX_BYTES, scriptAddressOf, scriptHashOf } from '../reference-script.js';
+import type { DatumUtxo } from '../cto-takeover-tx.js';
+import type { PlanAssets } from '../mesh-curve-spend.js';
+import { MAX_TX_BYTES, scriptHashOf } from '../reference-script.js';
 import { STAKE_EMPTY_ROOT } from '../stake-accumulator-tree.js';
 import {
   type LpEscrowDatumData,
@@ -46,33 +36,29 @@ import {
   venueAssetName,
 } from '../tier-a-schemas.js';
 import { VENUE_MAX_LQ_CAP, type VenuePoolConfigData, VenuePoolConfigSchema } from '../venue-pool.js';
+import {
+  at,
+  buildEvaluated,
+  datumCborAt,
+  launchScript,
+  onChain,
+  quantityIn,
+  referenced,
+  referenceOutput,
+  venueScript,
+} from './support/takeover-chain.js';
 
-const ROOT = join(import.meta.dirname, '..', '..');
-const blueprint = JSON.parse(readFileSync(join(ROOT, 'contracts', 'cardano', 'plutus.json'), 'utf8')) as {
-  validators: Array<{ title: string; compiledCode: string }>;
-};
-const applied = JSON.parse(
-  readFileSync(join(ROOT, 'contracts', 'cardano-dex', 'deployment', 'applied.json'), 'utf8'),
-) as { validators: Array<{ title: string; compiledCode: string }> };
-const code = (title: string, from = blueprint) => {
-  const v = from.validators.find((x) => x.title === title);
-  if (!v) throw new Error(`${title} is not in the blueprint`);
-  return v.compiledCode;
-};
+const VESTING = launchScript('vesting.vesting.spend');
+const GOVERNANCE = launchScript('cto_governance.cto_governance.spend');
+const LP_ESCROW = launchScript('lp_escrow.lp_escrow.spend');
+const STAKING = launchScript('staking_pool.staking_pool.spend');
+const POOL = venueScript('royalty_pool/pool.pool.spend');
 
-const VESTING = code('vesting.vesting.spend');
-const GOVERNANCE = code('cto_governance.cto_governance.spend');
-const LP_ESCROW = code('lp_escrow.lp_escrow.spend');
-const STAKING = code('staking_pool.staking_pool.spend');
-const POOL = code('royalty_pool/pool.pool.spend', applied);
-
-const at = (script: string) => scriptAddressOf(script, 0);
 const GOVERNANCE_HASH = scriptHashOf(GOVERNANCE);
 
 const GOVERNOR = '22'.repeat(28);
 const COMMUNITY = '77'.repeat(28);
 const CREATOR = '11'.repeat(28);
-const PAYER = '99'.repeat(28);
 const THREAD_POLICY = resolveNativeScriptHash({ type: 'sig', keyHash: GOVERNOR });
 const FACTORY = '1e'.repeat(28);
 const LAUNCH = `ab${'cd'.repeat(31)}`;
@@ -267,126 +253,35 @@ function withLiquidity(state: VestingTakeoverState) {
 
 // -- the chain the evaluator reads -------------------------------------------
 
-const PAYER_ADDRESS = credentialToAddress('Preprod', { type: 'Key', hash: PAYER });
-
 /** Published reference scripts, as the sites hold them for the escrow, the staking pool and the venue pool. */
-const REFS: Record<string, { script: string; utxo: MeshUTxO }> = {};
-for (const [role, script, n] of [
-  ['lpEscrow', LP_ESCROW, 0xe1],
-  ['stakingPool', STAKING, 0xe2],
-  ['venuePool', POOL, 0xe3],
-] as const) {
-  REFS[role] = {
-    script,
-    utxo: {
-      input: { txHash: n.toString(16).repeat(32), outputIndex: 0 },
-      output: {
-        address: PAYER_ADDRESS,
-        amount: [{ unit: 'lovelace', quantity: '60000000' }],
-        scriptRef: toScriptRef({ code: applyCborEncoding(script), version: 'V3' }).toCbor(),
-      },
-    },
-  };
-}
-
-function scripts(): Record<string, DispositionScriptSource> {
-  const ref = (role: string) => {
-    const r = REFS[role];
-    if (!r) throw new Error(role);
-    return {
-      compiledScriptCbor: r.script,
-      referenceScript: { txHash: r.utxo.input.txHash, outputIndex: 0, scriptHash: scriptHashOf(r.script) },
-    };
-  };
-  // Vesting has no published reference, so it is carried.
-  return {
-    vesting: { compiledScriptCbor: VESTING },
-    lpEscrow: ref('lpEscrow'),
-    stakingPool: ref('stakingPool'),
-    venuePool: ref('venuePool'),
-  };
-}
-
-const toMeshUtxo = (u: DatumUtxo<unknown>, datumCbor: string): MeshUTxO => ({
-  input: { txHash: u.txHash, outputIndex: u.outputIndex },
-  output: {
-    address: u.address,
-    amount: Object.entries(u.assets).map(([unit, q]) => ({ unit, quantity: q.toString() })),
-    plutusData: datumCbor,
-  },
-});
-
-const COLLATERAL: MeshUTxO = {
-  input: { txHash: 'c0'.repeat(32), outputIndex: 0 },
-  output: { address: PAYER_ADDRESS, amount: [{ unit: 'lovelace', quantity: '10000000' }] },
-};
-const FUNDS: MeshUTxO = {
-  input: { txHash: 'f0'.repeat(32), outputIndex: 1 },
-  output: { address: PAYER_ADDRESS, amount: [{ unit: 'lovelace', quantity: '12000000000' }] },
+const REFS = {
+  lpEscrow: referenceOutput(LP_ESCROW, 0xe1),
+  stakingPool: referenceOutput(STAKING, 0xe2),
+  venuePool: referenceOutput(POOL, 0xe3),
 };
 
-function payer(): CurveSpendWallet {
-  return {
-    getChangeAddress: async () => PAYER_ADDRESS,
-    getUtxos: async () => [COLLATERAL, FUNDS],
-    getCollateral: async () => [COLLATERAL],
-    signTx: async (tx) => tx,
-    submitTx: async () => 'submitted',
-  };
+// Vesting has no published reference, so it is carried.
+const SCRIPTS = {
+  vesting: { compiledScriptCbor: VESTING },
+  lpEscrow: referenced(LP_ESCROW, REFS.lpEscrow),
+  stakingPool: referenced(STAKING, REFS.stakingPool),
+  venuePool: referenced(POOL, REFS.venuePool),
+};
+
+/** Everything on "chain" for this state. */
+function chain(state: VestingTakeoverState) {
+  const known = [...Object.values(REFS)];
+  known.push(onChain(state.vesting, Data.to(state.vesting.datum, VestingDatumSchema)));
+  known.push(onChain(state.governance, Data.to(state.governance.datum, CtoGovernanceDatumSchema)));
+  if (state.stakingPool)
+    known.push(onChain(state.stakingPool, Data.to(state.stakingPool.datum, StakingPoolDatumSchema)));
+  if (state.lpEscrow) known.push(onChain(state.lpEscrow, Data.to(state.lpEscrow.datum, LpEscrowDatumSchema)));
+  if (state.venuePool) known.push(onChain(state.venuePool, Data.to(state.venuePool.datum, VenuePoolConfigSchema)));
+  return known;
 }
 
-/** Everything on "chain": the state UTXOs, the reference scripts and the wallet's outputs. */
-function provider(state: VestingTakeoverState) {
-  const known: MeshUTxO[] = [COLLATERAL, FUNDS, ...Object.values(REFS).map((r) => r.utxo)];
-  known.push(toMeshUtxo(state.vesting, Data.to(state.vesting.datum, VestingDatumSchema)));
-  known.push(toMeshUtxo(state.governance, Data.to(state.governance.datum, CtoGovernanceDatumSchema)));
-  if (state.stakingPool) {
-    known.push(toMeshUtxo(state.stakingPool, Data.to(state.stakingPool.datum, StakingPoolDatumSchema)));
-  }
-  if (state.lpEscrow) known.push(toMeshUtxo(state.lpEscrow, Data.to(state.lpEscrow.datum, LpEscrowDatumSchema)));
-  if (state.venuePool) {
-    known.push(toMeshUtxo(state.venuePool, Data.to(state.venuePool.datum, VenuePoolConfigSchema)));
-  }
-  const fetcher = {
-    fetchProtocolParameters: async () => DEFAULT_PROTOCOL_PARAMETERS,
-    fetchUTxOs: async (hash: string, index?: number) =>
-      known.filter((u) => u.input.txHash === hash && (index === undefined || u.input.outputIndex === index)),
-  };
-  const evaluator = new OfflineEvaluatorScalus(fetcher as never, 'preprod');
-  return {
-    ...fetcher,
-    evaluateTx: (tx: string, utxos?: MeshUTxO[], txs?: string[]) => evaluator.evaluateTx(tx, utxos, txs),
-  };
-}
-
-/**
- * Builds with the evaluator, and holds the result to having been evaluated:
- * one redeemer per script input (and none for the native mint), each with a
- * budget the evaluator measured. A transaction whose scripts never ran would
- * carry none.
- */
-async function build(plan: VestingTakeoverPlan, state: VestingTakeoverState) {
-  const tx = await buildVestingTakeover(plan, payer(), {
-    network: 'preprod',
-    provider: provider(state),
-    scripts: scripts(),
-  });
-  const redeemers = deserializeTx(tx).witnessSet().redeemers()?.toCore() ?? [];
-  expect(redeemers).toHaveLength(plan.spends.length);
-  for (const r of redeemers) expect(r.executionUnits.memory).toBeGreaterThan(0);
-  return tx;
-}
-
-const outputs = (txHex: string) => deserializeTx(txHex).body().outputs();
-
-/** The launch tokens an output carries. */
-const tokensIn = (txHex: string, index: number) =>
-  deserializeTx(txHex)
-    .body()
-    .outputs()
-    [index]?.amount()
-    .toCore()
-    .assets?.get(TOKEN as never) ?? 0n;
+const build = (plan: VestingTakeoverPlan, state: VestingTakeoverState) => buildEvaluated(plan, chain(state), SCRIPTS);
+const tokensIn = (txHex: string, index: number) => quantityIn(txHex, index, TOKEN);
 
 // -- tests -------------------------------------------------------------------
 
@@ -399,7 +294,7 @@ describe('freezing the allocation a takeover holds', () => {
     const plan = planVestingFreeze(state, { governanceScriptHash: GOVERNANCE_HASH });
     const tx = await build(plan, state);
     expect(tokensIn(tx, 0)).toBe(HELD);
-    const datum = Data.from(outputs(tx)[0]?.datum()?.asInlineData()?.toCbor() ?? '', VestingDatumSchema);
+    const datum = Data.from(datumCborAt(tx, 0), VestingDatumSchema);
     expect(datum).toMatchObject({
       vesting_state: 'CTOFrozen',
       cto_triggered: true,
@@ -427,7 +322,7 @@ describe('keeping the allocation on the treasury terms', () => {
     expect(plan.moved).toBe(0n);
     const tx = await build(plan, state);
     expect(tokensIn(tx, 0)).toBe(HELD);
-    const datum = Data.from(outputs(tx)[0]?.datum()?.asInlineData()?.toCbor() ?? '', VestingDatumSchema);
+    const datum = Data.from(datumCborAt(tx, 0), VestingDatumSchema);
     expect(datum.vesting_state).toBe('Disposed');
   });
 
@@ -456,7 +351,7 @@ describe('moving the allocation into staking', () => {
     const tx = await build(plan, state);
     expect(tokensIn(tx, 0)).toBe(0n);
     expect(tokensIn(tx, 1)).toBe(200_000_000n + HELD);
-    const pool = Data.from(outputs(tx)[1]?.datum()?.asInlineData()?.toCbor() ?? '', StakingPoolDatumSchema);
+    const pool = Data.from(datumCborAt(tx, 1), StakingPoolDatumSchema);
     expect(pool.unallocated).toBe(200_000_000n + HELD);
     expect(pool.emission_per_day).toBe(100_000n);
   });
@@ -482,7 +377,7 @@ describe('moving the allocation into staking', () => {
     expect(plan.staking).toEqual({ created: true, runwayDays: 1_095n, emissionPerDay: HELD / 1_095n });
     expect(plan.requiredSignerHashes).toEqual([GOVERNOR]);
     const tx = await build(plan, state);
-    const pool = Data.from(outputs(tx)[1]?.datum()?.asInlineData()?.toCbor() ?? '', StakingPoolDatumSchema);
+    const pool = Data.from(datumCborAt(tx, 1), StakingPoolDatumSchema);
     expect(pool.creator_pub_key_hash).toBe(COMMUNITY);
     expect(pool.unallocated).toBe(HELD);
     expect(pool.last_update_ms).toBe(BigInt(plan.validity?.fromMs ?? 0));
@@ -507,8 +402,7 @@ describe('moving the allocation into liquidity', () => {
     expect(plan.requiredSignerHashes).toEqual([COMMUNITY]);
     const tx = await build(plan, state);
     expect(tx.length / 2).toBeLessThan(MAX_TX_BYTES);
-    const out = outputs(tx);
-    const escrow = Data.from(out[1]?.datum()?.asInlineData()?.toCbor() ?? '', LpEscrowDatumSchema);
+    const escrow = Data.from(datumCborAt(tx, 1), LpEscrowDatumSchema);
     expect(escrow.lp_token_amount).toBe(LQ0 + 150_000_000n);
     expect(escrow.lock_timestamp).toBe(BigInt(plan.validity?.fromMs ?? 0));
     expect(tokensIn(tx, 0)).toBe(HELD - 30_000_000n);

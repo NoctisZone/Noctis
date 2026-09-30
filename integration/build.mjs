@@ -445,9 +445,9 @@ const registerVenueScriptsCliConfig = {
 	logLevel: "info",
 };
 
-const ctoVestingTakeoverCliConfig = {
-	entryPoints: [join(__dirname, "cli/cto-vesting-takeover.ts")],
-	outfile: join(__dirname, "cli/dist/cto-vesting-takeover.cjs"),
+const ctoTakeoverCliConfig = {
+	entryPoints: [join(__dirname, "cli/cto-takeover.ts")],
+	outfile: join(__dirname, "cli/dist/cto-takeover.cjs"),
 	bundle: true,
 	platform: "node",
 	// CJS for the same reason as the other Cardano CLIs: a bundled transitive
@@ -1112,7 +1112,7 @@ async function run() {
 		reclaimCtoRelayerBondCliConfig,
 		publishReferenceScriptCliConfig,
 		registerVenueScriptsCliConfig,
-		ctoVestingTakeoverCliConfig,
+		ctoTakeoverCliConfig,
 		orderActionCliConfig,
 		batchActionCliConfig,
 		reclaimReferenceScriptsCliConfig,
