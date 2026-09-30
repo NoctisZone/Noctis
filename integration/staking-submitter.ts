@@ -170,6 +170,19 @@ interface LoadedPool {
   positions: StakeAccumulator;
 }
 
+/**
+ * The instant a spend is built at: the caller's, or the clock read now.
+ *
+ * Called only once the pool has loaded. A spend is valid for about seven
+ * minutes from this instant (see `validityRangeFor`), and loading the pool
+ * over a slow connection can take most of that. Read before the load, a
+ * transaction can reach the network with its window nearly spent and expire
+ * before a block takes it.
+ */
+function afterLoading(nowMs?: number): number {
+  return nowMs ?? Date.now();
+}
+
 export class StakingSubmitter {
   private lucidPromise: Promise<LucidEvolution>;
   private validator: SpendingValidator;
@@ -556,12 +569,13 @@ export class StakingSubmitter {
    * Open or add to a position. Anything owed is compounded, which pays the
    * platform charge, and the lock restarts.
    */
-  async stakeCore(lucid: LucidEvolution, stakerAddress: string, amount: bigint, nowMs = Date.now()) {
+  async stakeCore(lucid: LucidEvolution, stakerAddress: string, amount: bigint, nowMs?: number) {
     if (amount <= 0n) throw new Error('Stake amount must be positive.');
     const loaded = await this.loadPool();
+    const clock = afterLoading(nowMs);
     const vkh = keyHashFromAddress(stakerAddress);
     let compounded = 0n;
-    const { tx } = this.buildSpend(lucid, loaded, vkh, nowMs, ({ acc, before, owed, now }) => {
+    const { tx } = this.buildSpend(lucid, loaded, vkh, clock, ({ acc, before, owed, now }) => {
       compounded = owed;
       const total = before.amount + amount + owed;
       return {
@@ -582,21 +596,22 @@ export class StakingSubmitter {
   }
 
   /** Close a position: the stake and everything owed on it, out. */
-  async unstakeCore(lucid: LucidEvolution, stakerAddress: string, nowMs = Date.now()) {
+  async unstakeCore(lucid: LucidEvolution, stakerAddress: string, nowMs?: number) {
     const loaded = await this.loadPool();
+    const clock = afterLoading(nowMs);
     const vkh = keyHashFromAddress(stakerAddress);
     const before = loaded.positions.get(hexToBytes(vkh));
     if (before.amount <= 0n) throw new Error('This wallet has no open staking position in this pool.');
     const unlocksAt = before.since + UNSTAKE_LOCK_MS;
     // Against the bound the validator reads, so a pre-check that passes here
     // is not one the chain then refuses.
-    if (BigInt(validityRangeFor(nowMs, Number(loaded.datum.last_update_ms)).from) < unlocksAt) {
+    if (BigInt(validityRangeFor(clock, Number(loaded.datum.last_update_ms)).from) < unlocksAt) {
       throw new Error(
         `This position is locked until ${new Date(Number(unlocksAt)).toISOString()}. ` +
           'Adding to a stake restarts the lock; claiming rewards does not.',
       );
     }
-    const { tx, payout } = this.buildSpend(lucid, loaded, vkh, nowMs, ({ before: pos, owed }) => ({
+    const { tx, payout } = this.buildSpend(lucid, loaded, vkh, clock, ({ before: pos, owed }) => ({
       redeemerIndex: STAKING_POOL_REDEEMER.Unstake,
       extraRedeemerFields: [],
       after: NO_POSITION,
@@ -610,7 +625,7 @@ export class StakingSubmitter {
     // pays the charge those rewards would have cost by the claim route.
     // Nothing accrued is nothing to charge for, and the validator agrees:
     // the charge is on the rewards, not on withdrawing a stake.
-    const { acc } = advance(loaded.datum, BigInt(validityRangeFor(nowMs, Number(loaded.datum.last_update_ms)).from));
+    const { acc } = advance(loaded.datum, BigInt(validityRangeFor(clock, Number(loaded.datum.last_update_ms)).from));
     const owed = owedAt(before, acc);
     return (owed > 0n ? this.chargeGovernor(loaded, PLATFORM_CHARGE_LOVELACE, withPayout) : withPayout).complete();
   }
@@ -633,7 +648,7 @@ export class StakingSubmitter {
     lucid: LucidEvolution,
     stakerAddress: string,
     platformClaimFeeLovelace: bigint = PLATFORM_CHARGE_LOVELACE,
-    nowMs = Date.now(),
+    nowMs?: number,
   ) {
     if (platformClaimFeeLovelace < PLATFORM_CHARGE_LOVELACE) {
       throw new Error(
@@ -642,13 +657,14 @@ export class StakingSubmitter {
       );
     }
     const loaded = await this.loadPool();
+    const clock = afterLoading(nowMs);
     const vkh = keyHashFromAddress(stakerAddress);
-    const { acc } = advance(loaded.datum, BigInt(validityRangeFor(nowMs, Number(loaded.datum.last_update_ms)).from));
+    const { acc } = advance(loaded.datum, BigInt(validityRangeFor(clock, Number(loaded.datum.last_update_ms)).from));
     const before = loaded.positions.get(hexToBytes(vkh));
     if (before.amount <= 0n) throw new Error('This wallet has no open staking position in this pool.');
     if (owedAt(before, acc) <= 0n) throw new Error('Nothing has accrued on this position yet.');
 
-    const { tx, payout } = this.buildSpend(lucid, loaded, vkh, nowMs, ({ acc: a, before: pos, owed }) => ({
+    const { tx, payout } = this.buildSpend(lucid, loaded, vkh, clock, ({ acc: a, before: pos, owed }) => ({
       redeemerIndex: STAKING_POOL_REDEEMER.ClaimRewards,
       extraRedeemerFields: [],
       // `since` is untouched: taking rewards is not a new commitment, so it
@@ -687,11 +703,11 @@ export class StakingSubmitter {
   }
 
   /** Add to the reward budget. Permissionless — anyone may. */
-  async topUpCore(lucid: LucidEvolution, funderAddress: string, amount: bigint, nowMs = Date.now()) {
+  async topUpCore(lucid: LucidEvolution, funderAddress: string, amount: bigint, nowMs?: number) {
     if (amount <= 0n) throw new Error('Top-up amount must be positive.');
     const { utxo, datum } = await this.findPoolUtxo(lucid);
     // Same rule as buildSpend: the bound the validator reads, not the clock.
-    const { from, to } = validityRangeFor(nowMs, Number(datum.last_update_ms));
+    const { from, to } = validityRangeFor(afterLoading(nowMs), Number(datum.last_update_ms));
     const now = BigInt(from);
     const { acc, unallocated } = advance(datum, now);
     const tokenUnit = datum.token_policy_id + datum.token_asset_name;

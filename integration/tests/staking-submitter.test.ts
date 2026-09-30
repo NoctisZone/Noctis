@@ -274,6 +274,52 @@ describe('the validity range is the clock', () => {
     expect(positions.get(hexToBytes(STAKER_VKH)).since).toBe(from);
     expect(positions.get(hexToBytes(STAKER_VKH)).since).not.toBe(BigInt(NOW_MS));
   });
+
+  // A spend is valid for about seven minutes from the instant it is built at.
+  // On 2026-09-29 a claim read the clock before loading the pool, the load took
+  // most of those minutes on a slow connection, and the transaction expired in
+  // the mempool. Each case here loads for six and a half.
+  const SLOW_LOAD_MS = 390_000;
+
+  it('reads the clock only once the pool has loaded, so a slow load cannot spend the window', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(NOW_MS);
+      const h = harness();
+      const load = h.submitter.loadPool.bind(h.submitter);
+      vi.spyOn(h.submitter, 'loadPool').mockImplementation(async () => {
+        const loaded = await load();
+        vi.setSystemTime(NOW_MS + SLOW_LOAD_MS);
+        return loaded;
+      });
+      await h.submitter.stakeCore(h.lucid as never, STAKER_ADDR, 1_000n);
+
+      const to = (h.tx.calls.validTo as [number])[0];
+      expect(to).toBeGreaterThan(NOW_MS + SLOW_LOAD_MS + 60_000);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('reads the clock after finding the pool for a top-up too', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(NOW_MS);
+      const h = harness();
+      const find = h.submitter.findPoolUtxo.bind(h.submitter);
+      vi.spyOn(h.submitter, 'findPoolUtxo').mockImplementation(async (lucid) => {
+        const found = await find(lucid);
+        vi.setSystemTime(NOW_MS + SLOW_LOAD_MS);
+        return found;
+      });
+      await h.submitter.topUpCore(h.lucid as never, STAKER_ADDR, 1_000n);
+
+      const to = (h.tx.calls.validTo as [number])[0];
+      expect(to).toBeGreaterThan(NOW_MS + SLOW_LOAD_MS + 60_000);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------
