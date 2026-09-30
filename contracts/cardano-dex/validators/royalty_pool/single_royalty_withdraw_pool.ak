@@ -785,3 +785,94 @@ test claim_whose_request_has_no_redeemer_fails() fail {
     Transaction { ..t, redeemers: [] },
   )
 }
+
+// ---------------------------------------------------------------------------
+// A claim signed the way a browser wallet signs one.
+//
+// CIP-30's `signData` does not sign the payload bare: it signs a COSE
+// `Sig_structure`, `["Signature1", protected, h'', payload]`, whose encoding
+// ends with the payload's bytes. So a wallet signature is over
+// `prefix ++ payload`, which is exactly the `additional_bytes ++ payload` this
+// script verifies, with the prefix carried in the request.
+//
+// The vector is generated, not invented: the platform's request builder
+// (`integration/venue-royalty-withdraw.ts`) drafts `claim()` at nonce 3,
+// Lucid Evolution's CIP-8 signer signs it for an address built on a key derived
+// from fixed entropy, and the builder takes the answer apart. Its payload is
+// the `serialise_data` bytes the vector above records. Only the public key,
+// the prefix and the signature appear here.
+// ---------------------------------------------------------------------------
+
+const wallet_pub_key: ByteArray =
+  #"1d2710f27da9ec987ec6349ca0fdceca760f09e40f497770b6dcf5698cc6f76c"
+
+const wallet_cose_prefix: ByteArray =
+  #"846a5369676e6174757265315846a201276761646472657373583900adda5a37ba63ed0dc96002a4687c828271c41e6be639635fb4a68690bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb40581f"
+
+const wallet_signature: ByteArray =
+  #"beb536780f69a028f422767f1d65f5b19cf89df53e6ca78f0a10eb69032d1f76db3cbb936840278ccf94bed85f1496dce6991a31b264934328ac5ecc3adfbe03"
+
+/// The fixture's claim, but against a pool whose royalty key is the wallet's
+/// and a request carrying the wallet's prefix and signature.
+fn wallet_claim_tx(prefix: ByteArray) -> Transaction {
+  let base = claim_tx(Script(request_vh), 3)
+  let wallet_request = Input {
+    output_reference: OutputReference { transaction_id: #"01", output_index: 0 },
+    output: Output {
+      address: Address {
+        payment_credential: Script(request_vh),
+        stake_credential: None,
+      },
+      value: assets.from_lovelace(4_000_000),
+      datum: InlineDatum(
+        RoyaltyWithdrawConfig {
+          withdraw_data: claim(),
+          signature: wallet_signature,
+          additional_bytes: prefix,
+          owner: #"c0",
+        },
+      ),
+      reference_script: None,
+    },
+  }
+  let wallet_pool_in = Input {
+    ..pool_in(3),
+    output: Output {
+      ..pool_in(3).output,
+      datum: InlineDatum(
+        SingleRoyaltyPoolConfig {
+          ..pool_cfg(3),
+          royalty_pub_key: wallet_pub_key,
+        },
+      ),
+    },
+  }
+  let wallet_pool_out = Output {
+    ..pool_out(3),
+    datum: InlineDatum(
+      SingleRoyaltyPoolConfig { ..paid_cfg(3), royalty_pub_key: wallet_pub_key },
+    ),
+  }
+  let wallet_reward = Output {
+    ..creator_reward(),
+    address: Address {
+      payment_credential: VerificationKey(blake2b_224(wallet_pub_key)),
+      stake_credential: None,
+    },
+  }
+  Transaction {
+    ..base,
+    inputs: [wallet_request, wallet_pool_in],
+    outputs: [wallet_pool_out, wallet_reward],
+  }
+}
+
+test claim_signed_by_a_cip30_wallet_passes() {
+  run_claim(wallet_claim_tx(wallet_cose_prefix))
+}
+
+/// The same signature with the prefix dropped: the payload alone is not what
+/// the wallet signed.
+test claim_signed_by_a_cip30_wallet_without_its_prefix_fails() fail {
+  run_claim(wallet_claim_tx(#""))
+}
