@@ -158,3 +158,8 @@ export function quantityIn(txHex: string, index: number, unit: string): bigint {
       .assets?.get(unit as never) ?? 0n
   );
 }
+
+/** The lovelace output `index` carries. */
+export function lovelaceIn(txHex: string, index: number): bigint {
+  return deserializeTx(txHex).body().outputs()[index]?.amount().coin() ?? 0n;
+}

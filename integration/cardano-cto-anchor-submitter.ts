@@ -155,7 +155,7 @@ export const CtoGovernanceDatumSchema = CtoGovernanceDatumShape as unknown as Ct
  * close the "forge a vote result for free" gap. See submitVoteResult's
  * own comment below for how the payment itself is constructed.
  */
-const AnchorVoteResultRedeemerShape = Data.Object({
+export const AnchorVoteResultRedeemerShape = Data.Object({
   proposal_type: ProposalTypeSchema,
   description_hash: Data.Bytes(),
   proposal_id: Data.Bytes(),
@@ -174,8 +174,8 @@ const AnchorVoteResultRedeemerShape = Data.Object({
   relayer_credential_hash: Data.Bytes(),
   relayer_bond: Data.Integer(),
 });
-type AnchorVoteResultRedeemerData = Data.Static<typeof AnchorVoteResultRedeemerShape>;
-const AnchorVoteResultRedeemerSchema = AnchorVoteResultRedeemerShape as unknown as AnchorVoteResultRedeemerData;
+export type AnchorVoteResultRedeemerData = Data.Static<typeof AnchorVoteResultRedeemerShape>;
+export const AnchorVoteResultRedeemerSchema = AnchorVoteResultRedeemerShape as unknown as AnchorVoteResultRedeemerData;
 
 /** Same fixed figure as cto_governance.ak's own `min_relayer_bond`. */
 export const MIN_RELAYER_BOND_LOVELACE = 25_000_000n;

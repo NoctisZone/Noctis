@@ -47,6 +47,7 @@ export interface DatumUtxo<D> extends PlanScriptUtxo {
 }
 
 export type TakeoverScriptRole =
+  | 'governance'
   | 'vesting'
   | 'stakingPool'
   | 'lpEscrow'
