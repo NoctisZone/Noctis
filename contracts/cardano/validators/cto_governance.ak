@@ -44,6 +44,7 @@
 // validity interval.
 // ============================================================================
 
+use aiken/builtin
 use aiken/collection/list
 use aiken/crypto.{VerificationKeyHash, blake2b_256}
 use aiken/interval.{Interval, IntervalBoundType}
@@ -57,6 +58,7 @@ use cardano/transaction.{
   InlineDatum, Input, Output, OutputReference, Transaction,
 }
 use noctis/clock
+use noctis/cto_governance_view as cto_view
 use noctis/lp_escrow_datum.{Locked, LpEscrowDatum}
 use noctis/settlement
 use noctis/thread_nft
@@ -3617,4 +3619,106 @@ test emergency_freeze_rejects_a_value_drain() {
     own_ref,
     self,
   )
+}
+
+// ============================================================================
+// noctis/cto_governance_view reads this record by position. These pin every
+// position it reads against the real types, so reordering a field here fails
+// here rather than in a reader that trusted the old order.
+// ============================================================================
+
+/// A record whose every field differs from every other, so a reader landing
+/// on the wrong position cannot return the right value by coincidence.
+fn view_anchor() -> ProposalAnchor {
+  ProposalAnchor {
+    proposal_type: DissolveCTOProposal,
+    description_hash: #"a1",
+    proof_bundle_hash: #"a2",
+    yes_votes: 3,
+    no_votes: 4,
+    voter_count: 5,
+    creator_yes_votes: 6,
+    creator_no_votes: 7,
+    outcome: Passed,
+    start_timestamp: 9,
+    end_timestamp: 10,
+    anchor_timestamp: 11,
+    execution_status: Executed,
+    target_dex_credential: None,
+    allocation_amount: 14,
+    allocation_recipient_hash: #"af",
+    relayer_credential_hash: #"b0",
+  }
+}
+
+fn view_record(executed: Option<ProposalAnchor>) -> CtoGovernanceDatum {
+  CtoGovernanceDatum {
+    launch_id: #"c0",
+    cto_state: CTOTriggered,
+    community_wallet_hash: #"c2",
+    governor_credential_hash: #"c3",
+    total_supply: 4,
+    quorum_bps: 5,
+    creator_vote_cap_bps: 6,
+    min_voter_count: 7,
+    active_proposal: None,
+    proposal_count: 9,
+    last_executed_proposal: executed,
+    pending_relayer_bond: 11,
+    pending_relayer_key_hash: #"cc",
+    payout_pub_key_hash: #"cd",
+    thread_nft_policy: #"ce",
+    ballot_duration: 15,
+    last_ballot_end_timestamp: 16,
+  }
+}
+
+test view_reads_the_record_fields_it_names() {
+  let record: Data = view_record(Some(view_anchor()))
+  and {
+    cto_view.launch_id(record) == #"c0",
+    cto_view.cto_state(record) == cto_view.cto_triggered,
+    cto_view.community_wallet_hash(record) == #"c2",
+  }
+}
+
+test view_reads_the_executed_proposal_fields_it_names() {
+  let record: Data = view_record(Some(view_anchor()))
+  let executed = cto_view.last_executed(record)
+  and {
+    cto_view.proposal_type(executed) == cto_view.dissolve_cto_proposal,
+    cto_view.outcome(executed) == cto_view.passed,
+    cto_view.execution_status(executed) == cto_view.executed,
+    cto_view.allocation_recipient_hash(executed) == #"af",
+  }
+}
+
+test view_refuses_a_record_with_nothing_executed() fail {
+  let record: Data = view_record(None)
+  let executed = cto_view.last_executed(record)
+  cto_view.outcome(executed) == cto_view.passed
+}
+
+/// The enum positions the view compares against are the real ones, and they
+/// tell apart the values a reader must never confuse.
+test view_enum_positions_are_the_real_ones() {
+  let tag = fn(value: Data) { builtin.un_constr_data(value).1st }
+  let silence: Data = SilenceLockTrigger
+  let dissolve: Data = DissolveCTOProposal
+  let triggered: Data = CTOTriggered
+  let dissolved: Data = CTODissolved
+  let passed: Data = Passed
+  let failed: Data = Failed
+  let executed: Data = Executed
+  let pending: Data = PendingExecution
+  and {
+    tag(silence) == cto_view.silence_lock_trigger,
+    tag(dissolve) == cto_view.dissolve_cto_proposal,
+    tag(triggered) == cto_view.cto_triggered,
+    tag(dissolved) != cto_view.cto_triggered,
+    tag(passed) == cto_view.passed,
+    tag(failed) != cto_view.passed,
+    tag(executed) == cto_view.executed,
+    tag(pending) != cto_view.executed,
+  }
 }

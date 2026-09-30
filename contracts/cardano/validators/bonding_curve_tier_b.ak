@@ -102,6 +102,7 @@ use cto_governance.{
 use noctis/bitmap
 use noctis/cap_accumulator.{CapProofStep}
 use noctis/clock
+use noctis/cto_governance_view as cto_view
 use noctis/settlement
 use noctis/staking_pool_datum
 use noctis/thread_nft
@@ -895,8 +896,9 @@ fn community_wallet_live(
       input.output.address.payment_credential == datum.cto_governance_credential
     },
   )
-  expect InlineDatum(cto_raw_datum) = cto_ref_input.output.datum
-  expect cto_datum: CtoGovernanceDatum = cto_raw_datum
+  expect InlineDatum(cto_record) = cto_ref_input.output.datum
+  // Read by position: the NFT below proves the record genuine, and only
+  // cto_governance.ak's typed check ever writes it. See noctis/cto_governance_view.
   and {
     assets.quantity_of(
       cto_ref_input.output.value,
@@ -906,8 +908,8 @@ fn community_wallet_live(
         datum.launch_id,
       ),
     ) == 1,
-    cto_datum.launch_id == datum.launch_id,
-    cto_datum.community_wallet_hash == datum.community_pub_key_hash,
+    cto_view.launch_id(cto_record) == datum.launch_id,
+    cto_view.community_wallet_hash(cto_record) == datum.community_pub_key_hash,
   }
 }
 
@@ -918,7 +920,7 @@ fn community_wallet_live(
 fn cto_vote_verified(
   self: Transaction,
   datum: BondingCurveTierBDatum,
-  proposal_type: ProposalType,
+  proposal_type: Int,
   expected_recipient: Option<VerificationKeyHash>,
 ) -> Bool {
   expect Some(cto_ref_input) = list.find(
@@ -927,17 +929,18 @@ fn cto_vote_verified(
       input.output.address.payment_credential == datum.cto_governance_credential
     },
   )
-  expect InlineDatum(cto_raw_datum) = cto_ref_input.output.datum
-  expect cto_datum: CtoGovernanceDatum = cto_raw_datum
-  expect Some(executed) = cto_datum.last_executed_proposal
+  expect InlineDatum(cto_record) = cto_ref_input.output.datum
+  // Read by position, as in community_wallet_live: the NFT check below is
+  // what makes the record genuine.
+  let executed = cto_view.last_executed(cto_record)
 
   let recipient_ok = when expected_recipient is {
     Some(recipient) -> and {
-        executed.allocation_recipient_hash == recipient,
+        cto_view.allocation_recipient_hash(executed) == recipient,
         // The record's LIVE community wallet must still name this recipient:
         // an emergency freeze clears it, and a cleared wallet installs nowhere.
-        cto_datum.cto_state == cto_governance.CTOTriggered,
-        cto_datum.community_wallet_hash == recipient,
+        cto_view.cto_state(cto_record) == cto_view.cto_triggered,
+        cto_view.community_wallet_hash(cto_record) == recipient,
       }
     None -> True
   }
@@ -964,10 +967,10 @@ fn cto_vote_verified(
         datum.launch_id,
       ),
     ) == 1,
-    cto_datum.launch_id == datum.launch_id,
-    executed.proposal_type == proposal_type,
-    executed.outcome == Passed,
-    executed.execution_status == Executed,
+    cto_view.launch_id(cto_record) == datum.launch_id,
+    cto_view.proposal_type(executed) == proposal_type,
+    cto_view.outcome(executed) == cto_view.passed,
+    cto_view.execution_status(executed) == cto_view.executed,
     recipient_ok,
   }
 }
@@ -2161,7 +2164,7 @@ validator bonding_curve_tier_b {
             cto_vote_verified(
               self,
               datum,
-              SilenceLockTrigger,
+              cto_view.silence_lock_trigger,
               Some(community_pub_key_hash),
             ),
             !datum.cto_triggered,
@@ -2181,7 +2184,7 @@ validator bonding_curve_tier_b {
           and {
             // Enforcement: same reasoning, gated on a real anchored
             // DissolveCTOProposal instead of a bare governor signature.
-            cto_vote_verified(self, datum, DissolveCTOProposal, None),
+            cto_vote_verified(self, datum, cto_view.dissolve_cto_proposal, None),
             datum.cto_triggered,
             new_datum == BondingCurveTierBDatum {
               ..datum,

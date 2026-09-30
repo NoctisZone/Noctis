@@ -341,7 +341,7 @@ describe('MeshCurveSpender', () => {
   // Every bound is asserted rather than only the one that currently binds, so
   // the next size move corrects this comment rather than passing quietly. It
   // has now done that four times.
-  it('needs the reference script for a Cardano Launch spend to fit at all', async () => {
+  it('needs the reference script for a full batch to fit', async () => {
     const s = spender(TIER_B);
     const referenced = (await s.build(buyPlan(s.scriptAddress), fakeWallet())).length / 2;
     const embedded = referenced + rawScriptSize(TIER_B.compiledCode);
@@ -352,8 +352,11 @@ describe('MeshCurveSpender', () => {
     const proofBytes = Data.to(new Constr(1, [proof as unknown as Data])).length / 2;
     const batchProofs = proofBytes * MAX_ORDERS_PER_BATCH;
 
+    // A single spend with the script embedded fits, but with little room, and
+    // the batcher never sends one: a batch of cap proofs does not fit unless
+    // the script is referenced.
     expect(referenced).toBeLessThan(MAX_TX_BYTES);
-    expect(embedded).toBeGreaterThan(MAX_TX_BYTES);
+    expect(embedded).toBeLessThan(MAX_TX_BYTES);
     expect(referenced + batchProofs).toBeLessThan(MAX_TX_BYTES);
     expect(embedded + batchProofs).toBeGreaterThan(MAX_TX_BYTES);
   });
