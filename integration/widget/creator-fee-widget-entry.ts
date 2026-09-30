@@ -23,11 +23,27 @@
 // creator, or the community wallet once a takeover holds, and checks that
 // against its own datum; the submitter says so by name before anything is
 // signed.
+//
+// The same bundle withdraws the creator's NoctisSwap pool royalty. That is a
+// request, not a spend: the wallet signs the amounts with `signData` and pays a
+// small request an executor fills (venue-royalty-withdraw-placer.ts). The page
+// offers it only where the site's batcher fills withdraws, which is what
+// `venue` in the config says.
 // ============================================================================
 
 import type { Network as LucidNetwork, WalletApi } from '@lucid-evolution/lucid';
-import type { ReferenceScriptPointer } from '../reference-script.js';
-import { LucidTierBCurveSubmitter, PLATFORM_CHARGE_LOVELACE } from '../tier-b-curve-submitter.js';
+import type { CurveNetwork } from '../mesh-curve-spend.js';
+import { MESH_NETWORK_ID, type ReferenceScriptPointer, scriptAddressOf } from '../reference-script.js';
+import {
+  LucidTierBCurveSubmitter,
+  meshBlockfrostProvider,
+  PLATFORM_CHARGE_LOVELACE,
+} from '../tier-b-curve-submitter.js';
+import {
+  type Cip30SigningApi,
+  placeVenueRoyaltyWithdraw,
+  readVenuePoolByNft,
+} from '../venue-royalty-withdraw-placer.js';
 
 export interface CreatorFeeWidgetConfig {
   /** The site's Blockfrost proxy route. */
@@ -39,7 +55,25 @@ export interface CreatorFeeWidgetConfig {
   curveScriptCbor: string;
   /** Where that validator is published, from the platform's settings. */
   referenceScript: ReferenceScriptPointer;
+  /**
+   * The venue's scripts, present only where the site fills royalty withdraws:
+   * the pool validator as deployed (applied), and the withdraw request
+   * validator. Both are read server-side from the venue's blueprints.
+   */
+  venue?: { poolScriptCbor: string; withdrawScriptCbor: string };
 }
+
+export interface RoyaltyWithdrawRequest {
+  /** The launch's pool NFT unit, from the platform's record of its pool. */
+  poolNft: string;
+  walletApi: WalletApi;
+}
+
+const CURVE_NETWORK: Partial<Record<LucidNetwork, CurveNetwork>> = {
+  Preview: 'preview',
+  Preprod: 'preprod',
+  Mainnet: 'mainnet',
+};
 
 export interface ClaimRequest {
   launchIdHex: string;
@@ -85,6 +119,52 @@ const NoctisCreatorFees = {
       referenceScript: cfg.referenceScript,
     });
     return submitter.claimCreatorFeesWithWallet(request.walletApi, amount);
+  },
+
+  /**
+   * Signs and places a request for everything the pool owes the creator.
+   * Returns what it takes and where it will be paid; an executor pays it.
+   */
+  async withdrawRoyalty(request: RoyaltyWithdrawRequest): Promise<{
+    txHash: string;
+    takeLovelace: string;
+    takeTokens: string;
+    feeLovelace: string;
+    payoutAddress: string;
+  }> {
+    const cfg = requireConfigured();
+    if (!cfg.venue) {
+      throw new Error('Withdrawing a pool royalty is not open on this site yet.');
+    }
+    const network = CURVE_NETWORK[cfg.network];
+    if (!network) throw new Error(`Unknown network "${cfg.network}".`);
+    const networkId = MESH_NETWORK_ID[network];
+    const pool = await readVenuePoolByNft(
+      async (path) => {
+        const res = await fetch(`${cfg.blockfrostUrl}/${path}`);
+        // Blockfrost answers 404 for an address holding none of the asset.
+        if (res.status === 404) return [];
+        if (!res.ok) throw new Error(`The chain could not be read just now (${res.status}). Try again shortly.`);
+        return res.json();
+      },
+      scriptAddressOf(cfg.venue.poolScriptCbor, networkId),
+      request.poolNft,
+    );
+    const placed = await placeVenueRoyaltyWithdraw({
+      api: request.walletApi as unknown as Cip30SigningApi,
+      pool,
+      network,
+      requestAddress: scriptAddressOf(cfg.venue.withdrawScriptCbor, networkId),
+      provider: meshBlockfrostProvider(cfg),
+    });
+    const wd = placed.draft.withdrawData;
+    return {
+      txHash: placed.txHash,
+      takeLovelace: wd.withdraw_royalty_x.toString(),
+      takeTokens: wd.withdraw_royalty_y.toString(),
+      feeLovelace: wd.ex_fee.toString(),
+      payoutAddress: placed.draft.payoutAddress,
+    };
   },
 };
 
