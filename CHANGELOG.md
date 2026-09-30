@@ -8,6 +8,7 @@ Notable changes to the Noctis Zone, by release. Internal development history pre
 
 ### Added
 
+- **Claiming curve fees from the creator dashboard.** A Cardano Launch creator claims their accrued curve fees with their own wallet, from the dashboard's Bonding curve fees card. The claim references the published curve validator, so it fits a transaction, and the site's Blockfrost proxy now relays script evaluation to price it. The whole balance comes to the wallet; a flat 5 ADA platform charge and the network fee are paid from it.
 - **Adding and removing NoctisSwap liquidity.** A deposit request pays both sides of a pool at its ratio and receives LQ; a redeem request hands LQ back for a share of both sides. The batcher fills them alongside swap orders, in the order the chain accepted them, each against the pool the previous fill left, and the placer can refund a request until it fills. The planners reproduce both validators' arithmetic exactly: each side pays the least that buys the LQ, and everything else returns with the collateral.
 - **A market read for each venue pool.** Its trades at the price they realised, the queue of resting swap orders and liquidity requests, its liquidity providers and its token's largest holders, read incrementally from the newest trade a caller already holds.
 

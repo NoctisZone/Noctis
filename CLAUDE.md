@@ -489,11 +489,11 @@ User Wallet (Midnight primary; Cardano for DV eligibility only)
 > ⚠️ This is a common source of confusion. Clarify in all code and UI.
 
 **Stream A — Bonding Curve Escrow (pre-graduation only)**
-- Accrues: 1.0% of bonding curve trades ONLY
+- Accrues: 0.5% of bonding curve trades ONLY (`CREATOR_BPS`)
 - Closes: When bonding curve graduates (curve closes permanently)
 - Amount: Fixed at graduation. Does NOT continue post-graduation.
-- Payment: Monthly manual claim, ADA
-- Gas: ~0.17 ADA deducted from escrow balance automatically
+- Payment: claimed in ADA whenever the creator chooses — from the creator dashboard, signed by the creator's own wallet (corrected 2026-09-30; this read "monthly")
+- Charge: a flat 5 ADA per claim (`platform_charge_lovelace` in `bonding_curve_tier_b.ak`), paid INTO the curve by the claiming wallet, plus the network fee. The dashboard claims the whole balance; a balance at or under 5 ADA costs more to claim than it pays, and the dashboard says so (corrected 2026-09-30; this read "~0.17 ADA deducted from escrow")
 
 **Stream B — Pool Royalty (post-graduation, ongoing)**
 

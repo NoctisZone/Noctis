@@ -260,6 +260,39 @@ module.exports.push({
 	},
 });
 
+// The creator-fee widget (2026-09-30) claims a Cardano Launch's curve fees
+// from the creator's own wallet. A curve spend references its validator, and
+// that path builds with Mesh, so unlike every bundle above this one carries
+// Mesh in the browser. The dashboard loads it only when a claim is made.
+//
+// Mesh expects three things from Node that a web build does not have, and
+// each is supplied here rather than for every widget:
+//   - `Buffer`, as a global, from the `buffer` package;
+//   - `crypto`, for random bytes (and pbkdf2Sync, which refuses: a browser
+//     claim never derives a key) — widget/node-crypto-shim.js;
+//   - `stream`, which only the `cbor` package asks for, inside a provider the
+//     claim never builds. It still has to load — widget/node-stream-shim.js.
+module.exports.push({
+	...module.exports[1],
+	name: "creator-fee-widget",
+	entry: path.resolve(__dirname, "widget/creator-fee-widget-entry.ts"),
+	output: {
+		...module.exports[1].output,
+		filename: "creator-fee-widget.bundle.js",
+	},
+	resolve: {
+		...module.exports[1].resolve,
+		fallback: {
+			crypto: path.resolve(__dirname, "widget/node-crypto-shim.js"),
+			stream: path.resolve(__dirname, "widget/node-stream-shim.js"),
+		},
+	},
+	plugins: [
+		...module.exports[1].plugins,
+		new webpack.ProvidePlugin({ Buffer: ["buffer", "Buffer"] }),
+	],
+});
+
 // The CTO governance widget shares every build concern the DarkVeil widget
 // has (same SDK, same wasm, same shims) and differs only in its entry, so it
 // is that configuration with a different entry and filename.

@@ -29,6 +29,7 @@ import {
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { type Cip30Api, Cip30CurveSpendWallet } from '../cip30-curve-spend-wallet.js';
 import { type CurveSpendPlan, MeshCurveSpender } from '../mesh-curve-spend.js';
+import { meshBlockfrostProvider } from '../tier-b-curve-submitter.js';
 
 interface Blueprint {
   validators: Array<{ title: string; compiledCode: string; hash: string }>;
@@ -218,5 +219,29 @@ describe('signing a spend the builder made', () => {
     const api = fakeApi();
     expect(await new Cip30CurveSpendWallet(api).submitTx('84a0')).toBe('submitted-by-wallet');
     expect(api.submitTx).toHaveBeenCalledWith('84a0');
+  });
+});
+
+describe('reaching the chain from a page', () => {
+  /** Where a provider sends its requests, and with what key. */
+  function target(provider: object): { baseURL?: string; key?: unknown } {
+    const axios = (provider as { _axiosInstance: { defaults: { baseURL?: string; headers: Record<string, unknown> } } })
+      ._axiosInstance;
+    return { baseURL: axios.defaults.baseURL, key: axios.defaults.headers.project_id };
+  }
+
+  it('sends requests from a page to the site proxy, carrying no key', () => {
+    const proxy = 'https://noctis.example/wp-json/np/v1/blockfrost-proxy';
+    expect(target(meshBlockfrostProvider({ blockfrostProjectId: 'proxy', blockfrostUrl: proxy }))).toEqual({
+      baseURL: proxy,
+      key: undefined,
+    });
+  });
+
+  it('sends a real project id to Blockfrost for its own network', () => {
+    const id = `preprod${'x'.repeat(32)}`;
+    expect(
+      target(meshBlockfrostProvider({ blockfrostProjectId: id, blockfrostUrl: 'https://unused.example' })),
+    ).toEqual({ baseURL: 'https://cardano-preprod.blockfrost.io/api/v0', key: id });
   });
 });

@@ -211,6 +211,23 @@ const MESH_NETWORK_FOR_LUCID: Record<string, CurveNetwork> = {
   Mainnet: 'mainnet',
 };
 
+/**
+ * Mesh's Blockfrost provider for a submitter's config.
+ *
+ * A real project id names its network in its first seven characters, and Mesh
+ * derives Blockfrost's URL from it. A page in the browser carries no project
+ * id: its `blockfrostUrl` is the site's own proxy, which adds the key on the
+ * way out, so Mesh is pointed at that instead.
+ */
+export function meshBlockfrostProvider(config: {
+  blockfrostProjectId: string;
+  blockfrostUrl: string;
+}): BlockfrostProvider {
+  return /^(mainnet|preprod|preview)/.test(config.blockfrostProjectId)
+    ? new BlockfrostProvider(config.blockfrostProjectId)
+    : new BlockfrostProvider(config.blockfrostUrl);
+}
+
 export interface LucidTierBCurveSubmitterConfig {
   blockfrostProjectId: string;
   blockfrostUrl: string;
@@ -387,7 +404,7 @@ export class LucidTierBCurveSubmitter {
           'one of the known ones, and guessing it would silently widen every transaction validity range.',
       );
     }
-    const provider = new BlockfrostProvider(this.config.blockfrostProjectId);
+    const provider = meshBlockfrostProvider(this.config);
     return {
       network,
       provider,
