@@ -24,6 +24,8 @@
 import type { ContractProviders } from '@midnight-ntwrk/midnight-js-contracts';
 import type { MerkleProofEntry } from '../../contracts/midnight/witnesses.js';
 import { computeVoteNullifier, hashBalanceLeaf, hashBalanceNode } from '../../packages/zk-proofs/src/cto-governance.js';
+import type { AnchoredBallot } from '../cto-anchor-reference.js';
+import { anchoredBallotOf } from '../cto-ballot.js';
 import type { SnapshotBundleEntry } from '../cto-snapshot-bundle.js';
 import { NoctisLaunchManager, NoctisMidnightClient } from '../midnight-client.js';
 import {
@@ -263,6 +265,59 @@ export async function castVoteFromBrowser(session: CtoSession, params: CastVoteP
     txId: String(result.public?.txId ?? ''),
     txHash: String(result.public?.txHash ?? ''),
   };
+}
+
+// ---------------------------------------------------------------------------
+// 4. After the ballot closes
+// ---------------------------------------------------------------------------
+// Closing a ballot and carrying it out on Midnight are both permissionless;
+// the wallet that runs them pays for them. Neither needs a snapshot leaf, so
+// the contract is joined without one.
+
+async function managerFor(session: CtoSession, providers: ContractProviders, contractAddress: string) {
+  const identity = await session.getIdentity();
+  const client = new NoctisMidnightClient(identity.userSecretKey);
+  await client.connectCtoGovernance(providers, contractAddress);
+  return new NoctisLaunchManager(client);
+}
+
+function txResult(result: unknown): CastVoteResult {
+  const r = result as { public?: { txId?: unknown; txHash?: unknown } };
+  return { txId: String(r.public?.txId ?? ''), txHash: String(r.public?.txHash ?? '') };
+}
+
+/** Closes a ballot whose window has passed, settling it as passed or failed. */
+export async function finalizeFromBrowser(
+  session: CtoSession,
+  params: { providers: ContractProviders; contractAddress: string; proposalIdHex: string },
+): Promise<CastVoteResult> {
+  const manager = await managerFor(session, params.providers, params.contractAddress);
+  return txResult(await manager.finalizeCtoProposal(hexToBytes(params.proposalIdHex), currentTimestampSeconds()));
+}
+
+/**
+ * Carries a passed proposal out on Midnight's governance contract, so a later
+ * ballot there sees the takeover it made. A Cardano Launch's contracts follow
+ * the result recorded on Cardano, not this.
+ */
+export async function executeOnMidnightFromBrowser(
+  session: CtoSession,
+  params: { providers: ContractProviders; contractAddress: string; proposalIdHex: string },
+): Promise<CastVoteResult> {
+  const manager = await managerFor(session, params.providers, params.contractAddress);
+  return txResult(await manager.executeCtoProposalGovernanceOnly(hexToBytes(params.proposalIdHex)));
+}
+
+/** A settled ballot as the Cardano record takes it, for the Cardano steps to record. */
+export async function readBallotForCardano(
+  publicDataProvider: ContractProviders['publicDataProvider'],
+  contractAddress: string,
+  proposalIdHex: string,
+): Promise<AnchoredBallot> {
+  const ledger = await readCtoGovernanceLedger(publicDataProvider, contractAddress);
+  const id = hexToBytes(proposalIdHex);
+  if (!ledger.proposals.member(id)) throw new Error("This launch's ballot holds no such proposal.");
+  return anchoredBallotOf(ledger.proposals.lookup(id), proposalIdHex);
 }
 
 // ---------------------------------------------------------------------------

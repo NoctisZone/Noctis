@@ -318,3 +318,19 @@ module.exports.push({
 		filename: "creator-identity-widget.bundle.js",
 	},
 });
+
+// The takeover vote's Cardano steps (2026-09-30): recording a finished vote,
+// executing it, applying it to the launch's contracts and reclaiming the bond,
+// each signed by the holder's own wallet. They build with Mesh, like the
+// creator-fee widget, so this is that configuration with a different entry and
+// filename. The takeover-vote panel loads it only when those steps are opened;
+// voting on Midnight stays in cto-widget.
+module.exports.push({
+	...module.exports.find((c) => c.name === "creator-fee-widget"),
+	name: "cto-cardano-widget",
+	entry: path.resolve(__dirname, "widget/cto-cardano-widget-entry.ts"),
+	output: {
+		...module.exports[1].output,
+		filename: "cto-cardano-widget.bundle.js",
+	},
+});

@@ -28,12 +28,15 @@ import {
   bytesToHex,
   type CastVoteResult,
   castVoteFromBrowser,
+  executeOnMidnightFromBrowser,
   fetchMyLeaf,
+  finalizeFromBrowser,
   hasVoted,
   hexToBytes,
   type MyLeaf,
   type NotInSnapshot,
   type RegisterVoterResult,
+  readBallotForCardano,
   readGovernance,
   registerVoter,
 } from './cto-vote-flow.js';
@@ -158,6 +161,27 @@ async function vote(params: {
   });
 }
 
+/** Closes a ballot whose window has passed. Anyone may; the connected Midnight wallet pays. */
+async function finalize(contractAddress: string, proposalIdHex: string): Promise<CastVoteResult> {
+  const providers = await requireMidnightProviders();
+  return finalizeFromBrowser(requireSession(), { providers, contractAddress, proposalIdHex });
+}
+
+/** Carries a passed proposal out on Midnight. Anyone may; the connected Midnight wallet pays. */
+async function executeOnMidnight(contractAddress: string, proposalIdHex: string): Promise<CastVoteResult> {
+  const providers = await requireMidnightProviders();
+  return executeOnMidnightFromBrowser(requireSession(), { providers, contractAddress, proposalIdHex });
+}
+
+/**
+ * A settled ballot, ready for the Cardano steps (window.NoctisCtoCardano) to
+ * record. Plain values; the page passes it across as it is.
+ */
+async function ballotForCardano(contractAddress: string, proposalIdHex: string) {
+  const providers = await requireMidnightProviders();
+  return readBallotForCardano(providers.publicDataProvider, contractAddress, proposalIdHex);
+}
+
 const NoctisCto = {
   configure,
   listAvailableWallets,
@@ -168,6 +192,9 @@ const NoctisCto = {
   governance,
   haveIVoted,
   vote,
+  finalize,
+  executeOnMidnight,
+  ballotForCardano,
 };
 
 declare global {

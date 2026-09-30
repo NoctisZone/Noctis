@@ -253,7 +253,7 @@ function readCoseSign1(hex: string): {
   return { protectedBytes, hashed, payload, signature };
 }
 
-function readCoseKeyX(hex: string): Uint8Array {
+export function readCoseKeyX(hex: string): Uint8Array {
   const { CborReader, CborReaderState } = Serialization;
   const reader = new CborReader(HexBlob(hex));
   const entries = reader.readStartMap();
