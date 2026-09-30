@@ -432,6 +432,19 @@ const orderActionCliConfig = {
 	logLevel: "info",
 };
 
+const registerVenueScriptsCliConfig = {
+	entryPoints: [join(__dirname, "cli/register-venue-scripts.ts")],
+	outfile: join(__dirname, "cli/dist/register-venue-scripts.cjs"),
+	bundle: true,
+	platform: "node",
+	// CJS for the same reason as the other Cardano CLIs: a bundled transitive
+	// dependency reads a bare `__dirname` to find its own WASM.
+	format: "cjs",
+	target: "node20",
+	sourcemap,
+	logLevel: "info",
+};
+
 const publishReferenceScriptCliConfig = {
 	entryPoints: [join(__dirname, "cli/publish-reference-script.ts")],
 	outfile: join(__dirname, "cli/dist/publish-reference-script.cjs"),
@@ -1085,6 +1098,7 @@ async function run() {
 		voidCtoProposalCliConfig,
 		reclaimCtoRelayerBondCliConfig,
 		publishReferenceScriptCliConfig,
+		registerVenueScriptsCliConfig,
 		orderActionCliConfig,
 		batchActionCliConfig,
 		reclaimReferenceScriptsCliConfig,
