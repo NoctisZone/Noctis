@@ -84,15 +84,17 @@ async function main() {
     scriptHashes,
     wallet: await payerWallet(input, provider),
     provider,
-    // A reward address the chain has never seen is a 404; one it has is
-    // registered while `active` says so.
+    // A reward address the chain has never seen is a 404. Blockfrost's
+    // `registered` is the stake registration this asks about; its `active`
+    // means delegated, which a script's reward address never is.
     isRegistered: async (rewardAddress) => {
       const res = await fetch(`${BLOCKFROST_BASE[network]}/accounts/${rewardAddress}`, {
         headers: { project_id: projectId },
       });
       if (res.status === 404) return false;
       if (!res.ok) throw new Error(`Blockfrost answered ${res.status} for ${rewardAddress}.`);
-      return ((await res.json()) as { active?: boolean }).active === true;
+      const account = (await res.json()) as { registered?: boolean; active?: boolean };
+      return account.registered ?? account.active === true;
     },
     dryRun: input.dryRun ?? false,
   });
