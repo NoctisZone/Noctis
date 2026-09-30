@@ -1024,17 +1024,22 @@ fn tokens_paid_to(
   )
 }
 
+/// The claimant's tokens reach an output at their own payment key, tagged with
+/// this claim: the same binding a batch fill's owner gets from tokens_paid_to.
 fn token_delivered(
   self: Transaction,
   own_ref: OutputReference,
   datum: BondingCurveTierBDatum,
+  owner: VerificationKeyHash,
   token_amount: Int,
 ) -> Bool {
+  let cred = from_verification_key(owner).payment_credential
   list.any(
     self.outputs,
     fn(output: Output) {
       and {
         settlement.settles(output, own_ref),
+        output.address.payment_credential == cred,
         assets.quantity_of(
           output.value,
           datum.token_policy_id,
@@ -1931,7 +1936,7 @@ validator bonding_curve_tier_b {
             // discounted DarkVeil allocation would make that claim false.
             buyer_key_hash != datum.creator_pub_key_hash,
             new_datum == expected_datum,
-            token_delivered(self, own_ref, datum, dv_amount),
+            token_delivered(self, own_ref, datum, buyer_key_hash, dv_amount),
             payment_received(self, own_ref, gross_payment),
             curve_token_balance_decreased(self, own_ref, datum, dv_amount),
             // The curve's own continuing output can't be padded.
@@ -3357,6 +3362,90 @@ test claim_darkveil_tokens_succeeds_with_valid_proof_and_payment() {
   }
 
   bonding_curve_tier_b.spend(Some(datum), redeemer, own_ref, self)
+}
+
+/// The passing claim above, with its delivery sent to `delivery_address`.
+fn run_dv_claim_delivered_to(delivery_address: Address) -> Bool {
+  let buyer_key = #"dd"
+  let dv_amount = 10
+  let salt = #"aa"
+  let leaf = hash_dv_leaf(buyer_key, dv_amount, 0, salt)
+  let datum = BondingCurveTierBDatum {
+    ..mock_datum(DvClaim, 0),
+    dv_allocation_root: leaf,
+  }
+  let own_ref = OutputReference { transaction_id: #"00", output_index: 0 }
+  let own_address = from_verification_key(#"cc")
+  let base_lovelace = 5_000_000
+  let own_input = Input {
+    output_reference: own_ref,
+    output: Output {
+      address: own_address,
+      value: assets.merge(
+        mock_curve_nft(),
+        assets.merge(
+          assets.from_lovelace(base_lovelace),
+          assets.from_asset(#"33", "tok", 1000),
+        ),
+      ),
+      datum: InlineDatum(datum),
+      reference_script: None,
+    },
+  }
+  let new_datum = BondingCurveTierBDatum {
+    ..datum,
+    tokens_sold: 10,
+    total_raised: 985,
+    creator_fees_accrued: 5,
+    platform_fees_accrued: 10,
+    claimed_bits: #"80",
+    cap_root: cap_root([(buyer_key, dv_amount)]),
+  }
+  let continuing_output = Output {
+    address: own_address,
+    value: assets.merge(
+      mock_curve_nft(),
+      assets.merge(
+        assets.from_lovelace(base_lovelace + 1000),
+        assets.from_asset(#"33", "tok", 990),
+      ),
+    ),
+    datum: InlineDatum(new_datum),
+    reference_script: None,
+  }
+  let delivery_output = Output {
+    address: delivery_address,
+    value: assets.from_asset(#"33", "tok", 10),
+    datum: InlineDatum(own_ref),
+    reference_script: None,
+  }
+  let self = Transaction {
+    ..transaction.placeholder,
+    inputs: [own_input],
+    outputs: [continuing_output, delivery_output],
+    extra_signatories: [buyer_key],
+    validity_range: interval.between(900, 1100),
+  }
+  let redeemer = ClaimDarkVeilTokens {
+    dv_amount,
+    salt,
+    merkle_proof: [],
+    buyer_key_hash: buyer_key,
+    leaf_index: 0,
+    current_timestamp: 1000,
+    cap_committed_before: 0,
+    cap_proof: cap_proof(buyer_key, []),
+  }
+  bonding_curve_tier_b.spend(Some(datum), redeemer, own_ref, self)
+}
+
+// A claim's tokens go to the claimant's own payment key, as a batch fill's go
+// to its owner's.
+test claim_darkveil_tokens_delivers_only_to_the_claimant() {
+  and {
+    run_dv_claim_delivered_to(from_verification_key(#"dd")),
+    !run_dv_claim_delivered_to(from_verification_key(#"ee")),
+  }
 }
 
 test claim_darkveil_tokens_rejects_double_claim() {

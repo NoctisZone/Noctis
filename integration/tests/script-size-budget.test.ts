@@ -44,6 +44,11 @@ for (const v of blueprint.validators) {
 /**
  * Measured 2026-08-08. Update in the same commit that moves one. Newest first.
  *
+ * bonding_curve_tier_b +34, 2026-09-30: a private buyer's claim pays out only to
+ * the claimant's own payment key, as a batch fill pays its owner. 15,121
+ * against the 16,052 B publish limit leaves 931 B. The other validators are
+ * byte for byte identical.
+ *
  * vesting +2,973, lp_escrow +2,019, cto_governance +210, 2026-09-30: a
  * takeover's second vote on the creator's frozen allocation. Governance gains
  * three proposal types (into the pool paired with ADA, into the staking pool,
@@ -370,7 +375,7 @@ for (const v of blueprint.validators) {
  * left its address to be discovered at deployment.
  */
 const RECORDED: Record<string, number> = {
-  bonding_curve_tier_b: 15_087,
+  bonding_curve_tier_b: 15_121,
   cto_governance: 8_367,
   cto_sybil_challenge: 3_457,
   curve_order: 4_544,
@@ -403,7 +408,7 @@ const RECORDED: Record<string, number> = {
  * old one has to be considered before the change ships.
  */
 const RECORDED_HASHES: Record<string, string> = {
-  bonding_curve_tier_b: '433b9ce09e21a04fe711eed8d5d1020563eacb614c8f58bffc6eb415',
+  bonding_curve_tier_b: 'f0799314b3a48270198d22cfcec6677eab498fbb208c4eed225b283b',
   cto_governance: '894ebfc0e82136139053b290f405e1eb1c54a2a24c83bb98965340eb',
   cto_sybil_challenge: '5f008c1306d25d435d69ee541da68bc9a7f3036ffb616a553be8c969',
   curve_order: 'db34df4b2be92eea1458fc11248255f1ef3ecad93d47196f934d7397',
