@@ -13,10 +13,18 @@ const built: unknown[] = [];
 const claimed = vi.fn();
 const readPool = vi.fn();
 const placed = vi.fn();
+const readRequests = vi.fn();
+const refunded = vi.fn();
 
 vi.mock('../venue-royalty-withdraw-placer.js', () => ({
   readVenuePoolByNft: (...args: unknown[]) => readPool(...args),
   placeVenueRoyaltyWithdraw: (...args: unknown[]) => placed(...args),
+}));
+
+vi.mock('../venue-royalty-withdraw-refund.js', () => ({
+  readVenueRoyaltyWithdrawRequests: (...args: unknown[]) => readRequests(...args),
+  refundVenueRoyaltyWithdraws: (...args: unknown[]) => refunded(...args),
+  venueRequestRef: (r: { txHash: string; outputIndex: number }) => `${r.txHash}#${r.outputIndex}`,
 }));
 
 vi.mock('../tier-b-curve-submitter.js', () => ({
@@ -42,6 +50,7 @@ interface Widget {
     walletApi: unknown;
   }): Promise<{ txHash: string }>;
   withdrawRoyalty(request: { poolNft: string; walletApi: unknown }): Promise<Record<string, string>>;
+  refundRoyalty(request: { refs: string[]; walletApi: unknown }): Promise<Record<string, unknown>>;
 }
 
 function venueCode(title: string): string {
@@ -86,6 +95,8 @@ beforeEach(() => {
   claimed.mockReset();
   readPool.mockReset();
   placed.mockReset();
+  readRequests.mockReset();
+  refunded.mockReset();
 });
 
 describe('the creator-fee widget', () => {
@@ -168,5 +179,43 @@ describe('withdrawing the pool royalty', () => {
       requestAddress: scriptAddressOf(VENUE.withdrawScriptCbor, 0),
       provider: { mesh: 'provider' },
     });
+  });
+});
+
+describe('taking a withdraw request back', () => {
+  const REQUEST_SCRIPT = venueCode('royalty_pool/withdraw_order.withdraw_order.spend');
+  const open = (tag: string) => ({ txHash: tag.repeat(32), outputIndex: 0, assets: { lovelace: 4_000_000n } });
+
+  it('refuses where the site has not been given the request validator', async () => {
+    widget.configure(PAGE_CONFIG);
+    await expect(widget.refundRoyalty({ refs: ['aa#0'], walletApi: {} })).rejects.toThrow(/request validator/);
+    expect(readRequests).not.toHaveBeenCalled();
+  });
+
+  it('works where fills are off: it needs the request validator, not the venue', async () => {
+    widget.configure({ ...PAGE_CONFIG, requestScriptCbor: REQUEST_SCRIPT });
+    readRequests.mockResolvedValue([open('a1'), open('a2')]);
+    refunded.mockResolvedValue({ txHash: 'tx-r', heldLovelace: 4_000_000n });
+    const wallet = { __wallet: true };
+    await expect(widget.refundRoyalty({ refs: [`${'a2'.repeat(32)}#0`], walletApi: wallet })).resolves.toEqual({
+      txHash: 'tx-r',
+      heldLovelace: '4000000',
+      count: 1,
+    });
+    expect(readRequests).toHaveBeenCalledWith(expect.any(Function), scriptAddressOf(REQUEST_SCRIPT, 0));
+    expect(refunded).toHaveBeenCalledWith({
+      api: wallet,
+      requests: [open('a2')],
+      config: { network: 'preprod', requestScriptCbor: REQUEST_SCRIPT, provider: { mesh: 'provider' } },
+    });
+  });
+
+  it('refuses by name a request filled or taken back since the page was drawn', async () => {
+    widget.configure({ ...PAGE_CONFIG, requestScriptCbor: REQUEST_SCRIPT });
+    readRequests.mockResolvedValue([open('a1')]);
+    await expect(widget.refundRoyalty({ refs: [`${'b9'.repeat(32)}#0`], walletApi: {} })).rejects.toThrow(
+      /b9b9.*#0 is no longer waiting/,
+    );
+    expect(refunded).not.toHaveBeenCalled();
   });
 });

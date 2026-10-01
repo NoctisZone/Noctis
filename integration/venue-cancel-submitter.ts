@@ -48,7 +48,7 @@ import { type VenueSwapOrderUtxo, venueCancelRedeemer, venueRewardAddress } from
  * evaluator is a third party that can be wrong, and when it is, it fails in a
  * form that names nothing.
  */
-export const VENUE_CANCEL_EXECUTION_UNITS = { mem: 120_000, steps: 40_000_000 } as const;
+export const VENUE_CANCEL_EXECUTION_UNITS = Object.freeze({ mem: 120_000, steps: 40_000_000 });
 
 /** The chains Lucid names differently from Mesh. One setting, not two. */
 const LUCID_NETWORK = { preview: 'Preview', preprod: 'Preprod', mainnet: 'Mainnet' } as const;
@@ -169,11 +169,11 @@ export class VenueCanceller {
       } else if ('embeddedScriptCbor' in this.config.orderScript) {
         tx.txInScript(applyCborEncoding(this.config.orderScript.embeddedScriptCbor));
       }
-      tx.txInInlineDatumPresent().txInRedeemerValue(
-        venueCancelRedeemer(),
-        'CBOR',
-        this.config.executionUnits ?? VENUE_CANCEL_EXECUTION_UNITS,
-      );
+      // A copy each time: an evaluating builder writes the measured budget back
+      // into the object it is handed, which would rewrite the shared constant.
+      tx.txInInlineDatumPresent().txInRedeemerValue(venueCancelRedeemer(), 'CBOR', {
+        ...(this.config.executionUnits ?? VENUE_CANCEL_EXECUTION_UNITS),
+      });
     }
 
     for (const hash of venueCancelSigners(orders)) tx.requiredSignerHash(hash);

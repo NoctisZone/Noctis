@@ -29,6 +29,11 @@
 // small request an executor fills (venue-royalty-withdraw-placer.ts). The page
 // offers it only where the site's batcher fills withdraws, which is what
 // `venue` in the config says.
+//
+// A request nobody fills comes back to the wallet that placed it
+// (venue-royalty-withdraw-refund.ts). That is offered wherever the site knows
+// the request validator, fills or no fills: a request must never be stranded
+// because the site stopped filling them.
 // ============================================================================
 
 import type { Network as LucidNetwork, WalletApi } from '@lucid-evolution/lucid';
@@ -44,6 +49,11 @@ import {
   placeVenueRoyaltyWithdraw,
   readVenuePoolByNft,
 } from '../venue-royalty-withdraw-placer.js';
+import {
+  readVenueRoyaltyWithdrawRequests,
+  refundVenueRoyaltyWithdraws,
+  venueRequestRef,
+} from '../venue-royalty-withdraw-refund.js';
 
 export interface CreatorFeeWidgetConfig {
   /** The site's Blockfrost proxy route. */
@@ -61,6 +71,18 @@ export interface CreatorFeeWidgetConfig {
    * validator. Both are read server-side from the venue's blueprints.
    */
   venue?: { poolScriptCbor: string; withdrawScriptCbor: string };
+  /**
+   * The withdraw request validator, present wherever the venue's blueprint is
+   * configured, whether or not the site fills withdraws: what taking a request
+   * back spends.
+   */
+  requestScriptCbor?: string;
+}
+
+export interface RoyaltyRefundRequest {
+  /** The requests to take back, as `txHash#index`. Each must still be open and placed by this wallet. */
+  refs: string[];
+  walletApi: WalletApi;
 }
 
 export interface RoyaltyWithdrawRequest {
@@ -91,6 +113,16 @@ function requireConfigured(): CreatorFeeWidgetConfig {
     throw new Error('NoctisCreatorFees.configure() must be called before a claim.');
   }
   return config;
+}
+
+/** A Blockfrost GET through the site's proxy; 404 is an address holding nothing. */
+function proxyGet(cfg: CreatorFeeWidgetConfig) {
+  return async (path: string): Promise<unknown> => {
+    const res = await fetch(`${cfg.blockfrostUrl}/${path}`);
+    if (res.status === 404) return [];
+    if (!res.ok) throw new Error(`The chain could not be read just now (${res.status}). Try again shortly.`);
+    return res.json();
+  };
 }
 
 const NoctisCreatorFees = {
@@ -140,13 +172,7 @@ const NoctisCreatorFees = {
     if (!network) throw new Error(`Unknown network "${cfg.network}".`);
     const networkId = MESH_NETWORK_ID[network];
     const pool = await readVenuePoolByNft(
-      async (path) => {
-        const res = await fetch(`${cfg.blockfrostUrl}/${path}`);
-        // Blockfrost answers 404 for an address holding none of the asset.
-        if (res.status === 404) return [];
-        if (!res.ok) throw new Error(`The chain could not be read just now (${res.status}). Try again shortly.`);
-        return res.json();
-      },
+      proxyGet(cfg),
       scriptAddressOf(cfg.venue.poolScriptCbor, networkId),
       request.poolNft,
     );
@@ -165,6 +191,41 @@ const NoctisCreatorFees = {
       feeLovelace: wd.ex_fee.toString(),
       payoutAddress: placed.draft.payoutAddress,
     };
+  },
+
+  /**
+   * Takes back withdraw requests this wallet placed and nobody filled. Each
+   * named request is read again first: one filled or taken back since the
+   * page was drawn is refused by name rather than built into a transaction
+   * that cannot land.
+   */
+  async refundRoyalty(request: RoyaltyRefundRequest): Promise<{ txHash: string; heldLovelace: string; count: number }> {
+    const cfg = requireConfigured();
+    if (!cfg.requestScriptCbor) {
+      throw new Error('This site has not been given the withdraw request validator, so it cannot take a request back.');
+    }
+    const network = CURVE_NETWORK[cfg.network];
+    if (!network) throw new Error(`Unknown network "${cfg.network}".`);
+    const wanted = [...new Set(request.refs)];
+    if (wanted.length === 0) throw new Error('There is no withdraw request to take back.');
+    const open = await readVenueRoyaltyWithdrawRequests(
+      proxyGet(cfg),
+      scriptAddressOf(cfg.requestScriptCbor, MESH_NETWORK_ID[network]),
+    );
+    const byRef = new Map(open.map((r) => [venueRequestRef(r), r]));
+    const gone = wanted.filter((ref) => !byRef.has(ref));
+    if (gone.length > 0) {
+      throw new Error(
+        `${gone.join(', ')} ${gone.length === 1 ? 'is' : 'are'} no longer waiting: filled or taken back since this ` +
+          'page was drawn. Refresh to see where it stands.',
+      );
+    }
+    const res = await refundVenueRoyaltyWithdraws({
+      api: request.walletApi as unknown as Cip30SigningApi,
+      requests: wanted.map((ref) => byRef.get(ref) as NonNullable<ReturnType<typeof byRef.get>>),
+      config: { network, requestScriptCbor: cfg.requestScriptCbor, provider: meshBlockfrostProvider(cfg) },
+    });
+    return { txHash: res.txHash, heldLovelace: res.heldLovelace.toString(), count: wanted.length };
   },
 };
 
