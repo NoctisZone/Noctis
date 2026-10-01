@@ -22,13 +22,17 @@ for that reason, and the two above do not.** A hash derived from the platform's
 own keys is not portable, and an entry that does not say so invites being read
 as though it were.
 
-### The Preprod deployment (2026-09-10)
+### The Preprod set (applied 2026-10-01)
 
 | Validator | Applied hash |
 |---|---|
-| `redirect` | `32c0b50e36e96f5475f9cfe505d64813d14421ef5036f163bd94df45` |
+| `redirect` | `ddf70ed853f3d7be03497c9c576e68bcfe0f029fe04960e0954f4063` |
 | `treasury` | `c85a51bc67a1bddbc0cf279c28bbde5a85cbba9d0a853080d4af34a4` |
-| `pool_mint` — **the factory policy id** | `1e946a8b0fdcae2f025fa1cb0a746e5727792f0c1461697efc10dbe4` |
+| `pool_mint` — **the factory policy id** | `bdb4190bd7809b404c60e0874ba9f43ee759f852d11b6abeb9c4c676` |
+
+The redirect is applied with the launch package's current governance and
+escrow validators, and the factory with that redirect; a test pins both to
+the launch blueprint.
 
 Two of its inputs are decisions rather than derivations, and are recorded as
 such in each entry's `parameters`:

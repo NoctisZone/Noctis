@@ -25,12 +25,20 @@
 //// record at the right address with a home-made datum, or a pool named by a
 //// datum that sits anywhere but the pool script, cannot pass.
 ////
+//// The record's launch id is matched in full, all 32 bytes. A launch id is
+//// the blake2b-256 of the launch token's policy and asset name, and a pool's
+//// `pool_y` is that token (the factory admits no other asset there), so the
+//// pool names its own launch completely through the token it trades. The
+//// NFT name carries only the first 31 bytes of the id, and the full match
+//// is what makes the record and the pool belong to one launch.
+////
 //// One pool per transaction: exactly one input sits at the pool script, so
 //// this one withdrawal cannot cover a second pool, and the pool the redeemer
 //// names is the pool being spent.
 
 use aiken/collection/list
-use aiken/crypto.{ScriptHash, blake2b_224}
+use aiken/crypto.{ScriptHash, blake2b_224, blake2b_256}
+use aiken/primitive/bytearray
 use cardano/address.{Address, Credential, Script, VerificationKey}
 use cardano/assets.{PolicyId, ada_asset_name, ada_policy_id}
 use cardano/transaction.{
@@ -98,6 +106,7 @@ validator redirect(
       pool_in.output.address.payment_credential == pool_cred,
       asset_quantity_of(pool_in.output.value, prev.pool_nft) == 1,
       prev.pool_nft.name == thread_asset_name(role_pool, launch_id),
+      blake2b_256(bytearray.concat(prev.pool_y.policy, prev.pool_y.name)) == launch_id,
       assets.quantity_of(
         cto_ref.output.value,
         thread_nft_policy,
@@ -147,8 +156,16 @@ const factory_policy: PolicyId = #"7c"
 
 const pool_hash: ScriptHash = #"0a"
 
+/// The launch id of the fixture pool's token, as the genesis builder derives
+/// it: blake2b-256 of the token's policy (`bb`) and asset name (`token`).
+/// `the_fixture_launch_id_is_its_tokens_hash` pins the derivation.
 const launch: ByteArray =
-  #"0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20"
+  #"6cfdd21ab4f8ee9a80074f389942fa3246714164f79cecf0fd7fb489706323ee"
+
+/// Another launch id that agrees with `launch` in its first 31 bytes, so
+/// every thread NFT and pool NFT name the two produce is the same.
+const colliding_launch: ByteArray =
+  #"6cfdd21ab4f8ee9a80074f389942fa3246714164f79cecf0fd7fb48970632311"
 
 const other_launch: ByteArray =
   #"ff02030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20"
@@ -410,6 +427,43 @@ test takeover_from_a_record_without_the_thread_nft_fails() fail {
   run(
     Takeover { pool_in_ix: 0 },
     tx(our_pool(), creator_key, community_key, [forged]),
+  )
+}
+
+test the_fixture_launch_id_is_its_tokens_hash() {
+  launch == blake2b_256(bytearray.concat(#"bb", #"746f6b656e"))
+}
+
+test the_colliding_launch_names_the_same_nfts() {
+  and {
+    colliding_launch != launch,
+    thread_asset_name(role_pool, colliding_launch) == thread_asset_name(
+      role_pool,
+      launch,
+    ),
+    thread_asset_name(role_cto_governance, colliding_launch) == thread_asset_name(
+      role_cto_governance,
+      launch,
+    ),
+  }
+}
+
+/// A genuine, triggered governance record of a launch whose id shares the
+/// pool's first 31 bytes: its thread NFT, the pool's NFT name and every other
+/// rule agree with the pool, and only the full launch id differs. The pool's
+/// token hashes to `launch`, so the full match is what rejects.
+test takeover_by_the_record_of_a_launch_sharing_the_pool_name_fails() fail {
+  let record_of_other = record(
+    cto_cred(),
+    with_nft(role_cto_governance, colliding_launch),
+    CtoGovernanceDatum {
+      ..cto_datum(CTOTriggered, blake2b_224(community_key)),
+      launch_id: colliding_launch,
+    },
+  )
+  run(
+    Takeover { pool_in_ix: 0 },
+    tx(our_pool(), creator_key, community_key, [record_of_other]),
   )
 }
 

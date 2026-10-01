@@ -149,6 +149,24 @@ describe('the applied venue scripts', () => {
       expect(declared?.map((p) => p.title)).toEqual(v.parameters.map((p) => p.title));
     }
   });
+
+  it('reads the launch records at the addresses the launch package compiles to', () => {
+    // The redirect finds a launch's governance and escrow records by the
+    // address of their validators, so it is applied with those validators'
+    // hashes, and the factory names that redirect so every new pool takes it.
+    const launch = JSON.parse(readFileSync(join(CONTRACTS, 'cardano', 'plutus.json'), 'utf8')) as {
+      validators: Array<{ title: string; hash: string }>;
+    };
+    const hashOf = (title: string) => launch.validators.find((v) => v.title === title)?.hash;
+    const redirect = applied.validators.find((v) => v.title === 'royalty_pool/redirect.redirect.withdraw');
+    const param = (v: AppliedValidator | undefined, name: string) => v?.parameters.find((p) => p.title === name)?.value;
+    expect(hashOf('cto_governance.cto_governance.spend')).toMatch(/^[0-9a-f]{56}$/);
+    expect(hashOf('lp_escrow.lp_escrow.spend')).toMatch(/^[0-9a-f]{56}$/);
+    expect(param(redirect, 'cto_governance_cred')).toBe(hashOf('cto_governance.cto_governance.spend'));
+    expect(param(redirect, 'lp_escrow_cred')).toBe(hashOf('lp_escrow.lp_escrow.spend'));
+    const factory = applied.validators.find((v) => v.title === VENUE_FACTORY_TITLE);
+    expect(param(factory, 'redirect_vh')).toBe(redirect?.hash);
+  });
 });
 
 /**

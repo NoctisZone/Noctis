@@ -50,8 +50,11 @@ pool guarded by this script without modification.
   fee-recipient key as the LP escrow records it. The pool is the input at the
   pool validator's address that holds the NFT its datum names, and that name
   carries the launch id; the governance and escrow records carry their own
-  NFTs under the platform's thread NFT policy. One pool per redirect
-  transaction: exactly one input at the pool script.
+  NFTs under the platform's thread NFT policy. The record's launch id is also
+  matched in full, all 32 bytes, against the pool's own token: a launch id is
+  the blake2b-256 of the launch token's policy and asset name, and the token a
+  pool trades (`pool_y`) is that token. One pool per redirect transaction:
+  exactly one input at the pool script.
 - **Parameters instead of constants.** The royalty-withdraw script hash and the
   withdraw-request script hash are validator parameters here; Splash compiles
   them in.
