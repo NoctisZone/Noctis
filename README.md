@@ -2,7 +2,7 @@
 
 **They can't front-run what they can't see.**
 
-A token launchpad built on Midnight Network. DarkVeil — the private buying phase — runs on Midnight for every launch, so nothing can trade ahead of an order it cannot read. The chain a token settles on is the creator's choice: Cardano L1 today, with Solana and XRP announced. Per-wallet whale caps, permanent LP lock, and community rescue mechanics.
+A token launchpad built on Midnight Network. DarkVeil — the private buying phase — runs on Midnight for every launch, so nothing can trade ahead of an order it cannot read. The chain a token settles on is the creator's choice: Cardano L1 today, with Solana announced. Per-wallet whale caps, permanent LP lock, and community rescue mechanics.
 
 This project is built on the Midnight Network.
 
@@ -47,8 +47,8 @@ and LP all live on Midnight, priced in NIGHT. Cardano is used only to anchor the
 ZK Fair Launch Certificate. *(Build-blocked on a ratified Midnight fungible token
 standard and a graduation-target DEX — see [ROADMAP.md](ROADMAP.md))*
 
-**Solana Launch** and **XRP Launch** are announced, not built: the same DarkVeil
-phase on Midnight settling to an SPL token and to the XRP Ledger respectively.
+**Solana Launch** is announced, not built: the same DarkVeil phase on Midnight,
+settling to an SPL token.
 
 > **A note on the code.** Validators, CLI entry points and stored launch records
 > use the original `tier_a` / `tier_b` / `tier_c` identifiers, and those names are

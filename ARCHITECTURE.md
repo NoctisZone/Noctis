@@ -5,7 +5,7 @@ High-level structural diagrams for the protocol. For full contract specs, consta
 > **Keeping this file current:** this diagram set (plus `README.md`, `architecture.html`, and `docs/PSM_ARCHITECTURE.md`) needs a real update pass whenever a major architectural fact changes — a contract merges/splits, a new validator ships, a feature's build status moves. It's easy for these to silently drift behind internal tracking (the actual source of truth) since nothing forces a re-read. Check it against current contract/test-count reality periodically, not just when someone notices it's wrong.
 >
 > **Naming.** A launch is named for the chain its token settles on: a **Cardano
-> Launch** or a **Midnight Launch** (**Solana** and **XRP** are announced, not
+> Launch** or a **Midnight Launch** (**Solana** is announced, not
 > built). The code underneath still uses the original `tier_a` / `tier_b` /
 > `tier_c` identifiers and cannot stop — a deployed validator's hash depends on
 > its name, and stored launch records carry the letter. Read `tier_b` as a

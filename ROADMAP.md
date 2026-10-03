@@ -244,16 +244,15 @@ Do not scaffold Midnight Launch contract work until the token-standard and gradu
 
 **Status:** Proposed, not started. Explicitly sequenced AFTER the Midnight Launch ships and the platform has proven stable on Cardano + Midnight — not a parallel workstream, and not something to scaffold prematurely (the same discipline already applied to the Midnight Launch itself: no contract work starts until the chain in question is a confirmed, real target).
 
-Noctis's core privacy value proposition ("they can't front-run what they can't see") depends specifically on Midnight's ZK execution layer — a launch on a different chain is only worth building if that chain offers something genuinely additive (new liquidity, new user base, a different privacy/settlement tradeoff), not privacy-launchpad parity for its own sake. Candidate chains, in no particular priority order yet:
+Noctis's core privacy value proposition ("they can't front-run what they can't see") depends specifically on Midnight's ZK execution layer — a launch on a different chain is only worth building if that chain offers something genuinely additive (new liquidity, new user base, a different privacy/settlement tradeoff), not privacy-launchpad parity for its own sake. The candidate chain so far:
 
-- **XRP Ledger (XRPL)** — fast, low-fee settlement; native DEX and (via hooks/sidechains) increasingly programmable. Would need its own bonding-curve/escrow contract design — no direct code reuse from the Aiken (Cardano) or Compact (Midnight) contracts, which are chain-specific by construction.
 - **Solana (SOL)** — high-throughput, large existing launchpad ecosystem (the platform's most direct multi-chain competitive comparison). Would need a full Anchor/Rust contract suite; no privacy layer equivalent to Midnight exists natively, so any DarkVeil-style private phase would need a different mechanism (e.g., a commit-reveal scheme without a real ZK layer) or would simply be omitted.
 
 **Open questions to resolve before this track can move past "proposed":**
-1. ~~How a new chain is named and presented.~~ **Answered:** a launch is named for the chain its token settles on, so these ship as a **Solana Launch** and an **XRP Launch** alongside the Cardano and Midnight ones. Both cards are already in the Create Wizard, marked "Coming later" and non-selectable. What the naming does not settle is question 3 below.
+1. ~~How a new chain is named and presented.~~ **Answered:** a launch is named for the chain its token settles on, so it ships as a **Solana Launch** alongside the Cardano and Midnight ones. Its card is already in the Create Wizard, marked "Coming later" and non-selectable. What the naming does not settle is question 3 below.
 2. Fee/revenue model per new chain (native gas token launch fee + trade fee split, mirroring the ADA/NIGHT split documented in CLAUDE.md).
-3. Whether DarkVeil-equivalent privacy is in scope at all for a non-Midnight chain, or whether these become public-only launches. The wizard's own copy currently promises "the same private buying phase on Midnight" on both cards, which presumes it is — that copy and this question need to be settled together before either ships.
-4. Wallet integration story per chain (XRPL wallets / Solana wallet adapter) — a different integration surface from the existing Cardano (Mesh/CIP-30) + Midnight (DApp Connector) pairing.
+3. Whether DarkVeil-equivalent privacy is in scope at all for a non-Midnight chain, or whether these become public-only launches. The wizard's own copy currently promises "the same private buying phase on Midnight" on its card, which presumes it is — that copy and this question need to be settled together before either ships.
+4. Wallet integration story (the Solana wallet adapter) — a different integration surface from the existing Cardano (Mesh/CIP-30) + Midnight (DApp Connector) pairing.
 
 No contract, integration, or WordPress work should start on this track until these are resolved and the Midnight Launch has shipped.
 

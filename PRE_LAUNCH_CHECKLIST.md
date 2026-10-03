@@ -64,7 +64,7 @@ Human sign-off gate. Three stages: website live, preprod contracts, mainnet.
 - [ ] Wallet cap correct (5% per wallet key, cumulative across DarkVeil and public)
 - [ ] LP lock duration correct (365 days)
 - [ ] No references to deprecated/removed reward mechanisms
-- [ ] Launch types correctly described (Cardano Launch, Midnight Launch; Solana and XRP marked as announced, not available)
+- [ ] Launch types correctly described (Cardano Launch, Midnight Launch; Solana marked as announced, not available)
 
 ---
 

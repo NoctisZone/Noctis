@@ -59,13 +59,13 @@ Full detail — mechanics, reproduction, which items remain open and where — b
 **Platform name:** Noctis 
 **Tagline:** They can't front-run what they can't see. 
 **Type:** Token launchpad built on Midnight Network — the private buying phase is Midnight on every launch, whichever chain the token settles on 
-**Chains:** Midnight Network (private execution, every launch) + the settlement chain the creator picks — Cardano L1 today; Solana and XRP announced 
+**Chains:** Midnight Network (private execution, every launch) + the settlement chain the creator picks — Cardano L1 today; Solana announced 
 **Status:** Design complete. Moving to build phase. 
 **Version:** Whitepaper v1 / Spec v1 
 
 Noctis is a token launchpad built on **Midnight Network**. DarkVeil — the private registration and buying phase — runs on Midnight for **every** launch, whichever chain the token settles on. That is the product: Midnight is the privacy engine, not one of two chains.
 
-The settlement chain is the creator's choice, and a launch is named for it. A **Cardano Launch** settles the public quadratic curve, escrow and LP on Cardano L1 — the first venue built, and the proof of the concept. A **Midnight Launch** is fully Midnight-native: the token, bonding curve, DarkVeil phase and LP all live on Midnight, with Cardano used only for the ZK anchor certificate. **Solana Launch** and **XRP Launch** are announced, not built.
+The settlement chain is the creator's choice, and a launch is named for it. A **Cardano Launch** settles the public quadratic curve, escrow and LP on Cardano L1 — the first venue built, and the proof of the concept. A **Midnight Launch** is fully Midnight-native: the token, bonding curve, DarkVeil phase and LP all live on Midnight, with Cardano used only for the ZK anchor certificate. **Solana Launch** is announced, not built.
 
 There is **no platform token**. Revenue flows in ADA and NIGHT only.
 
@@ -289,8 +289,8 @@ validator pass. It is not a launch option and is not listed as one below.
 | **Midnight wallet required** | Yes (DV phase only) | Yes (full launch) |
 | **Privacy level** | High — DV private; curve state visible, identities hidden | Maximum — all activity on Midnight |
 
-**Solana Launch** and **XRP Launch** are announced, not built — both cards are in
-the Create Wizard marked "Coming later" and non-selectable. See ROADMAP.md's
+**Solana Launch** is announced, not built — its card is in the Create Wizard,
+marked "Coming later" and non-selectable. See ROADMAP.md's
 new-chain track, and note its still-open question of whether a DarkVeil-equivalent
 private phase is in scope for a non-Midnight chain at all.
 

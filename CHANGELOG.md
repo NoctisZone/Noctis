@@ -247,6 +247,8 @@ Notable changes to the Noctis Zone, by release. Internal development history pre
 
 ### Removed
 
+- XRP as an announced settlement chain, for now. The site, the Create Wizard and these docs list
+  Cardano and Midnight Launches, with Solana announced.
 - The linear-curve launch path's two browser widgets: the live-curve buy widget
   and the post-graduation creator dashboard. The path is retired: no launch is
   created or shown on it, and its validator leaves the build with the next
