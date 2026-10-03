@@ -30,13 +30,15 @@ import {
 } from '../venue-fill-submitter.js';
 import { type VenuePoolConfigData, VenuePoolConfigSchema } from '../venue-pool.js';
 import {
-  draftVenueRoyaltyWithdraw,
-  planVenueRoyaltyWithdrawFill,
-  VENUE_ROYALTY_WITHDRAW_EX_FEE_LOVELACE,
   VENUE_ROYALTY_WITHDRAW_TITLE,
   VENUE_WITHDRAW_ORDER_TITLE,
   VenueRoyaltyWithdrawConfigSchema,
   type VenueWithdrawOrderUtxo,
+} from '../venue-royalty-shapes.js';
+import {
+  draftVenueRoyaltyWithdraw,
+  planVenueRoyaltyWithdrawFill,
+  VENUE_ROYALTY_WITHDRAW_EX_FEE_LOVELACE,
   venueRoyaltyWithdrawDatum,
   venueRoyaltyWithdrawRedeemer,
   venueSignatureFromCip30,

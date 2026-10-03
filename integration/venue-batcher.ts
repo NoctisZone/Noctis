@@ -67,7 +67,8 @@ import {
 import type { VenueFiller, VenueFillPlan } from './venue-fill-submitter.js';
 import { planVenueLiquidityFill, type VenueLiquidityOrderUtxo, venueLiquidityFillable } from './venue-liquidity.js';
 import { VenuePoolConfigSchema } from './venue-pool.js';
-import { planVenueRoyaltyWithdrawFill, type VenueWithdrawOrderUtxo } from './venue-royalty-withdraw.js';
+import type { VenueWithdrawOrderUtxo } from './venue-royalty-shapes.js';
+import { planVenueRoyaltyWithdrawFill } from './venue-royalty-withdraw.js';
 import {
   planVenueSwapFill,
   type VenueOrderPosition,

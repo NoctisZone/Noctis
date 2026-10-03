@@ -36,7 +36,8 @@
 //
 // Two signing shapes: the governor's actions and the creator's fee claim sign
 // with a decrypted extended key, because the platform's wallet custody never
-// stores a mnemonic; trades sign from a mnemonic (CLI) or a browser wallet.
+// stores a mnemonic; a buyer's actions sign from a mnemonic (CLI) or a browser
+// wallet, and the creator's fee claim can also take a browser wallet.
 // ============================================================================
 
 import type {
@@ -59,18 +60,16 @@ import {
 } from '@lucid-evolution/lucid';
 // Mesh, and the modules below that build on it, belong to referenced mode,
 // which is taken only when a `referenceScript` pointer is configured. Most of
-// it signs with a mnemonic or a stored private key, server-side. The one
-// browser action it serves is the creator's fee claim, signed by the
-// creator's connected wallet through cip30-curve-spend-wallet.ts; the other
-// browser actions turn a wallet away from it through
+// it signs with a mnemonic or a stored private key, server-side. The browser
+// actions it serves are the creator's fee claim and a buyer's DarkVeil claim,
+// signed by the connected wallet through cip30-curve-spend-wallet.ts; the
+// buyback claim turns a wallet away from it through
 // refuseBrowserWalletWhenReferenced().
 //
-// The DarkVeil widget reaches this file without a pointer, so its build
-// resolves these specifiers to an empty module rather than pulling Mesh's own
-// node:crypto and node:stream into a bundle that cannot have them. See
-// webpack.widgets.config.cjs's darkveil-widget alias block. Keep any new
-// server-only dependency in that block too, or the widget build stops
-// resolving.
+// A browser bundle that reaches this file therefore carries Mesh, and needs
+// the Node stand-ins the creator-fee widget's build supplies (see
+// webpack.widgets.config.cjs). The pages load those bundles only when the
+// action is taken.
 import { BlockfrostProvider, getOutputMinLovelace, MeshWallet } from '@meshsdk/core';
 import { buildCapTradeFields, type CapAccumulator } from './cap-accumulator-tree.js';
 import { type Cip30Api, Cip30CurveSpendWallet } from './cip30-curve-spend-wallet.js';
@@ -396,8 +395,8 @@ export class LucidTierBCurveSubmitter {
   /**
    * Refuses a browser-wallet action while a reference pointer is configured.
    *
-   * The creator's fee claim is connected, through Cip30CurveSpendWallet; the
-   * actions that call this are not yet. Falling back to the embedding path
+   * The creator's fee claim and the DarkVeil claim are connected, through
+   * Cip30CurveSpendWallet; the action that calls this is not yet. Falling back to the embedding path
    * instead would be worse than refusing: on this tier the validator alone is
    * most of the transaction cap, so what it produces is not a slower
    * transaction but one that cannot be submitted at all.
@@ -440,12 +439,8 @@ export class LucidTierBCurveSubmitter {
   }
 
   /**
-   * Prepares referenced mode for a mnemonic-signed action — the trades.
-   *
-   * A browser wallet reaches this codebase as a CIP-30 object, and connecting
-   * one to Mesh's builder is the Launch Wizard's own task rather than something
-   * to approximate here, so that path stays on Lucid and is refused when a
-   * reference pointer is configured.
+   * Prepares referenced mode for a mnemonic-signed action — a buyer's, from
+   * the CLI. A browser wallet takes {@link prepareReferencedFromWallet}.
    */
   private prepareReferencedFromMnemonic(mnemonic: string): void {
     const parts = this.referencedParts();
@@ -882,15 +877,22 @@ export class LucidTierBCurveSubmitter {
     return this.claimDarkVeilTokensCore(lucid, buyerAddress, params, capState);
   }
 
-  /** The buyer signs in their own wallet — they are paying, so they must. */
+  /**
+   * The buyer signs in their own wallet — they are paying, so they must.
+   *
+   * With a reference pointer configured, their connected wallet funds, signs
+   * and submits the spend Mesh builds, as the creator's fee claim does. The
+   * claimant is the same address either way: the one whose key the allocation
+   * leaf names, checked before anything is built.
+   */
   async claimDarkVeilTokensWithWallet(
     walletApi: WalletApi,
     params: DarkVeilClaimParams,
     capState: CapAccumulator,
   ): Promise<{ txHash: string }> {
-    this.refuseBrowserWalletWhenReferenced('DarkVeil claim');
     const lucid = await this.lucidPromise;
     lucid.selectWallet.fromAPI(walletApi);
+    this.prepareReferencedFromWallet(walletApi);
     const buyerAddress = await lucid.wallet().address();
     return this.claimDarkVeilTokensCore(lucid, buyerAddress, params, capState);
   }

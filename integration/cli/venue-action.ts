@@ -56,7 +56,7 @@ import { VENUE_FILL_EXECUTION_UNITS, VenueFiller, type VenueScriptSource } from 
 import { VENUE_DEPOSIT_ORDER_TITLE, VENUE_REDEEM_ORDER_TITLE } from '../venue-liquidity.js';
 import { readVenueMarket } from '../venue-market-reader.js';
 import { VENUE_FACTORY_TITLE } from '../venue-pool.js';
-import { VENUE_ROYALTY_WITHDRAW_TITLE, VENUE_WITHDRAW_ORDER_TITLE } from '../venue-royalty-withdraw.js';
+import { VENUE_ROYALTY_WITHDRAW_TITLE, VENUE_WITHDRAW_ORDER_TITLE } from '../venue-royalty-shapes.js';
 import { venueUnitOf } from '../venue-swap.js';
 import {
   CARDANO_NETWORK_MAP,

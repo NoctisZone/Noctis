@@ -32,7 +32,7 @@ import {
   type VenueRoyaltyWithdrawConfigData,
   VenueRoyaltyWithdrawConfigSchema,
   type VenueWithdrawOrderUtxo,
-} from '../venue-royalty-withdraw.js';
+} from '../venue-royalty-shapes.js';
 import {
   buildVenueRoyaltyWithdrawRefund,
   readVenueRoyaltyWithdrawRequests,

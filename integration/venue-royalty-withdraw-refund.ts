@@ -40,7 +40,7 @@ import {
 } from './mesh-curve-spend.js';
 import { MESH_NETWORK_ID, scriptAddressOf } from './reference-script.js';
 import { venueRefundRedeemer } from './venue-liquidity.js';
-import { VenueRoyaltyWithdrawConfigSchema, type VenueWithdrawOrderUtxo } from './venue-royalty-withdraw.js';
+import { VenueRoyaltyWithdrawConfigSchema, type VenueWithdrawOrderUtxo } from './venue-royalty-shapes.js';
 
 /**
  * What one request's refund costs to execute, declared rather than measured

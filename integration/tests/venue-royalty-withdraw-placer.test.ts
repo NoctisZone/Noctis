@@ -26,11 +26,10 @@ import { bytesToHex } from '@noble/hashes/utils.js';
 import { describe, expect, it, vi } from 'vitest';
 import { scriptAddressOf } from '../reference-script.js';
 import { type VenuePoolConfigData, VenuePoolConfigSchema } from '../venue-pool.js';
+import { VENUE_WITHDRAW_ORDER_TITLE, VenueRoyaltyWithdrawConfigSchema } from '../venue-royalty-shapes.js';
 import {
   VENUE_ROYALTY_REWARD_FLOOR_LOVELACE,
   VENUE_ROYALTY_WITHDRAW_EX_FEE_LOVELACE,
-  VENUE_WITHDRAW_ORDER_TITLE,
-  VenueRoyaltyWithdrawConfigSchema,
   venueWithdrawSignatureForm,
 } from '../venue-royalty-withdraw.js';
 import {

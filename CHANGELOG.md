@@ -26,6 +26,14 @@ Notable changes to the Noctis Zone, by release. Internal development history pre
 
 ### Changed
 
+- **A DarkVeil claim from the browser names the published curve script.** A buyer's connected wallet now
+  funds, signs and submits the claim Mesh builds against the curve validator's published reference, as the
+  creator's fee claim does, so the claim fits a transaction. It lives in its own widget bundle, which the
+  claim page loads when a buyer presses Claim; the DarkVeil widget carries no Mesh. A test runs the compiled
+  curve validator against a claim built this way, from a CIP-30 wallet, with a real allocation tree.
+- **Every widget bundle builds from source again.** The royalty-withdraw request's datum and signed-payload
+  shapes moved to `venue-royalty-shapes.ts`, which carries no Mesh, so the NoctisSwap panel reads requests
+  without it.
 - **The genesis datum builder reads no clock of its own.** The mint's time comes from its caller, which
   reads the clock once at the command-line boundary, and a build without one is refused rather than
   stamped with zero.

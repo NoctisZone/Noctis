@@ -15,13 +15,12 @@ import { bytesToHex, hexToBytes } from '@noble/hashes/utils.js';
 import { describe, expect, it } from 'vitest';
 import type { VenuePoolConfigData } from '../venue-pool.js';
 import { VenuePoolConfigSchema } from '../venue-pool.js';
+import { VenueRoyaltyWithdrawConfigSchema, type VenueWithdrawOrderUtxo } from '../venue-royalty-shapes.js';
 import {
   draftVenueRoyaltyWithdraw,
   planVenueRoyaltyWithdrawFill,
   VENUE_ROYALTY_REWARD_FLOOR_LOVELACE,
   VENUE_ROYALTY_WITHDRAW_EX_FEE_LOVELACE,
-  VenueRoyaltyWithdrawConfigSchema,
-  type VenueWithdrawOrderUtxo,
   venueRoyaltyKeyHash,
   venueRoyaltyWithdrawDatum,
   venueRoyaltyWithdrawPayload,

@@ -25,7 +25,7 @@ import { BlockfrostProvider, MeshWallet } from '@meshsdk/core';
 import { KeyCurveSpendWallet } from '../key-curve-spend-wallet.js';
 import type { CurveNetwork, CurveSpendWallet } from '../mesh-curve-spend.js';
 import { MESH_NETWORK_ID, scriptHashOf } from '../reference-script.js';
-import { VENUE_ROYALTY_WITHDRAW_TITLE } from '../venue-royalty-withdraw.js';
+import { VENUE_ROYALTY_WITHDRAW_TITLE } from '../venue-royalty-shapes.js';
 import { registerVenueStakeScripts } from '../venue-stake-registration.js';
 import {
   jsonSafe,

@@ -11,16 +11,15 @@
 // instantiated module namespace object, so the glue code's own
 // `wasm.__wbindgen_start()` call resolves `wasm` to that string, `.
 // __wbindgen_start` to `undefined`, and calling it throws
-// "(void 0) is not a function" before the IIFE ever assigns
-// window.NoctisDarkVeil / window.NoctisTierABuy. Externally corroborated
+// "(void 0) is not a function" before the IIFE ever assigns the widget's
+// window global. Externally corroborated
 // (wasm-bindgen's own docs/GitHub discussions): webpack is the only bundler
 // with real, native support for this exact output shape
 // (experiments.asyncWebAssembly below) — not a esbuild misconfiguration on
 // this project's part, a genuine capability gap.
 //
-// Scope: ONLY the 2 browser widget bundles (DarkVeil, the linear curve buy) move to
-// Webpack. Every Node-platform CLI bundle (integration/build.mjs's other
-// configs) stays on esbuild — this issue is specific to wasm-bindgen
+// Scope: ONLY the browser widget bundles build with webpack. Every
+// Node-platform CLI bundle (integration/build.mjs's configs) stays on esbuild — this issue is specific to wasm-bindgen
 // bundler-target output consumed by a BROWSER build; the same packages'
 // Node/CJS WASM loading (readFileSync-relative-path, copied via build.mjs's
 // copyWasmFiles()) was never affected.
@@ -117,24 +116,13 @@ module.exports = [
 					__dirname,
 					"widget/isomorphic-ws-shim.js",
 				),
-				// Mesh signs with a mnemonic or a stored private key, which is a
-				// server-side path by definition — the curve submitter refuses a
-				// browser wallet for it explicitly, and only ever loads these
-				// behind a `referenceScript` pointer no browser caller sets.
-				//
-				// Saying so here as well is what keeps it out of the bundle. A
-				// dynamic import defers WHEN a module loads; it does not remove
-				// it from the build, so webpack still had to resolve Mesh's own
-				// node:crypto and node:stream dependencies for the async chunk,
-				// and for a `target: "web"` build it cannot.
-				//
-				// `false` resolves to an empty module. If this path were ever
-				// reached from the browser it would throw on the first
-				// constructor rather than misbehave quietly.
-				"@meshsdk/core": false,
-				[path.resolve(__dirname, "key-curve-spend-wallet.ts")]: false,
-				[path.resolve(__dirname, "mesh-curve-spend.ts")]: false,
 			},
+			// No Mesh here. The DarkVeil claim, the one thing this widget once
+			// reached Mesh through, is its own bundle now (darkveil-claim-widget
+			// below), and neither of the two bundles built from this
+			// configuration reaches it. An import that does will fail the build
+			// on Mesh's node:crypto, which is the point: give it the claim
+			// widget's stand-ins and load it on demand, as that one does.
 		},
 		plugins: [providePlugin],
 		module: {
@@ -291,6 +279,22 @@ module.exports.push({
 		...module.exports[1].plugins,
 		new webpack.ProvidePlugin({ Buffer: ["buffer", "Buffer"] }),
 	],
+});
+
+// The DarkVeil claim widget (2026-10-04) settles a buyer's DarkVeil allocation
+// on the Cardano curve, from their own wallet. A curve spend references its
+// validator, and that path builds with Mesh, so it is the creator-fee widget's
+// configuration with a different entry and filename. The claim page loads it
+// only when a buyer presses Claim; the DarkVeil widget itself stays free of
+// Mesh, which would otherwise ride on every DarkVeil page.
+module.exports.push({
+	...module.exports.find((c) => c.name === "creator-fee-widget"),
+	name: "darkveil-claim-widget",
+	entry: path.resolve(__dirname, "widget/darkveil-claim-widget-entry.ts"),
+	output: {
+		...module.exports[1].output,
+		filename: "darkveil-claim-widget.bundle.js",
+	},
 });
 
 // The CTO governance widget shares every build concern the DarkVeil widget

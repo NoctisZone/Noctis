@@ -23,10 +23,10 @@ import { MeshTxBuilder } from '@meshsdk/core';
 import { type Cip30Api, Cip30CurveSpendWallet } from './cip30-curve-spend-wallet.js';
 import { type CurveNetwork, type CurveSpendProvider, spendableForFees } from './mesh-curve-spend.js';
 import { VenuePoolConfigSchema } from './venue-pool.js';
+import { VenueRoyaltyWithdrawConfigSchema } from './venue-royalty-shapes.js';
 import {
   type Cip30SignedData,
   draftVenueRoyaltyWithdraw,
-  VenueRoyaltyWithdrawConfigSchema,
   type VenueRoyaltyWithdrawDraft,
   venueRoyaltyWithdrawDatum,
   venueSignatureFromCip30,

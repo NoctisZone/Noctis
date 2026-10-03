@@ -65,6 +65,7 @@ vi.mock('../key-curve-spend-wallet.js', () => ({
 
 import { CML, credentialToAddress, Lucid } from '@lucid-evolution/lucid';
 import { bytesToHex, CAP_EMPTY_ROOT, CapAccumulator, hexToBytes } from '../cap-accumulator-tree.js';
+import { Cip30CurveSpendWallet } from '../cip30-curve-spend-wallet.js';
 import type { CurveSpendPlan } from '../mesh-curve-spend.js';
 import { threadNftAssetName } from '../tier-a-schemas.js';
 import { LucidTierBCurveSubmitter } from '../tier-b-curve-submitter.js';
@@ -393,14 +394,49 @@ describe('reference mode', () => {
     expect(submitSpy).not.toHaveBeenCalled();
   });
 
-  it('says plainly that a browser wallet cannot use it yet', async () => {
-    const { builder } = makeFakeTxBuilder();
-    const submitter = makeSubmitter(builder, { referenced: true, datum: dvClaimDatum() });
+  it('takes a browser wallet for a DarkVeil claim, signing with that wallet', async () => {
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(NOW);
+    const params = {
+      dvAmount: 100n,
+      salt: new Uint8Array(32).fill(3),
+      merkleProof: [{ sibling: new Uint8Array(32).fill(4), goesLeft: true }],
+      buyerKeyHash: hexToBytes(BUYER_KEY_HASH),
+      leafIndex: 0,
+    };
+    // The CLI's claim, the reference for what the transaction must say.
+    await makeSubmitter(makeFakeTxBuilder().builder, { referenced: true, datum: dvClaimDatum() }).claimDarkVeilTokens(
+      WALLET_KEY_PLACEHOLDER,
+      params,
+      new CapAccumulator(),
+    );
+    const [fromKey] = submitSpy.mock.calls[0] as [CurveSpendPlan];
+
+    const walletApi = { getUtxos: vi.fn(), getChangeAddress: vi.fn(), signTx: vi.fn(), submitTx: vi.fn() };
+    const { builder, calls } = makeFakeTxBuilder();
+    const result = await makeSubmitter(builder, {
+      referenced: true,
+      datum: dvClaimDatum(),
+    }).claimDarkVeilTokensWithWallet(walletApi as never, params, new CapAccumulator());
+    expect(result.txHash).toBe('referenced-tx-hash');
+    expect(submitSpy).toHaveBeenCalledTimes(2);
+    const [fromWallet, wallet] = submitSpy.mock.calls[1] as [CurveSpendPlan, unknown];
+    // The page's own wallet funds and signs it, and the Lucid builder that
+    // would carry the validator is never started.
+    expect(wallet).toBeInstanceOf(Cip30CurveSpendWallet);
+    expect(calls.collectFrom).toBeUndefined();
+    // The same claim as the CLI's, field for field.
+    expect(fromWallet).toEqual(fromKey);
+    expect(fromWallet.requiredSignerHashes).toEqual([BUYER_KEY_HASH]);
+    clock.mockRestore();
+  });
+
+  it('still refuses a claim the curve would reject from a browser wallet, before building anything', async () => {
+    const submitter = makeSubmitter(makeFakeTxBuilder().builder, { referenced: true, datum: dvClaimDatum() });
     await expect(
       submitter.claimDarkVeilTokensWithWallet(
         {} as never,
         {
-          dvAmount: 100n,
+          dvAmount: 600n,
           salt: new Uint8Array(32).fill(3),
           merkleProof: [{ sibling: new Uint8Array(32).fill(4), goesLeft: true }],
           buyerKeyHash: hexToBytes(BUYER_KEY_HASH),
@@ -408,7 +444,17 @@ describe('reference mode', () => {
         },
         new CapAccumulator(),
       ),
-    ).rejects.toThrow(/Launch Wizard wallet task/);
+    ).rejects.toThrow(/cap exceeded/i);
+    expect(submitSpy).not.toHaveBeenCalled();
+  });
+
+  it('says plainly that a browser wallet cannot take a buyback through it yet', async () => {
+    const submitter = makeSubmitter(makeFakeTxBuilder().builder, {
+      referenced: true,
+      datum: { ...activeDatum(), curve_state: 'Cancelled', tokens_sold: 300n, total_raised: 3_000_000n },
+    });
+    await expect(submitter.claimBuybackWithWallet({} as never, 100n)).rejects.toThrow(/Launch Wizard wallet task/);
+    expect(submitSpy).not.toHaveBeenCalled();
   });
 });
 

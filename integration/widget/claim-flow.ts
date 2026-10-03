@@ -1,10 +1,11 @@
 // ============================================================================
-// Noctis Zone — DarkVeil widget: Cardano Launch claim flow
+// Noctis Zone — DarkVeil claim widget: Cardano Launch claim flow
 // ============================================================================
-// Thin wrapper around darkveil-claim-submitter.ts's real Lucid Evolution
-// submitter. Unlike registration/buy-flow, this needs NO ContractProviders
-// (it's a plain Cardano transaction) — just the buyer's own connected
-// Cardano wallet API object.
+// Thin wrapper around darkveil-claim-submitter.ts. Unlike registration/buy-flow,
+// this needs NO ContractProviders (it's a plain Cardano transaction) — just the
+// buyer's own connected Cardano wallet API object. It is the whole of
+// darkveil-claim-widget-entry.ts's work, and lives in that bundle rather than
+// the DarkVeil widget's because the spend it builds carries Mesh.
 //
 // dvAmount/salt/merkleProof are inputs to this module, not something it
 // fetches. They come from a DIFFERENT Merkle tree than registration's

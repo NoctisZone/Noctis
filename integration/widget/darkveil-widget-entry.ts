@@ -1,10 +1,10 @@
 // ============================================================================
 // Noctis Zone — DarkVeil Private Buy Widget: browser entry point
 // ============================================================================
-// esbuild browser target (see ../build.mjs's widgetConfig) — bundled to
-// assets/js/darkveil-widget.bundle.js in the theme, enqueued only on
-// DarkVeil-phase page templates, following the exact pattern
-// inc/enqueue.php already uses for page-create.php → create.js.
+// webpack browser target (see ../webpack.widgets.config.cjs's
+// darkveil-widget block) — bundled to assets/js/darkveil-widget.bundle.js in
+// the theme, enqueued only on DarkVeil-phase page templates, following the
+// exact pattern inc/enqueue.php already uses for page-create.php → create.js.
 //
 // Exposes window.NoctisDarkVeil, a plain object of async functions the
 // theme's vanilla JS (no framework, per this project's standing rule) calls
@@ -41,41 +41,13 @@
 //    throws a clear "not configured" error rather than silently doing
 //    nothing or submitting something wrong.
 //
-// 2. claimTierB needs dvAmount/salt/merkleProof for the buyer's private
-//    DarkVeil allocation — a DIFFERENT Merkle tree from registration's
-//    allowlist (bonding_curve_tier_b.ak's dv_allocation_root, built by the
-//    governor/relayer after DarkVeil closes). Resolved (2026-07-20):
-//    darkveil-allocation.php now serves this for real — GET
-//    /wp-json/np/v1/darkveil/allocation-proof?launch_id=...&cardano_address=...
-//    returns { included, dvAmount, salt, merkleProof } for the calling
-//    buyer's own allocation only. The caller should fetch from that
-//    endpoint rather than supply these fields by hand.
-//
-// 3. claimTierB's underlying Lucid instance needs a Blockfrost API base URL
-//    + project ID to run IN THE BROWSER (it signs with the buyer's own
-//    connected wallet). Pointing `blockfrostUrl` directly at Blockfrost's
-//    real API with a real project ID embedded in page config WOULD LEAK
-//    THE KEY to anyone viewing page source. Resolved (2026-07-21): a
-//    real, generic same-origin proxy now exists —
-//    blockfrost-proxy.php's GET/POST /wp-json/np/v1/blockfrost-proxy/{path}
-//    (GET forwards any Blockfrost read path; POST is restricted to exactly
-//    tx/submit). configure() takes whatever blockfrostUrl it's given at
-//    face value — callers MUST pass that proxy's base URL
-//    (`<site>/wp-json/np/v1/blockfrost-proxy`), not Blockfrost's real API,
-//    and any non-empty placeholder for blockfrostProjectId (the proxy
-//    injects the real one server-side and ignores whatever the client
-//    sends). This module still doesn't enforce that choice itself — it's a
-//    deployment-time wiring responsibility, same as before, just no longer
-//    blocked on the proxy not existing.
+// 2. The Cardano Launch claim is not here. It spends the Cardano curve, which
+//    is built with Mesh, so it lives in darkveil-claim-widget-entry.ts and
+//    the claim page loads that bundle only when a buyer presses Claim. This
+//    bundle still serves the buyer's claim record (fetchMyClaimBundle and the
+//    save/load helpers below), which the claim reads its inputs from.
 // ============================================================================
 
-// Imported directly from @lucid-evolution/lucid rather than re-imported via
-// darkveil-claim-submitter.ts's own local `Network as LucidNetwork` alias —
-// that alias is never explicitly re-exported from that file (only used
-// internally), so relying on it here worked by accident of TS's module
-// resolution rather than a real public API of that module. Found during
-// audit; importing the real type directly is the robust fix.
-import type { Network as LucidNetwork, WalletApi } from '@lucid-evolution/lucid';
 import type { ContractProviders } from '@midnight-ntwrk/midnight-js-contracts';
 import { FetchZkConfigProvider } from '@midnight-ntwrk/midnight-js-fetch-zk-config-provider';
 import { httpClientProofProvider } from '@midnight-ntwrk/midnight-js-http-client-proof-provider';
@@ -89,7 +61,6 @@ import {
   type NotIncluded,
   parseSavedClaimBundle,
 } from './claim-bundle.js';
-import { type ClaimTierBParams, claimTierBTokens } from './claim-flow.js';
 import { buildMidnightWalletBridge } from './midnight-wallet-bridge.js';
 import {
   type AllowlistStatus,
@@ -147,16 +118,6 @@ export interface DarkVeilWidgetConfig {
      * operate its own proof-server process and put its URL here.
      */
     proofServerUrl: string;
-  };
-  /** For claimTierB (Cardano Launch only) — see scope note 3 above re: blockfrostUrl. */
-  cardano?: {
-    blockfrostProjectId: string;
-    blockfrostUrl: string;
-    network: LucidNetwork;
-    compiledScriptCbor: string;
-    /** The launch's thread-NFT policy id, hex, as rendered by the platform.
-     *  The Cardano Launch curve UTXO the claim spends is authenticated against it. */
-    threadNftPolicyId: string;
   };
 }
 
@@ -357,27 +318,6 @@ async function cancelCommit(params: {
   });
 }
 
-async function claimTierB(launchId: Uint8Array, walletApi: WalletApi, claimParams: ClaimTierBParams) {
-  const { cardano } = requireConfig();
-  if (!cardano) {
-    throw new Error(
-      'claimTierB needs cardano config (blockfrost + compiled script) — see darkveil-widget-entry.ts scope note 3.',
-    );
-  }
-  return claimTierBTokens(
-    {
-      blockfrostProjectId: cardano.blockfrostProjectId,
-      blockfrostUrl: cardano.blockfrostUrl,
-      network: cardano.network,
-      compiledScriptCbor: cardano.compiledScriptCbor,
-      threadNftPolicyId: cardano.threadNftPolicyId,
-      launchId,
-    },
-    walletApi,
-    claimParams,
-  );
-}
-
 function hexToBytes(hex: string): Uint8Array {
   const out = new Uint8Array(hex.length / 2);
   for (let i = 0; i < out.length; i++) {
@@ -430,7 +370,6 @@ const NoctisDarkVeil = {
   buyCommit,
   revealCommit,
   cancelCommit,
-  claimTierB,
 };
 
 declare global {
