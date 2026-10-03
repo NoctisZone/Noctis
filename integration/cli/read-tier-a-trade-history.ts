@@ -66,7 +66,6 @@ async function main() {
     blockfrostUrl: input.blockfrostUrl,
     bondingCurveAddress,
     launchIdHex: input.launchIdHex,
-    tier: input.tier,
   });
 
   const events: TradeEvent[] = await reader.getCurveTradeHistory(input.stopAtTxHash);

@@ -56,9 +56,7 @@ async function main() {
     blockfrostUrl: input.blockfrostUrl,
     network: CARDANO_NETWORK_MAP[input.network],
     vestingScriptCbor: loadValidatorCbor(blueprint, 'vesting.vesting.spend'),
-    // No curve validator: claimVested reads vesting state only. It used to
-    // name the linear one purely to satisfy the constructor, which tied a
-    // shared vesting path to a launch path it does not serve.
+    // No curve validator: claimVested reads vesting state only.
     launchIdHex: input.launchIdHex,
     threadNftPolicyId: input.threadNftPolicyId,
   });

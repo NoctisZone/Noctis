@@ -146,7 +146,7 @@ function tagIndexes(plan: CurveBatchPlan): bigint[] {
   return plan.payouts.map((p) => (p.datumCbor as unknown as { output_index: bigint }).output_index);
 }
 
-function makeSubmitter(tier: 'A' | 'B' = 'A') {
+function makeSubmitter() {
   vi.mocked(Lucid).mockResolvedValue({
     selectWallet: { fromSeed: vi.fn(), fromAPI: vi.fn(), fromAddress: vi.fn() },
     wallet: () => ({ address: vi.fn().mockResolvedValue(BATCHER_ADDRESS) }),
@@ -155,7 +155,7 @@ function makeSubmitter(tier: 'A' | 'B' = 'A') {
     blockfrostProjectId: 'proj',
     blockfrostUrl: 'https://cardano-preprod.blockfrost.io/api/v0',
     network: 'Preprod',
-    tier,
+    tier: 'B',
     curveScriptCbor: '590000',
     orderScriptCbor: '590001',
     // Never checked here — the spender is mocked, and the real staleness guard
@@ -172,26 +172,20 @@ describe('the redeemer index, which fails silently when wrong', () => {
     expect(REDEEMER_BATCH_TRADES.B).toBe(tierB?.index);
   });
 
-  it('is genuinely different between the tiers, so one constant would be wrong', () => {
-    expect(REDEEMER_BATCH_TRADES.A).not.toBe(REDEEMER_BATCH_TRADES.B);
-  });
-
   it('matches curve_order’s ApplyOrder', () => {
     const apply = blueprint.definitions['curve_order/OrderRedeemer']?.anyOf?.find((v) => v.title === 'ApplyOrder');
     expect(REDEEMER_APPLY_ORDER).toBe(apply?.index);
   });
 
-  for (const tier of ['A', 'B'] as const) {
-    it(`builds the batch redeemer at Tier ${tier}’s own index`, async () => {
-      await makeSubmitter(tier).submitBatch(KEY, {
-        curveUtxo: curveUtxo(),
-        orderUtxos: [orderUtxo(1)],
-        plan: buildPlan([{ owner: ALICE, index: 1, amount: 100n }]),
-      });
-      const redeemer = lastPlan().redeemerCbor as unknown as Constr<unknown>;
-      expect(redeemer.index).toBe(REDEEMER_BATCH_TRADES[tier]);
+  it('builds the batch redeemer at the curve’s own index', async () => {
+    await makeSubmitter().submitBatch(KEY, {
+      curveUtxo: curveUtxo(),
+      orderUtxos: [orderUtxo(1)],
+      plan: buildPlan([{ owner: ALICE, index: 1, amount: 100n }]),
     });
-  }
+    const redeemer = lastPlan().redeemerCbor as unknown as Constr<unknown>;
+    expect(redeemer.index).toBe(REDEEMER_BATCH_TRADES.B);
+  });
 });
 
 describe('the batch a plan turns into', () => {
@@ -498,7 +492,7 @@ describe('refusals', () => {
           blockfrostProjectId: 'proj',
           blockfrostUrl: 'https://cardano-preprod.blockfrost.io/api/v0',
           network: 'Custom',
-          tier: 'A',
+          tier: 'B',
           curveScriptCbor: '590000',
           orderScriptCbor: '590001',
           curveReferenceScript: { txHash: 'ab'.repeat(32), outputIndex: 0, scriptHash: 'x' },

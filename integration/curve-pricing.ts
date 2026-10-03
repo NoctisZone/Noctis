@@ -1,12 +1,13 @@
 // ============================================================================
 // Noctis Zone — bonding curve pricing
 // ============================================================================
-// The single TypeScript copy of what the two Cardano curve validators charge.
-// `bonding_curve.ak` (the linear curve, linear) and `bonding_curve_tier_b.ak` (Cardano Launch,
-// quadratic) each compute the price themselves from their own datum; nothing
-// off-chain can propose a figure and have it accepted. So everything here is
-// a MIRROR, and it has to agree with the validator to the lovelace — a
-// mismatch is not a rounding nuisance, it is a transaction that fails.
+// The single TypeScript copy of what the Cardano curve validator charges.
+// `bonding_curve_tier_b.ak` (Cardano Launch, quadratic) computes the price
+// itself from its own datum; nothing off-chain can propose a figure and have
+// it accepted. So everything here is a MIRROR, and it has to agree with the
+// validator to the lovelace — a mismatch is not a rounding nuisance, it is a
+// transaction that fails. The linear shape below is no validator's any more;
+// it is kept as the batch planner tests' simple fixture curve.
 //
 // That is also why this module exists at all rather than the formula living
 // in each submitter: the buy path, the sell path, the DarkVeil claim path and
@@ -32,16 +33,16 @@
 // 1.5% fee. All BigInt — no float ever touches a lovelace figure.
 // ============================================================================
 
-/** Mirrors both validators' `bps_denominator`. */
+/** Mirrors the validator's `bps_denominator`. */
 export const BPS_DENOMINATOR = 10_000n;
 
-/** Mirrors both validators' creator_bps / platform_bps (1.5% total). The
+/** Mirrors the validator's creator_bps / platform_bps (1.5% total). The
  *  platform runs ONE wallet, so there is no treasury/ops pair here either. */
 export const CREATOR_BPS = 50n;
 export const PLATFORM_BPS = 100n;
 
-/** The curve parameters both formulas need. Structurally satisfied by either
- *  tier's full datum type, so callers pass their datum directly. */
+/** The curve parameters both formulas need. Structurally satisfied by the
+ *  curve's full datum type, so callers pass their datum directly. */
 export interface CurveParams {
   base_price: bigint;
   max_price: bigint;
@@ -52,7 +53,7 @@ export interface CurveParams {
 export type RangeCost = readonly [numerator: bigint, denominator: bigint];
 
 /**
- * One fee slice of `gross`, floored — mirrors both validators' `fee_slice`.
+ * One fee slice of `gross`, floored — mirrors the validator's `fee_slice`.
  * Flooring each independently means the two together take slightly less
  * than 1.5% of an amount that does not divide cleanly; the remainder stays
  * with the curve rather than being paid out twice.
@@ -93,12 +94,12 @@ export function sellNet(gross: bigint): bigint {
 }
 
 // ----------------------------------------------------------------------------
-// The linear curve — linear, P(x) = base + (max - base) * x / supply
+// Linear, P(x) = base + (max - base) * x / supply — a test fixture shape
 // ----------------------------------------------------------------------------
 
 /**
- * Mirrors `bonding_curve.ak`'s `gross_range`. With `r = max - base` and
- * `S = supply`:
+ * The linear range sum, a simple curve for the batch planner's tests; no
+ * validator charges it. With `r = max - base` and `S = supply`:
  *
  *   sum(s, n) = n*base + r*n*(2s + n - 1) / (2S)
  */

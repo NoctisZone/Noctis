@@ -196,10 +196,9 @@ export function deriveUserPublicKey(sk: UserSecretKey, domain: string, launchId:
 
 // NOTE: there are deliberately no random secret/nonce generators here.
 // Every value that must survive a cleared browser — the user secret, the
-// DarkVeil registration nonce, the buy nonce, and the CTO voting identity —
-// is DERIVED from a single wallet signature, so it is reproducible on any
-// device. See integration/private-state-store.ts (SK_DOMAIN /
-// REG_NONCE_DOMAIN / BUY_NONCE_DOMAIN) and integration/cto-private-state-
+// buy nonce, and the CTO voting identity — is DERIVED from a single wallet
+// signature, so it is reproducible on any device. See
+// integration/private-state-store.ts (SK_DOMAIN / BUY_NONCE_DOMAIN) and integration/cto-private-state-
 // store.ts (CTO_SK_DOMAIN), both reached via widget/wallet-session.ts.
 // A randomly generated secret would be unrecoverable the moment a browser
 // clears its storage, stranding any bond or allocation locked against it.

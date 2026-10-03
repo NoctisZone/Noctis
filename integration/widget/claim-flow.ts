@@ -59,7 +59,6 @@ export async function claimTierBTokens(
     blockfrostUrl: config.blockfrostUrl,
     bondingCurveAddress: submitter.curveAddress,
     launchIdHex: Buffer.from(config.launchId).toString('hex'),
-    tier: 'B',
   });
   const capState = await rebuildCapAccumulator(reader, datum.cap_root);
 

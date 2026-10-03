@@ -70,6 +70,7 @@ const genesis = await buildGenesisDatums({
   maxPrice: 75,
   creatorAllocPct: 5,
   vestDays: 180,
+  genesisTimestampMs: 1_785_000_000_000,
 });
 const LAUNCH = genesis.launchIdHex;
 const thread = (role: Parameters<typeof threadNftAssetName>[0]) => THREAD_POLICY + threadNftAssetName(role, LAUNCH);

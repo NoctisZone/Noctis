@@ -4,9 +4,8 @@
 // bonding_curve_tier_b.ak's BuyTokens (and every other post-mint redeemer)
 // is a custom-Plutus-redeemer spend — Anvil's REST API can't do this (this
 // session's own finding, confirmed against the earlier Anvil research). Same category of
-// gap as darkveil-claim-submitter.ts and tier-a-curve-submitter.ts
-// (the linear curve's own Phase 4), both already fixed via Lucid Evolution. This is
-// the identical treatment for Cardano Launch's public curve.
+// gap as darkveil-claim-submitter.ts, already fixed via Lucid Evolution. This
+// is the same treatment for Cardano Launch's public curve.
 //
 // Real differences from the linear curve's curve, verified directly against
 // bonding_curve_tier_b.ak's real source before writing this (not assumed
@@ -48,7 +47,16 @@ import type {
   UTxO,
   WalletApi,
 } from '@lucid-evolution/lucid';
-import { Blockfrost, Constr, Data, getAddressDetails, Lucid, toUnit, validatorToAddress } from '@lucid-evolution/lucid';
+import {
+  Blockfrost,
+  CML,
+  Constr,
+  Data,
+  getAddressDetails,
+  Lucid,
+  toUnit,
+  validatorToAddress,
+} from '@lucid-evolution/lucid';
 // Mesh, and the modules below that build on it, belong to referenced mode,
 // which is taken only when a `referenceScript` pointer is configured. Most of
 // it signs with a mnemonic or a stored private key, server-side. The one
@@ -80,14 +88,27 @@ import { selectLaunchUtxo } from './launch-utxo-lookup.js';
 import { type CurveNetwork, type CurveSpendWallet, MeshCurveSpender } from './mesh-curve-spend.js';
 import { BONDING_CURVE_TIER_B_REDEEMER } from './redeemer-indices.js';
 import { MESH_NETWORK_ID, type ReferenceScriptPointer } from './reference-script.js';
-import { extendedHexToBech32PrivateKey, loadValidator } from './tier-a-curve-submitter.js';
 import type { BondingCurveTierBDatumData } from './tier-a-schemas.js';
 import {
   BondingCurveTierBDatumSchema,
   capProofToPlutus,
+  loadValidator,
   SETTLEMENT_TAG_STANDIN_CBOR,
   settlementDatum,
 } from './tier-a-schemas.js';
+
+/**
+ * A raw 64-byte BIP32-Ed25519 extended private key (kL||kR, the format the
+ * platform's WeldPress wallets store) as the bech32 `ed25519e_sk...` string
+ * Lucid's sign.withPrivateKey() takes.
+ */
+function extendedHexToBech32PrivateKey(extendedHex: string): string {
+  const bytes = new Uint8Array(Buffer.from(extendedHex, 'hex'));
+  if (bytes.length !== 64) {
+    throw new Error(`Expected a 64-byte extended private key (kL||kR), got ${bytes.length} bytes.`);
+  }
+  return CML.PrivateKey.from_extended_bytes(bytes).to_bech32();
+}
 
 // The platform's charge on a creator-fee claim — the same figure
 // bonding_curve_tier_b.ak names as `platform_charge_lovelace`, and the figure
@@ -577,10 +598,21 @@ export class LucidTierBCurveSubmitter {
   }
 
   // --------------------------------------------------------------------------
-  // ActivateCurve — governor-signed. Same design as tier-a-curve-submitter.ts's
-  // activateCurve() (see that file's class-level comment for the full
-  // key-format/coin-selection reasoning) — constructor index 0, identical
-  // between tiers.
+  // ActivateCurve — governor-signed, constructor index 0.
+  //
+  // The governor's key is the raw 64-byte kL||kR extended key the platform's
+  // WeldPress wallets store. CML.PrivateKey.from_extended_bytes() takes that
+  // format as it is, and its bech32 form signs through
+  // sign.withPrivateKey(), so build, sign and submit happen in one process.
+  // Two other shapes failed on Preprod: signing in PHP after building here
+  // (WeldPress's CBOR parser refuses indefinite-length arrays, and
+  // rebuilding the transaction in a second process changed its script
+  // integrity hash), and selecting coins with fromPrivateKey(), which can
+  // only derive an enterprise address from a payment key and so never sees
+  // the funds at the governor's base address. Coins are therefore selected
+  // with selectWallet.fromAddress(governorAddress, utxos) and the
+  // transaction signed separately. The key lives only for this one Node
+  // process, passed on stdin, and is never logged or returned.
   // --------------------------------------------------------------------------
 
   async activateCurve(
@@ -1224,9 +1256,12 @@ export class LucidTierBCurveSubmitter {
   }
 
   // --------------------------------------------------------------------------
-  // ExpireCurve — permissionless, constructor index 7. Same
-  // honest-"now" discipline as the linear curve's (see tier-a-curve-submitter.ts's
-  // own method header for the full timing-bug lesson this avoids).
+  // ExpireCurve — permissionless, constructor index 7. Its time is taken
+  // immediately before the transaction is built, never earlier in the call
+  // chain: a validity range computed before the process spawn and several
+  // chain reads can have elapsed by submission, and a transaction submitted
+  // after its range closes is accepted by the submit endpoint and then never
+  // lands, with no error.
   // --------------------------------------------------------------------------
 
   async expireCurve(governorPrivateKeyExtendedHex: string, governorAddress: string): Promise<{ txHash: string }> {

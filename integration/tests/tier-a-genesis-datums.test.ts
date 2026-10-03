@@ -15,6 +15,8 @@ import { BondingCurveTierBDatumSchema, StakingPoolDatumSchema } from '../tier-a-
 
 const KEYHASH = 'aa'.repeat(28);
 const POLICY = 'bb'.repeat(28);
+/** The mint's time, as its caller reads it. */
+const MINT_MS = 1_785_000_000_000;
 
 // The builder's own default resolves relative to the bundled CLI, so a test
 // has to supply this — see the `blueprint` input's comment.
@@ -38,35 +40,36 @@ function input(overrides: Record<string, unknown> = {}) {
     basePrice: 3,
     maxPrice: 75,
     vestDays: 90,
+    genesisTimestampMs: MINT_MS,
     ...overrides,
   };
 }
 
 describe('tier-a-genesis-datums.ts — the stall clock starts at the mint', () => {
-  it('stamps phase_started_at with the genesis time on the linear curve, not zero', async () => {
-    const at = 1_785_000_000_000;
+  it('stamps phase_started_at with the mint time it is given, not zero', async () => {
+    const at = 1_786_000_000_000;
     const g = await buildGenesisDatums(input({ genesisTimestampMs: at }));
     const datum = Data.from(g.datums.bondingCurve, BondingCurveTierBDatumSchema);
     expect(datum.phase_started_at).toBe(BigInt(at));
   });
 
-  it('stamps phase_started_at with the genesis time on Cardano Launch too', async () => {
-    const at = 1_785_000_000_000;
-    const g = await buildGenesisDatums(input({ tier: 'B', genesisTimestampMs: at }));
-    const datum = Data.from(g.datums.bondingCurve, BondingCurveTierBDatumSchema);
-    expect(datum.phase_started_at).toBe(BigInt(at));
+  it('refuses a build with no mint time, rather than stamping zero or reading a clock of its own', async () => {
+    // The CLIs read the clock once, at their boundary, and pass it in; a
+    // caller that forgets is refused rather than given a datum expirable
+    // from 1970.
+    await expect(buildGenesisDatums(input({ genesisTimestampMs: undefined }))).rejects.toThrow(/genesisTimestampMs/);
+    await expect(buildGenesisDatums(input({ genesisTimestampMs: 0 }))).rejects.toThrow(/genesisTimestampMs/);
   });
 
-  it('defaults to now rather than zero when no genesis time is given', async () => {
-    // The default is the case that actually ships — an explicit timestamp is
-    // the test-and-reproducibility path — so leaving it at zero would be the
-    // real bug and this is the test that would catch it.
-    const before = Date.now();
-    const g = await buildGenesisDatums(input());
-    const after = Date.now();
-    const datum = Data.from(g.datums.bondingCurve, BondingCurveTierBDatumSchema);
-    expect(datum.phase_started_at).toBeGreaterThanOrEqual(BigInt(before));
-    expect(datum.phase_started_at).toBeLessThanOrEqual(BigInt(after));
+  it('opens a staking pool at the mint time, or at mintedAtMs when one is given', async () => {
+    const staking = { stakingEnabled: true, stakingDurationDays: 1095 };
+    const pool = async (o: Record<string, unknown>) =>
+      Data.from(
+        (await buildGenesisDatums(input({ ...staking, ...o }))).datums.stakingPool ?? '',
+        StakingPoolDatumSchema,
+      );
+    expect((await pool({})).last_update_ms).toBe(BigInt(MINT_MS));
+    expect((await pool({ mintedAtMs: MINT_MS + 5 })).last_update_ms).toBe(BigInt(MINT_MS + 5));
   });
 
   it('opens the curve Inactive, which is the state the stall clock is timing', async () => {

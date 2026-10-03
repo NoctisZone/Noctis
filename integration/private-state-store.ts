@@ -20,7 +20,6 @@
 //
 //   masterSignature = wallet.signData(FIXED_DOMAIN_MESSAGE)   -- one prompt
 //   identitySecretKey    = sha256("sk"        || masterSignature)
-//   registrationNonce    = sha256("reg-nonce" || masterSignature)
 //   buyNonce(launchId)   = sha256("buy-nonce" || launchId || masterSignature)
 //
 // IndexedDB is now a CACHE for convenience (skip re-prompting the wallet on
@@ -118,7 +117,6 @@ export function concatBytes(...parts: Uint8Array[]): Uint8Array {
 export const MASTER_SIGNATURE_DOMAIN = 'noctis:darkveil:master:v1';
 
 const SK_DOMAIN = 'noctis:darkveil:derive:sk:v1';
-const REG_NONCE_DOMAIN = 'noctis:darkveil:derive:reg-nonce:v1';
 const BUY_NONCE_DOMAIN = 'noctis:darkveil:derive:buy-nonce:v1';
 
 /** Exported (2026-07-19) — same reasoning as the hex/byte helpers above. */
@@ -134,12 +132,14 @@ export function deriveFromSignature(domain: string, masterSignatureHex: string, 
 
 export interface DarkVeilIdentity {
   userSecretKey: UserSecretKey;
-  registrationNonce: Uint8Array;
 }
 
+/**
+ * A record written before the registration nonce left the contract may still
+ * carry `registrationNonceHex`; nothing reads it, so it is left where it is.
+ */
 interface StoredIdentity {
   secretKeyHex: string;
-  registrationNonceHex: string;
   /** Every launch contract address this identity has requested a buy nonce for -- see the file header's EXPORT/IMPORT note for why this list has to be self-tracked. */
   knownLaunchHexes: string[];
 }
@@ -251,26 +251,21 @@ export function createDarkVeilPrivateStore(config: CreateDarkVeilPrivateStoreCon
   async function getOrCreateIdentity(): Promise<DarkVeilIdentity> {
     const existing = await readIdentityRecord();
     if (existing) {
-      return {
-        userSecretKey: { bytes: hexToBytes(existing.secretKeyHex) },
-        registrationNonce: hexToBytes(existing.registrationNonceHex),
-      };
+      return { userSecretKey: { bytes: hexToBytes(existing.secretKeyHex) } };
     }
 
     const masterSig = await getMasterSignatureCached();
     const userSecretKey: UserSecretKey = {
       bytes: deriveFromSignature(SK_DOMAIN, masterSig),
     };
-    const registrationNonce = deriveFromSignature(REG_NONCE_DOMAIN, masterSig);
 
     const stored: StoredIdentity = {
       secretKeyHex: bytesToHex(userSecretKey.bytes),
-      registrationNonceHex: bytesToHex(registrationNonce),
       knownLaunchHexes: [],
     };
     provider.setContractAddress(IDENTITY_SENTINEL_ADDRESS);
     await provider.set(IDENTITY_PRIVATE_STATE_ID, stored);
-    return { userSecretKey, registrationNonce };
+    return { userSecretKey };
   }
 
   async function recordKnownLaunch(launchContractAddressHex: string): Promise<void> {

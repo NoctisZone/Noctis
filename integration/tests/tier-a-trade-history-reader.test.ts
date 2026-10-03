@@ -28,7 +28,6 @@ import { buyCost, sellProceeds } from '../curve-pricing.js';
 import { BONDING_CURVE_TIER_B_REDEEMER } from '../redeemer-indices.js';
 import { buildGenesisDatums } from '../tier-a-genesis-datums.js';
 import {
-  BONDING_CURVE_ACTIONS,
   BONDING_CURVE_TIER_B_ACTIONS,
   CURVE_FIELDS,
   decodeBatchOrders,
@@ -128,13 +127,12 @@ function chainFetch(utxos: Array<{ tx_hash: string; inline_datum: string | null 
 /** A redeemer as Lucid encodes it, so the decoder reads real bytes. */
 const redeemerCbor = (index: number, fields: LucidData[]) => Data.to(new Constr(index, fields));
 
-function reader(tier: 'B' = 'B') {
+function reader() {
   return new TierATradeHistoryReader({
     blockfrostProjectId: 'k',
     blockfrostUrl: 'https://bf.test',
     bondingCurveAddress: CURVE_ADDR,
     launchIdHex: LAUNCH_ID,
-    tier,
   });
 }
 
@@ -153,7 +151,7 @@ describe('action tables', () => {
   });
 
   it('gives every named curve action its field list', () => {
-    for (const [index, [name, fields]] of Object.entries(BONDING_CURVE_ACTIONS)) {
+    for (const [index, [name, fields]] of Object.entries(BONDING_CURVE_TIER_B_ACTIONS)) {
       if (CURVE_FIELDS[name]) expect(fields).toEqual(CURVE_FIELDS[name]);
       expect(Number(index)).toBeGreaterThanOrEqual(0);
     }
@@ -165,12 +163,6 @@ describe('action tables', () => {
     for (const action of ['BuyTokens', 'SellTokens', 'ClaimDarkVeilTokens', 'ClaimBuyback']) {
       expect(CURVE_FIELDS[action][0]).toBe('token_amount');
     }
-  });
-
-  it('keeps both Cardano curves tables separate', () => {
-    // Cardano Launch's constructor order genuinely differs; a shared table would
-    // mislabel one of them.
-    expect(BONDING_CURVE_TIER_B_ACTIONS).not.toEqual(BONDING_CURVE_ACTIONS);
   });
 
   it('builds the vesting table from vesting field names', () => {
@@ -193,7 +185,6 @@ describe('getCurveTradeHistory', () => {
       blockfrostUrl: 'https://bf.test',
       bondingCurveAddress: CURVE_ADDR,
       launchIdHex: launchId,
-      tier: 'B',
     });
     vi.stubGlobal(
       'fetch',
@@ -220,7 +211,6 @@ describe('getCurveTradeHistory', () => {
       blockfrostUrl: 'https://bf.test',
       bondingCurveAddress: CURVE_ADDR,
       launchIdHex: launchId,
-      tier: 'B',
     });
     vi.stubGlobal(
       'fetch',
@@ -241,7 +231,6 @@ describe('getCurveTradeHistory', () => {
       blockfrostUrl: 'https://bf.test',
       bondingCurveAddress: CURVE_ADDR,
       launchIdHex: launchId,
-      tier: 'B',
     });
     const cbor = redeemerCbor(BONDING_CURVE_TIER_B_REDEEMER.BuyTokens, [1000n, BUYER]);
     vi.stubGlobal(
@@ -284,7 +273,6 @@ describe('getCurveTradeHistory', () => {
       blockfrostUrl: 'https://bf.test',
       bondingCurveAddress: CURVE_ADDR,
       launchIdHex: launchId,
-      tier: 'B',
     });
     vi.stubGlobal(
       'fetch',
@@ -326,7 +314,6 @@ describe('getCurveTradeHistory', () => {
       blockfrostUrl: 'https://bf.test',
       bondingCurveAddress: CURVE_ADDR,
       launchIdHex: launchId,
-      tier: 'B',
     });
     vi.stubGlobal(
       'fetch',
@@ -360,7 +347,6 @@ describe('getCurveTradeHistory', () => {
       blockfrostUrl: 'https://bf.test',
       bondingCurveAddress: CURVE_ADDR,
       launchIdHex: launchId,
-      tier: 'B',
     });
     vi.stubGlobal(
       'fetch',
@@ -392,7 +378,6 @@ describe('getCurveTradeHistory', () => {
       blockfrostUrl: 'https://bf.test',
       bondingCurveAddress: CURVE_ADDR,
       launchIdHex: launchId,
-      tier: 'B',
     });
     vi.stubGlobal(
       'fetch',
@@ -424,7 +409,6 @@ describe('getCurveTradeHistory', () => {
       blockfrostUrl: 'https://bf.test',
       bondingCurveAddress: CURVE_ADDR,
       launchIdHex: launchId,
-      tier: 'B',
     });
     const f = chainFetch(
       [{ tx_hash: 'newest', inline_datum: hex }],
@@ -515,7 +499,6 @@ describe('batches', () => {
       blockfrostUrl: 'https://bf.test',
       bondingCurveAddress: CURVE_ADDR,
       launchIdHex: launchId,
-      tier: 'B',
     });
     const cbor = redeemerCbor(BONDING_CURVE_TIER_B_REDEEMER.BatchTrades, [
       [

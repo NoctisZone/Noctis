@@ -1,14 +1,10 @@
 // ============================================================================
 // Noctis Zone — Cardano Preprod milestone, Phase 5
 // StartVesting (vesting.ak) — standalone, independently retriable.
-// (2026-07-17): split out of the graduation transaction once embedding all
-// 3 validators in one transaction exceeded Cardano's real 16384-byte tx
-// size cap. Verified independent of Graduate/SealLock (no
-// cross-contract check in either direction) — see
-// tier-a-graduation-submitter.ts's own header for the full trail. Exists as
-// its own CLI both for the normal graduate() flow's TX2 and for recovery:
-// if TX2 fails after TX1 (Graduate+SealLock) already landed on-chain, this
-// can be re-run alone without re-touching curve/lp_escrow state.
+// Independent of graduation (no cross-contract check in either direction —
+// see tier-a-graduation-submitter.ts's header), so it runs after a
+// graduation as its second transaction, or alone to recover when that
+// second transaction failed, without touching curve or escrow state.
 // ============================================================================
 // Input: single JSON object on stdin, including the governor's PLAINTEXT
 // 64-byte extended private key hex (decrypted server-side by the PHP
@@ -60,13 +56,9 @@ async function main() {
     blockfrostProjectId: input.blockfrostProjectId,
     blockfrostUrl: input.blockfrostUrl,
     network: CARDANO_NETWORK_MAP[input.network],
-    // Graduate/SealLock scripts aren't needed for this call. The curve is now
-    // derived on demand rather than in the constructor, so this no longer
-    // names one at all — startVesting never reads curve state and never builds
-    // TX1, and vesting is shared across launch types while a curve is not.
-    lpEscrowScriptCbor: loadValidatorCbor(blueprint, 'lp_escrow.lp_escrow.spend'),
+    // Vesting is the one validator this needs: StartVesting never reads curve
+    // or escrow state, and vesting is shared by every Cardano launch.
     vestingScriptCbor: loadValidatorCbor(blueprint, 'vesting.vesting.spend'),
-    stakingPoolScriptCbor: loadValidatorCbor(blueprint, 'staking_pool.staking_pool.spend'),
     launchIdHex: input.launchIdHex,
     threadNftPolicyId: input.threadNftPolicyId,
   });

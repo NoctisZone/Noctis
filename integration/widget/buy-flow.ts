@@ -13,7 +13,7 @@
 // built anywhere in this codebase yet (no WalletProvider/MidnightProvider
 // bridge from the raw dapp-connector API exists). Also same as
 // registration-flow.ts: connecting to the contract at all requires the
-// SAME witness triple (merkleProof, buyNonce, registrationNonce) regardless
+// SAME witnesses (merkleProof, buyNonce) regardless
 // of which circuit gets called afterward — submitBuyCommit/revealBuyCommit
 // don't use the Merkle proof directly, but the witness closure still needs
 // one to construct the contract handle.

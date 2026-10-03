@@ -677,9 +677,6 @@ witness getMerkleProof(): Vector<20, MerkleProofEntry>;
 // built at a different time (registration freeze, not deploy).
 witness getRegistrantMerkleProof(): Vector<20, MerkleProofEntry>;
 
-// Random nonce for registration commitment — private, prevents replay
-witness getRegistrationNonce(): Bytes<32>;
-
 // Random nonce for a DarkVeil buy commitment — private, prevents replay
 witness getBuyNonce(): Bytes<32>;
 
@@ -2623,7 +2620,6 @@ export circuit graduateLp(): [] {
 //     no longer a free witness (design requirement): it's derived in-circuit from
 //     the caller's own identity, so there's no separate leaf value to keep
 //     private beyond the identity itself
-//   - Registration nonce (getRegistrationNonce witness)
 //   - DarkVeil buy nonce (getBuyNonce witness)
 //   - Governor's secret key (getGovernorSecret witness)
 //   - A DarkVeil buyer's purchase amount, BETWEEN submitBuyCommit and their

@@ -107,7 +107,6 @@ async function main() {
   // is a same-shape follow-up, not a blocker.
   const historyReader = new TierATradeHistoryReader({
     launchIdHex: input.launchIdHex,
-    tier: input.tier,
     bondingCurveAddress,
     blockfrostProjectId: input.blockfrostProjectId,
     blockfrostUrl: input.blockfrostUrl,

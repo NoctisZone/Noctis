@@ -2794,3 +2794,69 @@ describe('bonding_curve.compact — the DarkVeil phase runs on its sealed clock'
     expect(() => stranger().circuits.closeDarkVeil(d.ctx, DV_ALLOCATION + 1n)).toThrow(/exceeds dvAllocation/i);
   });
 });
+
+describe('bonding_curve.compact — read circuits return what the ledger holds', () => {
+  it('reports the DarkVeil allocation, price, state and certificate as deployed, and the fee split', () => {
+    const { contract, ctx } = deploy();
+    const state = ledger(ctx.currentQueryContext.state);
+    expect(contract.circuits.getDvAllocation(ctx).result).toBe(DV_ALLOCATION);
+    expect(contract.circuits.getDvPrice(ctx).result).toBe(DV_PRICE);
+    expect(contract.circuits.getDvState(ctx).result).toBe(state.dvState);
+    expect(contract.circuits.getFairLaunchCert(ctx).result).toEqual(state.fairLaunchCert);
+    expect(contract.circuits.getFees(ctx).result).toEqual({ creatorBps: 50n, platformBps: 100n });
+  });
+
+  it('reports the committed totals after a DarkVeil reveal, each from its own field', () => {
+    // The DarkVeil buying setup the commit/reveal tests above use.
+    const deployed = deploy();
+    const r0 = deployed.contract.circuits.advancePhase(deployed.ctx, LaunchPhase.DarkVeil);
+    const rStart = deployed.contract.circuits.startRegistration(nextContext(deployed.contractAddress, r0.context));
+    const rReg = deployed.contract.circuits.registerForDarkVeil(nextContext(deployed.contractAddress, rStart.context));
+    const rOpen = openBuyingWith(
+      deployed.contract,
+      deployed.contractAddress,
+      nextContext(deployed.contractAddress, rReg.context),
+      REGISTRANT_TREE.root,
+    );
+    const d = { ...deployed, ctx: nextContext(deployed.contractAddress, rOpen.context) };
+    const buyerKey = deriveUserPublicKey(fakeBytes32(3), LAUNCH_ID);
+    const tokenAmount = 50n;
+    const commitment = computeBuyCommit({
+      buyerKey,
+      launchId: LAUNCH_ID,
+      tokenAmount,
+      pricePerToken: DV_PRICE,
+      nonce: BUY_NONCE,
+    });
+    const r1 = d.contract.circuits.submitBuyCommit(d.ctx, commitment, 1n);
+    const r2 = d.contract.circuits.closeDarkVeil(nextContext(d.contractAddress, r1.context), 100n);
+    const grossPayment = tokenAmount * DV_PRICE;
+    const { creator, platform } = fees(grossPayment);
+    const r3 = d.contract.circuits.revealBuyCommit(
+      nextContextAtTime(d.contractAddress, nextContext(d.contractAddress, r2.context), 3),
+      commitment,
+      tokenAmount,
+      DV_PRICE,
+      creator,
+      platform,
+      3n,
+    );
+    const ctx = nextContext(d.contractAddress, r3.context);
+    const state = ledger(ctx.currentQueryContext.state);
+    // Different values, so a getter reading the other field cannot pass.
+    expect(d.contract.circuits.getTotalCommitted(ctx).result).toBe(tokenAmount);
+    expect(d.contract.circuits.getTotalRaisedCommitted(ctx).result).toBe(grossPayment);
+    expect(d.contract.circuits.getDvState(ctx).result).toBe(state.dvState);
+    expect(d.contract.circuits.getFairLaunchCert(ctx).result).toEqual(state.fairLaunchCert);
+  });
+
+  it('reports a buyer balance after a public buy, and zero for a key that never bought', () => {
+    const { contract, ctx } = deployAndActivate();
+    const tokenAmount = 10n;
+    const grossPayment = expectedGross(0n, tokenAmount);
+    const { creator, platform } = fees(grossPayment);
+    const r = contract.circuits.buyTokens(ctx, tokenAmount, grossPayment, creator, platform, 1_000_000n);
+    expect(contract.circuits.balanceOf(r.context, BUYER_KEY).result).toBe(tokenAmount);
+    expect(contract.circuits.balanceOf(r.context, fakeBytes32(77)).result).toBe(0n);
+  });
+});

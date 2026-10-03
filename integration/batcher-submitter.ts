@@ -40,19 +40,13 @@ import type { BatchPlan, PlannedFill } from './batch-planner.js';
 import { KeyCurveSpendWallet } from './key-curve-spend-wallet.js';
 import { type CurveBatchPlan, type CurveNetwork, type CurveSpendWallet, MeshCurveSpender } from './mesh-curve-spend.js';
 import { ownerAddressFrom } from './order-submitter.js';
-import { BONDING_CURVE_REDEEMER, BONDING_CURVE_TIER_B_REDEEMER, CURVE_ORDER_REDEEMER } from './redeemer-indices.js';
+import { BONDING_CURVE_TIER_B_REDEEMER, CURVE_ORDER_REDEEMER } from './redeemer-indices.js';
 import { MESH_NETWORK_ID, type ReferenceScriptPointer } from './reference-script.js';
-import type { BondingCurveDatumData, BondingCurveTierBDatumData } from './tier-a-schemas.js';
-import {
-  BondingCurveDatumSchema,
-  BondingCurveTierBDatumSchema,
-  batchOrderToPlutus,
-  settlementDatum,
-} from './tier-a-schemas.js';
+import type { BondingCurveTierBDatumData } from './tier-a-schemas.js';
+import { BondingCurveTierBDatumSchema, batchOrderToPlutus, settlementDatum } from './tier-a-schemas.js';
 
 /**
- * `BatchTrades`' constructor index — DIFFERENT on the two tiers, because Cardano Launch
- * declares three redeemers the linear curve does not.
+ * `BatchTrades`' constructor index on the Cardano Launch curve.
  *
  * Taken by NAME from `redeemer-indices.ts`, whose table a test holds against
  * the compiled blueprint, never assumed from the order the `.ak` source reads
@@ -61,14 +55,14 @@ import {
  * whatever that one checks.
  */
 const REDEEMER_BATCH_TRADES: Record<BatchTier, number> = {
-  A: BONDING_CURVE_REDEEMER.BatchTrades,
   B: BONDING_CURVE_TIER_B_REDEEMER.BatchTrades,
 };
 
 /** `ApplyOrder`'s constructor index on `curve_order`. */
 const REDEEMER_APPLY_ORDER = CURVE_ORDER_REDEEMER.ApplyOrder;
 
-export type BatchTier = 'A' | 'B';
+/** The curve a batch fills: the Cardano Launch curve, the only one there is since the linear path retired. */
+export type BatchTier = 'B';
 
 export interface BatcherSubmitterConfig {
   blockfrostProjectId: string;
@@ -313,7 +307,7 @@ export function batchTransactionPlan(inputs: BatchTransactionInputs): {
     throw new Error('Nothing to batch: the plan filled no orders. An empty batch moves the curve for nothing.');
   }
 
-  const currentDatum = decodeCurve(tier, curveUtxo);
+  const currentDatum = decodeCurve(curveUtxo);
   const tokenUnit = toUnit(currentDatum.token_policy_id, currentDatum.token_asset_name);
 
   // Each fill names an order UTXO; that UTXO has to be one of the inputs.
@@ -376,7 +370,7 @@ export function batchTransactionPlan(inputs: BatchTransactionInputs): {
     orderScriptCbor,
     ...(orderReferenceScript ? { orderReferenceScript } : {}),
     continuing: {
-      datumCbor: encodeCurve(tier, nextCurveDatum(currentDatum, plan)),
+      datumCbor: encodeCurve(nextCurveDatum(currentDatum, plan)),
       assets: nextCurveAssets(curveUtxo, plan, tokenUnit),
     },
     payouts,
@@ -415,10 +409,7 @@ function nextCurveAssets(curveUtxo: UTxO, plan: BatchPlan, tokenUnit: string): A
   return next;
 }
 
-function nextCurveDatum(
-  current: BondingCurveDatumData | BondingCurveTierBDatumData,
-  plan: BatchPlan,
-): BondingCurveDatumData | BondingCurveTierBDatumData {
+function nextCurveDatum(current: BondingCurveTierBDatumData, plan: BatchPlan): BondingCurveTierBDatumData {
   const graduated = plan.next.tokens_sold === current.curve_supply;
   return {
     ...current,
@@ -428,20 +419,16 @@ function nextCurveDatum(
     platform_fees_accrued: plan.next.platform_fees_accrued,
     curve_state: graduated ? 'Graduated' : current.curve_state,
     cap_root: plan.next.cap_root,
-  } as BondingCurveDatumData | BondingCurveTierBDatumData;
+  };
 }
 
-function decodeCurve(tier: BatchTier, utxo: UTxO): BondingCurveDatumData | BondingCurveTierBDatumData {
+function decodeCurve(utxo: UTxO): BondingCurveTierBDatumData {
   if (!utxo.datum) throw new Error('The curve UTXO carries no inline datum.');
-  return tier === 'A'
-    ? Data.from<BondingCurveDatumData>(utxo.datum, BondingCurveDatumSchema)
-    : Data.from<BondingCurveTierBDatumData>(utxo.datum, BondingCurveTierBDatumSchema);
+  return Data.from<BondingCurveTierBDatumData>(utxo.datum, BondingCurveTierBDatumSchema);
 }
 
-function encodeCurve(tier: BatchTier, datum: BondingCurveDatumData | BondingCurveTierBDatumData): string {
-  return tier === 'A'
-    ? Data.to<BondingCurveDatumData>(datum as BondingCurveDatumData, BondingCurveDatumSchema)
-    : Data.to<BondingCurveTierBDatumData>(datum as BondingCurveTierBDatumData, BondingCurveTierBDatumSchema);
+function encodeCurve(datum: BondingCurveTierBDatumData): string {
+  return Data.to<BondingCurveTierBDatumData>(datum, BondingCurveTierBDatumSchema);
 }
 
 function min(a: bigint, b: bigint): bigint {

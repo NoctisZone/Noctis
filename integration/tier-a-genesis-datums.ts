@@ -1,9 +1,10 @@
 // ============================================================================
 // Noctis Zone — Cardano Preprod milestone, Phase 3
-// Genesis-datum encoder: BondingCurveDatum / VestingDatum / LpEscrowDatum
+// Genesis-datum encoder: a Cardano Launch's curve, vesting, LP escrow and the
+// rest of its genesis outputs
 // ============================================================================
-// Produces the 3 CBOR-encoded inline datums the linear curve mint+seed transaction
-// must attach to its 3 genesis outputs (bonding_curve/vesting/lp_escrow's
+// Produces the CBOR-encoded inline datums the mint+seed transaction must
+// attach to its genesis outputs (bonding_curve/vesting/lp_escrow's
 // fixed script addresses — see finding #1 in TIER_A_PREPROD_MILESTONE.md:
 // none of the 3 validators take constructor parameters, so every launch
 // shares ONE address per validator and is distinguished purely by its
@@ -18,7 +19,7 @@
 // Genesis field values below were derived by reading each validator's own
 // redeemer-handling logic directly (not assumed from CLAUDE.md prose, which
 // documents intent but not exact datum shape) — specifically:
-//   - bonding_curve.ak's mock_datum() + Graduate's lp_seeding_output_ok():
+//   - the curve's mock_datum() + Graduate's lp_seeding_output_ok():
 //     community_pub_key_hash starts "" (empty), cto_triggered/lp_seeded/
 //     staking_seeded start False, lp_escrow_credential/staking_pool_credential
 //     are the FIXED script addresses' own credentials (ScriptCredential),
@@ -37,8 +38,7 @@
 //     for a Cardano Launch the position is the venue pool's LQ token:
 //     lp_token_policy_id = the factory policy, lp_token_name = the LQ role
 //     tag + launch id, lp_token_amount = VENUE_INITIAL_LQ, all of which the
-//     factory checks at the pool mint. The retired linear path keeps the
-//     launch's own token identity with lp_reserve_tokens as the amount.
+//     factory checks at the pool mint.
 //
 // launch_id scheme (fresh decision, 2026-07-17, restated explicitly here
 // since it wasn't preserved verbatim across a context compaction earlier
@@ -93,8 +93,6 @@ import {
 } from './launch-allocation.js';
 import {
   assertValidCip68BaseName,
-  type BondingCurveDatumData,
-  BondingCurveDatumSchema,
   type BondingCurveTierBDatumData,
   BondingCurveTierBDatumSchema,
   buildCip68FungibleMetadata,
@@ -131,16 +129,11 @@ export const STAKING_UNSTAKE_LOCK_MAX_MS = 604_800_000;
 
 export interface BuildGenesisDatumsInput {
   network: 'preview' | 'preprod' | 'mainnet';
-  // 'A' (default) → bonding_curve.ak / BondingCurveDatum.
-  // 'B' → bonding_curve_tier_b.ak / BondingCurveTierBDatum. The ONLY genesis
-  // difference is the curve validator + the curve datum's purchase-tracking
-  // fields (Cardano Launch adds
-  // dv_allocation_root/dv_claimed/dv_settled — the DarkVeil-claim
-  // mechanism). Supply split is identical: DarkVeil claims draw from the SAME
-  // curve_supply (verified against bonding_curve_tier_b.ak's
-  // ClaimDarkVeilTokens — `dv_amount <= curve_supply - tokens_sold`), so there
-  // is NO separate DarkVeil token carve-out at genesis. vesting/lp_escrow are
-  // the shared validators, identical for both tiers.
+  // The Cardano Launch curve (bonding_curve_tier_b.ak), the only one there
+  // is; any other value is refused. DarkVeil claims draw from the SAME
+  // curve_supply (ClaimDarkVeilTokens — `dv_amount <= curve_supply -
+  // tokens_sold`), so there is NO separate DarkVeil token carve-out at
+  // genesis.
   tier?: 'B';
   /** DarkVeil allocation as a % of total supply — Cardano Launch only, 10-20,
    *  default DV_ALLOC_DEFAULT. Drawn from curve_supply rather than carved out
@@ -181,9 +174,14 @@ export interface BuildGenesisDatumsInput {
    *  really is 1,000,000,000 units rather than a scaled base amount. */
   tokenDecimals?: number;
 
-  /** Wall-clock time written into the metadata datum's last_updated_ts.
-   *  Defaults to now; overridable so a build is reproducible in tests. */
-  genesisTimestampMs?: number;
+  /**
+   * The moment of the mint, POSIX ms, from the caller's clock. The curve's
+   * Inactive phase (ExpireCurve's stall window counts from it) and the
+   * metadata's last update start here, and the staking pool opens here unless
+   * `mintedAtMs` says otherwise. Required: this builder reads no clock of its
+   * own, so a build is the same for the same input.
+   */
+  genesisTimestampMs: number;
 
   totalSupply?: number; // default 1_000_000_000 (CLAUDE.md TOTAL_SUPPLY)
   // There is no LP percentage to give. The LP reserve is SIZED from the raise
@@ -217,7 +215,7 @@ export interface BuildGenesisDatumsInput {
    * rehearsal run in a day while production keeps the full period.
    */
   stakingUnstakeLockMs?: number;
-  /** Overrides the pool's opening timestamp. Real POSIX ms; defaults to now. */
+  /** Overrides the pool's opening timestamp. Real POSIX ms; defaults to genesisTimestampMs. */
   mintedAtMs?: number;
 
   /**
@@ -365,6 +363,12 @@ export async function buildGenesisDatums(input: BuildGenesisDatumsInput) {
   if (tier !== 'B') {
     throw new Error(`tier must be "B" - the linear-curve path is retired (got "${String(input.tier)}")`);
   }
+  // Checked at run time for the same reason: the input arrives as JSON.
+  const genesisMs = input.genesisTimestampMs;
+  if (!Number.isSafeInteger(genesisMs) || genesisMs <= 0) {
+    throw new Error(`genesisTimestampMs must be the mint's time in POSIX ms, got ${String(genesisMs)}`);
+  }
+  const poolOpenedMs = input.mintedAtMs ?? genesisMs;
   const totalSupply = input.totalSupply ?? 1_000_000_000;
   if ((input as unknown as Record<string, unknown>).lpReservePct != null) {
     throw new Error(
@@ -375,10 +379,9 @@ export async function buildGenesisDatums(input: BuildGenesisDatumsInput) {
   // Taking nothing is the default; a creator raises it deliberately or not at
   // all. `??` rather than `||` matters here — 0 is a real, chosen value.
   const creatorAllocPct = input.creatorAllocPct ?? 0;
-  // The linear curve has no DarkVeil phase, so no reserve; Cardano Launch defaults to
-  // DV_ALLOC_DEFAULT and is creator-adjustable within DV_ALLOC_MIN/MAX.
-  const dvAllocPct = tier === 'B' ? (input.dvAllocPct ?? 15) : 0;
-  if (tier === 'B' && (dvAllocPct < 10 || dvAllocPct > 20)) {
+  // DV_ALLOC_DEFAULT unless the creator chose within DV_ALLOC_MIN/MAX.
+  const dvAllocPct = input.dvAllocPct ?? 15;
+  if (dvAllocPct < 10 || dvAllocPct > 20) {
     throw new Error(`dvAllocPct must be 10-20 (DV_ALLOC_MIN/DV_ALLOC_MAX), got ${dvAllocPct}`);
   }
 
@@ -387,24 +390,22 @@ export async function buildGenesisDatums(input: BuildGenesisDatumsInput) {
   // value is refused before it costs a transaction rather than after.
   const dvClaimWindowMs = input.dvClaimWindowMs ?? 86_400_000;
   const dvSettlementWindowMs = input.dvSettlementWindowMs ?? 1_800_000;
-  if (tier === 'B') {
-    if (dvClaimWindowMs < 600_000 || dvClaimWindowMs > 604_800_000) {
-      throw new Error(`dvClaimWindowMs must be 600000 (10 min) to 604800000 (7 days), got ${dvClaimWindowMs}`);
-    }
-    if (dvSettlementWindowMs < 60_000 || dvSettlementWindowMs > 86_400_000) {
-      throw new Error(`dvSettlementWindowMs must be 60000 (1 min) to 86400000 (24h), got ${dvSettlementWindowMs}`);
-    }
-    // Narrower than the chain's floor, and deliberately so. A registrant who
-    // misses the claim window forfeits their allocation, so a sub-hour window
-    // on a launch with real participants is a trap rather than a setting.
-    // Demos, where one operator places every claim, opt in by name.
-    if (dvClaimWindowMs < 3_600_000 && !input.allowShortDvWindows) {
-      throw new Error(
-        `dvClaimWindowMs of ${dvClaimWindowMs} is under an hour. A registrant who misses the claim ` +
-          'window forfeits their allocation. Pass allowShortDvWindows: true to confirm this is a demo ' +
-          'or test launch where the same operator places every claim.',
-      );
-    }
+  if (dvClaimWindowMs < 600_000 || dvClaimWindowMs > 604_800_000) {
+    throw new Error(`dvClaimWindowMs must be 600000 (10 min) to 604800000 (7 days), got ${dvClaimWindowMs}`);
+  }
+  if (dvSettlementWindowMs < 60_000 || dvSettlementWindowMs > 86_400_000) {
+    throw new Error(`dvSettlementWindowMs must be 60000 (1 min) to 86400000 (24h), got ${dvSettlementWindowMs}`);
+  }
+  // Narrower than the chain's floor, and deliberately so. A registrant who
+  // misses the claim window forfeits their allocation, so a sub-hour window
+  // on a launch with real participants is a trap rather than a setting.
+  // Demos, where one operator places every claim, opt in by name.
+  if (dvClaimWindowMs < 3_600_000 && !input.allowShortDvWindows) {
+    throw new Error(
+      `dvClaimWindowMs of ${dvClaimWindowMs} is under an hour. A registrant who misses the claim ` +
+        'window forfeits their allocation. Pass allowShortDvWindows: true to confirm this is a demo ' +
+        'or test launch where the same operator places every claim.',
+    );
   }
   const walletCapPct = input.walletCapPct ?? 5;
   const stakingEnabled = input.stakingEnabled ?? false;
@@ -579,8 +580,7 @@ export async function buildGenesisDatums(input: BuildGenesisDatumsInput) {
   const lpEscrowCredential = { ScriptCredential: [lpEscrowScriptHash] as [string] };
   const stakingPoolCredential = { ScriptCredential: [stakingPoolScriptHash] as [string] };
 
-  // Fields shared by both curve datums. The tier-specific purchase-tracking
-  // fields are added below. Data.to() reads fields by the SCHEMA's key order,
+  // The curve's fields, the DarkVeil-claim ones added below. Data.to() reads fields by the SCHEMA's key order,
   // not this object's — so key position here is irrelevant, only presence +
   // value matter (verified: the round-trip decode below matches the contract's
   // own field order exactly).
@@ -598,7 +598,7 @@ export async function buildGenesisDatums(input: BuildGenesisDatumsInput) {
     // its stall window from this field — so a zero here would read as
     // "expired since 1970" and let anyone cancel the launch before the
     // governor ever activated it.
-    phase_started_at: BigInt(input.genesisTimestampMs ?? Date.now()),
+    phase_started_at: BigInt(genesisMs),
     tokens_sold: 0n,
     // Who may batch this curve. Sits with the written fields at the front
     // because SetBatcherAllowlist rewrites it; see the validator's own field
@@ -632,40 +632,35 @@ export async function buildGenesisDatums(input: BuildGenesisDatumsInput) {
     cap_root: capBytesToHex(CAP_EMPTY_ROOT),
   };
 
-  const bondingCurveDatum: BondingCurveDatumData | BondingCurveTierBDatumData =
-    tier === 'B'
-      ? {
-          ...sharedCurveFields,
-          // Cardano Launch DarkVeil-claim fields. All start empty/false at
-          // dv_allocation_root is anchored later by AnchorDvAllocationRoot (with
-          // dv_settled → true), which ActivateCurve then requires.
-          dv_allocation_root: '',
-          // The DarkVeil share of curve_supply. There is no separate token
-          // carve-out — the reserve is enforced by the claim window, which is
-          // the only time claims are possible, so anything unclaimed when it
-          // closes is simply still sellable on the public curve.
-          dv_reserve_tokens: BigInt(dvReserveTokens),
-          // Both set by OpenDvClaim, once the registrant count is known.
-          dv_claim_opened_at: 0n,
-          claimed_bits: '',
-          dv_settled: false,
-          // The launch's own windows. Declared here, at genesis, so the terms
-          // a registrant is shown before registering are the terms they get —
-          // a value supplied later could be shortened by the one party who
-          // already knows who registered.
-          //
-          // The validator bounds these when OpenDvClaim starts the clock; the
-          // narrower refusal below is this builder's own, so a short window
-          // has to be asked for rather than arrived at.
-          dv_claim_window: BigInt(dvClaimWindowMs),
-          dv_settlement_window: BigInt(dvSettlementWindowMs),
-          pool_nft_policy: input.poolNftPolicyIdHex,
-        }
-      : {
-          ...sharedCurveFields,
-        };
+  const bondingCurveDatum: BondingCurveTierBDatumData = {
+    ...sharedCurveFields,
+    // Cardano Launch DarkVeil-claim fields. All start empty/false at
+    // dv_allocation_root is anchored later by AnchorDvAllocationRoot (with
+    // dv_settled → true), which ActivateCurve then requires.
+    dv_allocation_root: '',
+    // The DarkVeil share of curve_supply. There is no separate token
+    // carve-out — the reserve is enforced by the claim window, which is
+    // the only time claims are possible, so anything unclaimed when it
+    // closes is simply still sellable on the public curve.
+    dv_reserve_tokens: BigInt(dvReserveTokens),
+    // Both set by OpenDvClaim, once the registrant count is known.
+    dv_claim_opened_at: 0n,
+    claimed_bits: '',
+    dv_settled: false,
+    // The launch's own windows. Declared here, at genesis, so the terms
+    // a registrant is shown before registering are the terms they get —
+    // a value supplied later could be shortened by the one party who
+    // already knows who registered.
+    //
+    // The validator bounds these when OpenDvClaim starts the clock; the
+    // narrower refusal below is this builder's own, so a short window
+    // has to be asked for rather than arrived at.
+    dv_claim_window: BigInt(dvClaimWindowMs),
+    dv_settlement_window: BigInt(dvSettlementWindowMs),
+    pool_nft_policy: input.poolNftPolicyIdHex,
+  };
 
-  const bondingCurveSchema = tier === 'B' ? BondingCurveTierBDatumSchema : BondingCurveDatumSchema;
+  const bondingCurveSchema = BondingCurveTierBDatumSchema;
 
   const vestingDatum: VestingDatumData = {
     launch_id: launchIdHex,
@@ -698,12 +693,11 @@ export async function buildGenesisDatums(input: BuildGenesisDatumsInput) {
     multisig_signers: [input.governorPubKeyHashHex], // confirmed decision 2026-07-17: governor only, 1-of-1
     multisig_threshold: 1n,
     pending_dex_change: null,
-    // The position the seal must find. Cardano Launch: the venue pool's LQ
-    // token, minted by the factory at graduation. Linear path: the launch's
-    // own token, seeded as raw reserves.
-    lp_token_policy_id: tier === 'B' ? input.poolNftPolicyIdHex : input.tokenPolicyIdHex,
-    lp_token_name: tier === 'B' ? venueAssetName('lq', launchIdHex) : tokenAssetNameHex,
-    lp_token_amount: tier === 'B' ? VENUE_INITIAL_LQ : BigInt(lpReserveTokens),
+    // The position the seal must find: the venue pool's LQ token, minted by
+    // the factory at graduation.
+    lp_token_policy_id: input.poolNftPolicyIdHex,
+    lp_token_name: venueAssetName('lq', launchIdHex),
+    lp_token_amount: VENUE_INITIAL_LQ,
     cto_governance_credential: ctoGovernanceCredential,
     thread_nft_policy: threadNftPolicyId,
     last_migration_timestamp: 0n, // never migrated at genesis
@@ -774,7 +768,7 @@ export async function buildGenesisDatums(input: BuildGenesisDatumsInput) {
     // until then, and `Stake` refuses a pool with no budget precisely so this
     // opening state cannot be disturbed before the curve seeds it.
     unallocated: 0n,
-    last_update_ms: BigInt(input.mintedAtMs ?? Date.now()),
+    last_update_ms: BigInt(poolOpenedMs),
     exhausted_at: null,
     // Who the flat claim charge is paid to. The same key the curve pays its
     // own platform fees to, so the pool can charge without consulting it.
@@ -832,7 +826,7 @@ export async function buildGenesisDatums(input: BuildGenesisDatumsInput) {
       thread_nft_policy: threadNftPolicyId,
       // First revision. Every UpdateMetadata increments it.
       metadata_revision: 1n,
-      last_updated_ts: BigInt(input.genesisTimestampMs ?? Date.now()),
+      last_updated_ts: BigInt(genesisMs),
     },
   };
 
@@ -881,7 +875,7 @@ export async function buildGenesisDatums(input: BuildGenesisDatumsInput) {
   const minLovelace: Record<string, string | null> = {
     bondingCurve: minLovelaceFor(bondingCurveAddress, bondingCurveCbor, {
       [tokenUnit]: BigInt(curveSupply + lpReserveTokens + stakingReserveTokens),
-      [threadUnit(tier === 'B' ? 'bondingCurveTierB' : 'bondingCurve')]: 1n,
+      [threadUnit('bondingCurveTierB')]: 1n,
     }),
     vesting: minLovelaceFor(vestingAddress, vestingCbor, {
       [tokenUnit]: BigInt(creatorAllocTokens),

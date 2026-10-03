@@ -1,7 +1,6 @@
 // Tests for tier-b-curve-submitter.ts's LucidTierBCurveSubmitter — Cardano Launch's
-// public bonding curve. Structurally similar to
-// tier-a-curve-submitter.test.ts's coverage, but this file focuses on the
-// REAL differences this module's own header documents: QUADRATIC pricing
+// public bonding curve. It focuses on what this module's own header
+// documents: QUADRATIC pricing
 // (not linear), FLOOR-rounded fees (not exact-equality), the shared
 // balance from a DarkVeil claim), SellTokens' deliberately-non-adjacent
 // constructor index 13, and the two-directional ClaimCreatorFees value

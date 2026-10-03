@@ -40,11 +40,15 @@ import {
   parseJsonStdin,
   readStdin,
   requireFieldsStrict,
+  requireTimestampMs,
 } from './cli-io.js';
 
 declare const __dirname: string;
 
-interface Input extends Omit<BuildGenesisDatumsInput, 'tokenPolicyIdHex'> {
+interface Input extends Omit<BuildGenesisDatumsInput, 'tokenPolicyIdHex' | 'genesisTimestampMs'> {
+  /** The mint's time, POSIX ms. Defaults to this process's clock, read once. */
+  genesisTimestampMs?: number;
+
   blockfrostProjectId: string;
   blockfrostUrl: string;
 
@@ -65,7 +69,7 @@ interface Input extends Omit<BuildGenesisDatumsInput, 'tokenPolicyIdHex'> {
  * NFT, since the launch's own policy already gives it a unique per-launch token.
  */
 const OUTPUT_ROLES: Record<string, ThreadNftRole> = {
-  bondingCurve: 'bondingCurve',
+  bondingCurve: 'bondingCurveTierB',
   vesting: 'vesting',
   lpEscrow: 'lpEscrow',
   ctoGovernance: 'ctoGovernance',
@@ -114,18 +118,25 @@ async function main() {
   );
 
   // 2. Genesis datums, against that policy id.
-  const genesis = await buildGenesisDatums({ ...input, tokenPolicyIdHex: policyId });
+  // The one place this mint reads the clock: every genesis stamp comes from it.
+  const genesis = await buildGenesisDatums({
+    ...input,
+    tokenPolicyIdHex: policyId,
+    genesisTimestampMs:
+      input.genesisTimestampMs === undefined
+        ? Date.now()
+        : requireTimestampMs(input.genesisTimestampMs, 'genesisTimestampMs'),
+  });
 
   // 3. The outputs, in a fixed order so a caller reading the built transaction
   //    can match each one to its validator. The curve holds the sellable supply
   //    plus the LP and staking reserves; vesting holds the creator allocation;
   //    the rest hold min-ADA and their datum only.
-  const curveRole: ThreadNftRole = genesis.tier === 'B' ? 'bondingCurveTierB' : 'bondingCurve';
   const outputs: GenesisOutput[] = [
     {
       address: genesis.addresses.bondingCurve,
       datumCbor: genesis.datums.bondingCurve,
-      role: curveRole,
+      role: OUTPUT_ROLES.bondingCurve,
       lovelace: BigInt(genesis.minLovelace.bondingCurve as string),
       launchTokens: BigInt(
         genesis.supplySplit.curveSupply +

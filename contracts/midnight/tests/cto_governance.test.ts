@@ -2345,3 +2345,29 @@ describe('cto_governance.compact — the second vote on a taken-over creator all
     expect(after.ctoState).toBe(CtoState.CTOTriggered);
   });
 });
+
+describe('cto_governance.compact — read circuits return what the ledger holds', () => {
+  it('reports the takeover state, the creator activity and the claimable flag', () => {
+    for (const claimable of [true, false]) {
+      const { contract, ctx } = deploy(CREATOR_VOTE_CAP, DEFAULT_MIN_VOTER_COUNT, claimable);
+      const state = ledger(ctx.currentQueryContext.state);
+      expect(contract.circuits.getCtoState(ctx).result).toBe(CtoState.PreCTO);
+      expect(contract.circuits.getCtoState(ctx).result).toBe(state.ctoState);
+      expect(contract.circuits.getLastCreatorActivity(ctx).result).toBe(state.lastCreatorActivity);
+      expect(contract.circuits.getHasClaimableBalance(ctx).result).toBe(claimable);
+      expect(contract.circuits.getHasClaimableBalance(ctx).result).toBe(state.hasClaimableBalance);
+      expect(contract.circuits.getBreakGlassChallenge(ctx).result).toEqual(state.breakGlassChallenge);
+    }
+  });
+
+  it('reports a filed proposal by its id, as filed, and refuses an id it does not hold', () => {
+    const { contract, ctx, proposalId, createTime } = deployAndCreateProposal([{ fill: VOTER_FILL, balance: 1000n }]);
+    const proposal = contract.circuits.getProposal(ctx, proposalId).result;
+    expect(proposal.proposalType).toBe(ProposalType.SilenceLockTrigger);
+    expect(proposal.state).toBe(ProposalState.Active);
+    expect(proposal.descriptionHash).toEqual(fakeBytes32(40));
+    expect(proposal.proposedCommunityWallet).toEqual(fakeBytes32(90));
+    expect(proposal.startTimestamp).toBe(createTime);
+    expect(() => contract.circuits.getProposal(ctx, fakeBytes32(123))).toThrow('Proposal not found');
+  });
+});

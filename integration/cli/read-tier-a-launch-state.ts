@@ -57,7 +57,7 @@ import {
 // dance needed the way the ESM-format CLI bundles in this directory do.
 declare const __dirname: string;
 
-// Datum schemas (BondingCurveDatumSchema/VestingDatumSchema/LpEscrowDatumSchema)
+// Datum schemas (BondingCurveTierBDatumSchema/VestingDatumSchema/LpEscrowDatumSchema)
 // and loadValidator() now live in ../tier-a-schemas.ts, shared with the
 // genesis-datum encoder (Phase 3) so the two can never drift apart — see
 // that file's own header for the full rationale. Extracted 2026-07-17.
@@ -72,15 +72,9 @@ interface ReadLaunchStateInput {
   blockfrostProjectId: string;
   blockfrostUrl: string;
   /**
-   * Which curve validator to look at. Cardano Launch's curve is a DIFFERENT script at
-   * a different address, so a Cardano Launch launch read against the linear curve's address
-   * simply finds nothing and reports `bondingCurve: null` — which reads as "no
-   * curve exists" rather than "looked in the wrong place". Vesting and LP
-   * escrow need no tier because those two validators are shared.
-   *
-   * Optional, defaulting to 'A', so existing the linear curve callers are unchanged.
-   * Same field and same values as read-tier-a-trade-history.ts, which has been
-   * tier-aware all along — this reader is the one that was left behind.
+   * The Cardano Launch curve, the only one there is; absent means the same,
+   * and any other value is refused below rather than read against a curve
+   * that no longer exists.
    */
   tier?: 'B';
 }
@@ -100,9 +94,9 @@ async function main() {
   if (tier !== 'B') {
     throw new Error(`tier must be "B" - the linear-curve path is retired, got ${JSON.stringify(input.tier)}`);
   }
-  // The datum has to travel with the address: decoding a Cardano Launch curve against
-  // The linear curve's schema fails the Data.from and is skipped as "not our UTxO",
-  // producing the same silent null the wrong address does.
+  // The datum schema travels with the address: a curve decoded against the
+  // wrong schema fails Data.from and is skipped as "not our UTxO", the same
+  // silent null a wrong address gives.
   const bondingCurveValidator = loadValidator(blueprint, 'bonding_curve_tier_b.bonding_curve_tier_b.spend');
   const bondingCurveSchema = BondingCurveTierBDatumSchema;
   const vestingValidator = loadValidator(blueprint, 'vesting.vesting.spend');

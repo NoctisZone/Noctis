@@ -206,8 +206,8 @@ async function main() {
     // governor witness (matches NoctisMidnightClient's own documented
     // default, since no user-side circuit is being called here).
     const client = new NoctisMidnightClient({ bytes: governorSecret });
-    // Empty/zero placeholders for the user-witness triple
-    // (merkleProof/buyNonce/registrationNonce) — connectEligibilityGate
+    // Empty/zero placeholders for the user witnesses
+    // (merkleProof/buyNonce) — connectEligibilityGate
     // requires concrete values for every declared witness even though
     // updateAllowlistRoot never reads them.
     await client.connectEligibilityGate(providers, input.contractAddress, [], new Uint8Array(32));

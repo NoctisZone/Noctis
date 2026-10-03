@@ -364,3 +364,27 @@ describe('creator_escrow.compact — a dissolved CTO leaves a claimable escrow',
     expect(ledger(rSecond.context.currentQueryContext.state).claimedAmount).toBe(4_000n);
   });
 });
+
+describe('creator_escrow.compact — read circuits return what the ledger holds', () => {
+  it('reports the escrow state and the last claim time, before and after graduation closes it', () => {
+    const fresh = deploy();
+    expect(fresh.contract.circuits.getEscrowInfo(fresh.ctx).result).toBe(EscrowState.Active);
+
+    const { contract, ctx } = deployAndClose(); // closed at t=500
+    const state = ledger(ctx.currentQueryContext.state);
+    expect(contract.circuits.getEscrowInfo(ctx).result).toBe(EscrowState.Closed);
+    expect(contract.circuits.getEscrowInfo(ctx).result).toBe(state.escrowState);
+    expect(contract.circuits.getLastClaimTimestamp(ctx).result).toBe(500n);
+    expect(contract.circuits.getLastClaimTimestamp(ctx).result).toBe(state.lastClaimTimestamp);
+  });
+
+  it('reports the fees a takeover routes to the community accumulator', () => {
+    const { contract, contractAddress, ctx } = deployAndClose();
+    expect(contract.circuits.getPostCtoFees(ctx).result).toBe(0n);
+    const rTrigger = contract.circuits.triggerCTO(ctx, fakeBytes32(211), fakeBytes32(4));
+    const rDeposit = contract.circuits.depositFees(nextContext(contractAddress, rTrigger.context), 2000n);
+    const after = nextContext(contractAddress, rDeposit.context);
+    expect(contract.circuits.getPostCtoFees(after).result).toBe(2000n);
+    expect(contract.circuits.getPostCtoFees(after).result).toBe(ledger(after.currentQueryContext.state).postCtoFees);
+  });
+});

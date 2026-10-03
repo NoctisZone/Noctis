@@ -46,8 +46,8 @@ function fromHex(hex: string): Uint8Array {
   return new Uint8Array(Buffer.from(hex, 'hex'));
 }
 
-/** Same conversion tier-a-curve-submitter.ts's activateCurve() already
- *  proved on real Preprod — reused verbatim rather than re-derived. */
+/** Same conversion tier-b-curve-submitter.ts's activateCurve() uses, proved
+ *  on real Preprod — reused verbatim rather than re-derived. */
 function extendedHexToBech32PrivateKey(extendedHex: string): string {
   const bytes = fromHex(extendedHex);
   if (bytes.length !== 64) {

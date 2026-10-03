@@ -1,22 +1,15 @@
 // ============================================================================
 // Noctis Zone — Cardano Preprod milestone, Phase 6
-// Real Cardano transaction submitter: vesting.ak's ClaimVested and
-// bonding_curve.ak's ClaimCreatorFees — the two Stream A/creator-facing
-// claims (CLAUDE.md: "Bonding Curve Escrow" fees vs. token vesting, never
-// conflated).
+// Real Cardano transaction submitter for vesting.ak's ClaimVested: a
+// creator claiming their vested allocation. Shared by every Cardano launch,
+// since vesting is one validator for all of them. A curve's creator fees are
+// claimed from the curve's own submitter (tier-b-curve-submitter.ts).
 // ============================================================================
-// Both creator-wallet-signed. ClaimVested REQUIRES this — fix (2026-07-18)
-// enforces the identity requirement on ClaimVested (must be
-// check at all (any third party could redirect the creator's vested
-// tokens to themselves) and NO check that the continuing output at
-// vesting's own address retained the still-locked balance (the creator
-// themselves could otherwise drain 100% on day one, defeating the whole
-// vesting schedule). Both gaps closed by requiring
-// list.has(self.extra_signatories, datum.creator_pub_key_hash) plus a new
-// vesting_tokens_retained() relative-decrease check, mirroring
-// bonding_curve.ak's own graduation_funds_left_curve pattern exactly.
-// ClaimCreatorFees already required a real signature
-// (active_fee_recipient) — unaffected by that fix.
+// Creator-wallet-signed. ClaimVested requires the creator's signature
+// (list.has(self.extra_signatories, datum.creator_pub_key_hash)), and the
+// continuing output at vesting's own address must keep every token not yet
+// claimable (vesting_tokens_retained()), so a claim pays only the creator
+// and only what has vested.
 //
 // ClaimVested's current_timestamp IS bound to real chain time: the validator
 // requires interval.contains(validity_range, current_timestamp) and a range
@@ -25,17 +18,12 @@
 // and this builder has to set the range itself — a transaction without one
 // is refused by the script rather than merely being imprecise.
 //
-// Two signing shapes per action, same split as tier-a-curve-submitter.ts's
-// ActivateCurve/BuyTokens:
-//   - claimVested()/claimCreatorFees(): CLI-driven verification path (this
-//     session's Phase 6 proof), signs via a decrypted creator extended key
-//     (CML.PrivateKey.from_extended_bytes() + sign.withPrivateKey()).
-//   - claimVestedWithWallet()/claimCreatorFeesWithWallet(): the real
-//     production path (the dashboard widget,
-//     integration/widget/tier-a-dashboard-widget-entry.ts), signs via
-//     lucid.selectWallet.fromAPI(walletApi) + sign.withWallet() — the same
-//     real, installed WalletApi type and fromAPI()/withWallet() pattern
-//     tier-a-curve-submitter.ts's buyTokensWithWallet() already proved out.
+// Two signing shapes:
+//   - claimVested(): the command-line path, signing with a decrypted creator
+//     extended key (CML.PrivateKey.from_extended_bytes() +
+//     sign.withPrivateKey()).
+//   - claimVestedWithWallet(): a browser wallet, through
+//     lucid.selectWallet.fromAPI(walletApi) + sign.withWallet().
 // ============================================================================
 
 import type {
@@ -49,26 +37,8 @@ import type {
 } from '@lucid-evolution/lucid';
 import { Blockfrost, CML, Constr, Data, Lucid, validatorToAddress } from '@lucid-evolution/lucid';
 import { type LaunchScopedDatum, selectLaunchUtxo } from './launch-utxo-lookup.js';
-import { BONDING_CURVE_REDEEMER, VESTING_REDEEMER } from './redeemer-indices.js';
-import {
-  type BondingCurveDatumData,
-  BondingCurveDatumSchema,
-  settlementDatum,
-  type ThreadNftRole,
-  type VestingDatumData,
-  VestingDatumSchema,
-} from './tier-a-schemas.js';
-
-/**
- * The platform's charge on a creator-fee claim, as `bonding_curve.ak` names it
- * (`platform_charge_lovelace`) and enforces it.
- *
- * Declared here rather than imported from the quadratic curve's submitter:
- * each validator names its own charge in the house style, and this class
- * submits to the linear one. The figures match, and a test pins them together
- * so they cannot drift apart silently.
- */
-export const PLATFORM_CHARGE_LOVELACE = 5_000_000n;
+import { VESTING_REDEEMER } from './redeemer-indices.js';
+import { settlementDatum, type ThreadNftRole, type VestingDatumData, VestingDatumSchema } from './tier-a-schemas.js';
 
 function fromHex(hex: string): Uint8Array {
   return new Uint8Array(Buffer.from(hex, 'hex'));
@@ -99,20 +69,6 @@ export interface TierAClaimsConfig {
   blockfrostUrl: string;
   network: LucidNetwork;
   vestingScriptCbor: string;
-  /**
-   * Optional, and only the creator-fee paths need it.
-   *
-   * Vesting is shared across launch types; the bonding curve is not, and the
-   * curve address derived from this is read by `readCurveDatum` and the
-   * `claimCreatorFees` arms alone — `claimVested` never touches it. Requiring
-   * it made every vesting caller name a curve validator it does not use, which
-   * is how the vesting CLIs came to load a validator belonging to a launch
-   * path they do not serve.
-   *
-   * Derived lazily below, so omitting it costs nothing until a path that
-   * genuinely needs a curve asks for one, and then says so by name.
-   */
-  bondingCurveScriptCbor?: string;
   launchIdHex: string;
   /**
    * The launch's thread-NFT policy id, hex, from the platform's own record of
@@ -127,38 +83,6 @@ export class TierAClaimsSubmitter {
   private lucidPromise: Promise<LucidEvolution>;
   private vestingValidator: SpendingValidator;
   private vestingAddress: string;
-  private bondingCurveCache?: { validator: SpendingValidator; address: string };
-
-  /**
-   * The curve validator and its address, derived on first use.
-   *
-   * A caller that never reads curve state never supplies one, and never gets
-   * an error about one. A caller that does and did not is told exactly which
-   * field is missing, rather than failing later against an address derived
-   * from nothing.
-   */
-  private get bondingCurve(): { validator: SpendingValidator; address: string } {
-    if (!this.bondingCurveCache) {
-      const script = this.config.bondingCurveScriptCbor;
-      if (!script) {
-        throw new Error(
-          'This operation reads bonding-curve state, but no bondingCurveScriptCbor was given. ' +
-            'Supply the compiled curve validator for this launch.',
-        );
-      }
-      const validator: SpendingValidator = { type: 'PlutusV3', script };
-      this.bondingCurveCache = { validator, address: validatorToAddress(this.config.network, validator) };
-    }
-    return this.bondingCurveCache;
-  }
-
-  private get bondingCurveValidator(): SpendingValidator {
-    return this.bondingCurve.validator;
-  }
-
-  private get bondingCurveAddress(): string {
-    return this.bondingCurve.address;
-  }
 
   constructor(private config: TierAClaimsConfig) {
     this.vestingValidator = {
@@ -186,24 +110,10 @@ export class TierAClaimsSubmitter {
     return selectLaunchUtxo<T>(utxos, address, this.config.launchIdHex, role, schema, this.config.threadNftPolicyId);
   }
 
-  /** Live on-chain vesting state — dashboard widget calls this directly
-   *  (no server round-trip), same "readCurveDatum()" convention as
-   *  tier-a-curve-submitter.ts. */
+  /** Live on-chain vesting state, read straight from the chain. */
   async readVestingDatum(): Promise<VestingDatumData> {
     const lucid = await this.lucidPromise;
     const { datum } = await this.findUtxo<VestingDatumData>(lucid, this.vestingAddress, 'vesting', VestingDatumSchema);
-    return datum;
-  }
-
-  /** Live on-chain bonding_curve state (creator_fees_accrued etc.). */
-  async readCurveDatum(): Promise<BondingCurveDatumData> {
-    const lucid = await this.lucidPromise;
-    const { datum } = await this.findUtxo<BondingCurveDatumData>(
-      lucid,
-      this.bondingCurveAddress,
-      'bondingCurve',
-      BondingCurveDatumSchema,
-    );
     return datum;
   }
 
@@ -251,7 +161,7 @@ export class TierAClaimsSubmitter {
 
     // The validator caps the range at max_validity_range_width (600,000ms).
     // A 240s buffer each way leaves room for build/sign/submit latency while
-    // staying well inside that cap — the same window tier-a-curve-submitter
+    // staying well inside that cap — the same window the curve's submitter
     // uses for its own chain-time-bound redeemers.
     const validFrom = currentTimestampMs - 240_000;
     const validTo = currentTimestampMs + 240_000;
@@ -308,125 +218,6 @@ export class TierAClaimsSubmitter {
     const creatorAddress = await lucid.wallet().address();
 
     const tx = await this.claimVestedCore(lucid, creatorAddress, claimAmount, currentTimestampMs);
-    const signed = await tx.sign.withWallet().complete();
-    const txHash = await signed.submit();
-    return { txHash };
-  }
-
-  /**
-   * Fix (2026-07-19): bonding_curve.ak's ClaimCreatorFees previously had
-   * NO real value-conservation check at all — this submitter's own
-   * pre-fix version mirrored that gap client-side too (it paid `amount` to
-   * the creator but never actually shrank the curve's real lovelace
-   * balance in `newCurveAssets`, since `curveUtxo.assets.lovelace - amount`
-   * was computed but the ORIGINAL code's redeemer only carried `amount` —
-   * this rewrite now also collects the real, on-chain-enforced
-   * `platformClaimFeeLovelace` (paid INTO the curve, opposite direction),
-   * matching the fixed contract's new two-field redeemer exactly.
-   *
-   * @param platformClaimFeeLovelace  What the claim pays the platform.
-   *   Defaults to `PLATFORM_CHARGE_LOVELACE`, which is the figure the contract
-   *   names, so a caller has nothing to compute and no oracle is in the path.
-   *   A lower value is refused here rather than on chain, so a caller holding
-   *   a stale figure fails legibly instead of as an opaque script error.
-   */
-  private async claimCreatorFeesCore(
-    lucid: LucidEvolution,
-    creatorAddress: string,
-    amount: bigint,
-    platformClaimFeeLovelace: bigint,
-  ): Promise<TxSignBuilder> {
-    const { utxo: curveUtxo, datum: curveDatum } = await this.findUtxo<BondingCurveDatumData>(
-      lucid,
-      this.bondingCurveAddress,
-      'bondingCurve',
-      BondingCurveDatumSchema,
-    );
-
-    if (curveDatum.cto_triggered) {
-      throw new Error('CTO has been triggered — creator fees now route to the community wallet, not this flow.');
-    }
-    if (amount > curveDatum.creator_fees_accrued) {
-      throw new Error(
-        `Requested amount (${amount}) exceeds accrued creator fees (${curveDatum.creator_fees_accrued}).`,
-      );
-    }
-    if (platformClaimFeeLovelace < PLATFORM_CHARGE_LOVELACE) {
-      throw new Error(
-        `platformClaimFeeLovelace (${platformClaimFeeLovelace}) is below the charge the contract ` +
-          `enforces (${PLATFORM_CHARGE_LOVELACE}) — the transaction would fail on-chain.`,
-      );
-    }
-
-    // No split: the platform runs one wallet, so the whole claim fee accrues
-    // to the single platform line.
-    const newCurveDatum: BondingCurveDatumData = {
-      ...curveDatum,
-      creator_fees_accrued: curveDatum.creator_fees_accrued - amount,
-      platform_fees_accrued: curveDatum.platform_fees_accrued + platformClaimFeeLovelace,
-    };
-    const newCurveAssets = {
-      ...curveUtxo.assets,
-      lovelace: (curveUtxo.assets.lovelace ?? 0n) - amount + platformClaimFeeLovelace,
-    };
-
-    // BondingCurveRedeemer: ClaimCreatorFees is variant 2 of 13 (freshly
-    // regenerated plutus.json, 2026-07-19) — now takes two
-    // fields (amount, platform_claim_fee), same constructor index as
-    // before since SellTokens was added AFTER ClaimOpsFees in the type
-    // declaration, not before ClaimCreatorFees.
-    const claimFeesRedeemer = new Constr(BONDING_CURVE_REDEEMER.ClaimCreatorFees, [amount, platformClaimFeeLovelace]);
-
-    return lucid
-      .newTx()
-      .collectFrom([curveUtxo], Data.to(claimFeesRedeemer))
-      .attach.SpendingValidator(this.bondingCurveValidator)
-      .pay.ToContract(
-        this.bondingCurveAddress,
-        {
-          kind: 'inline',
-          value: Data.to<BondingCurveDatumData>(newCurveDatum, BondingCurveDatumSchema),
-        },
-        newCurveAssets,
-      )
-      .pay.ToAddressWithData(
-        creatorAddress,
-        { kind: 'inline', value: settlementDatum(curveUtxo) },
-        { lovelace: amount },
-      )
-      .addSigner(creatorAddress)
-      .complete();
-  }
-
-  /** CLI-driven verification path — see file header. */
-  async claimCreatorFees(
-    creatorPrivateKeyExtendedHex: string,
-    creatorAddress: string,
-    amount: bigint,
-    platformClaimFeeLovelace: bigint,
-  ): Promise<{ txHash: string }> {
-    const lucid = await this.lucidPromise;
-    const bech32Key = extendedHexToBech32PrivateKey(creatorPrivateKeyExtendedHex);
-    const creatorUtxos = await lucid.utxosAt(creatorAddress);
-    lucid.selectWallet.fromAddress(creatorAddress, creatorUtxos);
-
-    const tx = await this.claimCreatorFeesCore(lucid, creatorAddress, amount, platformClaimFeeLovelace);
-    const signed = await tx.sign.withPrivateKey(bech32Key).complete();
-    const txHash = await signed.submit();
-    return { txHash };
-  }
-
-  /** Real production path — see file header. */
-  async claimCreatorFeesWithWallet(
-    walletApi: WalletApi,
-    amount: bigint,
-    platformClaimFeeLovelace: bigint,
-  ): Promise<{ txHash: string }> {
-    const lucid = await this.lucidPromise;
-    lucid.selectWallet.fromAPI(walletApi);
-    const creatorAddress = await lucid.wallet().address();
-
-    const tx = await this.claimCreatorFeesCore(lucid, creatorAddress, amount, platformClaimFeeLovelace);
     const signed = await tx.sign.withWallet().complete();
     const txHash = await signed.submit();
     return { txHash };

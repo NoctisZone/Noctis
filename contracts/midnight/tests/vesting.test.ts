@@ -337,3 +337,35 @@ describe('vesting.compact — the creator allocation is bounded by the launch it
     expect(() => deploy(TOKEN_ALLOCATION, 0n)).toThrow('Total supply must be positive');
   });
 });
+
+describe('vesting.compact — read circuits return what the ledger holds', () => {
+  const read = (contract: ReturnType<typeof deploy>['contract'], ctx: ReturnType<typeof deploy>['ctx']) => ({
+    state: contract.circuits.getVestingState(ctx).result,
+    claimed: contract.circuits.getClaimedTokens(ctx).result,
+    wallet: contract.circuits.getCommunityTreasuryWallet(ctx).result,
+    ledger: ledger(ctx.currentQueryContext.state),
+  });
+
+  it('reports the schedule state and the tokens claimed, before and after a claim', () => {
+    const { contract, contractAddress, ctx } = deployAndStart();
+    const before = read(contract, ctx);
+    expect(before.state).toBe(VestingState.Vesting);
+    expect(before.state).toBe(before.ledger.vestingState);
+    expect(before.claimed).toBe(0n);
+
+    const r = claimVestedAt(contract, contractAddress, ctx, TOKEN_ALLOCATION, NOW + Number(VEST_SECONDS));
+    const after = read(contract, nextContext(contractAddress, r.context));
+    expect(after.claimed).toBe(TOKEN_ALLOCATION);
+    expect(after.claimed).toBe(after.ledger.claimedTokens);
+    expect(after.state).toBe(after.ledger.vestingState);
+  });
+
+  it('reports the community wallet a takeover records, and the frozen state', () => {
+    const { contract, contractAddress, ctx } = deployAndStart();
+    const r = contract.circuits.triggerCTO(ctx, fakeBytes32(218), fakeBytes32(4));
+    const after = read(contract, nextContext(contractAddress, r.context));
+    expect(after.wallet).toEqual(fakeBytes32(4));
+    expect(after.wallet).toEqual(after.ledger.communityTreasuryWallet);
+    expect(after.state).toBe(VestingState.CTOFrozen);
+  });
+});

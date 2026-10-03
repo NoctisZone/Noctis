@@ -1,19 +1,18 @@
 // ============================================================================
-// Noctis Zone — the linear curve shared Lucid Evolution Data schemas
+// Noctis Zone — shared Lucid Evolution Data schemas
 // ============================================================================
-// Single source of truth for bonding_curve/vesting/lp_escrow's real datum
-// shapes, shared by read-tier-a-launch-state.ts (Phase 2, decode) and
-// build-tier-a-genesis-datums.ts (Phase 3, encode) — extracted here
+// Single source of truth for the curve's, vesting's, lp_escrow's and the other
+// launch validators' real datum shapes, shared by read-tier-a-launch-state.ts
+// (decode) and build-tier-a-genesis-datums.ts (encode) — extracted here
 // 2026-07-17 specifically to avoid the two ever drifting apart, the same
 // class of bug found for real once already in this project (a stale
 // plutus.json producing a wrong-shaped transaction).
 //
 // Every field name/order/constructor-index mirrors contracts/cardano/
-// plutus.json's real definitions as of 2026-07-17 (bonding_curve/
-// BondingCurveDatum, vesting/VestingDatum, noctis/lp_escrow_datum/LpEscrowDatum + their
-// *State enums) — not .ak source comments, which can drift. Re-verify
-// against a freshly-regenerated plutus.json if any of the 3 .ak files
-// change after this date.
+// plutus.json's real definitions (bonding_curve_tier_b/BondingCurveTierBDatum,
+// vesting/VestingDatum, noctis/lp_escrow_datum/LpEscrowDatum + their *State
+// enums) — not .ak source comments, which can drift. Re-verify against a
+// freshly-regenerated plutus.json whenever one of those .ak files changes.
 //
 // Credential fields (lp_escrow_credential, staking_pool_credential, and
 // lp_escrow's dex_whitelist/multisig entries) use Lucid Evolution's own
@@ -26,18 +25,10 @@
 
 import { Constr, CredentialSchema, Data } from '@lucid-evolution/lucid';
 
-export const CurveStateSchema = Data.Enum([
-  Data.Literal('Inactive'),
-  Data.Literal('Active'),
-  Data.Literal('Graduated'),
-  Data.Literal('Cancelled'),
-]);
-
-/// Cardano Launch's CurveState is a DIFFERENT on-chain type from the linear curve's, and no
-/// longer the same shape: it carries the DarkVeil claim window. `DvClaim` is
+/// The curve's CurveState carries the DarkVeil claim window. `DvClaim` is
 /// declared last on-chain precisely so `Active`/`Graduated`/`Cancelled` keep
 /// their indices, so this must list it last too — the order here IS the
-/// encoding. Do not collapse the two schemas back into one.
+/// encoding.
 export const CurveStateTierBSchema = Data.Enum([
   Data.Literal('Inactive'),
   Data.Literal('Active'),
@@ -46,60 +37,9 @@ export const CurveStateTierBSchema = Data.Enum([
   Data.Literal('DvClaim'),
 ]);
 
-export const BondingCurveDatumShape = Data.Object({
-  curve_state: CurveStateSchema,
-  // One platform wallet: a single accrual, claimed once.
-  platform_fees_accrued: Data.Integer(),
-  creator_fees_accrued: Data.Integer(),
-  total_raised: Data.Integer(),
-  tokens_sold: Data.Integer(),
-  /** The keys allowed to apply a batch against this curve — checked by the
-   *  batch arm alongside the transaction's real signatures, so naming a key in
-   *  the redeemer is no longer enough on its own. Rewritten only by
-   *  SetBatcherAllowlist, which is why it sits with the written fields at the
-   *  front rather than with the read-only ones at the back. */
-  batcher_allowlist: Data.Array(Data.Bytes()),
-  // The cumulative wallet cap, as one root over `key -> tokens taken from this
-  // curve`. Genesis writes CAP_EMPTY_ROOT (see cap-accumulator-tree.ts); every
-  // trade rewrites it. Appended last on both tiers because a datum is
-  // positional.
-  cap_root: Data.Bytes(),
-  community_pub_key_hash: Data.Bytes(),
-  cto_triggered: Data.Boolean(),
-  phase_started_at: Data.Integer(),
-  lp_seeded: Data.Boolean(),
-  staking_seeded: Data.Boolean(),
-  launch_id: Data.Bytes(),
-  creator_pub_key_hash: Data.Bytes(),
-  governor_pub_key_hash: Data.Bytes(),
-  base_price: Data.Integer(),
-  max_price: Data.Integer(),
-  curve_supply: Data.Integer(),
-  wallet_cap: Data.Integer(),
-  token_policy_id: Data.Bytes(),
-  token_asset_name: Data.Bytes(),
-  lp_escrow_credential: CredentialSchema,
-  lp_reserve_tokens: Data.Integer(),
-  staking_enabled: Data.Boolean(),
-  staking_pool_credential: CredentialSchema,
-  staking_reserve_tokens: Data.Integer(),
-  /** The runway the creator commits to at launch creation. With the reserve it
-   *  fixes the pool's emission rate for life, and the curve pins that rate on
-   *  chain at graduation — so a wrong value here cannot be corrected later. */
-  staking_duration_days: Data.Integer(),
-  // Fix (2026-07-23): added to the on-chain datum after this
-  // schema was first written. thread_nft_policy is a PolicyId (bytes).
-  cto_governance_credential: CredentialSchema,
-  thread_nft_policy: Data.Bytes(),
-});
-export type BondingCurveDatumData = Data.Static<typeof BondingCurveDatumShape>;
-export const BondingCurveDatumSchema = BondingCurveDatumShape as unknown as BondingCurveDatumData;
-
-// Cardano Launch's bonding_curve_tier_b.ak datum is a genuinely different shape
-// from the linear curve's above (adds
-// dv_allocation_root/dv_claimed for the DarkVeil-claim mechanism) —
-// verified directly against BondingCurveTierBDatum's real field order
-// before writing this, not assumed from the linear curve's shape.
+// Cardano Launch's bonding_curve_tier_b.ak datum, with the DarkVeil-claim
+// fields — verified directly against BondingCurveTierBDatum's real field
+// order.
 export const BondingCurveTierBDatumShape = Data.Object({
   curve_state: CurveStateTierBSchema,
   // One platform wallet: a single accrual, claimed once.
@@ -113,9 +53,9 @@ export const BondingCurveTierBDatumShape = Data.Object({
    *  SetBatcherAllowlist, which is why it sits with the written fields at the
    *  front rather than with the read-only ones at the back. */
   batcher_allowlist: Data.Array(Data.Bytes()),
-  // Same field, same tree, same position as the linear curve's — one accumulator
-  // definition serves both curves. On Cardano Launch it additionally spans the
-  // DarkVeil claim window, so a claim and a public buy draw on one 5%.
+  // The cumulative wallet cap (cap-accumulator-tree.ts). It spans the DarkVeil
+  // claim window as well as the public curve, so a claim and a public buy draw
+  // on one 5%.
   cap_root: Data.Bytes(),
   // Was `dv_claimed`, a growing list of every claimant's key hash. Now one
   // bit per allocation leaf, sized once at OpenDvClaim and emptied by

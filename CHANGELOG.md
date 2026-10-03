@@ -8,6 +8,10 @@ Notable changes to the Noctis Zone, by release. Internal development history pre
 
 ### Added
 
+- **Property tests for the curve and fee arithmetic**, over generated curves and amounts: a range costs the
+  same however it is split, rounding favours the curve, a round trip never profits, and the fee slices and
+  the raise's share never exceed the value they divide. The Midnight contracts' getters that had no test
+  now have one, each checked against the public ledger after a state change.
 - **Previewing a vote to pair a frozen allocation into the pool.** Before anyone files a vote to pair a taken-over creator's tokens into the launch's pool, the proposal form shows what the ADA it names would do at the pool's price now: the tokens it buys, how many of the frozen allocation go in and how many stay in vesting, the liquidity minted into the LP escrow, and, when the ADA buys more than is frozen, the price the pool rises to. It reads the same outputs and runs the same arithmetic as the disposition itself, which now shares one function with it, and builds or signs nothing.
 - **DEX votes from the browser.** A vote to move a pool's locked LP to another DEX, or to change the DEX whitelist, names the DEX by its 28-byte pool script hash. The ballot carries it in its 32-byte field the way it carries a wallet's key hash, and the relayer reads it back as the script credential the Cardano record keeps, refusing a field that does not hold one. With that, the proposal form offers every vote type.
 - **Reading a launch's takeover votes without a wallet.** The governance widget reads each listed governance contract through the site's public indexer, for the CTO Governance page's list of open and recent votes. A contract that cannot be read is reported on its own and does not stop the rest.
@@ -22,6 +26,9 @@ Notable changes to the Noctis Zone, by release. Internal development history pre
 
 ### Changed
 
+- **The genesis datum builder reads no clock of its own.** The mint's time comes from its caller, which
+  reads the clock once at the command-line boundary, and a build without one is refused rather than
+  stamped with zero.
 - **A curve sell pays its own fee.** A sell gives back the share of its range's value that the curve's raise holds, 98.5% or what a buy of that range banked, and its 1.5% fee comes out of that share. The seller receives about 97% of the range's curve value, and selling can never draw down what graduation seeds the pool with, so the pool opens at no less than the price the LP reserve was sized for. A round trip costs 1.5% on each leg. The batch planner quotes sells the same way. This moves the curve's script hash.
 - **A vote on what becomes of a taken-over creator's tokens.** After a takeover freezes a creator's allocation, a second vote, no sooner than the ballot cooldown allows, sends all of it to one destination:
   - into the launch's pool, paired with ADA the community wallet supplies at the pool's own ratio, with the LP escrow's lock restarting;
@@ -252,6 +259,12 @@ Notable changes to the Noctis Zone, by release. Internal development history pre
 
 ### Removed
 
+- The linear curve's remaining off-chain code: its transaction submitter, datum schema and redeemer table,
+  and the branches that still decoded it in the batcher, the trade-history reader, the genesis builder and
+  the allocation planner. The claim and start-vesting submitters keep only their halves on the shared
+  vesting validator.
+- A registration nonce nothing read any more, from the Midnight Launch contract's witnesses and the
+  browser's derived private state.
 - The linear-curve launch path's two browser widgets: the live-curve buy widget
   and the post-graduation creator dashboard. The path is retired: no launch is
   created or shown on it, and its validator leaves the build with the next

@@ -6,17 +6,27 @@
 // import time cannot be imported, and bundling one that does produces two
 // mains racing for the same stdin.
 //
-// Input: single JSON object on stdin. Output: single JSON object on stdout,
-// or { error }.
+// Input: single JSON object on stdin; `genesisTimestampMs` defaults to this
+// process's clock, read once. Output: single JSON object on stdout, or
+// { error }.
 // ============================================================================
 
 import { type BuildGenesisDatumsInput, buildGenesisDatums } from '../tier-a-genesis-datums.js';
-import { parseJsonStdin, readStdin } from './cli-io.js';
+import { parseJsonStdin, readStdin, requireTimestampMs } from './cli-io.js';
 
 async function main() {
   const raw = await readStdin();
-  const input = parseJsonStdin<BuildGenesisDatumsInput>(raw);
-  process.stdout.write(JSON.stringify(await buildGenesisDatums(input)));
+  const input = parseJsonStdin<Omit<BuildGenesisDatumsInput, 'genesisTimestampMs'> & { genesisTimestampMs?: number }>(
+    raw,
+  );
+  const genesis = await buildGenesisDatums({
+    ...input,
+    genesisTimestampMs:
+      input.genesisTimestampMs === undefined
+        ? Date.now()
+        : requireTimestampMs(input.genesisTimestampMs, 'genesisTimestampMs'),
+  });
+  process.stdout.write(JSON.stringify(genesis));
 }
 
 main().catch((err) => {

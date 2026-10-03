@@ -118,14 +118,15 @@ export function creatorVestingRequirement(creatorPercent: bigint): VestingRequir
   return { required: true, floorDays: band.floorDays, maxDays: VESTING_MAX_DAYS };
 }
 
-export type Tier = 'A' | 'B' | 'C';
+/** A Cardano Launch ('B') or a Midnight Launch ('C'); both have a DarkVeil phase. */
+export type Tier = 'B' | 'C';
 
 export interface LaunchAllocationRequest {
   totalSupply: bigint;
   tier: Tier;
   /** Whole percent, 0 to CREATOR_ALLOC_MAX_PCT. */
   creatorPercent: bigint;
-  /** Whole percent within the DarkVeil band. Must be absent on tier A, which has no DarkVeil phase. */
+  /** Whole percent within the DarkVeil band. */
   darkVeilPercent?: bigint;
   /** The staking pool is per-launch optional; enabling it carves out a fixed share. */
   stakingEnabled: boolean;
@@ -292,12 +293,6 @@ export function sizeLpReserve(
 }
 
 function resolveDarkVeilPercent(tier: Tier, requested: bigint | undefined): bigint {
-  if (tier === 'A') {
-    if (requested !== undefined && requested !== 0n) {
-      throw new Error(`the linear curve has no DarkVeil phase, so it cannot allocate ${requested}% to one`);
-    }
-    return 0n;
-  }
   if (requested === undefined) {
     throw new Error(`Tier ${tier} has a DarkVeil phase and must allocate to it`);
   }

@@ -18,9 +18,8 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { BONDING_CURVE_REDEEMER, BONDING_CURVE_TIER_B_REDEEMER } from '../redeemer-indices.js';
+import { BONDING_CURVE_TIER_B_REDEEMER } from '../redeemer-indices.js';
 import {
-  BONDING_CURVE_ACTIONS,
   BONDING_CURVE_TIER_B_ACTIONS,
   CURVE_FIELDS,
   VESTING_ACTIONS,
@@ -38,7 +37,7 @@ const titles = (definition: string) => new Set((blueprint.definitions[definition
 describe('field lists name constructors that exist', () => {
   // A typo here costs nothing at compile time and decodes the action's fields
   // as `field0`, `field1` — losing exactly the names a consumer reads.
-  it('every curve field list belongs to a real constructor on one tier or the other', () => {
+  it('every curve field list belongs to a real constructor on the curve', () => {
     const real = new Set([...titles('bonding_curve_tier_b/BondingCurveTierBRedeemer')]);
     for (const name of Object.keys(CURVE_FIELDS)) expect(real, `${name} is not a curve redeemer`).toContain(name);
   });
@@ -52,21 +51,16 @@ describe('field lists name constructors that exist', () => {
 describe('the drift that actually happened', () => {
   // Written as literals on purpose. The point is to notice a SHIFT, and a test
   // that reads the same table the code reads cannot.
-  it('decodes the linear curve index 4 as a sell, not an ops fee claim', () => {
-    expect(BONDING_CURVE_ACTIONS[4]?.[0]).toBe('SellTokens');
-    expect(BONDING_CURVE_ACTIONS[7]?.[0]).toBe('ClaimBuyback');
-    expect(BONDING_CURVE_ACTIONS[12]?.[0]).toBe('BatchTrades');
-  });
-
-  it('does not reuse the linear curve’s numbering for Cardano Launch, which differs from index 2 on', () => {
+  it('decodes the curve’s claim and sell at their own indices, which no other numbering shares', () => {
     expect(BONDING_CURVE_TIER_B_ACTIONS[2]?.[0]).toBe('ClaimDarkVeilTokens');
     expect(BONDING_CURVE_TIER_B_ACTIONS[13]?.[0]).toBe('SellTokens');
-    // The same name, two different numbers — which is the whole hazard.
-    expect(BONDING_CURVE_TIER_B_REDEEMER.SellTokens).not.toBe(BONDING_CURVE_REDEEMER.SellTokens);
   });
 
-  it('gives a trade its named fields on both tiers', () => {
-    expect(BONDING_CURVE_ACTIONS[BONDING_CURVE_REDEEMER.BuyTokens]?.[1]).toEqual(['token_amount', 'buyer_key_hash']);
+  it('gives a trade its named fields', () => {
+    expect(BONDING_CURVE_TIER_B_ACTIONS[BONDING_CURVE_TIER_B_REDEEMER.BuyTokens]?.[1]).toEqual([
+      'token_amount',
+      'buyer_key_hash',
+    ]);
     expect(BONDING_CURVE_TIER_B_ACTIONS[BONDING_CURVE_TIER_B_REDEEMER.SellTokens]?.[1]).toEqual([
       'token_amount',
       'seller_key_hash',
@@ -74,9 +68,6 @@ describe('the drift that actually happened', () => {
   });
 
   it('covers every constructor each validator declares', () => {
-    // The linear table is kept for the shared modules that still carry it, but
-    // its validator has left the blueprint, so coverage is asserted for the
-    // curve that is still compiled.
     expect(Object.keys(BONDING_CURVE_TIER_B_ACTIONS)).toHaveLength(
       titles('bonding_curve_tier_b/BondingCurveTierBRedeemer').size,
     );

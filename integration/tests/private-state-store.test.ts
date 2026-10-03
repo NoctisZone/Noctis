@@ -69,8 +69,6 @@ describe('private-state-store.ts — deterministic identity derivation (rework, 
     const identity = await store.getOrCreateIdentity();
     expect(identity.userSecretKey.bytes).toBeInstanceOf(Uint8Array);
     expect(identity.userSecretKey.bytes.length).toBe(32);
-    expect(identity.registrationNonce).toBeInstanceOf(Uint8Array);
-    expect(identity.registrationNonce.length).toBe(32);
   });
 
   it('returns the SAME identity on a second call, without re-prompting the wallet (cache hit)', async () => {
@@ -78,7 +76,6 @@ describe('private-state-store.ts — deterministic identity derivation (rework, 
     const first = await store.getOrCreateIdentity();
     const second = await store.getOrCreateIdentity();
     expect(second.userSecretKey.bytes).toEqual(first.userSecretKey.bytes);
-    expect(second.registrationNonce).toEqual(first.registrationNonce);
     expect(getMasterSignature).toHaveBeenCalledTimes(1); // not called again on cache hit
   });
 
@@ -95,7 +92,6 @@ describe('private-state-store.ts — deterministic identity derivation (rework, 
     const recovered = await recoveredStore.getOrCreateIdentity();
 
     expect(recovered.userSecretKey.bytes).toEqual(original.userSecretKey.bytes);
-    expect(recovered.registrationNonce).toEqual(original.registrationNonce);
   });
 
   it('different wallets (different signatures) derive different identities', async () => {
@@ -148,7 +144,7 @@ describe('private-state-store.ts — deterministic buy nonce derivation', () => 
     const { store } = makeStore('wallet-addr-1', WALLET_A_SIGNATURE);
     const identity = await store.getOrCreateIdentity();
     const nonce = await store.getOrCreateBuyNonce(LAUNCH_A);
-    expect(nonce).not.toEqual(identity.registrationNonce);
+    expect(nonce).not.toEqual(identity.userSecretKey.bytes);
   });
 
   it('deriving an identity AND a buy nonce in one session only prompts the wallet ONCE (in-memory signature reuse)', async () => {
@@ -196,7 +192,6 @@ describe('private-state-store.ts — optional secondary backup flow (export/impo
     const restored = await storeB.getOrCreateIdentity();
 
     expect(restored.userSecretKey.bytes).toEqual(original.userSecretKey.bytes);
-    expect(restored.registrationNonce).toEqual(original.registrationNonce);
   });
 
   it('round-trips buy nonces through export/import too, not just identity', async () => {

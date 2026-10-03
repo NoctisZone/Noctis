@@ -30,7 +30,7 @@ function fromHex(hex: string): Uint8Array {
   return new Uint8Array(Buffer.from(hex, 'hex'));
 }
 
-/** Same conversion as tier-a-curve-submitter.ts's extendedHexToBech32PrivateKey — see that file's own comment for the full reasoning (WeldPress_CardanoWalletPHP's raw 64-byte kL||kR format -> Lucid's bech32 ed25519e_sk...). */
+/** Same conversion as tier-b-curve-submitter.ts's extendedHexToBech32PrivateKey — see its ActivateCurve note for the reasoning (WeldPress_CardanoWalletPHP's raw 64-byte kL||kR format -> Lucid's bech32 ed25519e_sk...). */
 function extendedHexToBech32PrivateKey(extendedHex: string): string {
   const bytes = fromHex(extendedHex);
   if (bytes.length !== 64) {

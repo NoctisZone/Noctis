@@ -100,9 +100,7 @@ async function main() {
     blockfrostUrl: input.blockfrostUrl,
     bondingCurveAddress: curveAddress,
     launchIdHex: input.launchIdHex,
-    threadNftPolicyId: input.threadNftPolicyId,
-    tier: input.tier,
-  } as never);
+  });
 
   const since =
     input.since && /^[0-9a-f]{64}$/.test(input.since.headTxHash) && Array.isArray(input.since.capState)

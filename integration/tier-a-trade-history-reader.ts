@@ -2,10 +2,9 @@
 // Noctis Zone — Cardano Trade History Reader
 // ============================================================================
 // Reconstructs a launch's full real transaction history — every action ever
-// taken against its bonding_curve (and vesting) script UTxOs — by walking
-// the UTXO chain backward from the CURRENT UTxO to the genesis mint output.
-// bonding_curve.ak's (and bonding_curve_tier_b.ak's) own design makes this
-// possible: each script address is a single-threaded state machine — every
+// taken against its curve's script UTxO — by walking the UTXO chain
+// backward from the CURRENT UTxO to the genesis mint output.
+// bonding_curve_tier_b.ak's own design makes this possible: each script address is a single-threaded state machine — every
 // action spends exactly the one existing UTxO for a launch and creates
 // exactly one continuing one (until a terminal action like Migrate), so the
 // full history is a simple linked list, walkable via each transaction's own
@@ -33,14 +32,8 @@
 import { Constr, Data, getAddressDetails } from '@lucid-evolution/lucid';
 import type { CurveParams, CurveShape } from './curve-pricing.js';
 import { buyCost, sellProceeds } from './curve-pricing.js';
-import { BONDING_CURVE_REDEEMER, BONDING_CURVE_TIER_B_REDEEMER, VESTING_REDEEMER } from './redeemer-indices.js';
-import {
-  type BondingCurveDatumData,
-  BondingCurveDatumSchema,
-  BondingCurveTierBDatumSchema,
-  type VestingDatumData,
-  VestingDatumSchema,
-} from './tier-a-schemas.js';
+import { BONDING_CURVE_TIER_B_REDEEMER, VESTING_REDEEMER } from './redeemer-indices.js';
+import { BondingCurveTierBDatumSchema } from './tier-a-schemas.js';
 
 export interface TradeEvent {
   txHash: string;
@@ -386,7 +379,6 @@ function actionsFor(
   return out;
 }
 
-export const BONDING_CURVE_ACTIONS = actionsFor(BONDING_CURVE_REDEEMER, CURVE_FIELDS);
 export const BONDING_CURVE_TIER_B_ACTIONS = actionsFor(BONDING_CURVE_TIER_B_REDEEMER, CURVE_FIELDS);
 export const VESTING_ACTIONS = actionsFor(VESTING_REDEEMER, VESTING_FIELDS);
 
@@ -529,81 +521,13 @@ async function walkHistory(
 export interface TierATradeHistoryConfig {
   blockfrostProjectId: string;
   blockfrostUrl: string;
+  /** The Cardano Launch curve's address (bonding_curve_tier_b.ak). */
   bondingCurveAddress: string;
-  /** the linear curve only (vesting.ak) — omit for Cardano Launch (bonding_curve_tier_b.ak
-   *  has no vesting counterpart; both launch types vesting lives on Midnight). Only
-   *  getTradeHistory() (both contracts) needs this; getCurveTradeHistory()
-   *  (the trade/chart consumer) never touches it. */
-  vestingAddress?: string;
   launchIdHex: string;
-  /** Cardano Launch's bonding_curve_tier_b.ak has a different datum shape AND a
-   *  different redeemer constructor order than the linear curve's bonding_curve.ak
-   *  (see BONDING_CURVE_TIER_B_ACTIONS's own header note) — only affects
-   *  getCurveTradeHistory(); getTradeHistory() (the linear curve + vesting) is
-   *  unaffected. Defaults to 'A' for backward compatibility with existing
-   *  callers. */
-  tier?: 'A' | 'B';
 }
 
 export class TierATradeHistoryReader {
   constructor(private config: TierATradeHistoryConfig) {}
-
-  async getTradeHistory(): Promise<TradeEvent[]> {
-    const bfConfig = {
-      blockfrostProjectId: this.config.blockfrostProjectId,
-      blockfrostUrl: this.config.blockfrostUrl,
-    };
-
-    const [curveUtxos, vestingUtxos] = await Promise.all([
-      bf<
-        Array<{
-          tx_hash: string;
-          output_index: number;
-          inline_datum: string | null;
-        }>
-      >(bfConfig, `/addresses/${this.config.bondingCurveAddress}/utxos`),
-      this.config.vestingAddress
-        ? bf<
-            Array<{
-              tx_hash: string;
-              output_index: number;
-              inline_datum: string | null;
-            }>
-          >(bfConfig, `/addresses/${this.config.vestingAddress}/utxos`)
-        : Promise.resolve([]),
-    ]);
-
-    const findOwn = (
-      utxos: Array<{ tx_hash: string; inline_datum: string | null }>,
-      schema: unknown,
-    ): string | null => {
-      for (const u of utxos) {
-        if (!u.inline_datum) continue;
-        try {
-          const decoded = Data.from<{ launch_id: string }>(u.inline_datum, schema as never);
-          if (decoded.launch_id === this.config.launchIdHex) return u.tx_hash;
-        } catch {}
-      }
-      return null;
-    };
-
-    const curveStartTx = findOwn(curveUtxos, BondingCurveDatumSchema);
-    const vestingStartTx = findOwn(vestingUtxos, VestingDatumSchema);
-
-    const [curveEvents, vestingEvents] = await Promise.all([
-      curveStartTx
-        ? walkHistory(bfConfig, this.config.bondingCurveAddress, curveStartTx, 'bonding_curve', BONDING_CURVE_ACTIONS, {
-            shape: 'linear',
-            datumSchema: BondingCurveDatumSchema,
-          })
-        : Promise.resolve([]),
-      vestingStartTx && this.config.vestingAddress
-        ? walkHistory(bfConfig, this.config.vestingAddress, vestingStartTx, 'vesting', VESTING_ACTIONS, undefined)
-        : Promise.resolve([]),
-    ]);
-
-    return [...curveEvents, ...vestingEvents].sort((a, b) => a.blockTime - b.blockTime);
-  }
 
   /**
    * Bonding-curve-only history, for trade/chart consumers (BuyTokens/
@@ -618,9 +542,7 @@ export class TierATradeHistoryReader {
       blockfrostProjectId: this.config.blockfrostProjectId,
       blockfrostUrl: this.config.blockfrostUrl,
     };
-    const isTierB = this.config.tier === 'B';
-    const datumSchema = isTierB ? BondingCurveTierBDatumSchema : BondingCurveDatumSchema;
-    const actionTable = isTierB ? BONDING_CURVE_TIER_B_ACTIONS : BONDING_CURVE_ACTIONS;
+    const datumSchema = BondingCurveTierBDatumSchema;
 
     const curveUtxos = await bf<Array<{ tx_hash: string; inline_datum: string | null }>>(
       bfConfig,
@@ -646,12 +568,10 @@ export class TierATradeHistoryReader {
       this.config.bondingCurveAddress,
       curveStartTx,
       'bonding_curve',
-      actionTable,
-      { shape: isTierB ? 'quadratic' : 'linear', datumSchema },
+      BONDING_CURVE_TIER_B_ACTIONS,
+      { shape: 'quadratic', datumSchema },
       stopAtTxHash,
     );
     return events.sort((a, b) => a.blockTime - b.blockTime);
   }
 }
-
-export type { BondingCurveDatumData, VestingDatumData };

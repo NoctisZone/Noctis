@@ -274,6 +274,7 @@ describe('cto-vote-relayer.ts — the ballot window crosses from seconds to mill
       maxPrice: 75,
       creatorAllocPct: 5,
       vestDays: 180,
+      genesisTimestampMs: 1_785_000_000_000,
     });
     const record = Data.from(genesis.datums.ctoGovernance, CtoGovernanceDatumSchema);
     const { params } = buildVoteResultFromProposal(

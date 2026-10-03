@@ -29,11 +29,10 @@ describe('planLaunchAllocations — the split is a partition', () => {
   it('every allocation set it produces sums to exactly the supply, with the DarkVeil reserve inside the curve', () => {
     // The property that matters, over the whole space of permitted inputs
     // rather than one example of it.
-    for (const tier of ['A', 'B', 'C'] as const) {
+    for (const tier of ['B', 'C'] as const) {
       for (let creator = 0n; creator <= CREATOR_ALLOC_MAX_PCT; creator++) {
         for (const staking of [false, true]) {
-          const darkVeilPercents = tier === 'A' ? [undefined] : [10n, 15n, DV_ALLOC_MAX_PCT];
-          for (const darkVeilPercent of darkVeilPercents) {
+          for (const darkVeilPercent of [10n, 15n, DV_ALLOC_MAX_PCT]) {
             const plan = planLaunchAllocations({
               totalSupply: SUPPLY,
               tier,
@@ -184,8 +183,9 @@ describe('planLaunchAllocations — refuses what a contract could not', () => {
     expect(() =>
       planLaunchAllocations({
         totalSupply: SUPPLY,
-        tier: 'A',
+        tier: 'B',
         creatorPercent: CREATOR_ALLOC_MAX_PCT + 1n,
+        darkVeilPercent: 15n,
         stakingEnabled: false,
         ...PRICES,
       }),
@@ -207,19 +207,6 @@ describe('planLaunchAllocations — refuses what a contract could not', () => {
     }
   });
 
-  it('rejects a DarkVeil allocation on the tier that has no DarkVeil phase', () => {
-    expect(() =>
-      planLaunchAllocations({
-        totalSupply: SUPPLY,
-        tier: 'A',
-        creatorPercent: 5n,
-        darkVeilPercent: 15n,
-        stakingEnabled: false,
-        ...PRICES,
-      }),
-    ).toThrow(/the linear curve has no DarkVeil phase/);
-  });
-
   it('rejects a DarkVeil tier that allocates nothing to the phase', () => {
     expect(() =>
       planLaunchAllocations({ totalSupply: SUPPLY, tier: 'C', creatorPercent: 5n, stakingEnabled: false, ...PRICES }),
@@ -227,7 +214,7 @@ describe('planLaunchAllocations — refuses what a contract could not', () => {
   });
 
   it('rejects a supply above the platform cap, and a non-positive one', () => {
-    const base = { tier: 'A' as const, creatorPercent: 5n, stakingEnabled: false, ...PRICES };
+    const base = { tier: 'B' as const, creatorPercent: 5n, darkVeilPercent: 15n, stakingEnabled: false, ...PRICES };
     expect(() => planLaunchAllocations({ ...base, totalSupply: TOTAL_SUPPLY_CAP + 1n })).toThrow(
       /exceeds the platform cap/,
     );

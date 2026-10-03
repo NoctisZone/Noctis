@@ -480,9 +480,9 @@ export class CardanoCtoAnchorSubmitter {
 
     // AnchorVoteResult requires validity_range_is_narrow (cto_governance.ak,
     // max width 600_000ms) on top of interval.contains(range,
-    // anchor_timestamp) — same pattern as tier-a-curve-submitter.ts's
-    // ActivateCurve, but bounded much tighter to satisfy the narrow-range
-    // check. anchor_timestamp is expected to be the real submission time,
+    // anchor_timestamp) — the same pattern as the curve's ActivateCurve
+    // (tier-b-curve-submitter.ts), bounded much tighter to satisfy the
+    // narrow-range check. anchor_timestamp is expected to be the real submission time,
     // so a small symmetric margin around it is sufficient.
     const lpEscrowUtxo = await findLpEscrowUtxo(
       lucid,

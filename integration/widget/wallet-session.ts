@@ -103,7 +103,7 @@ export async function startDarkVeilSession(
   // identity/nonce derivation (private-state-store.ts) — one wallet prompt
   // covers both, since each hashes the same signature under its own
   // distinct domain string (see private-state-store.ts's SK_DOMAIN/
-  // REG_NONCE_DOMAIN/BUY_NONCE_DOMAIN vs. password-derivation.ts's own
+  // BUY_NONCE_DOMAIN vs. password-derivation.ts's own
   // internal salted-retry domain).
   // Caches the in-flight PROMISE, not the resolved value — two concurrent
   // callers (e.g. checkAllowlistStatus and checkMyEligibility firing near-
