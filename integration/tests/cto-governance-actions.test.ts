@@ -3,17 +3,16 @@ import { ProposalType } from '../../contracts/midnight/compiled/cto_governance/c
 import {
   ATTESTOR_ACTIONS,
   CTO_ACTIONS,
-  descriptionHashOf,
   IDENTITY_ACTIONS,
   identityFor,
   isCtoAction,
   OFFLINE_ACTIONS,
   OPEN_ACTIONS,
   resolveCurrentTimestamp,
-  resolveProposalArgs,
   TIMESTAMP_FUTURE_TOLERANCE_SECONDS,
   TIMESTAMP_STALE_LIMIT_SECONDS,
 } from '../cto-governance-actions.js';
+import { descriptionHashOf, resolveProposalArgs } from '../cto-proposal-args.js';
 import { cardanoKeyHashFromBallotField } from '../cto-wallet-field.js';
 
 const hex = (byte: number) => byte.toString(16).padStart(2, '0').repeat(32);

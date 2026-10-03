@@ -139,12 +139,18 @@ async function main() {
           launchIdHex: input.launchIdHex,
           maxVoterCap: args.maxVoterCap.toString(),
           minVoterCount: args.minVoterCount.toString(),
+          // Sealed in the contract and absent from its public state: recorded
+          // on the launch so the proposal form can name both before a proof.
+          breakGlassBondMin: args.breakGlassBondMin.toString(),
+          graduationTimestamp: args.graduationTimestamp.toString(),
           ...(record.pendingCircuits ? { pendingCircuits: record.pendingCircuits } : {}),
           note: record.pendingCircuits
-            ? 'Record contractAddress against the launch as cto_governance_contract_address. This contract does ' +
+            ? 'Record contractAddress against the launch as cto_governance_contract_address, breakGlassBondMin as ' +
+              'cto_proposal_bond_min and graduationTimestamp as cto_graduation_timestamp. This contract does ' +
               'not yet answer the circuits in pendingCircuits: deliver their verifier keys with ' +
               'deliver-deferred-circuits (contract: "cto_governance") using the same governor secret and launch id.'
-            : 'Record contractAddress against the launch as cto_governance_contract_address.',
+            : 'Record contractAddress against the launch as cto_governance_contract_address, breakGlassBondMin as ' +
+              'cto_proposal_bond_min and graduationTimestamp as cto_graduation_timestamp.',
         }),
       ),
     );

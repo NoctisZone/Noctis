@@ -1,5 +1,7 @@
+import { bytesToHex } from '@noble/hashes/utils.js';
 import { describe, expect, it } from 'vitest';
-import { keyHashOf, royaltyKeyAmong } from '../cto-royalty-key.js';
+import { coseKeyPublicKey, keyHashOf, royaltyKeyAmong } from '../cto-royalty-key.js';
+import { readCoseKeyX } from '../venue-royalty-withdraw.js';
 
 // Vectors from Python's hashlib.blake2b(key, digest_size=28), an implementation
 // independent of the one under test.
@@ -33,5 +35,30 @@ describe('royaltyKeyAmong', () => {
   it('passes over anything that is not a 32-byte key', () => {
     expect(royaltyKeyAmong([KEY_A.slice(2), `${KEY_A}00`, 'zz'.repeat(32), HASH_A], HASH_A)).toBeUndefined();
     expect(royaltyKeyAmong(['zz'.repeat(32), KEY_A], HASH_A)).toBe(KEY_A);
+  });
+});
+
+describe('coseKeyPublicKey', () => {
+  const X = '3b'.repeat(16) + 'c7'.repeat(16);
+  const STANDARD = `a4010103272006215820${X}`; // {1: 1, 3: -8, -1: 6, -2: h'…'}
+  const REORDERED = `a4215820${X}010103272006`;
+  const TEXT_LABEL = `a563666f6f01010103272006215820${X}`; // a text label first: {"foo": 1, …}
+  const INDEFINITE = `bf010103272006215820${X}ff`;
+
+  it.each([
+    ['the usual order', STANDARD],
+    ['another order', REORDERED],
+    ['a text label', TEXT_LABEL],
+    ['an indefinite map', INDEFINITE],
+  ])('reads the key from %s, as the Cardano library does', (_label, hex) => {
+    expect(coseKeyPublicKey(hex)).toBe(X);
+    expect(bytesToHex(readCoseKeyX(hex))).toBe(X);
+  });
+
+  it('refuses a key without a 32-byte public key', () => {
+    expect(() => coseKeyPublicKey('a3010103272006')).toThrow(/no public key/);
+    expect(() => coseKeyPublicKey(`a121581f${'00'.repeat(31)}`)).toThrow(/32-byte/);
+    expect(() => coseKeyPublicKey('8101')).toThrow(/COSE_Key map/);
+    expect(() => coseKeyPublicKey('a1215820aa')).toThrow(/ends early/);
   });
 });

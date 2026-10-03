@@ -16,6 +16,18 @@
 import type { ContractProviders } from '@midnight-ntwrk/midnight-js-contracts';
 import { FetchZkConfigProvider } from '@midnight-ntwrk/midnight-js-fetch-zk-config-provider';
 import { httpClientProofProvider } from '@midnight-ntwrk/midnight-js-http-client-proof-provider';
+import {
+  BROWSER_PROPOSAL_TYPES,
+  descriptionHashOf,
+  type ProposalDescription,
+  type ProposalOpening,
+  type ProposalTypeName,
+  proposalDescriptionText,
+  proposalOpening,
+  readProposalDescription,
+  resolveProposalArgs,
+} from '../cto-proposal-args.js';
+import { coseKeyPublicKey, keyHashOf } from '../cto-royalty-key.js';
 import type { CtoGovernanceSnapshot } from '../midnight-public-state.js';
 import {
   connectMidnightWallet,
@@ -28,6 +40,8 @@ import {
   bytesToHex,
   type CastVoteResult,
   castVoteFromBrowser,
+  claimProposalBondFromBrowser,
+  createProposalFromBrowser,
   executeOnMidnightFromBrowser,
   fetchMyLeaf,
   finalizeFromBrowser,
@@ -35,10 +49,12 @@ import {
   hexToBytes,
   type MyLeaf,
   type NotInSnapshot,
+  type ProposeResult,
   type RegisterVoterResult,
   readBallotForCardano,
   readGovernance,
   registerVoter,
+  sweepProposalBondFromBrowser,
 } from './cto-vote-flow.js';
 import { buildMidnightWalletBridge } from './midnight-wallet-bridge.js';
 
@@ -182,6 +198,166 @@ async function ballotForCardano(contractAddress: string, proposalIdHex: string) 
   return readBallotForCardano(providers.publicDataProvider, contractAddress, proposalIdHex);
 }
 
+// ----------------------------------------------------------------------------
+// Proposing
+// ----------------------------------------------------------------------------
+
+/**
+ * The connected Cardano wallet's payment public key and its key hash, read from
+ * the signature the session already holds. A takeover vote names a community
+ * wallet by its key hash and carries its public key, so the takeover can later
+ * install it as the pool's royalty key without that wallet present.
+ */
+async function myWalletKey(): Promise<{ pubKeyHex: string; keyHashHex: string }> {
+  const { key } = await requireSession().getMasterSignatureMaterial();
+  const pubKeyHex = coseKeyPublicKey(key);
+  return { pubKeyHex, keyHashHex: keyHashOf(pubKeyHex) };
+}
+
+/** The key hash a public key signs under: what a takeover vote names its community wallet by. */
+function walletKeyHash(pubKeyHex: string): string {
+  const key = pubKeyHex.trim().toLowerCase();
+  if (!/^[0-9a-f]{64}$/.test(key)) throw new Error('A public key is 64 hex characters.');
+  return keyHashOf(key);
+}
+
+type Opening = { open: true } | { open: false; reason: string; fromSeconds?: string };
+
+/**
+ * Whether each vote the page offers may be filed now, and if not, why and from
+ * when. The contract's own gates, read against its own state; it still decides.
+ */
+async function openings(contractAddress: string, graduationSeconds?: string): Promise<Record<string, Opening>> {
+  const g = await governance(contractAddress);
+  const state = {
+    ctoState: g.ctoState,
+    hasClaimableBalance: g.hasClaimableBalance,
+    lastCreatorActivity: BigInt(g.lastCreatorActivity),
+    lastProposalEnd: BigInt(g.lastProposalEnd),
+    activeProposalCount: BigInt(g.activeProposalCount),
+    lastSnapshotTimestamp: BigInt(g.lastSnapshotTimestamp),
+    balanceSnapshotRootHex: g.balanceSnapshotRootHex,
+  };
+  const now = BigInt(Math.floor(Date.now() / 1000));
+  const grad = graduationSeconds ? BigInt(graduationSeconds) : undefined;
+  const out: Record<string, Opening> = {};
+  for (const t of BROWSER_PROPOSAL_TYPES) {
+    const o: ProposalOpening = proposalOpening(state, t, now, grad);
+    out[t] = o.open
+      ? o
+      : {
+          open: false,
+          reason: o.reason,
+          ...(o.fromSeconds === undefined ? {} : { fromSeconds: o.fromSeconds.toString() }),
+        };
+  }
+  return out;
+}
+
+export interface ProposeParams extends ProposalDescription {
+  contractAddress: string;
+  launchId: string;
+  proposalType: ProposalTypeName;
+  /** VestingToLp: lovelace. VestingToStaking: a new pool's runway in days, or 0. FundAllocation: the amount. */
+  allocationAmount?: string;
+  /** FundAllocation: the recipient's 28-byte payment key hash. */
+  allocationRecipientHex?: string;
+  /** NIGHT atomic units. */
+  bondAmount: string;
+  /** The launch's bond floor, when the site knows it, so a bond under it is refused before a proof. */
+  bondMin?: string;
+}
+
+function apiBase(): string {
+  return requireConfig().apiBase.replace(/\/$/, '');
+}
+
+/**
+ * Files a proposal: stores its description on the site under its SHA-256,
+ * checks the site kept those exact bytes, then files the proposal committing to
+ * that hash. A takeover vote names its community wallet by the key hash of the
+ * public key its description carries.
+ */
+async function propose(params: ProposeParams): Promise<ProposeResult & { descriptionHashHex: string }> {
+  if (!(BROWSER_PROPOSAL_TYPES as readonly string[]).includes(params.proposalType)) {
+    throw new Error(`This page does not file ${params.proposalType} proposals.`);
+  }
+  const takeover = params.proposalType === 'SilenceLockTrigger';
+  const walletKey = params.communityWalletPubKey;
+  if (takeover && !walletKey) throw new Error('A takeover vote names the community wallet by its public key.');
+  const text = proposalDescriptionText({
+    title: params.title,
+    text: params.text,
+    ...(takeover ? { communityWalletPubKey: walletKey } : {}),
+  });
+  const descriptionHashHex = bytesToHex(descriptionHashOf(text));
+  const resolved = resolveProposalArgs(
+    {
+      proposalType: params.proposalType,
+      descriptionHashHex,
+      allocationAmount: params.allocationAmount,
+      allocationRecipientHex: params.allocationRecipientHex,
+      proposedCommunityWalletHex: takeover && walletKey ? keyHashOf(walletKey) : undefined,
+      bondAmount: params.bondAmount,
+    },
+    params.bondMin ? BigInt(params.bondMin) : undefined,
+  );
+  const providers = await requireMidnightProviders();
+
+  const res = await fetch(`${apiBase()}/cto/description`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: JSON.stringify({ launch_id: params.launchId, text }),
+  });
+  const body = (await res.json().catch(() => ({}))) as { hash?: string; message?: string };
+  if (!res.ok) throw new Error(body.message || 'The site could not store the description.');
+  if (body.hash !== descriptionHashHex) throw new Error('The site stored the description under a different hash.');
+
+  const made = await createProposalFromBrowser(requireSession(), {
+    providers,
+    contractAddress: params.contractAddress,
+    resolved,
+  });
+  return { ...made, descriptionHashHex };
+}
+
+/** A proposal's description from the site, checked against the hash the proposal commits to. */
+async function description(
+  launchId: string,
+  descriptionHashHex: string,
+): Promise<(ProposalDescription & { found: true }) | { found: false }> {
+  const res = await fetch(
+    `${apiBase()}/cto/description?launch_id=${encodeURIComponent(launchId)}&hash=${encodeURIComponent(descriptionHashHex)}`,
+    { headers: { Accept: 'application/json' } },
+  );
+  if (res.status === 404) return { found: false };
+  const body = (await res.json().catch(() => ({}))) as { text?: string; message?: string };
+  if (!res.ok || typeof body.text !== 'string') throw new Error(body.message || 'The description could not be read.');
+  if (bytesToHex(descriptionHashOf(body.text)) !== descriptionHashHex.toLowerCase()) {
+    throw new Error('The stored description does not match the hash the proposal commits to.');
+  }
+  return { ...readProposalDescription(body.text), found: true };
+}
+
+/** Returns this proposer's bond, behind a ballot that drew a quorum, to the connected Midnight wallet. */
+async function claimBond(contractAddress: string, proposalIdHex: string): Promise<CastVoteResult> {
+  const providers = await requireMidnightProviders();
+  const recipientAddress = midnight?.unshieldedAddress;
+  if (!recipientAddress) throw new Error('Connect the Midnight wallet the bond should return to.');
+  return claimProposalBondFromBrowser(requireSession(), {
+    providers,
+    contractAddress,
+    proposalIdHex,
+    recipientAddress,
+  });
+}
+
+/** Sends the bond behind a ballot that drew no quorum to the platform. Anyone may; the connected Midnight wallet pays. */
+async function sweepBond(contractAddress: string, proposalIdHex: string): Promise<CastVoteResult> {
+  const providers = await requireMidnightProviders();
+  return sweepProposalBondFromBrowser(requireSession(), { providers, contractAddress, proposalIdHex });
+}
+
 const NoctisCto = {
   configure,
   listAvailableWallets,
@@ -195,6 +371,13 @@ const NoctisCto = {
   finalize,
   executeOnMidnight,
   ballotForCardano,
+  myWalletKey,
+  walletKeyHash,
+  openings,
+  propose,
+  description,
+  claimBond,
+  sweepBond,
 };
 
 declare global {

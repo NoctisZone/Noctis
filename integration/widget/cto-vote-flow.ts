@@ -26,6 +26,7 @@ import type { MerkleProofEntry } from '../../contracts/midnight/witnesses.js';
 import { computeVoteNullifier, hashBalanceLeaf, hashBalanceNode } from '../../packages/zk-proofs/src/cto-governance.js';
 import type { AnchoredBallot } from '../cto-anchor-reference.js';
 import { anchoredBallotOf } from '../cto-ballot.js';
+import type { ResolvedProposal } from '../cto-proposal-args.js';
 import type { SnapshotBundleEntry } from '../cto-snapshot-bundle.js';
 import { NoctisLaunchManager, NoctisMidnightClient } from '../midnight-client.js';
 import {
@@ -33,6 +34,7 @@ import {
   readCtoGovernanceLedger,
   summarizeCtoGovernance,
 } from '../midnight-public-state.js';
+import { unshieldedAddressBytes } from '../midnight-unshielded-address.js';
 import { signCardanoData } from '../wallet-connection.js';
 import type { CtoSession } from './cto-session.js';
 import { buildBinds, proveWalletControlFrom, withProofQuery } from './wallet-control.js';
@@ -306,6 +308,68 @@ export async function executeOnMidnightFromBrowser(
 ): Promise<CastVoteResult> {
   const manager = await managerFor(session, params.providers, params.contractAddress);
   return txResult(await manager.executeCtoProposalGovernanceOnly(hexToBytes(params.proposalIdHex)));
+}
+
+// ---------------------------------------------------------------------------
+// 5. Proposing, and the bond behind a proposal
+// ---------------------------------------------------------------------------
+// Any holder of a voting identity may propose; no snapshot leaf is needed. The
+// bond is NIGHT from the connected Midnight wallet, returned to the proposer
+// once the ballot draws a quorum, or swept to the platform when it draws none.
+
+export interface ProposeResult extends CastVoteResult {
+  /** The new proposal, found by its description and start; null if the read has not caught up yet. */
+  proposalIdHex: string | null;
+  /** The second the ballot opened at, as the contract recorded it. */
+  startTimestamp: string;
+}
+
+/** Files a proposal whose arguments were built and checked by cto-proposal-args. */
+export async function createProposalFromBrowser(
+  session: CtoSession,
+  params: { providers: ContractProviders; contractAddress: string; resolved: ResolvedProposal },
+): Promise<ProposeResult> {
+  const manager = await managerFor(session, params.providers, params.contractAddress);
+  const r = params.resolved;
+  const startTimestamp = currentTimestampSeconds();
+  const result = await manager.createCtoProposal(
+    r.proposalType,
+    r.descriptionHash,
+    startTimestamp,
+    r.targetDexAddr,
+    r.allocationAmount,
+    r.allocationRecipient,
+    r.proposedCommunityWallet,
+    r.bondAmount,
+  );
+  // The contract names a proposal by its proposer, launch, description and
+  // start; the one carrying this description and starting at this second is it.
+  const after = await readGovernance(params.providers.publicDataProvider, params.contractAddress);
+  const descriptionHashHex = bytesToHex(r.descriptionHash);
+  const made = after.proposals.find(
+    (p) => p.descriptionHashHex === descriptionHashHex && p.startTimestamp === startTimestamp.toString(),
+  );
+  return { ...txResult(result), proposalIdHex: made?.proposalIdHex ?? null, startTimestamp: startTimestamp.toString() };
+}
+
+/** Returns the bond behind a ballot that drew a quorum, to an unshielded address. Proposer only. */
+export async function claimProposalBondFromBrowser(
+  session: CtoSession,
+  params: { providers: ContractProviders; contractAddress: string; proposalIdHex: string; recipientAddress: string },
+): Promise<CastVoteResult> {
+  const manager = await managerFor(session, params.providers, params.contractAddress);
+  return txResult(
+    await manager.claimProposalBond(hexToBytes(params.proposalIdHex), unshieldedAddressBytes(params.recipientAddress)),
+  );
+}
+
+/** Sweeps the bond behind a ballot that drew no quorum to the platform. Anyone may. */
+export async function sweepProposalBondFromBrowser(
+  session: CtoSession,
+  params: { providers: ContractProviders; contractAddress: string; proposalIdHex: string },
+): Promise<CastVoteResult> {
+  const manager = await managerFor(session, params.providers, params.contractAddress);
+  return txResult(await manager.sweepForfeitedProposalBond(hexToBytes(params.proposalIdHex)));
 }
 
 /** A settled ballot as the Cardano record takes it, for the Cardano steps to record. */

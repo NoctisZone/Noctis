@@ -43,10 +43,9 @@ import {
   identityFor,
   isCtoAction,
   OFFLINE_ACTIONS,
-  type ProposalInput,
   resolveCurrentTimestamp,
-  resolveProposalArgs,
 } from '../cto-governance-actions.js';
+import { type ProposalInput, resolveProposalArgs } from '../cto-proposal-args.js';
 import { fromHex32 } from '../eligibility-gate-deploy-args.js';
 import { describeError } from '../error-detail.js';
 import { NoctisLaunchManager, NoctisMidnightClient } from '../midnight-client.js';
