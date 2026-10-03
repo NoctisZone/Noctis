@@ -1,4 +1,4 @@
-// Tests for tier-a-graduation-submitter.ts's TierAGraduationSubmitter —
+// Tests for vesting-start-submitter.ts's VestingStartSubmitter —
 // StartVesting on the shared vesting.ak: which UTXO it starts, the guard
 // against starting twice, and the transaction it builds. Same importOriginal
 // partial-mock Lucid strategy as the other submitter tests.
@@ -19,9 +19,9 @@ vi.mock('@lucid-evolution/lucid', async (importOriginal) => {
 });
 
 import { CML, type Constr, credentialToAddress, Lucid } from '@lucid-evolution/lucid';
+import { threadNftAssetName } from '../launch-schemas.js';
 import { VESTING_REDEEMER } from '../redeemer-indices.js';
-import { TierAGraduationSubmitter } from '../tier-a-graduation-submitter.js';
-import { threadNftAssetName } from '../tier-a-schemas.js';
+import { VestingStartSubmitter } from '../vesting-start-submitter.js';
 
 const toHex = (bytes: Uint8Array) => Buffer.from(bytes).toString('hex');
 const REAL_EXTENDED_KEY_HEX = toHex(CML.PrivateKey.generate_ed25519extended().to_raw_bytes());
@@ -83,7 +83,7 @@ function makeSubmitter(vestingUtxos: Array<{ datum: unknown; assets: Record<stri
     newTx: () => builder,
   } as never);
 
-  const submitter = new TierAGraduationSubmitter({
+  const submitter = new VestingStartSubmitter({
     blockfrostProjectId: 'proj',
     blockfrostUrl: 'https://cardano-preprod.blockfrost.io/api/v0',
     network: 'Preprod',
@@ -99,7 +99,7 @@ beforeEach(() => {
   vi.mocked(Lucid).mockReset();
 });
 
-describe('TierAGraduationSubmitter.startVesting', () => {
+describe('VestingStartSubmitter.startVesting', () => {
   it('refuses a vesting UTXO with no thread NFT', async () => {
     const { submitter } = makeSubmitter([{ datum: vestDatum(), assets: {}, noThreadNft: true }]);
     await expect(submitter.startVesting(REAL_EXTENDED_KEY_HEX, GOVERNOR_ADDR, 1000)).rejects.toThrow(

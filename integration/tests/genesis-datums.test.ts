@@ -10,8 +10,8 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Data } from '@lucid-evolution/lucid';
 import { describe, expect, it } from 'vitest';
-import { buildGenesisDatums } from '../tier-a-genesis-datums.js';
-import { BondingCurveTierBDatumSchema, StakingPoolDatumSchema } from '../tier-a-schemas.js';
+import { buildGenesisDatums } from '../genesis-datums.js';
+import { BondingCurveTierBDatumSchema, StakingPoolDatumSchema } from '../launch-schemas.js';
 
 const KEYHASH = 'aa'.repeat(28);
 const POLICY = 'bb'.repeat(28);
@@ -45,7 +45,7 @@ function input(overrides: Record<string, unknown> = {}) {
   };
 }
 
-describe('tier-a-genesis-datums.ts — the stall clock starts at the mint', () => {
+describe('genesis-datums.ts — the stall clock starts at the mint', () => {
   it('stamps phase_started_at with the mint time it is given, not zero', async () => {
     const at = 1_786_000_000_000;
     const g = await buildGenesisDatums(input({ genesisTimestampMs: at }));
@@ -90,7 +90,7 @@ describe('tier-a-genesis-datums.ts — the stall clock starts at the mint', () =
 // Each is the passing fixture plus ONE delta, so a failure can only be the
 // delta. The positive case above them is what stops all three passing for the
 // wrong reason.
-describe('tier-a-genesis-datums.ts — the pool opens at the target price whatever the allocations', () => {
+describe('genesis-datums.ts — the pool opens at the target price whatever the allocations', () => {
   it('sizes the reserve from the raise: the wizard defaults open at 1.2× graduation', async () => {
     const g = await buildGenesisDatums(input({ tier: 'B' }));
     const datum = Data.from(g.datums.bondingCurve, BondingCurveTierBDatumSchema);
@@ -149,7 +149,7 @@ describe('tier-a-genesis-datums.ts — the pool opens at the target price whatev
   });
 });
 
-describe('tier-a-genesis-datums.ts — the lock on leaving a staking position', () => {
+describe('genesis-datums.ts — the lock on leaving a staking position', () => {
   // A staking-enabled quadratic launch. Every case below is this fixture with
   // exactly one thing changed, so a failure names the one thing.
   const staked = (overrides: Record<string, unknown> = {}) =>
@@ -189,7 +189,7 @@ describe('tier-a-genesis-datums.ts — the lock on leaving a staking position', 
   });
 });
 
-describe('tier-a-genesis-datums.ts — a bigger creator allocation must vest longer', () => {
+describe('genesis-datums.ts — a bigger creator allocation must vest longer', () => {
   // Both figures were already bounded on their own, and every pairing of the
   // two passed: the largest allocation on the shortest schedule built a datum
   // like any other. These are the pairings that must now be refused, and the

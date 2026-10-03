@@ -83,18 +83,18 @@ import {
   spotPrice,
 } from './curve-pricing.js';
 import { KeyCurveSpendWallet } from './key-curve-spend-wallet.js';
-import { selectLaunchUtxo } from './launch-utxo-lookup.js';
-import { type CurveNetwork, type CurveSpendWallet, MeshCurveSpender } from './mesh-curve-spend.js';
-import { BONDING_CURVE_TIER_B_REDEEMER } from './redeemer-indices.js';
-import { MESH_NETWORK_ID, type ReferenceScriptPointer } from './reference-script.js';
-import type { BondingCurveTierBDatumData } from './tier-a-schemas.js';
+import type { BondingCurveTierBDatumData } from './launch-schemas.js';
 import {
   BondingCurveTierBDatumSchema,
   capProofToPlutus,
   loadValidator,
   SETTLEMENT_TAG_STANDIN_CBOR,
   settlementDatum,
-} from './tier-a-schemas.js';
+} from './launch-schemas.js';
+import { selectLaunchUtxo } from './launch-utxo-lookup.js';
+import { type CurveNetwork, type CurveSpendWallet, MeshCurveSpender } from './mesh-curve-spend.js';
+import { BONDING_CURVE_TIER_B_REDEEMER } from './redeemer-indices.js';
+import { MESH_NETWORK_ID, type ReferenceScriptPointer } from './reference-script.js';
 
 /**
  * A raw 64-byte BIP32-Ed25519 extended private key (kL||kR, the format the
@@ -1078,10 +1078,8 @@ export class LucidTierBCurveSubmitter {
 
   /**
    * CLI-driven verification path — signs with a decrypted extended key
-   * (CML.PrivateKey.from_extended_bytes() + sign.withPrivateKey()), the
-   * SAME pattern the linear curve's claimCreatorFees() (tier-a-claims-submitter.ts)
-   * uses for its own policy-wallet-as-creator-stand-in — the platform
-   * wallet custody scheme (anvil-client.php) only ever persists an
+   * (CML.PrivateKey.from_extended_bytes() + sign.withPrivateKey()) — the
+   * platform wallet custody scheme (anvil-client.php) only ever persists an
    * extended skey, never a mnemonic, so this is the only signing shape
    * that actually works against a real provisioned wallet, not a design
    * choice made for this file alone.

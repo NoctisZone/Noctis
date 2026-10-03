@@ -65,9 +65,9 @@ import type {
   UTxO,
 } from '@lucid-evolution/lucid';
 import { Blockfrost, CML, Constr, Data, Lucid, validatorToAddress } from '@lucid-evolution/lucid';
+import { type LpEscrowDatumData, LpEscrowDatumSchema, threadNftAssetName } from './launch-schemas.js';
 import { selectLaunchUtxo } from './launch-utxo-lookup.js';
 import { LP_ESCROW_REDEEMER } from './redeemer-indices.js';
-import { type LpEscrowDatumData, LpEscrowDatumSchema, threadNftAssetName } from './tier-a-schemas.js';
 
 function fromHex(hex: string): Uint8Array {
   return new Uint8Array(Buffer.from(hex, 'hex'));
@@ -156,7 +156,7 @@ export interface MinswapV2Config {
   authenPolicyCbor: string; // full compiled bytecode, same source
 }
 
-export interface TierALpMigrationConfig {
+export interface LpMigrationConfig {
   blockfrostProjectId: string;
   blockfrostUrl: string;
   network: LucidNetwork;
@@ -172,14 +172,14 @@ export interface TierALpMigrationConfig {
   minswap: MinswapV2Config;
 }
 
-export class TierALpMigrationSubmitter {
+export class LpMigrationSubmitter {
   private lucidPromise: Promise<LucidEvolution>;
   private lpEscrowValidator: SpendingValidator;
   private lpEscrowAddress: string;
   private factoryValidator: SpendingValidator;
   private authenPolicy: MintingPolicy;
 
-  constructor(private config: TierALpMigrationConfig) {
+  constructor(private config: LpMigrationConfig) {
     this.lpEscrowValidator = {
       type: 'PlutusV3',
       script: config.lpEscrowScriptCbor,

@@ -42,10 +42,6 @@ import {
   type TakeoverSpend,
   type TakeoverTxPlan,
 } from './cto-takeover-tx.js';
-import type { PlanAssets } from './mesh-curve-spend.js';
-import { LP_ESCROW_REDEEMER, STAKING_POOL_REDEEMER, VESTING_REDEEMER } from './redeemer-indices.js';
-import { STAKE_EMPTY_ROOT } from './stake-accumulator-tree.js';
-import { advance, validityRangeFor } from './staking-math.js';
 import {
   type LpEscrowDatumData,
   LpEscrowDatumSchema,
@@ -55,7 +51,11 @@ import {
   type VestingDatumData,
   VestingDatumSchema,
   venueAssetName,
-} from './tier-a-schemas.js';
+} from './launch-schemas.js';
+import type { PlanAssets } from './mesh-curve-spend.js';
+import { LP_ESCROW_REDEEMER, STAKING_POOL_REDEEMER, VESTING_REDEEMER } from './redeemer-indices.js';
+import { STAKE_EMPTY_ROOT } from './stake-accumulator-tree.js';
+import { advance, validityRangeFor } from './staking-math.js';
 import { VENUE_MAX_LQ_CAP, type VenuePoolConfigData, VenuePoolConfigSchema } from './venue-pool.js';
 import { VENUE_POOL_ACTION } from './venue-swap.js';
 

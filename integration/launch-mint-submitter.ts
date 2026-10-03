@@ -47,7 +47,7 @@ import {
   cip68ReferenceAssetName,
   type ThreadNftRole,
   threadNftAssetNames,
-} from './tier-a-schemas.js';
+} from './launch-schemas.js';
 
 /** One genesis state UTXO: where it goes, what datum it carries, what it holds. */
 export interface GenesisOutput {
@@ -65,7 +65,7 @@ export interface GenesisOutput {
   holdsReferenceNft?: boolean;
 }
 
-export interface TierAMintParams {
+export interface LaunchMintParams {
   creatorAddress: Address;
   /** Where the launch fee goes. One destination: the platform runs a single
    *  wallet, so there is no split to divide or verify. */
@@ -83,7 +83,7 @@ export interface TierAMintParams {
   genesisOutputs: GenesisOutput[];
 }
 
-export interface TierAMintSubmitterConfig {
+export interface LaunchMintSubmitterConfig {
   blockfrostUrl: string;
   blockfrostProjectId: string;
   network: LucidNetwork;
@@ -92,10 +92,10 @@ export interface TierAMintSubmitterConfig {
   launchTokenPolicyCbor: string;
 }
 
-export class TierAMintSubmitter {
+export class LaunchMintSubmitter {
   private lucidPromise: Promise<LucidEvolution>;
 
-  constructor(private config: TierAMintSubmitterConfig) {
+  constructor(private config: LaunchMintSubmitterConfig) {
     this.lucidPromise = Lucid(new Blockfrost(config.blockfrostUrl, config.blockfrostProjectId), config.network);
     // Nothing awaits this until a method runs, so a caller that constructs the
     // submitter and then fails before calling one leaves the rejection with no
@@ -162,7 +162,7 @@ export class TierAMintSubmitter {
    * same policy id this transaction actually mints under.
    */
   async buildGenesisMint(
-    params: TierAMintParams & { seedUtxo: UTxO; appliedPolicyCbor: string },
+    params: LaunchMintParams & { seedUtxo: UTxO; appliedPolicyCbor: string },
   ): Promise<{ unsignedTxCbor: string; policyId: string }> {
     const lucid = await this.lucidPromise;
     const creatorUtxos = await lucid.utxosAt(params.creatorAddress);

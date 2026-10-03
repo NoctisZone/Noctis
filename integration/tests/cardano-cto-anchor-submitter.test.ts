@@ -23,7 +23,7 @@ vi.mock('@lucid-evolution/lucid', async (importOriginal) => {
 import { Data, Lucid } from '@lucid-evolution/lucid';
 import type { VoteResultParams } from '../cardano-cto-anchor-submitter.js';
 import { CardanoCtoAnchorSubmitter, MIN_RELAYER_BOND_LOVELACE, toHex } from '../cardano-cto-anchor-submitter.js';
-import { type LpEscrowDatumData, LpEscrowDatumSchema, threadNftAssetName } from '../tier-a-schemas.js';
+import { type LpEscrowDatumData, LpEscrowDatumSchema, threadNftAssetName } from '../launch-schemas.js';
 
 function fakeBytes(fill: number, len = 32): Uint8Array {
   return new Uint8Array(len).fill(fill);

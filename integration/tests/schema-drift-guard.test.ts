@@ -3,7 +3,7 @@
 //
 // WHY THIS EXISTS
 // ---------------
-// `tier-a-schemas.ts` is hand-written to mirror the compiled blueprint, and its
+// `launch-schemas.ts` is hand-written to mirror the compiled blueprint, and its
 // own header says: "Re-verify against a freshly-regenerated plutus.json if any
 // of the .ak files change after this date." That re-verification was a manual
 // step nobody is reminded to do. It has already been missed for real once in
@@ -56,7 +56,7 @@ import {
   StakePositionShape,
   StakingPoolDatumShape,
   VestingDatumShape,
-} from '../tier-a-schemas.js';
+} from '../launch-schemas.js';
 
 // ---------------------------------------------------------------------------
 // Blueprint loading

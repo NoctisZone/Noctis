@@ -26,10 +26,10 @@ import {
 } from '../batch-planner.js';
 import { BatcherSubmitter } from '../batcher-submitter.js';
 import { capAccumulatorFromHex } from '../cap-accumulator-tree.js';
+import type { BondingCurveTierBDatumData } from '../launch-schemas.js';
+import { BondingCurveTierBDatumSchema } from '../launch-schemas.js';
 import { selectLaunchUtxo } from '../launch-utxo-lookup.js';
 import { OrderSubmitter } from '../order-submitter.js';
-import type { BondingCurveTierBDatumData } from '../tier-a-schemas.js';
-import { BondingCurveTierBDatumSchema } from '../tier-a-schemas.js';
 import {
   CARDANO_NETWORK_MAP,
   jsonSafe,

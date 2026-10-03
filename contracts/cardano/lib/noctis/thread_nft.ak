@@ -112,7 +112,7 @@ test curve_roles_do_not_collide() {
 }
 
 /// Cross-implementation pin. The genesis mint builds these names in
-/// TypeScript (integration/tier-a-schemas.ts, threadNftAssetName) while the
+/// TypeScript (integration/launch-schemas.ts, threadNftAssetName) while the
 /// validators derive them here; if the two ever disagree, every launch mints
 /// tokens its own validators reject and the failure only shows up at spend
 /// time, long after the mint succeeded.

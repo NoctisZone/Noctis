@@ -17,7 +17,7 @@ import {
   rebuildCapAccumulatorFrom,
 } from '../cap-accumulator-from-history.js';
 import { bytesToHex, CapAccumulator, hexToBytes } from '../cap-accumulator-tree.js';
-import type { TradeEvent } from '../tier-a-trade-history-reader.js';
+import type { TradeEvent } from '../trade-history-reader.js';
 
 const ALICE = 'aa'.repeat(28);
 const BOB = 'bb'.repeat(28);

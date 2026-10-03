@@ -38,9 +38,9 @@
 
 import type { LucidEvolution, Network as LucidNetwork, SpendingValidator, UTxO } from '@lucid-evolution/lucid';
 import { Blockfrost, CML, Constr, Data, Lucid, validatorToAddress } from '@lucid-evolution/lucid';
+import { type LpEscrowDatumData, LpEscrowDatumSchema } from './launch-schemas.js';
 import { selectLaunchUtxo } from './launch-utxo-lookup.js';
 import { LP_ESCROW_REDEEMER } from './redeemer-indices.js';
-import { type LpEscrowDatumData, LpEscrowDatumSchema } from './tier-a-schemas.js';
 
 function fromHex(hex: string): Uint8Array {
   return new Uint8Array(Buffer.from(hex, 'hex'));
@@ -58,7 +58,7 @@ function extendedHexToBech32PrivateKey(extendedHex: string): string {
 
 export type DexAction = 'ProposeAdd' | 'ProposeRemove';
 
-export interface TierADexChangeConfig {
+export interface DexChangeConfig {
   blockfrostProjectId: string;
   blockfrostUrl: string;
   network: LucidNetwork;
@@ -73,12 +73,12 @@ export interface TierADexChangeConfig {
   threadNftPolicyId: string;
 }
 
-export class TierADexChangeSubmitter {
+export class DexChangeSubmitter {
   private lucidPromise: Promise<LucidEvolution>;
   private lpEscrowValidator: SpendingValidator;
   private lpEscrowAddress: string;
 
-  constructor(private config: TierADexChangeConfig) {
+  constructor(private config: DexChangeConfig) {
     this.lpEscrowValidator = {
       type: 'PlutusV3',
       script: config.lpEscrowScriptCbor,

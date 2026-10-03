@@ -1,4 +1,4 @@
-// Tests for tier-a-mint-submitter.ts's TierAMintSubmitter — the genesis mint.
+// Tests for launch-mint-submitter.ts's LaunchMintSubmitter — the genesis mint.
 //
 // The property worth pinning here is the CIP-68 pair: one transaction mints
 // the fungible supply at label 333 and exactly one reference NFT at label 100,
@@ -31,8 +31,8 @@ vi.mock('@lucid-evolution/lucid', async (importOriginal) => {
 });
 
 import { credentialToAddress, Lucid, mintingPolicyToId, scriptFromNative } from '@lucid-evolution/lucid';
-import { type GenesisOutput, TierAMintSubmitter } from '../tier-a-mint-submitter.js';
-import { CIP68_FUNGIBLE_TOKEN_LABEL, CIP68_REFERENCE_NFT_LABEL, threadNftAssetNames } from '../tier-a-schemas.js';
+import { type GenesisOutput, LaunchMintSubmitter } from '../launch-mint-submitter.js';
+import { CIP68_FUNGIBLE_TOKEN_LABEL, CIP68_REFERENCE_NFT_LABEL, threadNftAssetNames } from '../launch-schemas.js';
 
 function fakeKeyHash(fill: number): string {
   return fill.toString(16).padStart(2, '0').repeat(28);
@@ -103,7 +103,7 @@ function makeSubmitter(builder: ReturnType<typeof makeFakeTxBuilder>['builder'],
   };
   vi.mocked(Lucid).mockResolvedValue(fakeLucid as never);
   return {
-    submitter: new TierAMintSubmitter({
+    submitter: new LaunchMintSubmitter({
       blockfrostProjectId: 'proj',
       blockfrostUrl: 'https://cardano-preprod.blockfrost.io/api/v0',
       network: 'Preprod',
@@ -132,7 +132,7 @@ function genesisOutputs(): GenesisOutput[] {
   ];
 }
 
-async function build(overrides: Partial<Parameters<TierAMintSubmitter['buildGenesisMint']>[0]> = {}) {
+async function build(overrides: Partial<Parameters<LaunchMintSubmitter['buildGenesisMint']>[0]> = {}) {
   const { builder, calls } = makeFakeTxBuilder();
   const { submitter } = makeSubmitter(builder);
   const result = await submitter.buildGenesisMint({
@@ -155,7 +155,7 @@ beforeEach(() => {
   vi.mocked(Lucid).mockReset();
 });
 
-describe('TierAMintSubmitter.resolveSeedAndPolicy', () => {
+describe('LaunchMintSubmitter.resolveSeedAndPolicy', () => {
   it('throws when the creator wallet has no UTXO to seed the one-shot', async () => {
     const { builder } = makeFakeTxBuilder();
     const { submitter } = makeSubmitter(builder, []);
@@ -175,7 +175,7 @@ describe('TierAMintSubmitter.resolveSeedAndPolicy', () => {
   });
 });
 
-describe('TierAMintSubmitter.buildGenesisMint — the CIP-68 pair', () => {
+describe('LaunchMintSubmitter.buildGenesisMint — the CIP-68 pair', () => {
   it('mints the supply at label 333 and exactly one reference NFT at label 100, under one policy', async () => {
     const { calls, result } = await build();
 
@@ -227,7 +227,7 @@ describe('TierAMintSubmitter.buildGenesisMint — the CIP-68 pair', () => {
   });
 });
 
-describe('TierAMintSubmitter.buildGenesisMint — outputs', () => {
+describe('LaunchMintSubmitter.buildGenesisMint — outputs', () => {
   it('gives the metadata output the reference NFT, and every other output a thread NFT', async () => {
     const { calls, result } = await build();
     const threadPolicyId = mintingPolicyToId(scriptFromNative(THREAD_NATIVE));

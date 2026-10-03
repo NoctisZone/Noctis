@@ -41,7 +41,7 @@
 // ============================================================================
 
 import { Data, type Network as LucidNetwork } from '@lucid-evolution/lucid';
-import { VENUE_ROLES } from './tier-a-schemas.js';
+import { VENUE_ROLES } from './launch-schemas.js';
 import {
   type VenueDepositConfigData,
   VenueDepositConfigSchema,

@@ -39,8 +39,8 @@
 import type { LucidEvolution, Network as LucidNetwork, SpendingValidator, UTxO } from '@lucid-evolution/lucid';
 import { Blockfrost, CredentialSchema, Data, Lucid, validatorToAddress } from '@lucid-evolution/lucid';
 import { deriveAnchorReferenceHex, type TargetDexCredential } from './cto-anchor-reference.js';
+import { LpEscrowDatumSchema } from './launch-schemas.js';
 import { selectLaunchUtxo } from './launch-utxo-lookup.js';
-import { LpEscrowDatumSchema } from './tier-a-schemas.js';
 
 // ============================================================================
 // DATA SCHEMAS — mirror the fresh contracts/cardano/plutus.json exactly
@@ -74,7 +74,7 @@ export const ExecutionStatusSchema = Data.Enum([
 ]);
 export type ExecutionStatusData = Data.Static<typeof ExecutionStatusSchema>;
 
-/** target_dex_credential/active_proposal/last_executed_proposal are all real Option<T> fields on-chain — Data.Nullable is Lucid Evolution's own real Option encoding, already used elsewhere in this codebase (tier-a-schemas.ts's pending_dex_change). */
+/** target_dex_credential/active_proposal/last_executed_proposal are all real Option<T> fields on-chain — Data.Nullable is Lucid Evolution's own real Option encoding, already used elsewhere in this codebase (launch-schemas.ts's pending_dex_change). */
 export const ProposalAnchorShape = Data.Object({
   proposal_type: ProposalTypeSchema,
   description_hash: Data.Bytes(),
@@ -98,7 +98,7 @@ export type ProposalAnchorData = Data.Static<typeof ProposalAnchorShape>;
 export const ProposalAnchorSchema = ProposalAnchorShape as unknown as ProposalAnchorData;
 
 /**
- * This mirrors the same on-chain datum as tier-a-schemas' own
+ * This mirrors the same on-chain datum as launch-schemas' own
  * CtoGovernanceDatumShape, and exists separately only because that one models
  * active_proposal as Data.Any() -- genesis writes null and never needs the
  * nested shape, whereas this submitter has to build a real ProposalAnchor.

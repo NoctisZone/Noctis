@@ -40,7 +40,7 @@
 
 import { Constr } from '@lucid-evolution/lucid';
 import { bytesToHex, CapAccumulator, capAccumulatorFromHex, hexToBytes } from './cap-accumulator-tree.js';
-import type { TradeEvent } from './tier-a-trade-history-reader.js';
+import type { TradeEvent } from './trade-history-reader.js';
 
 /** Where in a `BatchOrder` each field sits — see the type in either curve. */
 const BATCH_ORDER_OWNER = 0;
@@ -129,7 +129,7 @@ export function capAccumulatorFromHistory(events: readonly TradeEvent[]): CapAcc
 }
 
 /**
- * What a reader has to provide. `TierATradeHistoryReader` satisfies it.
+ * What a reader has to provide. `TradeHistoryReader` satisfies it.
  *
  * `stopAtTxHash` returns only what happened after that curve transaction,
  * oldest first; without it, the whole history.

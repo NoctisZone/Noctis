@@ -32,8 +32,8 @@
 import { Constr, Data, getAddressDetails } from '@lucid-evolution/lucid';
 import type { CurveParams, CurveShape } from './curve-pricing.js';
 import { buyCost, sellProceeds } from './curve-pricing.js';
+import { BondingCurveTierBDatumSchema } from './launch-schemas.js';
 import { BONDING_CURVE_TIER_B_REDEEMER, VESTING_REDEEMER } from './redeemer-indices.js';
-import { BondingCurveTierBDatumSchema } from './tier-a-schemas.js';
 
 export interface TradeEvent {
   txHash: string;
@@ -518,7 +518,7 @@ async function walkHistory(
   return events;
 }
 
-export interface TierATradeHistoryConfig {
+export interface TradeHistoryConfig {
   blockfrostProjectId: string;
   blockfrostUrl: string;
   /** The Cardano Launch curve's address (bonding_curve_tier_b.ak). */
@@ -526,8 +526,8 @@ export interface TierATradeHistoryConfig {
   launchIdHex: string;
 }
 
-export class TierATradeHistoryReader {
-  constructor(private config: TierATradeHistoryConfig) {}
+export class TradeHistoryReader {
+  constructor(private config: TradeHistoryConfig) {}
 
   /**
    * Bonding-curve-only history, for trade/chart consumers (BuyTokens/

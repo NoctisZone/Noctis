@@ -23,9 +23,7 @@ import {
   takeoverDirectionOf,
 } from '../cto-takeover-effects.js';
 import type { DatumUtxo } from '../cto-takeover-tx.js';
-import type { PlanAssets } from '../mesh-curve-spend.js';
-import { scriptHashOf } from '../reference-script.js';
-import { buildGenesisDatums } from '../tier-a-genesis-datums.js';
+import { buildGenesisDatums } from '../genesis-datums.js';
 import {
   type BondingCurveTierBDatumData,
   BondingCurveTierBDatumSchema,
@@ -37,7 +35,9 @@ import {
   type VestingDatumData,
   VestingDatumSchema,
   venueAssetName,
-} from '../tier-a-schemas.js';
+} from '../launch-schemas.js';
+import type { PlanAssets } from '../mesh-curve-spend.js';
+import { scriptHashOf } from '../reference-script.js';
 import { blake2b224Hex, VENUE_MAX_LQ_CAP, type VenuePoolConfigData, VenuePoolConfigSchema } from '../venue-pool.js';
 import {
   at,

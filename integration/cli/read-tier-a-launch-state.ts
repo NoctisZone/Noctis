@@ -42,7 +42,7 @@ import {
   LpEscrowDatumSchema,
   loadValidator,
   VestingDatumSchema,
-} from '../tier-a-schemas.js';
+} from '../launch-schemas.js';
 import {
   CARDANO_NETWORK_MAP,
   jsonSafe,
@@ -52,13 +52,13 @@ import {
   requireFieldsFalsy,
 } from './cli-io.js';
 
-// Bundled as CJS (see build.mjs's readTierALaunchStateCliConfig comment) —
+// Bundled as CJS (see build.mjs's readLaunchStateCliConfig comment) —
 // __dirname is a native CJS global here, no fileURLToPath(import.meta.url)
 // dance needed the way the ESM-format CLI bundles in this directory do.
 declare const __dirname: string;
 
 // Datum schemas (BondingCurveTierBDatumSchema/VestingDatumSchema/LpEscrowDatumSchema)
-// and loadValidator() now live in ../tier-a-schemas.ts, shared with the
+// and loadValidator() now live in ../launch-schemas.ts, shared with the
 // genesis-datum encoder (Phase 3) so the two can never drift apart — see
 // that file's own header for the full rationale. Extracted 2026-07-17.
 

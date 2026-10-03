@@ -1,4 +1,4 @@
-// Tests for tier-a-lp-migration-submitter.ts's TierALpMigrationSubmitter —
+// Tests for lp-migration-submitter.ts's LpMigrationSubmitter —
 // the heaviest single method in this codebase's submitter surface: one
 // transaction that both spends lp_escrow's Migrate redeemer AND creates a
 // real Minswap V2 liquidity pool (factory consumption, LP-token mint, pool/
@@ -27,9 +27,9 @@ vi.mock('@lucid-evolution/lucid', async (importOriginal) => {
 });
 
 import { CML, type Constr, credentialToAddress, Lucid } from '@lucid-evolution/lucid';
+import { threadNftAssetName } from '../launch-schemas.js';
+import { LpMigrationSubmitter } from '../lp-migration-submitter.js';
 import { LP_ESCROW_REDEEMER } from '../redeemer-indices.js';
-import { TierALpMigrationSubmitter } from '../tier-a-lp-migration-submitter.js';
-import { threadNftAssetName } from '../tier-a-schemas.js';
 
 function fakeKeyHash(fill: number): string {
   return fill.toString(16).padStart(2, '0').repeat(28);
@@ -193,7 +193,7 @@ function makeSubmitter(
   };
   vi.mocked(Lucid).mockResolvedValue(fakeLucid as never);
 
-  const submitter = new TierALpMigrationSubmitter({
+  const submitter = new LpMigrationSubmitter({
     blockfrostProjectId: 'proj',
     blockfrostUrl: 'https://cardano-preprod.blockfrost.io/api/v0',
     network: 'Preprod',
@@ -212,7 +212,7 @@ beforeEach(() => {
   vi.mocked(Lucid).mockReset();
 });
 
-describe('TierALpMigrationSubmitter.migrateToMinswapPool — guard rails', () => {
+describe('LpMigrationSubmitter.migrateToMinswapPool — guard rails', () => {
   it('rejects when the lp_escrow UTXO holds no real ADA or token value', async () => {
     const { builder } = makeFakeTxBuilder();
     const submitter = makeSubmitter(builder, {
@@ -266,7 +266,7 @@ describe('TierALpMigrationSubmitter.migrateToMinswapPool — guard rails', () =>
   });
 });
 
-describe('TierALpMigrationSubmitter.migrateToMinswapPool — real crypto + pool math', () => {
+describe('LpMigrationSubmitter.migrateToMinswapPool — real crypto + pool math', () => {
   function realFactoryUtxo() {
     const _lpAssetName = independentComputeLPAssetName(TOKEN_POLICY, TOKEN_NAME);
     return {

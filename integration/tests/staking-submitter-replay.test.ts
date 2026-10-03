@@ -28,9 +28,9 @@
 import { Constr, Data, slotToUnixTime } from '@lucid-evolution/lucid';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { bytesToHex, type CapProofStep } from '../cap-accumulator-tree.js';
+import { type StakingPoolDatumData, StakingPoolDatumSchema } from '../launch-schemas.js';
 import { StakeAccumulator } from '../stake-accumulator-tree.js';
 import { StakingSubmitter } from '../staking-submitter.js';
-import { type StakingPoolDatumData, StakingPoolDatumSchema } from '../tier-a-schemas.js';
 
 const NETWORK = 'Preprod' as const;
 const LAUNCH_ID = 'ab'.repeat(32);

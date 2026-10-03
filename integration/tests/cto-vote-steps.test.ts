@@ -31,8 +31,8 @@ import {
   voteStage,
 } from '../cto-vote-steps.js';
 import { cardanoKeyHashToBallotField, cardanoScriptHashToBallotField } from '../cto-wallet-field.js';
-import { buildGenesisDatums } from '../tier-a-genesis-datums.js';
-import { type LpEscrowDatumData, LpEscrowDatumSchema, threadNftAssetName } from '../tier-a-schemas.js';
+import { buildGenesisDatums } from '../genesis-datums.js';
+import { type LpEscrowDatumData, LpEscrowDatumSchema, threadNftAssetName } from '../launch-schemas.js';
 import {
   at,
   BLUEPRINT,

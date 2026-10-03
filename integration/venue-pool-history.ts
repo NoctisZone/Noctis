@@ -8,7 +8,7 @@
 // `swap_order.ak` finds it the same way. So each transaction names its
 // predecessor in its own inputs, and the chain of them IS the history.
 //
-// This is the shape `tier-a-trade-history-reader.ts` already established for
+// This is the shape `trade-history-reader.ts` already established for
 // the launch curve, for the same reason, and it is worth saying what it buys
 // here beyond consistency:
 //

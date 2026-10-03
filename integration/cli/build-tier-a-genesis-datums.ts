@@ -1,7 +1,7 @@
 // ============================================================================
 // Noctis Zone — Cardano genesis datums, as a standalone CLI
 // ============================================================================
-// Thin wrapper. The logic lives in ../tier-a-genesis-datums.ts so that
+// Thin wrapper. The logic lives in ../genesis-datums.ts so that
 // mint-tier-a-launch.ts can call it in-process: a module that runs `main()` at
 // import time cannot be imported, and bundling one that does produces two
 // mains racing for the same stdin.
@@ -11,7 +11,7 @@
 // { error }.
 // ============================================================================
 
-import { type BuildGenesisDatumsInput, buildGenesisDatums } from '../tier-a-genesis-datums.js';
+import { type BuildGenesisDatumsInput, buildGenesisDatums } from '../genesis-datums.js';
 import { parseJsonStdin, readStdin, requireTimestampMs } from './cli-io.js';
 
 async function main() {

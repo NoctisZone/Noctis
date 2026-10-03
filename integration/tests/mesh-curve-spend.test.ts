@@ -22,6 +22,7 @@ import { deserializeTx } from '@meshsdk/core-cst';
 import { describe, expect, it, vi } from 'vitest';
 import { MAX_ORDERS_PER_BATCH } from '../batch-planner.js';
 import { capProofFor, hexToBytes } from '../cap-accumulator-tree.js';
+import { capProofToPlutus } from '../launch-schemas.js';
 import {
   type CurveSpendPlan,
   type CurveSpendWallet,
@@ -35,7 +36,6 @@ import {
   scriptAddressOf,
   scriptHashOf,
 } from '../reference-script.js';
-import { capProofToPlutus } from '../tier-a-schemas.js';
 
 interface Blueprint {
   validators: Array<{ title: string; compiledCode: string; hash: string }>;

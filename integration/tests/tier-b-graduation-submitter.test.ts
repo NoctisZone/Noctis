@@ -38,9 +38,9 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { CML, credentialToAddress, Lucid } from '@lucid-evolution/lucid';
 import { bytesToHex } from '../cap-accumulator-tree.js';
+import { type ThreadNftRole, threadNftAssetName } from '../launch-schemas.js';
 import { scriptHashOf } from '../reference-script.js';
 import { STAKE_EMPTY_ROOT } from '../stake-accumulator-tree.js';
-import { type ThreadNftRole, threadNftAssetName } from '../tier-a-schemas.js';
 import { TierBGraduationSubmitter } from '../tier-b-graduation-submitter.js';
 import { blake2b224Hex, VENUE_MAX_LQ_CAP, type VenueFactoryParameters, venueAssetName } from '../venue-pool.js';
 

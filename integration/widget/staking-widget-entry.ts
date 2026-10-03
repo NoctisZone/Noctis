@@ -4,13 +4,12 @@
 // Webpack browser target (see ../webpack.widgets.config.cjs) — bundled to
 // assets/js/staking-widget.bundle.js in the theme, enqueued on any launch page
 // where staking_enabled is true, same pattern inc/enqueue.php already uses for
-// tier-a-buy-widget.bundle.js/darkveil-widget.bundle.js. On Webpack (not
-// esbuild) for the same reason those two are — this bundle pulls in
-// @lucid-evolution/lucid's CML/WASM dependency, which needs webpack's real
-// native WASM-as-ESM support.
+// the other widget bundles. On Webpack (not esbuild) for the same reason they
+// are — this bundle pulls in @lucid-evolution/lucid's CML/WASM dependency,
+// which needs webpack's real native WASM-as-ESM support.
 //
 // Exposes window.NoctisStaking, the same "plain object of async functions the
-// theme's vanilla JS calls directly" shape as window.NoctisTierABuy.
+// theme's vanilla JS calls directly" shape as the other widgets' globals.
 //
 // EVERYTHING HERE IS CLIENT-SIDE, AND NOW GENUINELY SO
 // Stake, unstake and claim are browser-wallet-signed, and the figures behind
@@ -31,7 +30,7 @@ export interface StakingWidgetConfig {
   blockfrostProjectId: string;
   blockfrostUrl: string;
   network: LucidNetwork;
-  /** staking_pool.ak's compiled PlutusV3 script CBOR — read server-side (PHP), inlined here same as tier-a-buy-widget-entry.ts's compiledScriptCbor. */
+  /** staking_pool.ak's compiled PlutusV3 script CBOR — read server-side (PHP) and inlined into the page config. */
   compiledScriptCbor: string;
   launchIdHex: string;
   /** The launch's thread-NFT policy id, hex, as rendered by the platform for

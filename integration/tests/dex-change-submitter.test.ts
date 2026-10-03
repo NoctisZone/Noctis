@@ -1,4 +1,4 @@
-// Tests for tier-a-dex-change-submitter.ts's TierADexChangeSubmitter —
+// Tests for dex-change-submitter.ts's DexChangeSubmitter —
 // lp_escrow.ak's DEX-whitelist mechanism: ProposeDexChange (multisig-
 // gated, starts the 72h public notice clock, legitimately backdatable per
 // this file's own header since it's not permissionless) and
@@ -24,8 +24,8 @@ vi.mock('@lucid-evolution/lucid', async (importOriginal) => {
 });
 
 import { CML, Constr, credentialToAddress, Lucid } from '@lucid-evolution/lucid';
-import { TierADexChangeSubmitter } from '../tier-a-dex-change-submitter.js';
-import { threadNftAssetName } from '../tier-a-schemas.js';
+import { DexChangeSubmitter } from '../dex-change-submitter.js';
+import { threadNftAssetName } from '../launch-schemas.js';
 
 function fakeKeyHash(fill: number): string {
   return fill.toString(16).padStart(2, '0').repeat(28);
@@ -119,7 +119,7 @@ function makeSubmitter(
   };
   vi.mocked(Lucid).mockResolvedValue(fakeLucid as never);
 
-  return new TierADexChangeSubmitter({
+  return new DexChangeSubmitter({
     blockfrostProjectId: 'proj',
     blockfrostUrl: 'https://cardano-preprod.blockfrost.io/api/v0',
     network: 'Preprod',
@@ -133,7 +133,7 @@ beforeEach(() => {
   vi.mocked(Lucid).mockReset();
 });
 
-describe('TierADexChangeSubmitter.proposeDexChange', () => {
+describe('DexChangeSubmitter.proposeDexChange', () => {
   it('rejects when a DEX change proposal is already pending', async () => {
     const { builder } = makeFakeTxBuilder();
     const submitter = makeSubmitter(builder, [
@@ -233,7 +233,7 @@ describe('TierADexChangeSubmitter.proposeDexChange', () => {
   });
 });
 
-describe('TierADexChangeSubmitter.executeDexChange', () => {
+describe('DexChangeSubmitter.executeDexChange', () => {
   it('rejects when there is no pending DEX change to execute', async () => {
     const { builder } = makeFakeTxBuilder();
     const submitter = makeSubmitter(builder, [{ datum: lpDatum({ pending_dex_change: null }), assets: {} }]);

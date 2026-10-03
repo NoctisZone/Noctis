@@ -39,6 +39,7 @@ vi.mock('@lucid-evolution/lucid', async (importOriginal) => {
 
 import { CML, Constr, credentialToAddress, Lucid } from '@lucid-evolution/lucid';
 import { bytesToHex, hexToBytes } from '../cap-accumulator-tree.js';
+import { type StakingPoolDatumData, threadNftAssetName } from '../launch-schemas.js';
 import { STAKING_POOL_REDEEMER } from '../redeemer-indices.js';
 import { StakeAccumulator, type StakePosition } from '../stake-accumulator-tree.js';
 import { ACC_SCALE, advance, debtAt, owedAt, UNSTAKE_LOCK_MS, validityRangeFor } from '../staking-math.js';
@@ -49,7 +50,6 @@ import {
   PLATFORM_CHARGE_LOVELACE,
   StakingSubmitter,
 } from '../staking-submitter.js';
-import { type StakingPoolDatumData, threadNftAssetName } from '../tier-a-schemas.js';
 
 const NETWORK = 'Preprod' as const;
 const LAUNCH_ID = 'ab'.repeat(32);

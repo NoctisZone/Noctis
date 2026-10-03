@@ -52,6 +52,7 @@ import {
   validatorToAddress,
 } from '@lucid-evolution/lucid';
 import { bytesToHex, type CapProofStep, hexToBytes, recomputeCapRoot } from './cap-accumulator-tree.js';
+import { type StakingPoolDatumData, StakingPoolDatumSchema, settlementDatum } from './launch-schemas.js';
 import { selectStakingPoolUtxo } from './launch-utxo-lookup.js';
 import { STAKING_POOL_REDEEMER } from './redeemer-indices.js';
 import { NO_POSITION, StakeAccumulator, type StakePosition, stakeLeafFor } from './stake-accumulator-tree.js';
@@ -65,7 +66,6 @@ import {
   UNSTAKE_LOCK_MS,
   validityRangeFor,
 } from './staking-math.js';
-import { type StakingPoolDatumData, StakingPoolDatumSchema, settlementDatum } from './tier-a-schemas.js';
 
 function fromHex(hex: string): Uint8Array {
   return new Uint8Array(Buffer.from(hex, 'hex'));
@@ -327,7 +327,7 @@ export class StakingSubmitter {
    *
    * Blockfrost gives a redeemer's DATA HASH rather than its bytes, and indexes
    * the bytes alongside datums — so this is two lookups per spend, the same
-   * route tier-a-trade-history-reader.ts already established.
+   * route trade-history-reader.ts already established.
    */
   private async readPoolRedeemers(): Promise<PoolEvent[]> {
     const bf = async <T>(path: string): Promise<T> => {

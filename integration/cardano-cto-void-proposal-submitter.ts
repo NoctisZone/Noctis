@@ -30,8 +30,8 @@ import {
   requireCtoDatum,
   toHex,
 } from './cardano-cto-anchor-submitter.js';
+import { settlementDatum } from './launch-schemas.js';
 import { CTO_GOVERNANCE_REDEEMER } from './redeemer-indices.js';
-import { settlementDatum } from './tier-a-schemas.js';
 
 /** Same fixed figure as cto_governance.ak's own constant. */
 const CHALLENGE_WINDOW_MS = 86_400_000n;

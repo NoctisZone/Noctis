@@ -1,14 +1,14 @@
 // ============================================================================
 // Noctis Zone — Cardano Preprod milestone, Phase 6
 // ClaimVested (vesting.ak) — creator-signed. See
-// tier-a-claims-submitter.ts's header for the fix this depends on.
+// vesting-claims-submitter.ts's header for the fix this depends on.
 // ============================================================================
 // Input: single JSON object on stdin, including the creator's PLAINTEXT
 // 64-byte extended private key hex (decrypted server-side by the PHP
 // caller). Never logged. Output: {txHash} on stdout.
 // ============================================================================
 
-import { TierAClaimsSubmitter } from '../tier-a-claims-submitter.js';
+import { VestingClaimsSubmitter } from '../vesting-claims-submitter.js';
 import {
   CARDANO_NETWORK_MAP,
   loadPlutusBlueprint,
@@ -51,7 +51,7 @@ async function main() {
 
   const blueprint = loadPlutusBlueprint(__dirname);
 
-  const submitter = new TierAClaimsSubmitter({
+  const submitter = new VestingClaimsSubmitter({
     blockfrostProjectId: input.blockfrostProjectId,
     blockfrostUrl: input.blockfrostUrl,
     network: CARDANO_NETWORK_MAP[input.network],

@@ -29,7 +29,7 @@
 import type { WalletApi } from '@lucid-evolution/lucid';
 import { rebuildCapAccumulator } from '../cap-accumulator-from-history.js';
 import { LucidDarkVeilClaimSubmitter, type LucidDarkVeilClaimSubmitterConfig } from '../darkveil-claim-submitter.js';
-import { TierATradeHistoryReader } from '../tier-a-trade-history-reader.js';
+import { TradeHistoryReader } from '../trade-history-reader.js';
 
 export interface ClaimTierBParams {
   dvAmount: bigint;
@@ -55,7 +55,7 @@ export async function claimTierBTokens(
 ): Promise<{ txHash: string }> {
   const submitter = new LucidDarkVeilClaimSubmitter(config);
   const datum = await submitter.readCurveDatum();
-  const reader = new TierATradeHistoryReader({
+  const reader = new TradeHistoryReader({
     blockfrostProjectId: config.blockfrostProjectId,
     blockfrostUrl: config.blockfrostUrl,
     bondingCurveAddress: submitter.curveAddress,

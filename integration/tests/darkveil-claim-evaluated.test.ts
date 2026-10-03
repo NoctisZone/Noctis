@@ -53,13 +53,13 @@ vi.mock('@meshsdk/core', async (importOriginal) => {
 import { CapAccumulator } from '../cap-accumulator-tree.js';
 import { testBit } from '../claim-bitmap.js';
 import { buildDvAllocationTree } from '../dv-allocation-tree.js';
-import { scriptHashOf } from '../reference-script.js';
-import { buildGenesisDatums } from '../tier-a-genesis-datums.js';
+import { buildGenesisDatums } from '../genesis-datums.js';
 import {
   type BondingCurveTierBDatumData,
   BondingCurveTierBDatumSchema,
   threadNftAssetName,
-} from '../tier-a-schemas.js';
+} from '../launch-schemas.js';
+import { scriptHashOf } from '../reference-script.js';
 import { LucidTierBCurveSubmitter } from '../tier-b-curve-submitter.js';
 import {
   at,

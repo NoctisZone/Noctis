@@ -34,9 +34,9 @@ import {
 import { type AnchoredBallot, deriveAnchorReferenceHex } from './cto-anchor-reference.js';
 import { threadUnit } from './cto-disposition.js';
 import { type DatumUtxo, readByUnit, type TakeoverOutput, type TakeoverTxPlan } from './cto-takeover-tx.js';
+import { type LpEscrowDatumData, LpEscrowDatumSchema, settlementDatum } from './launch-schemas.js';
 import type { CurveNetwork, PlanAssets } from './mesh-curve-spend.js';
 import { CTO_GOVERNANCE_REDEEMER } from './redeemer-indices.js';
-import { type LpEscrowDatumData, LpEscrowDatumSchema, settlementDatum } from './tier-a-schemas.js';
 
 // The governance validator's own windows, in milliseconds.
 export const CHALLENGE_WINDOW_MS = 86_400_000n;

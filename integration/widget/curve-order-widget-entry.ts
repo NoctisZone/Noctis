@@ -4,12 +4,12 @@
 // webpack browser target (see ../webpack.widgets.config.cjs's
 // curve-order-widget block) — bundled to assets/js/curve-order-widget.bundle.js
 // in the theme, enqueued only on Cardano Launch curve_live launch pages
-// (lp-chart-buy-tier-b.php), following the exact enqueue pattern the linear curve
-// buy widget already uses.
+// (lp-chart-buy-tier-b.php), following the enqueue pattern the other widgets
+// use.
 //
 // Exposes window.NoctisCurveOrder, a plain object of async functions the
-// theme's vanilla JS calls directly from DOM event handlers — same shape as
-// window.NoctisTierABuy (tier-a-buy-widget-entry.ts).
+// theme's vanilla JS calls directly from DOM event handlers — the same shape
+// as the other widgets' window globals.
 //
 // WHY THIS IS AN ORDER WIDGET AND NOT A DIRECT-SPEND WIDGET: the linear curve
 // widget spends the curve UTXO itself, which works because Lucid Evolution
@@ -69,10 +69,10 @@
 import type { Network as LucidNetwork, UTxO, WalletApi } from '@lucid-evolution/lucid';
 import { Blockfrost, getAddressDetails, Lucid, type LucidEvolution } from '@lucid-evolution/lucid';
 import { buyCost, spotPrice } from '../curve-pricing.js';
+import type { BondingCurveTierBDatumData, OrderDatumData } from '../launch-schemas.js';
+import { BondingCurveTierBDatumSchema } from '../launch-schemas.js';
 import { selectLaunchUtxo } from '../launch-utxo-lookup.js';
 import { OrderSubmitter } from '../order-submitter.js';
-import type { BondingCurveTierBDatumData, OrderDatumData } from '../tier-a-schemas.js';
-import { BondingCurveTierBDatumSchema } from '../tier-a-schemas.js';
 
 export interface CurveOrderWidgetConfig {
   blockfrostProjectId: string;

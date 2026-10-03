@@ -29,12 +29,6 @@ import { type CtoGovernanceDatumData, CtoGovernanceDatumSchema } from './cardano
 import { planVestingFreeze, sameCredential, threadUnit } from './cto-disposition.js';
 import { type DatumUtxo, REDIRECT_ACTION, readByUnit, type TakeoverTxPlan } from './cto-takeover-tx.js';
 import {
-  BONDING_CURVE_TIER_B_REDEEMER,
-  LP_ESCROW_REDEEMER,
-  TOKEN_METADATA_REDEEMER,
-  VESTING_REDEEMER,
-} from './redeemer-indices.js';
-import {
   type BondingCurveTierBDatumData,
   BondingCurveTierBDatumSchema,
   cip68BaseName,
@@ -46,7 +40,13 @@ import {
   type VestingDatumData,
   VestingDatumSchema,
   venueAssetName,
-} from './tier-a-schemas.js';
+} from './launch-schemas.js';
+import {
+  BONDING_CURVE_TIER_B_REDEEMER,
+  LP_ESCROW_REDEEMER,
+  TOKEN_METADATA_REDEEMER,
+  VESTING_REDEEMER,
+} from './redeemer-indices.js';
 import { blake2b224Hex, type VenuePoolConfigData, VenuePoolConfigSchema } from './venue-pool.js';
 import { VENUE_POOL_ACTION } from './venue-swap.js';
 

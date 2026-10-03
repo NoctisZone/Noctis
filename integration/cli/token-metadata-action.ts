@@ -16,7 +16,7 @@
 // Output: single JSON object on stdout (bigints stringified) or { error }.
 // ============================================================================
 
-import type { Cip68FungibleMetadata } from '../tier-a-schemas.js';
+import type { Cip68FungibleMetadata } from '../launch-schemas.js';
 import { metadataWithLogo, TokenMetadataSubmitter } from '../token-metadata-submitter.js';
 import {
   CARDANO_NETWORK_MAP,

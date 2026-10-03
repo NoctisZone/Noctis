@@ -2,13 +2,12 @@
 // Node-platform CLI bundles only (for PHP's proc_open-invoked one-shot
 // checks). Run: node build.mjs [--watch]
 //
-// (2026-07-17): the browser widget bundles (DarkVeil, the linear curve buy) moved
-// OFF esbuild entirely, to webpack.widgets.config.cjs — esbuild's WASM
-// handling cannot correctly link wasm-bindgen's `--target bundler` output
-// that several Lucid Evolution/Midnight transitive deps ship, which broke
-// window.NoctisDarkVeil/window.NoctisTierABuy at runtime with no build-time
-// error. Run `npm run build:widgets` for those. This file no longer builds
-// or references either widget.
+// (2026-07-17): the browser widget bundles moved OFF esbuild entirely, to
+// webpack.widgets.config.cjs — esbuild's WASM handling cannot correctly link
+// wasm-bindgen's `--target bundler` output that several Lucid
+// Evolution/Midnight transitive deps ship, which broke the widgets' window
+// globals at runtime with no build-time error. Run `npm run build:widgets`
+// for those. This file builds no widget.
 
 import { createHash } from "node:crypto";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
@@ -136,7 +135,7 @@ const verifyCtoVoterRegistrationCliConfig = {
 	// @midnight-ntwrk/ledger-v8's WASM loader, which needs a real
 	// import.meta.url — the same reasoning cliConfig above documents) AND
 	// Cardano/Lucid Evolution (verifyData/getAddressDetails, transitively
-	// needing CML's WASM loader, which readTierALaunchStateCliConfig's own
+	// needing CML's WASM loader, which readLaunchStateCliConfig's own
 	// comment says needs a real bare __dirname instead). Tried CJS first
 	// (matching the other Lucid-only CLIs) — failed at runtime with
 	// `fileURLToPath(undefined)` inside midnight-ledger-wasm's loader
@@ -192,7 +191,7 @@ const checkCtoBadgeStatusCliConfig = {
 	},
 };
 
-const readTierALaunchStateCliConfig = {
+const readLaunchStateCliConfig = {
 	entryPoints: [join(__dirname, "cli/read-tier-a-launch-state.ts")],
 	outfile: join(__dirname, "cli/dist/read-tier-a-launch-state.cjs"),
 	bundle: true,
@@ -216,7 +215,7 @@ const buildGenesisDatumsCliConfig = {
 	outfile: join(__dirname, "cli/dist/build-tier-a-genesis-datums.cjs"),
 	bundle: true,
 	platform: "node",
-	// CJS for the same reason as readTierALaunchStateCliConfig above (a Lucid
+	// CJS for the same reason as readLaunchStateCliConfig above (a Lucid
 	// Evolution transitive dep needs a real bare __dirname).
 	format: "cjs",
 	target: "node20",
@@ -328,7 +327,7 @@ const anchorDvAllocationRootCliConfig = {
 	outfile: join(__dirname, "cli/dist/anchor-dv-allocation-root-tier-b.cjs"),
 	bundle: true,
 	platform: "node",
-	format: "cjs", // same __dirname/CML-WASM reasoning as readTierALaunchStateCliConfig
+	format: "cjs", // same __dirname/CML-WASM reasoning as readLaunchStateCliConfig
 	target: "node20",
 	sourcemap,
 	logLevel: "info",
@@ -344,7 +343,7 @@ const graduateTierBLaunchCliConfig = {
 	outfile: join(__dirname, "cli/dist/graduate-tier-b-launch.cjs"),
 	bundle: true,
 	platform: "node",
-	format: "cjs", // same __dirname/CML-WASM reasoning as readTierALaunchStateCliConfig
+	format: "cjs", // same __dirname/CML-WASM reasoning as readLaunchStateCliConfig
 	target: "node20",
 	sourcemap,
 	logLevel: "info",
@@ -352,7 +351,7 @@ const graduateTierBLaunchCliConfig = {
 
 // cto_governance.ak's remaining 3 real redeemers with no prior submitter
 // (ExecuteProposal/VoidPendingProposal/ReclaimRelayerBond) — same
-// __dirname/CML-WASM CJS reasoning as readTierALaunchStateCliConfig.
+// __dirname/CML-WASM CJS reasoning as readLaunchStateCliConfig.
 const executeCtoProposalCliConfig = {
 	entryPoints: [join(__dirname, "cli/execute-cto-proposal.ts")],
 	outfile: join(__dirname, "cli/dist/execute-cto-proposal.cjs"),
@@ -476,7 +475,7 @@ const startVestingCliConfig = {
 	outfile: join(__dirname, "cli/dist/start-vesting-tier-a.cjs"),
 	bundle: true,
 	platform: "node",
-	format: "cjs", // same __dirname/CML-WASM reasoning as readTierALaunchStateCliConfig
+	format: "cjs", // same __dirname/CML-WASM reasoning as readLaunchStateCliConfig
 	target: "node20",
 	sourcemap,
 	logLevel: "info",
@@ -487,7 +486,7 @@ const proposeDexChangeCliConfig = {
 	outfile: join(__dirname, "cli/dist/propose-dex-change-tier-a.cjs"),
 	bundle: true,
 	platform: "node",
-	format: "cjs", // same __dirname/CML-WASM reasoning as readTierALaunchStateCliConfig
+	format: "cjs", // same __dirname/CML-WASM reasoning as readLaunchStateCliConfig
 	target: "node20",
 	sourcemap,
 	logLevel: "info",
@@ -498,7 +497,7 @@ const executeDexChangeCliConfig = {
 	outfile: join(__dirname, "cli/dist/execute-dex-change-tier-a.cjs"),
 	bundle: true,
 	platform: "node",
-	format: "cjs", // same __dirname/CML-WASM reasoning as readTierALaunchStateCliConfig
+	format: "cjs", // same __dirname/CML-WASM reasoning as readLaunchStateCliConfig
 	target: "node20",
 	sourcemap,
 	logLevel: "info",
@@ -509,7 +508,7 @@ const migrateLpToMinswapCliConfig = {
 	outfile: join(__dirname, "cli/dist/migrate-lp-to-minswap-tier-a.cjs"),
 	bundle: true,
 	platform: "node",
-	format: "cjs", // same __dirname/CML-WASM reasoning as readTierALaunchStateCliConfig
+	format: "cjs", // same __dirname/CML-WASM reasoning as readLaunchStateCliConfig
 	target: "node20",
 	sourcemap,
 	logLevel: "info",
@@ -520,7 +519,7 @@ const claimVestedCliConfig = {
 	outfile: join(__dirname, "cli/dist/claim-vested-tier-a.cjs"),
 	bundle: true,
 	platform: "node",
-	format: "cjs", // same __dirname/CML-WASM reasoning as readTierALaunchStateCliConfig
+	format: "cjs", // same __dirname/CML-WASM reasoning as readLaunchStateCliConfig
 	target: "node20",
 	sourcemap,
 	logLevel: "info",
@@ -532,7 +531,7 @@ const readTradeHistoryCliConfig = {
 	outfile: join(__dirname, "cli/dist/read-tier-a-trade-history.cjs"),
 	bundle: true,
 	platform: "node",
-	format: "cjs", // same __dirname/CML-WASM reasoning as readTierALaunchStateCliConfig
+	format: "cjs", // same __dirname/CML-WASM reasoning as readLaunchStateCliConfig
 	target: "node20",
 	sourcemap,
 	logLevel: "info",
@@ -543,7 +542,7 @@ const checkCtoCreatorActivityCliConfig = {
 	outfile: join(__dirname, "cli/dist/check-cto-creator-activity-tier-a.cjs"),
 	bundle: true,
 	platform: "node",
-	format: "cjs", // same __dirname/CML-WASM reasoning as readTierALaunchStateCliConfig
+	format: "cjs", // same __dirname/CML-WASM reasoning as readLaunchStateCliConfig
 	target: "node20",
 	sourcemap,
 	logLevel: "info",
@@ -791,7 +790,7 @@ const publishAllowlistRootCliConfig = {
 };
 
 // Pure Lucid Evolution address parsing (getAddressDetails) — CJS for
-// the same __dirname/CML-WASM reasoning as readTierALaunchStateCliConfig.
+// the same __dirname/CML-WASM reasoning as readLaunchStateCliConfig.
 const resolveAddressVkhCliConfig = {
 	entryPoints: [join(__dirname, "cli/resolve-address-payment-key-hashes.ts")],
 	outfile: join(__dirname, "cli/dist/resolve-address-payment-key-hashes.cjs"),
@@ -908,7 +907,7 @@ async function copyWasmFiles() {
 	const destDirs = new Set([
 		dirname(cliConfig.outfile),
 		dirname(allowlistTreeCliConfig.outfile),
-		dirname(readTierALaunchStateCliConfig.outfile),
+		dirname(readLaunchStateCliConfig.outfile),
 		dirname(buildGenesisDatumsCliConfig.outfile),
 		dirname(usdToAdaCliConfig.outfile),
 		dirname(mintLaunchCliConfig.outfile),
@@ -1067,7 +1066,7 @@ async function run() {
 	const configs = [
 		cliConfig,
 		allowlistTreeCliConfig,
-		readTierALaunchStateCliConfig,
+		readLaunchStateCliConfig,
 		buildGenesisDatumsCliConfig,
 		usdToAdaCliConfig,
 		gateDeployFieldsCliConfig,

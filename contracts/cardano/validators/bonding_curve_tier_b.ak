@@ -165,7 +165,7 @@ pub type MerkleProofStep {
 //
 // So: a new field that a redeemer writes belongs at the FRONT, next to its
 // neighbours. A new read-only field belongs at the BACK. Either way the
-// off-chain schema in integration/tier-a-schemas.ts must move with it — the
+// off-chain schema in integration/launch-schemas.ts must move with it — the
 // encoding is positional, and a mismatch decodes to the wrong field rather
 // than failing.
 pub type BondingCurveTierBDatum {

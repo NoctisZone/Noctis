@@ -17,7 +17,7 @@
 //     the same reasoning in cto_governance.compact.
 //
 // Reuses two already-real, already-tested pieces rather than duplicating
-// their logic: tier-a-trade-history-reader.ts's TierATradeHistoryReader
+// their logic: trade-history-reader.ts's TradeHistoryReader
 // (for the timestamp, via its own isCreatorAction flag) and the same live-
 // UTxO-datum-read pattern read-tier-a-launch-state.ts already established
 // (for the current balance) — this file's own Blockfrost/Lucid setup is
@@ -39,8 +39,8 @@
 // ============================================================================
 
 import { Blockfrost, Data, Lucid, validatorToAddress } from '@lucid-evolution/lucid';
-import { BondingCurveTierBDatumSchema, loadValidator } from '../tier-a-schemas.js';
-import { TierATradeHistoryReader } from '../tier-a-trade-history-reader.js';
+import { BondingCurveTierBDatumSchema, loadValidator } from '../launch-schemas.js';
+import { TradeHistoryReader } from '../trade-history-reader.js';
 import { CARDANO_NETWORK_MAP, loadPlutusBlueprint, parseJsonStdin, readStdin, requireFieldsFalsy } from './cli-io.js';
 
 declare const __dirname: string;
@@ -105,7 +105,7 @@ async function main() {
   // address only for this first pass; ClaimCreatorFees alone is a real,
   // sufficient activity signal, and adding vesting's ClaimVested tracking
   // is a same-shape follow-up, not a blocker.
-  const historyReader = new TierATradeHistoryReader({
+  const historyReader = new TradeHistoryReader({
     launchIdHex: input.launchIdHex,
     bondingCurveAddress,
     blockfrostProjectId: input.blockfrostProjectId,

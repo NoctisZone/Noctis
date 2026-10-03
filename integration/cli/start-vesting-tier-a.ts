@@ -2,7 +2,7 @@
 // Noctis Zone — Cardano Preprod milestone, Phase 5
 // StartVesting (vesting.ak) — standalone, independently retriable.
 // Independent of graduation (no cross-contract check in either direction —
-// see tier-a-graduation-submitter.ts's header), so it runs after a
+// see vesting-start-submitter.ts's header), so it runs after a
 // graduation as its second transaction, or alone to recover when that
 // second transaction failed, without touching curve or escrow state.
 // ============================================================================
@@ -11,7 +11,7 @@
 // caller). Never logged. Output: {txHash} on stdout.
 // ============================================================================
 
-import { TierAGraduationSubmitter } from '../tier-a-graduation-submitter.js';
+import { VestingStartSubmitter } from '../vesting-start-submitter.js';
 import {
   CARDANO_NETWORK_MAP,
   loadPlutusBlueprint,
@@ -52,7 +52,7 @@ async function main() {
 
   const blueprint = loadPlutusBlueprint(__dirname);
 
-  const submitter = new TierAGraduationSubmitter({
+  const submitter = new VestingStartSubmitter({
     blockfrostProjectId: input.blockfrostProjectId,
     blockfrostUrl: input.blockfrostUrl,
     network: CARDANO_NETWORK_MAP[input.network],

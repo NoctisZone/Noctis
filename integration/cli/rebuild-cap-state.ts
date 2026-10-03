@@ -24,9 +24,9 @@
 import { Blockfrost, Data, Lucid, validatorToAddress } from '@lucid-evolution/lucid';
 import { rebuildCapAccumulatorFrom } from '../cap-accumulator-from-history.js';
 import { bytesToHex } from '../cap-accumulator-tree.js';
+import { BondingCurveTierBDatumSchema } from '../launch-schemas.js';
 import { selectLaunchUtxo } from '../launch-utxo-lookup.js';
-import { BondingCurveTierBDatumSchema } from '../tier-a-schemas.js';
-import { TierATradeHistoryReader } from '../tier-a-trade-history-reader.js';
+import { TradeHistoryReader } from '../trade-history-reader.js';
 import {
   CARDANO_NETWORK_MAP,
   jsonSafe,
@@ -95,7 +95,7 @@ async function main() {
   if (!found.utxo.datum) throw new Error('The launch UTXO carries no inline datum.');
   const { cap_root } = Data.from<{ cap_root: string }>(found.utxo.datum, schema as never);
 
-  const reader = new TierATradeHistoryReader({
+  const reader = new TradeHistoryReader({
     blockfrostProjectId: input.blockfrostProjectId,
     blockfrostUrl: input.blockfrostUrl,
     bondingCurveAddress: curveAddress,

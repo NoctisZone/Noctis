@@ -29,7 +29,7 @@ vi.mock('@lucid-evolution/lucid', async (importOriginal) => {
 });
 
 import { applyParamsToScript, credentialToAddress, Lucid } from '@lucid-evolution/lucid';
-import { cip68FungibleAssetName, cip68ReferenceAssetName, threadNftAssetName } from '../tier-a-schemas.js';
+import { cip68FungibleAssetName, cip68ReferenceAssetName, threadNftAssetName } from '../launch-schemas.js';
 import { metadataWithLogo, TokenMetadataSubmitter, toHex } from '../token-metadata-submitter.js';
 
 function fakeKeyHash(fill: number): string {

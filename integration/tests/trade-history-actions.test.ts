@@ -24,7 +24,7 @@ import {
   CURVE_FIELDS,
   VESTING_ACTIONS,
   VESTING_FIELDS,
-} from '../tier-a-trade-history-reader.js';
+} from '../trade-history-reader.js';
 
 interface Blueprint {
   definitions: Record<string, { anyOf?: Array<{ title: string; index: number }> }>;

@@ -1,4 +1,4 @@
-// Tests for tier-a-trade-history-reader.ts — the walk that turns a chain of
+// Tests for trade-history-reader.ts — the walk that turns a chain of
 // script spends back into a trade feed.
 //
 // Two failure modes here have already happened for real, and both are silent:
@@ -25,17 +25,17 @@ import { join } from 'node:path';
 import { Constr, credentialToAddress, Data, type Data as LucidData } from '@lucid-evolution/lucid';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { buyCost, sellProceeds } from '../curve-pricing.js';
+import { buildGenesisDatums } from '../genesis-datums.js';
 import { BONDING_CURVE_TIER_B_REDEEMER } from '../redeemer-indices.js';
-import { buildGenesisDatums } from '../tier-a-genesis-datums.js';
 import {
   BONDING_CURVE_TIER_B_ACTIONS,
   CURVE_FIELDS,
   decodeBatchOrders,
   priceBatch,
-  TierATradeHistoryReader,
+  TradeHistoryReader,
   toFeedRows,
   VESTING_ACTIONS,
-} from '../tier-a-trade-history-reader.js';
+} from '../trade-history-reader.js';
 
 const blueprint = JSON.parse(
   readFileSync(join(import.meta.dirname, '..', '..', 'contracts', 'cardano', 'plutus.json'), 'utf8'),
@@ -128,7 +128,7 @@ function chainFetch(utxos: Array<{ tx_hash: string; inline_datum: string | null 
 const redeemerCbor = (index: number, fields: LucidData[]) => Data.to(new Constr(index, fields));
 
 function reader() {
-  return new TierATradeHistoryReader({
+  return new TradeHistoryReader({
     blockfrostProjectId: 'k',
     blockfrostUrl: 'https://bf.test',
     bondingCurveAddress: CURVE_ADDR,
@@ -180,7 +180,7 @@ describe('getCurveTradeHistory', () => {
 
   it('skips a UTXO whose datum cannot be decoded rather than throwing', async () => {
     const { hex, launchId } = await curveDatum();
-    const r = new TierATradeHistoryReader({
+    const r = new TradeHistoryReader({
       blockfrostProjectId: 'k',
       blockfrostUrl: 'https://bf.test',
       bondingCurveAddress: CURVE_ADDR,
@@ -206,7 +206,7 @@ describe('getCurveTradeHistory', () => {
 
   it('records the genesis transaction as a Mint and stops there', async () => {
     const { hex, launchId } = await curveDatum();
-    const r = new TierATradeHistoryReader({
+    const r = new TradeHistoryReader({
       blockfrostProjectId: 'k',
       blockfrostUrl: 'https://bf.test',
       bondingCurveAddress: CURVE_ADDR,
@@ -226,7 +226,7 @@ describe('getCurveTradeHistory', () => {
 
   it('decodes a buy, prices it from the pre-trade datum, and walks to genesis', async () => {
     const { hex, launchId } = await curveDatum();
-    const r = new TierATradeHistoryReader({
+    const r = new TradeHistoryReader({
       blockfrostProjectId: 'k',
       blockfrostUrl: 'https://bf.test',
       bondingCurveAddress: CURVE_ADDR,
@@ -268,7 +268,7 @@ describe('getCurveTradeHistory', () => {
     // The batch bug: an order's ApplyOrder is constructor 0, which read
     // against the curve's table decodes as ActivateCurve with no fields.
     const { hex, launchId } = await curveDatum();
-    const r = new TierATradeHistoryReader({
+    const r = new TradeHistoryReader({
       blockfrostProjectId: 'k',
       blockfrostUrl: 'https://bf.test',
       bondingCurveAddress: CURVE_ADDR,
@@ -309,7 +309,7 @@ describe('getCurveTradeHistory', () => {
 
   it('flags a trade made by the creator', async () => {
     const { hex, launchId } = await curveDatum();
-    const r = new TierATradeHistoryReader({
+    const r = new TradeHistoryReader({
       blockfrostProjectId: 'k',
       blockfrostUrl: 'https://bf.test',
       bondingCurveAddress: CURVE_ADDR,
@@ -342,7 +342,7 @@ describe('getCurveTradeHistory', () => {
     // A transaction that spent our UTXO but whose redeemer belongs to another
     // script contributes no event — it is not invented as Unknown.
     const { hex, launchId } = await curveDatum();
-    const r = new TierATradeHistoryReader({
+    const r = new TradeHistoryReader({
       blockfrostProjectId: 'k',
       blockfrostUrl: 'https://bf.test',
       bondingCurveAddress: CURVE_ADDR,
@@ -373,7 +373,7 @@ describe('getCurveTradeHistory', () => {
 
   it('marks an event Unknown when the redeemer cannot be fetched', async () => {
     const { hex, launchId } = await curveDatum();
-    const r = new TierATradeHistoryReader({
+    const r = new TradeHistoryReader({
       blockfrostProjectId: 'k',
       blockfrostUrl: 'https://bf.test',
       bondingCurveAddress: CURVE_ADDR,
@@ -404,7 +404,7 @@ describe('getCurveTradeHistory', () => {
 
   it('stops at stopAtTxHash without fetching anything older', async () => {
     const { hex, launchId } = await curveDatum();
-    const r = new TierATradeHistoryReader({
+    const r = new TradeHistoryReader({
       blockfrostProjectId: 'k',
       blockfrostUrl: 'https://bf.test',
       bondingCurveAddress: CURVE_ADDR,
@@ -494,7 +494,7 @@ describe('batches', () => {
 
   it('prices a batch from its pre-batch datum and keeps the raw redeemer', async () => {
     const { hex, launchId } = await curveDatum();
-    const r = new TierATradeHistoryReader({
+    const r = new TradeHistoryReader({
       blockfrostProjectId: 'k',
       blockfrostUrl: 'https://bf.test',
       bondingCurveAddress: CURVE_ADDR,

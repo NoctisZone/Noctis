@@ -25,8 +25,8 @@ vi.mock('@lucid-evolution/lucid', async (importOriginal) => {
 
 import { CML, credentialToAddress, Lucid } from '@lucid-evolution/lucid';
 import { bytesToHex, CAP_EMPTY_ROOT } from '../cap-accumulator-tree.js';
-import type { BondingCurveTierBDatumData } from '../tier-a-schemas.js';
-import { threadNftAssetName } from '../tier-a-schemas.js';
+import type { BondingCurveTierBDatumData } from '../launch-schemas.js';
+import { threadNftAssetName } from '../launch-schemas.js';
 /// Every fixture below starts from a curve nothing has been taken from, so the
 /// accumulator is empty and each buyer proves their own empty slot — the same
 /// state genesis writes. A fresh instance per call, since a submitter that

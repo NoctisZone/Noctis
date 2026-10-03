@@ -10,7 +10,7 @@
 // shares ONE address per validator and is distinguished purely by its
 // datum's launch_id field).
 //
-// Schemas are imported from ../tier-a-schemas.ts, the SAME module
+// Schemas are imported from ../launch-schemas.ts, the SAME module
 // read-tier-a-launch-state.ts (Phase 2) uses to decode — Data.to() here is
 // the direct inverse of that file's Data.from(), so the two can never
 // silently drift apart (the class of bug already caused once for real
@@ -115,7 +115,7 @@ import {
   venueAssetName,
   type ZkAnchorDatumData,
   ZkAnchorDatumSchema,
-} from './tier-a-schemas.js';
+} from './launch-schemas.js';
 
 declare const __dirname: string;
 
@@ -746,7 +746,7 @@ export async function buildGenesisDatums(input: BuildGenesisDatumsInput) {
   //
   // Wrapped as the Pool variant of StakingDatum (Constr 0 with ONE nested
   // field), not the bare StakingPoolDatum — see StakingDatumShape's own
-  // comment in tier-a-schemas.ts.
+  // comment in launch-schemas.ts.
   const stakingPoolDatum: StakingPoolDatumData = {
     launch_id: launchIdHex,
     creator_pub_key_hash: input.creatorPubKeyHashHex,

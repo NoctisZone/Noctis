@@ -24,9 +24,9 @@
 
 import type { LucidEvolution, Network as LucidNetwork, SpendingValidator, UTxO } from '@lucid-evolution/lucid';
 import { Blockfrost, CML, Constr, Data, Lucid, validatorToAddress } from '@lucid-evolution/lucid';
+import { type ThreadNftRole, type VestingDatumData, VestingDatumSchema } from './launch-schemas.js';
 import { selectLaunchUtxo } from './launch-utxo-lookup.js';
 import { VESTING_REDEEMER } from './redeemer-indices.js';
-import { type ThreadNftRole, type VestingDatumData, VestingDatumSchema } from './tier-a-schemas.js';
 
 /** Same conversion tier-b-curve-submitter.ts's activateCurve() uses, proved
  *  on real Preprod — reused verbatim rather than re-derived. */
@@ -38,7 +38,7 @@ function extendedHexToBech32PrivateKey(extendedHex: string): string {
   return CML.PrivateKey.from_extended_bytes(bytes).to_bech32();
 }
 
-export interface TierAGraduationConfig {
+export interface VestingStartConfig {
   blockfrostProjectId: string;
   blockfrostUrl: string;
   network: LucidNetwork;
@@ -65,12 +65,12 @@ export interface CreatorSigner {
   privateKeyExtendedHex: string;
 }
 
-export class TierAGraduationSubmitter {
+export class VestingStartSubmitter {
   private lucidPromise: Promise<LucidEvolution>;
   private vestingValidator: SpendingValidator;
   private vestingAddress: string;
 
-  constructor(private config: TierAGraduationConfig) {
+  constructor(private config: VestingStartConfig) {
     this.vestingValidator = { type: 'PlutusV3', script: config.vestingScriptCbor };
     this.vestingAddress = validatorToAddress(config.network, this.vestingValidator);
     this.lucidPromise = Lucid(new Blockfrost(config.blockfrostUrl, config.blockfrostProjectId), config.network);

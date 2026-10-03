@@ -32,8 +32,8 @@
 
 import type { LucidEvolution, Network as LucidNetwork, SpendingValidator, UTxO } from '@lucid-evolution/lucid';
 import { Blockfrost, Data, Lucid, validatorToAddress } from '@lucid-evolution/lucid';
+import { CertificateTypeSchema, type ZkAnchorDatumData, ZkAnchorDatumSchema } from './launch-schemas.js';
 import { selectLaunchUtxo } from './launch-utxo-lookup.js';
-import { CertificateTypeSchema, type ZkAnchorDatumData, ZkAnchorDatumSchema } from './tier-a-schemas.js';
 import type { AnchorCertificateParams, CardanoTxSubmitter } from './zk-cert-relayer.js';
 
 // ============================================================================
@@ -55,7 +55,7 @@ import type { AnchorCertificateParams, CardanoTxSubmitter } from './zk-cert-rela
  * in the string itself, so this array's order must stay in sync with
  * zk_anchor.ak's actual enum declaration order.
  */
-// CertificateTypeSchema / ZkAnchorDatum* now live in tier-a-schemas.ts — the
+// CertificateTypeSchema / ZkAnchorDatum* now live in launch-schemas.ts — the
 // genesis builder authors this datum too, so a private copy here would be a
 // second definition of the same on-chain shape. Imported above.
 

@@ -245,7 +245,7 @@ for (const v of blueprint.validators) {
  * script per index position per update site, against ~0.15 for a read, which
  * is why paying 27 bytes of reads to save 3,511 of updates is the right trade.
  * No behaviour changed; the datum encoding is positional, so
- * integration/tier-a-schemas.ts moved with it.
+ * integration/launch-schemas.ts moved with it.
  *
  * Before that, refusing a graduation output that carries a staking
  * credential: the linear curve +43, Cardano Launch +44. `Graduate` is permissionless, so without

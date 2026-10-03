@@ -66,8 +66,8 @@ vi.mock('../key-curve-spend-wallet.js', () => ({
 import { CML, credentialToAddress, Lucid } from '@lucid-evolution/lucid';
 import { bytesToHex, CAP_EMPTY_ROOT, CapAccumulator, hexToBytes } from '../cap-accumulator-tree.js';
 import { Cip30CurveSpendWallet } from '../cip30-curve-spend-wallet.js';
+import { threadNftAssetName } from '../launch-schemas.js';
 import type { CurveSpendPlan } from '../mesh-curve-spend.js';
-import { threadNftAssetName } from '../tier-a-schemas.js';
 import { LucidTierBCurveSubmitter } from '../tier-b-curve-submitter.js';
 
 function fakeKeyHash(fill: number): string {

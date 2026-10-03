@@ -1,7 +1,7 @@
 // ============================================================================
 // Noctis Zone — Cardano Preprod milestone, Phase 5b
 // Real Migrate (lp_escrow.ak) + Minswap V2 pool-creation, combined in one
-// transaction. See tier-a-lp-migration-submitter.ts's header for the full
+// transaction. See lp-migration-submitter.ts's header for the full
 // design and verification trail.
 // ============================================================================
 // Input: single JSON object on stdin, including the governor's PLAINTEXT
@@ -10,7 +10,7 @@
 // on stdout.
 // ============================================================================
 
-import { TierALpMigrationSubmitter } from '../tier-a-lp-migration-submitter.js';
+import { LpMigrationSubmitter } from '../lp-migration-submitter.js';
 import {
   CARDANO_NETWORK_MAP,
   loadPlutusBlueprint,
@@ -64,7 +64,7 @@ async function main() {
 
   const blueprint = loadPlutusBlueprint(__dirname);
 
-  const submitter = new TierALpMigrationSubmitter({
+  const submitter = new LpMigrationSubmitter({
     blockfrostProjectId: input.blockfrostProjectId,
     blockfrostUrl: input.blockfrostUrl,
     network: CARDANO_NETWORK_MAP[input.network],

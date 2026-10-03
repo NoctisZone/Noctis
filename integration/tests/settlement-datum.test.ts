@@ -15,7 +15,7 @@ import {
   OutputReferenceSchema,
   SETTLEMENT_TAG_STANDIN_CBOR,
   settlementDatum,
-} from '../tier-a-schemas.js';
+} from '../launch-schemas.js';
 
 const TX = 'ab'.repeat(32);
 

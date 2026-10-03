@@ -4,13 +4,12 @@
 // datum's own claim, and refuse rather than choose when two UTXOs both answer.
 
 import { describe, expect, it, vi } from 'vitest';
-
+import { threadNftAssetName } from '../launch-schemas.js';
 import { selectLaunchUtxo } from '../launch-utxo-lookup.js';
-import { threadNftAssetName } from '../tier-a-schemas.js';
 
 // Only `Data.from` is replaced — the fixtures below are already decoded, and a
 // real CBOR decode is not what these tests are about. The rest of the module
-// has to stay real, because tier-a-schemas builds its shapes out of Data.Object
+// has to stay real, because launch-schemas builds its shapes out of Data.Object
 // and friends the moment it is imported.
 vi.mock('@lucid-evolution/lucid', async () => {
   const actual = await vi.importActual<typeof import('@lucid-evolution/lucid')>('@lucid-evolution/lucid');

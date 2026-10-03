@@ -45,9 +45,9 @@ import {
   toUnit,
   validatorToAddress,
 } from '@lucid-evolution/lucid';
+import type { OrderDatumData } from './launch-schemas.js';
+import { OrderDatumSchema, settlementDatum } from './launch-schemas.js';
 import { CURVE_ORDER_REDEEMER } from './redeemer-indices.js';
-import type { OrderDatumData } from './tier-a-schemas.js';
-import { OrderDatumSchema, settlementDatum } from './tier-a-schemas.js';
 
 /**
  * `curve_order.ak`'s `OrderRedeemer`, by name.

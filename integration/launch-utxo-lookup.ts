@@ -42,7 +42,7 @@
 import type { UTxO } from '@lucid-evolution/lucid';
 import { Data } from '@lucid-evolution/lucid';
 
-import { cip68BaseName, cip68ReferenceAssetName, type ThreadNftRole, threadNftAssetName } from './tier-a-schemas.js';
+import { cip68BaseName, cip68ReferenceAssetName, type ThreadNftRole, threadNftAssetName } from './launch-schemas.js';
 
 /** The minimum a datum must expose for this module to authenticate its UTXO. */
 export interface LaunchScopedDatum {

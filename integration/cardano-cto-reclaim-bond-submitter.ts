@@ -28,8 +28,8 @@ import {
   requireCtoDatum,
   toHex,
 } from './cardano-cto-anchor-submitter.js';
+import { settlementDatum } from './launch-schemas.js';
 import { CTO_GOVERNANCE_REDEEMER } from './redeemer-indices.js';
-import { settlementDatum } from './tier-a-schemas.js';
 
 /**
  * ReclaimRelayerBond, by name — see `redeemer-indices.ts`, whose table a test

@@ -33,7 +33,7 @@ vi.mock('@lucid-evolution/lucid', async (importOriginal) => {
 import { credentialToAddress, Lucid } from '@lucid-evolution/lucid';
 import { bytesToHex, CAP_EMPTY_ROOT, CapAccumulator } from '../cap-accumulator-tree.js';
 import { feeFloor, fromHex, LucidDarkVeilClaimSubmitter, toHex } from '../darkveil-claim-submitter.js';
-import { threadNftAssetName } from '../tier-a-schemas.js';
+import { threadNftAssetName } from '../launch-schemas.js';
 
 /// Every fixture here starts from a curve nothing has been taken from, so the
 /// accumulator is empty and the claimant proves their own empty slot — the

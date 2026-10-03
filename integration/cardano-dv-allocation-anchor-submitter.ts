@@ -22,8 +22,8 @@
 
 import type { Network as LucidNetwork } from '@lucid-evolution/lucid';
 import { CML } from '@lucid-evolution/lucid';
+import type { BondingCurveTierBDatumData } from './launch-schemas.js';
 import type { ReferenceScriptPointer } from './reference-script.js';
-import type { BondingCurveTierBDatumData } from './tier-a-schemas.js';
 import { LucidTierBCurveSubmitter } from './tier-b-curve-submitter.js';
 
 function fromHex(hex: string): Uint8Array {

@@ -40,7 +40,7 @@
 
 import { Constr, Data, StakingCredentialSchema } from '@lucid-evolution/lucid';
 import { blake2b } from '@noble/hashes/blake2.js';
-import { VENUE_ROLES, venueAssetName } from './tier-a-schemas.js';
+import { VENUE_ROLES, venueAssetName } from './launch-schemas.js';
 
 /** Fee numerators are expressed over this denominator — `pool_state.ak`'s
  *  `fee_den`, and Splash's convention before it. */

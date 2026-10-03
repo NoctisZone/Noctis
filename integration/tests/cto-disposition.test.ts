@@ -23,9 +23,6 @@ import {
   type VestingTakeoverState,
 } from '../cto-disposition.js';
 import type { DatumUtxo } from '../cto-takeover-tx.js';
-import type { PlanAssets } from '../mesh-curve-spend.js';
-import { MAX_TX_BYTES, scriptHashOf } from '../reference-script.js';
-import { STAKE_EMPTY_ROOT } from '../stake-accumulator-tree.js';
 import {
   type LpEscrowDatumData,
   LpEscrowDatumSchema,
@@ -35,7 +32,10 @@ import {
   type VestingDatumData,
   VestingDatumSchema,
   venueAssetName,
-} from '../tier-a-schemas.js';
+} from '../launch-schemas.js';
+import type { PlanAssets } from '../mesh-curve-spend.js';
+import { MAX_TX_BYTES, scriptHashOf } from '../reference-script.js';
+import { STAKE_EMPTY_ROOT } from '../stake-accumulator-tree.js';
 import { VENUE_MAX_LQ_CAP, type VenuePoolConfigData, VenuePoolConfigSchema } from '../venue-pool.js';
 import {
   at,

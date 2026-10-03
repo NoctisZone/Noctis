@@ -1,4 +1,4 @@
-// Tests for tier-a-claims-submitter.ts's TierAClaimsSubmitter — vesting.ak's
+// Tests for vesting-claims-submitter.ts's VestingClaimsSubmitter — vesting.ak's
 // ClaimVested, creator-wallet-signed (the creator is a required signer, so a
 // claim pays only the creator). Same importOriginal partial-mock Lucid
 // strategy as the other submitter tests.
@@ -19,8 +19,8 @@ vi.mock('@lucid-evolution/lucid', async (importOriginal) => {
 });
 
 import { CML, credentialToAddress, Lucid } from '@lucid-evolution/lucid';
-import { TierAClaimsSubmitter } from '../tier-a-claims-submitter.js';
-import { threadNftAssetName } from '../tier-a-schemas.js';
+import { threadNftAssetName } from '../launch-schemas.js';
+import { VestingClaimsSubmitter } from '../vesting-claims-submitter.js';
 
 function fakeKeyHash(fill: number): string {
   return fill.toString(16).padStart(2, '0').repeat(28);
@@ -145,7 +145,7 @@ function makeSubmitter(
   };
   vi.mocked(Lucid).mockResolvedValue(fakeLucid as never);
 
-  const submitter = new TierAClaimsSubmitter({
+  const submitter = new VestingClaimsSubmitter({
     blockfrostProjectId: 'proj',
     blockfrostUrl: 'https://cardano-preprod.blockfrost.io/api/v0',
     network: 'Preprod',
@@ -167,7 +167,7 @@ beforeEach(() => {
   vi.mocked(Lucid).mockReset();
 });
 
-describe('TierAClaimsSubmitter.readVestingDatum', () => {
+describe('VestingClaimsSubmitter.readVestingDatum', () => {
   it('reads the vesting datum matching the configured launchIdHex', async () => {
     const { builder } = makeFakeTxBuilder();
     const { submitter } = makeSubmitter(builder, [{ datum: vestingDatum({ claimed_tokens: 500n }), assets: {} }]);
@@ -176,7 +176,7 @@ describe('TierAClaimsSubmitter.readVestingDatum', () => {
   });
 });
 
-describe('TierAClaimsSubmitter.claimVested', () => {
+describe('VestingClaimsSubmitter.claimVested', () => {
   it('rejects when vesting is not in the Vesting state', async () => {
     const { builder } = makeFakeTxBuilder();
     const { submitter } = makeSubmitter(builder, [

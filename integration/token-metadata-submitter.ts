@@ -3,7 +3,7 @@
 // ============================================================================
 // Builds real transactions for revising a launch's CIP-68 metadata. The
 // reference NFT itself is minted at genesis, by the launch token's own
-// one-shot policy (see tier-a-mint-submitter.ts) — CIP-68 requires the token
+// one-shot policy (see launch-mint-submitter.ts) — CIP-68 requires the token
 // and its reference NFT to share one policy id, which is what makes the
 // metadata discoverable from the token. Revisions are spends of that UTXO,
 // never mints, so this submitter only ever spends. Structurally
@@ -57,7 +57,6 @@ import {
   validatorToAddress,
   validatorToScriptHash,
 } from '@lucid-evolution/lucid';
-import { LaunchUtxoNotFoundError, selectCip68MetadataUtxo, selectLaunchUtxo } from './launch-utxo-lookup.js';
 import {
   type BondingCurveTierBDatumData,
   BondingCurveTierBDatumSchema,
@@ -67,7 +66,8 @@ import {
   Cip68MetadataShape,
   type TokenMetadataDatumData,
   TokenMetadataDatumSchema,
-} from './tier-a-schemas.js';
+} from './launch-schemas.js';
+import { LaunchUtxoNotFoundError, selectCip68MetadataUtxo, selectLaunchUtxo } from './launch-utxo-lookup.js';
 
 /** The six fields Noctis writes into a launch's CIP-68 map, by their hex keys. */
 const KNOWN_METADATA_KEYS = ['name', 'description', 'ticker', 'url', 'logo', 'decimals'].map((k) =>
@@ -111,7 +111,7 @@ export function metadataWithLogo(current: Record<string, string>, logoUri: strin
 // ============================================================================
 // DATA SCHEMAS
 // ============================================================================
-// TokenMetadataDatum lives in tier-a-schemas.ts, because the genesis mint
+// TokenMetadataDatum lives in launch-schemas.ts, because the genesis mint
 // authors this datum and this submitter revises it — the two drifting apart
 // is precisely the failure that module exists to prevent. Its shape mirrors
 // the compiled blueprint: constructor 0 over [metadata, version, extra],

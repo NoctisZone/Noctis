@@ -199,7 +199,7 @@ export async function connectCardanoWallet(walletId: string): Promise<CardanoWal
 
   // Decode via lucid-evolution — getAddressDetails accepts hex OR bech32 and
   // yields the canonical bech32 form plus payment/stake credentials. Dynamic
-  // import matches the other widget entries (tier-a-buy, staking) and keeps
+  // import matches the other widget entries (staking, curve order) and keeps
   // this off the module's synchronous load path.
   const { getAddressDetails } = await import('@lucid-evolution/lucid');
   const details = getAddressDetails(rawAddress);

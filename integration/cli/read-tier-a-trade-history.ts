@@ -1,7 +1,7 @@
 // ============================================================================
 // Noctis Zone — Cardano Trade History CLI
 // ============================================================================
-// Thin stdin/stdout wrapper around tier-a-trade-history-reader.ts's
+// Thin stdin/stdout wrapper around trade-history-reader.ts's
 // getCurveTradeHistory(), same proc_open calling convention as
 // read-tier-a-launch-state.ts (single JSON object on stdin, single JSON
 // object on stdout, exit 0 on success even for an empty/not-found result).
@@ -19,8 +19,8 @@
 // ============================================================================
 
 import { validatorToAddress } from '@lucid-evolution/lucid';
-import { loadValidator } from '../tier-a-schemas.js';
-import { TierATradeHistoryReader, type TradeEvent, toFeedRows } from '../tier-a-trade-history-reader.js';
+import { loadValidator } from '../launch-schemas.js';
+import { type TradeEvent, TradeHistoryReader, toFeedRows } from '../trade-history-reader.js';
 import {
   CARDANO_NETWORK_MAP,
   jsonSafe,
@@ -61,7 +61,7 @@ async function main() {
   const network = CARDANO_NETWORK_MAP[input.network];
   const bondingCurveAddress = validatorToAddress(network, bondingCurveValidator);
 
-  const reader = new TierATradeHistoryReader({
+  const reader = new TradeHistoryReader({
     blockfrostProjectId: input.blockfrostProjectId,
     blockfrostUrl: input.blockfrostUrl,
     bondingCurveAddress,

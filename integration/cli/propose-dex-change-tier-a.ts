@@ -1,7 +1,7 @@
 // ============================================================================
 // Noctis Zone — Cardano Preprod milestone, Phase 5b
 // ProposeDexChange (lp_escrow.ak) — multisig-signed, starts the 72h public
-// notice clock. See tier-a-dex-change-submitter.ts's header for the full
+// notice clock. See dex-change-submitter.ts's header for the full
 // design (why backdating `timestamp` here is legitimate, unlike
 // ExecuteDexChange).
 // ============================================================================
@@ -10,7 +10,7 @@
 // caller). Never logged. Output: {txHash} on stdout.
 // ============================================================================
 
-import { type DexAction, TierADexChangeSubmitter } from '../tier-a-dex-change-submitter.js';
+import { type DexAction, DexChangeSubmitter } from '../dex-change-submitter.js';
 import {
   CARDANO_NETWORK_MAP,
   loadPlutusBlueprint,
@@ -54,7 +54,7 @@ async function main() {
 
   const blueprint = loadPlutusBlueprint(__dirname);
 
-  const submitter = new TierADexChangeSubmitter({
+  const submitter = new DexChangeSubmitter({
     blockfrostProjectId: input.blockfrostProjectId,
     blockfrostUrl: input.blockfrostUrl,
     network: CARDANO_NETWORK_MAP[input.network],

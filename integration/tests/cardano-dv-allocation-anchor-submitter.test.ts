@@ -23,8 +23,8 @@ vi.mock('@lucid-evolution/lucid', async (importOriginal) => {
 
 import { CML, credentialToAddress, Lucid } from '@lucid-evolution/lucid';
 import { CardanoDvAllocationAnchorSubmitter, fromHex } from '../cardano-dv-allocation-anchor-submitter.js';
+import { threadNftAssetName } from '../launch-schemas.js';
 import { BONDING_CURVE_TIER_B_REDEEMER } from '../redeemer-indices.js';
-import { threadNftAssetName } from '../tier-a-schemas.js';
 import { MAX_CLAIMED_BITS_BYTES } from '../tier-b-curve-submitter.js';
 
 function toHex(bytes: Uint8Array): string {

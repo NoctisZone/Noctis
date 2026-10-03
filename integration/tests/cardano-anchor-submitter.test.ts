@@ -22,7 +22,7 @@ vi.mock('@lucid-evolution/lucid', async (importOriginal) => {
 
 import { Lucid } from '@lucid-evolution/lucid';
 import { fromHex, LucidAnchorSubmitter, toHex } from '../cardano-anchor-submitter.js';
-import { threadNftAssetName } from '../tier-a-schemas.js';
+import { threadNftAssetName } from '../launch-schemas.js';
 import type { AnchorCertificateParams } from '../zk-cert-relayer.js';
 
 function fakeBytes(fill: number, len = 32): Uint8Array {

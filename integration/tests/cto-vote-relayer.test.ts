@@ -11,7 +11,7 @@ import {
   toCardanoProposalType,
 } from '../cto-vote-relayer.js';
 import { cardanoKeyHashToBallotField, cardanoScriptHashToBallotField } from '../cto-wallet-field.js';
-import { buildGenesisDatums } from '../tier-a-genesis-datums.js';
+import { buildGenesisDatums } from '../genesis-datums.js';
 import { BLUEPRINT } from './support/takeover-chain.js';
 
 function fakeBytes(fill: number): Uint8Array {

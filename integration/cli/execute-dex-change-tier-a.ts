@@ -2,7 +2,7 @@
 // Noctis Zone — Cardano Preprod milestone, Phase 5b
 // ExecuteDexChange (lp_escrow.ak) — permissionless, applies a pending
 // whitelist change once its 72h public notice period has elapsed. See
-// tier-a-dex-change-submitter.ts's header (validity-width-bound, real honest
+// dex-change-submitter.ts's header (validity-width-bound, real honest
 // "now" validity range required).
 // ============================================================================
 // Input: single JSON object on stdin, including the governor's PLAINTEXT
@@ -12,7 +12,7 @@
 // simplicity). Never logged. Output: {txHash} on stdout.
 // ============================================================================
 
-import { TierADexChangeSubmitter } from '../tier-a-dex-change-submitter.js';
+import { DexChangeSubmitter } from '../dex-change-submitter.js';
 import {
   CARDANO_NETWORK_MAP,
   loadPlutusBlueprint,
@@ -53,7 +53,7 @@ async function main() {
 
   const blueprint = loadPlutusBlueprint(__dirname);
 
-  const submitter = new TierADexChangeSubmitter({
+  const submitter = new DexChangeSubmitter({
     blockfrostProjectId: input.blockfrostProjectId,
     blockfrostUrl: input.blockfrostUrl,
     network: CARDANO_NETWORK_MAP[input.network],

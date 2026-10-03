@@ -31,6 +31,11 @@ Notable changes to the Noctis Zone, by release. Internal development history pre
   creator's fee claim does, so the claim fits a transaction. It lives in its own widget bundle, which the
   claim page loads when a buyer presses Claim; the DarkVeil widget carries no Mesh. A test runs the compiled
   curve validator against a claim built this way, from a CIP-30 wallet, with a real allocation tree.
+- **The shared modules every Cardano launch uses carry neutral names.** `launch-schemas.ts`,
+  `launch-mint-submitter.ts`, `genesis-datums.ts`, `trade-history-reader.ts`, `vesting-claims-submitter.ts`,
+  `vesting-start-submitter.ts`, `dex-change-submitter.ts` and `lp-migration-submitter.ts` replace the names
+  they carried from the retired linear curve, and their classes follow. The CLI entry points keep their
+  names, since a deployed CLI is found by its file name.
 - **Every widget bundle builds from source again.** The royalty-withdraw request's datum and signed-payload
   shapes moved to `venue-royalty-shapes.ts`, which carries no Mesh, so the NoctisSwap panel reads requests
   without it.

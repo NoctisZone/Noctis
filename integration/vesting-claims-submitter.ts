@@ -36,9 +36,9 @@ import type {
   WalletApi,
 } from '@lucid-evolution/lucid';
 import { Blockfrost, CML, Constr, Data, Lucid, validatorToAddress } from '@lucid-evolution/lucid';
+import { settlementDatum, type ThreadNftRole, type VestingDatumData, VestingDatumSchema } from './launch-schemas.js';
 import { type LaunchScopedDatum, selectLaunchUtxo } from './launch-utxo-lookup.js';
 import { VESTING_REDEEMER } from './redeemer-indices.js';
-import { settlementDatum, type ThreadNftRole, type VestingDatumData, VestingDatumSchema } from './tier-a-schemas.js';
 
 function fromHex(hex: string): Uint8Array {
   return new Uint8Array(Buffer.from(hex, 'hex'));
@@ -47,7 +47,7 @@ function fromHex(hex: string): Uint8Array {
 /** Cardano's real ledger has no explicit-zero multi-asset entries — a
  *  computed-to-zero token quantity must be dropped from the assets map
  *  entirely, not passed through as 0 (same convention as
- *  tier-a-graduation-submitter.ts's pruneZero). */
+ *  vesting-start-submitter.ts's pruneZero). */
 function pruneZero(assets: Assets): Assets {
   const out: Assets = {};
   for (const [unit, qty] of Object.entries(assets)) {
@@ -64,7 +64,7 @@ function extendedHexToBech32PrivateKey(extendedHex: string): string {
   return CML.PrivateKey.from_extended_bytes(bytes).to_bech32();
 }
 
-export interface TierAClaimsConfig {
+export interface VestingClaimsConfig {
   blockfrostProjectId: string;
   blockfrostUrl: string;
   network: LucidNetwork;
@@ -79,12 +79,12 @@ export interface TierAClaimsConfig {
   threadNftPolicyId: string;
 }
 
-export class TierAClaimsSubmitter {
+export class VestingClaimsSubmitter {
   private lucidPromise: Promise<LucidEvolution>;
   private vestingValidator: SpendingValidator;
   private vestingAddress: string;
 
-  constructor(private config: TierAClaimsConfig) {
+  constructor(private config: VestingClaimsConfig) {
     this.vestingValidator = {
       type: 'PlutusV3',
       script: config.vestingScriptCbor,

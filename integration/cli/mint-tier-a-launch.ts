@@ -29,9 +29,9 @@
 // ============================================================================
 
 import { mintingPolicyToId, scriptFromNative } from '@lucid-evolution/lucid';
-import { type BuildGenesisDatumsInput, buildGenesisDatums } from '../tier-a-genesis-datums.js';
-import { type GenesisOutput, TierAMintSubmitter } from '../tier-a-mint-submitter.js';
-import type { ThreadNftRole } from '../tier-a-schemas.js';
+import { type BuildGenesisDatumsInput, buildGenesisDatums } from '../genesis-datums.js';
+import { type GenesisOutput, LaunchMintSubmitter } from '../launch-mint-submitter.js';
+import type { ThreadNftRole } from '../launch-schemas.js';
 import {
   CARDANO_NETWORK_MAP,
   jsonSafe,
@@ -102,7 +102,7 @@ async function main() {
   }
 
   const blueprint = loadPlutusBlueprint(__dirname);
-  const submitter = new TierAMintSubmitter({
+  const submitter = new LaunchMintSubmitter({
     blockfrostProjectId: input.blockfrostProjectId,
     blockfrostUrl: input.blockfrostUrl,
     network: CARDANO_NETWORK_MAP[input.network],
