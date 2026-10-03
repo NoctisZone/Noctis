@@ -30,7 +30,7 @@ import {
   type VoteRecordState,
   voteStage,
 } from '../cto-vote-steps.js';
-import { cardanoKeyHashToBallotField } from '../cto-wallet-field.js';
+import { cardanoKeyHashToBallotField, cardanoScriptHashToBallotField } from '../cto-wallet-field.js';
 import { buildGenesisDatums } from '../tier-a-genesis-datums.js';
 import { type LpEscrowDatumData, LpEscrowDatumSchema, threadNftAssetName } from '../tier-a-schemas.js';
 import {
@@ -173,6 +173,19 @@ describe('recording a finished ballot', () => {
     expect(after.proposal_count).toBe(BASE.proposal_count + 1n);
     expect(after.last_ballot_end_timestamp).toBe(0n);
     expect(lovelaceIn(tx, 0)).toBe(5_000_000n + BOND);
+  });
+
+  it('records a DEX vote with its target as a 28-byte script credential, against the compiled validator', async () => {
+    const dex = '5d'.repeat(28);
+    const r = record({ cto_state: 'CTOTriggered', community_wallet_hash: COMMUNITY });
+    const plan = recordPlan(r, {
+      proposalType: ProposalType.DexMigration,
+      proposedCommunityWallet: new Uint8Array(32),
+      targetDexAddr: cardanoScriptHashToBallotField(dex),
+    });
+    const after = decoded(await buildEvaluated(plan, known(r), SCRIPTS));
+    expect(after.active_proposal?.proposal_type).toBe('DexMigration');
+    expect(after.active_proposal?.target_dex_credential).toEqual({ ScriptCredential: [dex] });
   });
 
   it('is refused when the record also starts the cooldown', async () => {

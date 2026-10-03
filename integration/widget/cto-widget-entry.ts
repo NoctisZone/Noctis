@@ -263,6 +263,8 @@ export interface ProposeParams extends ProposalDescription {
   allocationAmount?: string;
   /** FundAllocation: the recipient's 28-byte payment key hash. */
   allocationRecipientHex?: string;
+  /** DexMigration / WhitelistUpdate: the target DEX's 28-byte script hash. */
+  targetDexScriptHashHex?: string;
   /** NIGHT atomic units. */
   bondAmount: string;
   /** The launch's bond floor, when the site knows it, so a bond under it is refused before a proof. */
@@ -298,6 +300,7 @@ async function propose(params: ProposeParams): Promise<ProposeResult & { descrip
       descriptionHashHex,
       allocationAmount: params.allocationAmount,
       allocationRecipientHex: params.allocationRecipientHex,
+      targetDexScriptHashHex: params.targetDexScriptHashHex,
       proposedCommunityWalletHex: takeover && walletKey ? keyHashOf(walletKey) : undefined,
       bondAmount: params.bondAmount,
     },

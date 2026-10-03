@@ -3,6 +3,7 @@ import {
   BROWSER_PROPOSAL_TYPES,
   CTO_WINDOWS,
   descriptionHashOf,
+  PROPOSAL_TYPE_NAMES,
   type ProposalGateState,
   proposalDescriptionText,
   proposalOpening,
@@ -83,9 +84,8 @@ describe('proposalOpening', () => {
     expect(proposalOpening({ ...base, ctoState: 'CTODissolved' }, 'SilenceLockTrigger', NOW).open).toBe(false);
   });
 
-  it('holds back the two DEX types', () => {
-    expect(BROWSER_PROPOSAL_TYPES).not.toContain('DexMigration');
-    expect(BROWSER_PROPOSAL_TYPES).not.toContain('WhitelistUpdate');
+  it('offers every type, the two DEX types included, now that their target is carried as a script hash', () => {
+    expect([...BROWSER_PROPOSAL_TYPES].sort()).toEqual([...PROPOSAL_TYPE_NAMES].sort());
   });
 
   it('waits for a snapshot to exist', () => {

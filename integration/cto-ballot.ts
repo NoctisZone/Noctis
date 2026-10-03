@@ -3,10 +3,12 @@
 // ============================================================================
 // Pure conversion, shared by the server-side relayer (cto-vote-relayer.ts) and
 // the browser, which hands the result to the Cardano steps
-// (cto-vote-steps.ts). Two things change on the way across: a ballot's times,
-// from Midnight's POSIX seconds to the milliseconds the Cardano record compares
-// with a transaction's validity range, and a payee, from the ballot's 32-byte
-// wallet field to the 28-byte payment key hash every Cardano contract pays.
+// (cto-vote-steps.ts). Three things change on the way across: a ballot's
+// times, from Midnight's POSIX seconds to the milliseconds the Cardano record
+// compares with a transaction's validity range; a payee, from the ballot's
+// 32-byte wallet field to the 28-byte payment key hash every Cardano contract
+// pays; and a DEX vote's target, from its 32-byte field to the 28-byte script
+// hash a Cardano script credential carries.
 // ============================================================================
 
 import {
@@ -15,7 +17,7 @@ import {
 } from '../contracts/midnight/compiled/cto_governance/contract/index.js';
 import type { ProposalTypeData } from './cardano-cto-anchor-submitter.js';
 import type { AnchoredBallot } from './cto-anchor-reference.js';
-import { cardanoKeyHashFromBallotField } from './cto-wallet-field.js';
+import { cardanoKeyHashFromBallotField, cardanoScriptHashFromBallotField } from './cto-wallet-field.js';
 
 function bytesToHex(bytes: Uint8Array): string {
   return Array.from(bytes)
@@ -65,7 +67,7 @@ export interface MidnightProposalLike {
   allocationRecipient: Uint8Array;
   /** The wallet a SilenceLockTrigger takes over with, pinned when the proposal was created. */
   proposedCommunityWallet: Uint8Array;
-  /** Only meaningful for DexMigration/WhitelistUpdate — see this file's header for the ScriptCredential-always encoding decision. */
+  /** DexMigration/WhitelistUpdate: the target DEX's 28-byte script hash in a 32-byte field (cto-wallet-field.ts); zero otherwise. */
   targetDexAddr: Uint8Array;
 }
 
@@ -133,7 +135,9 @@ export function anchoredBallotOf(proposal: MidnightProposalLike, proposalIdHex: 
     outcome: proposal.state === ProposalState.Failed ? 'Failed' : 'Passed',
     startTimestamp: midnightSecondsToCardanoMs(proposal.startTimestamp),
     endTimestamp: midnightSecondsToCardanoMs(proposal.endTimestamp),
-    targetDexCredential: isDexRelated ? { kind: 'Script', hashHex: bytesToHex(proposal.targetDexAddr) } : null,
+    targetDexCredential: isDexRelated
+      ? { kind: 'Script', hashHex: cardanoScriptHashFromBallotField(proposal.targetDexAddr, 'targetDexAddr') }
+      : null,
     allocationAmount: proposal.allocationAmount,
     allocationRecipientHashHex: cardanoPayeeOf(proposal),
   };

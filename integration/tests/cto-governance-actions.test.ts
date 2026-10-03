@@ -145,12 +145,17 @@ describe('resolveProposalArgs', () => {
     expect(ok.allocationAmount).toBe(10n);
   });
 
-  it('DexMigration and WhitelistUpdate need a target', () => {
-    expect(() => resolveProposalArgs({ ...BASE, proposalType: 'DexMigration' })).toThrow(/targetDexAddrHex/);
-    expect(() => resolveProposalArgs({ ...BASE, proposalType: 'WhitelistUpdate' })).toThrow(/targetDexAddrHex/);
-    expect(
-      resolveProposalArgs({ ...BASE, proposalType: 'DexMigration', targetDexAddrHex: hex(0x92) }).proposalType,
-    ).toBe(ProposalType.DexMigration);
+  it('DexMigration and WhitelistUpdate need a target: a 28-byte script hash, carried in the 32-byte field', () => {
+    expect(() => resolveProposalArgs({ ...BASE, proposalType: 'DexMigration' })).toThrow(/targetDexScriptHashHex/);
+    expect(() => resolveProposalArgs({ ...BASE, proposalType: 'WhitelistUpdate' })).toThrow(/targetDexScriptHashHex/);
+    const script = '92'.repeat(28);
+    const ok = resolveProposalArgs({ ...BASE, proposalType: 'DexMigration', targetDexScriptHashHex: script });
+    expect(ok.proposalType).toBe(ProposalType.DexMigration);
+    expect(Buffer.from(ok.targetDexAddr).toString('hex')).toBe(`${script}00000000`);
+    // 32 bytes is not a Cardano script hash, so it is refused rather than truncated.
+    expect(() =>
+      resolveProposalArgs({ ...BASE, proposalType: 'WhitelistUpdate', targetDexScriptHashHex: hex(0x92) }),
+    ).toThrow(/script hash is 28 bytes, got 32/);
   });
 
   it('holds the bond to the contract floor when one is known, and refuses zero always', () => {

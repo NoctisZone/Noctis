@@ -18,6 +18,7 @@ import {
 import {
   planDisposition,
   planVestingFreeze,
+  previewLpDisposition,
   type VestingTakeoverPlan,
   type VestingTakeoverState,
 } from '../cto-disposition.js';
@@ -429,6 +430,55 @@ describe('moving the allocation into liquidity', () => {
     if (!vestingOut) throw new Error('no vesting output');
     vestingOut.assets = { ...vestingOut.assets, [TOKEN]: (vestingOut.assets[TOKEN] ?? 0n) + 1n };
     await expect(build(plan, state)).rejects.toThrow(/evaluation failed/i);
+  });
+});
+
+describe('previewing a vote to pair the allocation into the pool', () => {
+  const DX = 4_500_000_000n;
+
+  it('shows exactly what the disposition will deposit, from the same reads', () => {
+    const state = withLiquidity(stateFor(proposal({ proposal_type: 'VestingToLp', allocation_amount: DX })));
+    const preview = previewLpDisposition(state, DX);
+    const plan = planDisposition(state, { governanceScriptHash: GOVERNANCE_HASH, nowMs: NOW });
+    expect({ dx: preview.dx, dy: preview.moved, dlq: preview.dlq }).toEqual(plan.lp);
+    expect(preview).toMatchObject({
+      held: HELD,
+      frozen: true,
+      buys: 30_000_000n,
+      moved: 30_000_000n,
+      left: HELD - 30_000_000n,
+      escrowLq: LQ0,
+      escrowLqAfter: LQ0 + 150_000_000n,
+      before: { rx: RX, ry: RY },
+      after: { rx: RX + DX, ry: RY + 30_000_000n },
+    });
+  });
+
+  it('shows when the ADA buys more than vesting holds: every token goes in and the price rises', () => {
+    const dx = 9_000_000_000n;
+    const state = withLiquidity(stateFor(proposal({ proposal_type: 'VestingToLp', allocation_amount: dx })));
+    state.vesting.assets[TOKEN] = 40_000_000n;
+    const preview = previewLpDisposition(state, dx);
+    expect(preview.buys).toBe(60_000_000n);
+    expect(preview.moved).toBe(40_000_000n);
+    expect(preview.left).toBe(0n);
+    expect(preview.moved).toBe(planDisposition(state, { governanceScriptHash: GOVERNANCE_HASH, nowMs: NOW }).moved);
+    // Lovelace per token, cross-multiplied: after > before.
+    expect(preview.after.rx * preview.before.ry).toBeGreaterThan(preview.before.rx * preview.after.ry);
+  });
+
+  it('reads a launch before the vote is filed, and says whether the freeze has been applied', () => {
+    const state = withLiquidity(stateFor(proposal(), { vesting_state: 'Vesting', cto_triggered: false }));
+    const preview = previewLpDisposition(state, DX);
+    expect(preview.frozen).toBe(false);
+    expect(preview.moved).toBe(30_000_000n);
+  });
+
+  it('refuses no ADA, and a launch without its pool, in the words the disposition uses', () => {
+    const state = withLiquidity(stateFor(proposal()));
+    expect(() => previewLpDisposition(state, 0n)).toThrow(/positive amount of ADA/);
+    const noPool = stateFor(proposal());
+    expect(() => previewLpDisposition(noPool, DX)).toThrow(/needs the LP escrow and the pool/);
   });
 });
 

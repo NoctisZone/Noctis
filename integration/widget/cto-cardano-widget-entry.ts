@@ -24,7 +24,12 @@ import { bytesToHex, hexToBytes } from '@noble/hashes/utils.js';
 import type { CtoGovernanceDatumData } from '../cardano-cto-anchor-submitter.js';
 import { Cip30CurveSpendWallet } from '../cip30-curve-spend-wallet.js';
 import type { AnchoredBallot } from '../cto-anchor-reference.js';
-import { planDisposition, readVestingTakeoverState, type VestingTakeoverPlan } from '../cto-disposition.js';
+import {
+  planDisposition,
+  previewLpDisposition,
+  readVestingTakeoverState,
+  type VestingTakeoverPlan,
+} from '../cto-disposition.js';
 import { royaltyKeyAmong } from '../cto-royalty-key.js';
 import {
   planTakeoverEffects,
@@ -302,6 +307,23 @@ const NoctisCtoCardano = {
       }
     }
     return plain({ direction, applied, skipped });
+  },
+
+  /**
+   * What a vote to pair the frozen allocation into the pool with this much ADA
+   * would do, read from the chain now and worked out with the arithmetic the
+   * disposition itself runs. Read only: nothing is built or signed, and no
+   * wallet is asked.
+   */
+  async lpPreview(launch: LaunchRef & { lovelace: string }) {
+    const { cfg, network } = requireConfigured();
+    const a = addresses(cfg, network);
+    if (!a.venuePool) throw new Error('The venue is not configured on this site.');
+    const state = await readVestingTakeoverState(reader(cfg), {
+      ...launch,
+      addresses: { vesting: a.vesting, governance: a.governance, lpEscrow: a.lpEscrow, venuePool: a.venuePool },
+    });
+    return plain(previewLpDisposition(state, BigInt(launch.lovelace)));
   },
 
   /**

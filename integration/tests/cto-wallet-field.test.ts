@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { cardanoKeyHashFromBallotField, cardanoKeyHashToBallotField } from '../cto-wallet-field.js';
+import {
+  cardanoKeyHashFromBallotField,
+  cardanoKeyHashToBallotField,
+  cardanoScriptHashFromBallotField,
+  cardanoScriptHashToBallotField,
+} from '../cto-wallet-field.js';
 
 const KEY = 'c2'.repeat(28);
 
@@ -23,5 +28,22 @@ describe('a Cardano payment key hash in a ballot wallet field', () => {
     expect(() => cardanoKeyHashFromBallotField(tail)).toThrow(/last four bytes are not zero/);
     expect(() => cardanoKeyHashFromBallotField(new Uint8Array(32))).toThrow(/is empty/);
     expect(() => cardanoKeyHashFromBallotField(new Uint8Array(28))).toThrow(/32 bytes, got 28/);
+  });
+});
+
+describe("a DEX vote's target, a Cardano script hash, in a ballot field", () => {
+  const SCRIPT = '7a'.repeat(28);
+
+  it('sits in the first 28 bytes, with four zero bytes after it', () => {
+    const field = cardanoScriptHashToBallotField(SCRIPT);
+    expect(Buffer.from(field).toString('hex')).toBe(`${SCRIPT}00000000`);
+    expect(cardanoScriptHashFromBallotField(field)).toBe(SCRIPT);
+  });
+
+  it('refuses a 32-byte value, which is not a Cardano script hash', () => {
+    expect(() => cardanoScriptHashToBallotField('7a'.repeat(32))).toThrow(/script hash is 28 bytes, got 32/);
+    expect(() => cardanoScriptHashToBallotField('00'.repeat(28))).toThrow(/names no script/);
+    const full = new Uint8Array(32).fill(0x7a);
+    expect(() => cardanoScriptHashFromBallotField(full)).toThrow(/does not hold a Cardano script hash/);
   });
 });

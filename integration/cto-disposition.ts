@@ -352,37 +352,11 @@ export function planDisposition(
   }
 
   // VestingToLp.
-  const escrow = state.lpEscrow;
-  const pool = state.venuePool;
-  if (!escrow || !pool) throw new Error('Moving the allocation into liquidity needs the LP escrow and the pool.');
+  const { escrow, pool, lqUnit } = lpArmOf(state);
   const e = escrow.datum;
   const cfg = pool.datum;
-  if (escrow.assets[threadUnit(v.thread_nft_policy, 'lpEscrow', v.launch_id)] !== 1n || e.launch_id !== v.launch_id) {
-    throw new Error("The LP escrow given is not this launch's.");
-  }
-  if (e.lp_state !== 'Locked')
-    throw new Error(`The LP escrow is ${e.lp_state}, and only a locked one takes liquidity.`);
-  const poolNftUnit = e.lp_token_policy_id + venueAssetName('pool', v.launch_id);
-  if (pool.assets[poolNftUnit] !== 1n) throw new Error("The pool given is not this launch's pool.");
-  const lqUnit = e.lp_token_policy_id + e.lp_token_name;
-  if (cfg.pool_lq.policy + cfg.pool_lq.name !== lqUnit) {
-    throw new Error("The pool's liquidity token is not the one the escrow holds.");
-  }
-  if (cfg.pool_y.policy + cfg.pool_y.name !== tokenUnit(v)) {
-    throw new Error("The pool does not trade this launch's token.");
-  }
-  if (cfg.pool_x.policy !== '' || cfg.pool_x.name !== '') throw new Error('The pool does not pair the token with ADA.');
-
   const dx = executed.allocation_amount;
-  const rx = (pool.assets.lovelace ?? 0n) - cfg.treasury_x - cfg.royalty_x;
-  const ry = (pool.assets[tokenUnit(v)] ?? 0n) - cfg.treasury_y - cfg.royalty_y;
-  const lq0 = VENUE_MAX_LQ_CAP - (pool.assets[lqUnit] ?? 0n);
-  if (rx <= 0n || ry <= 0n || lq0 <= 0n) throw new Error('The pool has no reserves to price a deposit against.');
-  const buys = (dx * ry) / rx;
-  const moved = held < buys ? held : buys;
-  const byX = (dx * lq0) / rx;
-  const byY = (moved * lq0) / ry;
-  const dlq = byX < byY ? byX : byY;
+  const { moved, dlq } = lpDepositOf(dx, held, poolReservesOf(pool, tokenUnit(v), lqUnit));
   if (moved <= 0n) throw new Error('The ADA the vote named buys no tokens at the pool price.');
   if (dlq <= 0n) throw new Error('The deposit is too small to mint any liquidity.');
 
@@ -416,6 +390,127 @@ export function planDisposition(
     fundingLovelace: dx,
     moved,
     lp: { dx, dy: moved, dlq },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// The LP arm's arithmetic, shared by the transaction and its preview
+// ---------------------------------------------------------------------------
+
+/** The launch's LP escrow and pool, each checked as this launch's, as the LP arm reads them. */
+function lpArmOf(state: VestingTakeoverState) {
+  const v = state.vesting.datum;
+  const escrow = state.lpEscrow;
+  const pool = state.venuePool;
+  if (!escrow || !pool) throw new Error('Moving the allocation into liquidity needs the LP escrow and the pool.');
+  const e = escrow.datum;
+  const cfg = pool.datum;
+  if (escrow.assets[threadUnit(v.thread_nft_policy, 'lpEscrow', v.launch_id)] !== 1n || e.launch_id !== v.launch_id) {
+    throw new Error("The LP escrow given is not this launch's.");
+  }
+  if (e.lp_state !== 'Locked')
+    throw new Error(`The LP escrow is ${e.lp_state}, and only a locked one takes liquidity.`);
+  const poolNftUnit = e.lp_token_policy_id + venueAssetName('pool', v.launch_id);
+  if (pool.assets[poolNftUnit] !== 1n) throw new Error("The pool given is not this launch's pool.");
+  const lqUnit = e.lp_token_policy_id + e.lp_token_name;
+  if (cfg.pool_lq.policy + cfg.pool_lq.name !== lqUnit) {
+    throw new Error("The pool's liquidity token is not the one the escrow holds.");
+  }
+  if (cfg.pool_y.policy + cfg.pool_y.name !== tokenUnit(v)) {
+    throw new Error("The pool does not trade this launch's token.");
+  }
+  if (cfg.pool_x.policy !== '' || cfg.pool_x.name !== '') throw new Error('The pool does not pair the token with ADA.');
+  return { escrow, pool, lqUnit };
+}
+
+/** A pool's trading reserves (its value less the fees it holds for others) and its liquidity outstanding. */
+export interface PoolReserves {
+  /** Lovelace. */
+  rx: bigint;
+  /** The launch's tokens. */
+  ry: bigint;
+  /** Liquidity tokens outstanding. */
+  lq0: bigint;
+}
+
+export function poolReservesOf(
+  pool: Pick<DatumUtxo<VenuePoolConfigData>, 'assets' | 'datum'>,
+  tokenUnitId: string,
+  lqUnit: string,
+): PoolReserves {
+  const cfg = pool.datum;
+  const rx = (pool.assets.lovelace ?? 0n) - cfg.treasury_x - cfg.royalty_x;
+  const ry = (pool.assets[tokenUnitId] ?? 0n) - cfg.treasury_y - cfg.royalty_y;
+  const lq0 = VENUE_MAX_LQ_CAP - (pool.assets[lqUnit] ?? 0n);
+  if (rx <= 0n || ry <= 0n || lq0 <= 0n) throw new Error('The pool has no reserves to price a deposit against.');
+  return { rx, ry, lq0 };
+}
+
+/**
+ * The LP arm's deposit: `dx` lovelace, with as many of the `held` tokens as it
+ * buys at the pool's ratio, and the liquidity that mints. When the ADA buys
+ * more than vesting holds, every held token goes in and all of the ADA still
+ * does, so the pool's price rises; the liquidity minted is what the smaller
+ * side earns.
+ */
+export function lpDepositOf(dx: bigint, held: bigint, r: PoolReserves) {
+  const buys = (dx * r.ry) / r.rx;
+  const moved = held < buys ? held : buys;
+  const byX = (dx * r.lq0) / r.rx;
+  const byY = (moved * r.lq0) / r.ry;
+  const dlq = byX < byY ? byX : byY;
+  return { dx, buys, moved, dlq };
+}
+
+/** What pairing the frozen allocation into the pool with `dxLovelace` would do, read before anyone votes for it. */
+export interface LpDispositionPreview {
+  /** The launch tokens vesting holds. */
+  held: bigint;
+  /** Whether the takeover's freeze has been applied to vesting yet. */
+  frozen: boolean;
+  dx: bigint;
+  /** The tokens the ADA buys at the pool's ratio. */
+  buys: bigint;
+  /** The tokens that go in: what the ADA buys, or every held token when it buys more. */
+  moved: bigint;
+  /** The tokens left in vesting, on the treasury terms. */
+  left: bigint;
+  /** Liquidity tokens the deposit mints, all of them into the LP escrow. */
+  dlq: bigint;
+  /** The LP escrow's position before and after. */
+  escrowLq: bigint;
+  escrowLqAfter: bigint;
+  /** Liquidity outstanding before the deposit. */
+  lq0: bigint;
+  /** The pool's trading reserves before and after. */
+  before: { rx: bigint; ry: bigint };
+  after: { rx: bigint; ry: bigint };
+}
+
+/**
+ * The LP arm's figures for a vote not yet filed: the same reads and the same
+ * arithmetic the disposition will run, with nothing built or signed.
+ */
+export function previewLpDisposition(state: VestingTakeoverState, dxLovelace: bigint): LpDispositionPreview {
+  if (dxLovelace <= 0n) throw new Error('Name a positive amount of ADA.');
+  const v = state.vesting.datum;
+  const { escrow, pool, lqUnit } = lpArmOf(state);
+  const held = state.vesting.assets[tokenUnit(v)] ?? 0n;
+  const reserves = poolReservesOf(pool, tokenUnit(v), lqUnit);
+  const d = lpDepositOf(dxLovelace, held, reserves);
+  return {
+    held,
+    frozen: v.cto_triggered && v.vesting_state === 'CTOFrozen',
+    dx: d.dx,
+    buys: d.buys,
+    moved: d.moved,
+    left: held - d.moved,
+    dlq: d.dlq,
+    escrowLq: escrow.datum.lp_token_amount,
+    escrowLqAfter: escrow.datum.lp_token_amount + d.dlq,
+    lq0: reserves.lq0,
+    before: { rx: reserves.rx, ry: reserves.ry },
+    after: { rx: reserves.rx + d.dx, ry: reserves.ry + d.moved },
   };
 }
 

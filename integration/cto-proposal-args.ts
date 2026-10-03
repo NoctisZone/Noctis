@@ -9,7 +9,7 @@
 
 import { sha256 } from '@noble/hashes/sha2.js';
 import { ProposalType } from '../contracts/midnight/compiled/cto_governance/contract/index.js';
-import { cardanoKeyHashToBallotField } from './cto-wallet-field.js';
+import { cardanoKeyHashToBallotField, cardanoScriptHashToBallotField } from './cto-wallet-field.js';
 
 /** 32 bytes from 64 hex characters, or an error naming the field. */
 function fromHex32(hex: unknown, label: string): Uint8Array {
@@ -40,8 +40,11 @@ export interface ProposalInput {
   /** 32 bytes hex; or give `description` and the SHA-256 of its UTF-8 is used. */
   descriptionHashHex?: string;
   description?: string;
-  /** DexMigration / WhitelistUpdate: the target, 32 bytes hex. */
-  targetDexAddrHex?: string;
+  /**
+   * DexMigration / WhitelistUpdate: the target DEX's 28-byte script hash, which
+   * the ballot holds in its 32-byte field (see cto-wallet-field.ts).
+   */
+  targetDexScriptHashHex?: string;
   /**
    * FundAllocation: the amount, with `allocationRecipientHex`.
    * VestingToLp: the lovelace the community wallet pairs with the tokens.
@@ -78,11 +81,6 @@ export const DISPOSITION_RUNWAY_MAX_DAYS = 1825n;
 
 const ZERO32 = new Uint8Array(32);
 const isZero = (b: Uint8Array) => b.every((x) => x === 0);
-
-function optionalHex32(value: string | undefined, label: string): Uint8Array {
-  if (value === undefined || value === '') return ZERO32;
-  return fromHex32(value, label);
-}
 
 /** A wallet field: a Cardano payment key hash (28 bytes) is placed in it, 32 bytes are taken as they are. */
 function optionalWallet(value: string | undefined, label: string): Uint8Array {
@@ -126,7 +124,10 @@ export function resolveProposalArgs(input: ProposalInput, breakGlassBondMin?: bi
     throw new Error('A proposal needs descriptionHashHex, or description text to hash.');
   }
 
-  const targetDexAddr = optionalHex32(input.targetDexAddrHex, 'targetDexAddrHex');
+  const targetDexAddr =
+    input.targetDexScriptHashHex === undefined || input.targetDexScriptHashHex === ''
+      ? ZERO32
+      : cardanoScriptHashToBallotField(input.targetDexScriptHashHex, 'targetDexScriptHashHex');
   const allocationRecipient = optionalWallet(input.allocationRecipientHex, 'allocationRecipientHex');
   const proposedCommunityWallet = optionalWallet(input.proposedCommunityWalletHex, 'proposedCommunityWalletHex');
   const allocationAmount = toBigInt(input.allocationAmount, 'allocationAmount');
@@ -147,7 +148,7 @@ export function resolveProposalArgs(input: ProposalInput, breakGlassBondMin?: bi
       break;
     case 'DexMigration':
     case 'WhitelistUpdate':
-      if (isZero(targetDexAddr)) throw new Error(`${name} needs targetDexAddrHex.`);
+      if (isZero(targetDexAddr)) throw new Error(`${name} needs targetDexScriptHashHex.`);
       break;
     case 'DissolveCTO':
       break;
@@ -253,14 +254,12 @@ export const CTO_WINDOWS = {
   staleSnapshotGrace: 7_776_000n,
 } as const;
 
-/**
- * The types the browser offers: a takeover, and the votes a community acts on
- * once it holds one. DexMigration and WhitelistUpdate are filed from the
- * command-line action.
- */
+/** The types the browser offers: a takeover, and the votes a community acts on once it holds one. */
 export const BROWSER_PROPOSAL_TYPES = [
   'SilenceLockTrigger',
   'FundAllocation',
+  'DexMigration',
+  'WhitelistUpdate',
   'DissolveCTO',
   'VestingToLp',
   'VestingToStaking',

@@ -10,7 +10,7 @@ import {
   midnightSecondsToCardanoMs,
   toCardanoProposalType,
 } from '../cto-vote-relayer.js';
-import { cardanoKeyHashToBallotField } from '../cto-wallet-field.js';
+import { cardanoKeyHashToBallotField, cardanoScriptHashToBallotField } from '../cto-wallet-field.js';
 import { buildGenesisDatums } from '../tier-a-genesis-datums.js';
 import { BLUEPRINT } from './support/takeover-chain.js';
 
@@ -19,6 +19,8 @@ function fakeBytes(fill: number): Uint8Array {
 }
 
 const COMMUNITY = 'c2'.repeat(28);
+/** A DEX vote's target: a 28-byte script hash, filled with one byte. */
+const dexField = (fill: number) => cardanoScriptHashToBallotField(fill.toString(16).padStart(2, '0').repeat(28));
 const RECIPIENT = 'a2'.repeat(28);
 
 function fakeProposal(overrides: Partial<MidnightProposalLike> = {}): MidnightProposalLike {
@@ -70,26 +72,36 @@ describe('cto-vote-relayer.ts — buildVoteResultFromProposal (pure)', () => {
     expect(buildVoteResultFromProposal(proposal, 'aa', 'bb', 'cc').params.outcome).toBe('Passed');
   });
 
-  it('accepts DexMigration and encodes targetDexAddr as a ScriptCredential', () => {
+  it('accepts DexMigration and records its target as the 28-byte script hash the field carries', () => {
     const proposal = fakeProposal({
       proposalType: ProposalType.DexMigration,
-      targetDexAddr: fakeBytes(7),
+      targetDexAddr: dexField(7),
     });
     const result = buildVoteResultFromProposal(proposal, 'aa', 'bb', 'cc');
-    expect(result.params.targetDexCredential).toEqual({
-      ScriptCredential: [fakeBytes(7).reduce((s, b) => s + b.toString(16).padStart(2, '0'), '')],
-    });
+    expect(result.params.targetDexCredential).toEqual({ ScriptCredential: ['07'.repeat(28)] });
   });
 
-  it('accepts WhitelistUpdate and encodes targetDexAddr as a ScriptCredential', () => {
+  it('accepts WhitelistUpdate and records its target as the 28-byte script hash the field carries', () => {
     const proposal = fakeProposal({
       proposalType: ProposalType.WhitelistUpdate,
-      targetDexAddr: fakeBytes(9),
+      targetDexAddr: dexField(9),
     });
     const result = buildVoteResultFromProposal(proposal, 'aa', 'bb', 'cc');
-    expect(result.params.targetDexCredential).toEqual({
-      ScriptCredential: [fakeBytes(9).reduce((s, b) => s + b.toString(16).padStart(2, '0'), '')],
-    });
+    expect(result.params.targetDexCredential).toEqual({ ScriptCredential: ['09'.repeat(28)] });
+  });
+
+  it('refuses a DEX target field that does not hold a Cardano script hash, rather than record 32 bytes as one', () => {
+    for (const proposalType of [ProposalType.DexMigration, ProposalType.WhitelistUpdate]) {
+      const proposal = fakeProposal({ proposalType, targetDexAddr: fakeBytes(7) });
+      expect(() => buildVoteResultFromProposal(proposal, 'aa', 'bb', 'cc')).toThrow(
+        /targetDexAddr does not hold a Cardano script hash/,
+      );
+    }
+  });
+
+  it('ignores the DEX field on every other type, whatever it holds', () => {
+    const proposal = fakeProposal({ proposalType: ProposalType.SilenceLockTrigger, targetDexAddr: fakeBytes(7) });
+    expect(buildVoteResultFromProposal(proposal, 'aa', 'bb', 'cc').params.targetDexCredential).toBeNull();
   });
 
   it('accepts a Passed SilenceLockTrigger and derives outcome Passed', () => {
@@ -163,11 +175,11 @@ describe('cto-vote-relayer.ts — buildVoteResultFromProposal (pure)', () => {
   it('the proof bundle hash changes when targetDexAddr differs for a DexMigration proposal', () => {
     const p1 = fakeProposal({
       proposalType: ProposalType.DexMigration,
-      targetDexAddr: fakeBytes(1),
+      targetDexAddr: dexField(1),
     });
     const p2 = fakeProposal({
       proposalType: ProposalType.DexMigration,
-      targetDexAddr: fakeBytes(2),
+      targetDexAddr: dexField(2),
     });
     const r1 = buildVoteResultFromProposal(p1, 'aa', 'bb', 'cc', 500n);
     const r2 = buildVoteResultFromProposal(p2, 'aa', 'bb', 'cc', 500n);
