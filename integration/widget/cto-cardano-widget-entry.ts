@@ -25,6 +25,7 @@ import type { CtoGovernanceDatumData } from '../cardano-cto-anchor-submitter.js'
 import { Cip30CurveSpendWallet } from '../cip30-curve-spend-wallet.js';
 import type { AnchoredBallot } from '../cto-anchor-reference.js';
 import { planDisposition, readVestingTakeoverState, type VestingTakeoverPlan } from '../cto-disposition.js';
+import { royaltyKeyAmong } from '../cto-royalty-key.js';
 import {
   planTakeoverEffects,
   readTakeoverEffectsState,
@@ -253,10 +254,11 @@ const NoctisCtoCardano = {
   /**
    * Applies an executed takeover, or dissolve, to each of the launch's
    * contracts it has not reached yet, one transaction each. The pool's
-   * royalty moves only when the connected wallet is the one it moves to,
-   * since the key installed there has to be that wallet's public key.
+   * royalty moves to a public key whose hash is the wallet it moves to: one of
+   * `royaltyKeys` (the site's known keys for the launch), or else the
+   * connected wallet's own, when it is that wallet.
    */
-  async apply(launch: LaunchRef & { walletApi: WalletApi }) {
+  async apply(launch: LaunchRef & { walletApi: WalletApi; royaltyKeys?: readonly string[] }) {
     const { cfg, network } = requireConfigured();
     const get = reader(cfg);
     const a = addresses(cfg, network);
@@ -269,7 +271,10 @@ const NoctisCtoCardano = {
       direction === 'takeover'
         ? state.governance.datum.community_wallet_hash
         : state.lpEscrow?.datum.fee_recipient_pub_key_hash;
-    const royaltyPubKeyHex = target ? await royaltyKeyFrom(launch.walletApi, target, launch.launchIdHex) : undefined;
+    const royaltyPubKeyHex = target
+      ? (royaltyKeyAmong(launch.royaltyKeys ?? [], target) ??
+        (await royaltyKeyFrom(launch.walletApi, target, launch.launchIdHex)))
+      : undefined;
     const planned = planTakeoverEffects(state, {
       governanceScriptHash: scriptHashOf(cfg.scripts.governance),
       royaltyPubKeyHex,
