@@ -16,6 +16,7 @@
 import type { ContractProviders } from '@midnight-ntwrk/midnight-js-contracts';
 import { FetchZkConfigProvider } from '@midnight-ntwrk/midnight-js-fetch-zk-config-provider';
 import { httpClientProofProvider } from '@midnight-ntwrk/midnight-js-http-client-proof-provider';
+import { indexerPublicDataProvider } from '@midnight-ntwrk/midnight-js-indexer-public-data-provider';
 import {
   BROWSER_PROPOSAL_TYPES,
   descriptionHashOf,
@@ -358,6 +359,30 @@ async function sweepBond(contractAddress: string, proposalIdHex: string): Promis
   return sweepProposalBondFromBrowser(requireSession(), { providers, contractAddress, proposalIdHex });
 }
 
+/**
+ * Each listed contract's governance state, read through the site's public
+ * indexer with no wallet connected: what is being voted on, and where each
+ * launch stands. A contract that cannot be read is reported as such and does
+ * not stop the rest.
+ */
+async function readOnlyGovernance(
+  contractAddresses: readonly string[],
+  indexer: { httpUrl: string; wsUrl: string },
+): Promise<Array<{ contractAddress: string; governance?: CtoGovernanceSnapshot; error?: string }>> {
+  if (!indexer.httpUrl || !indexer.wsUrl)
+    throw new Error('The site has not configured a Midnight indexer to read from.');
+  const provider = indexerPublicDataProvider(indexer.httpUrl, indexer.wsUrl);
+  const out: Array<{ contractAddress: string; governance?: CtoGovernanceSnapshot; error?: string }> = [];
+  for (const contractAddress of contractAddresses) {
+    try {
+      out.push({ contractAddress, governance: await readGovernance(provider, contractAddress) });
+    } catch (err) {
+      out.push({ contractAddress, error: err instanceof Error ? err.message : String(err) });
+    }
+  }
+  return out;
+}
+
 const NoctisCto = {
   configure,
   listAvailableWallets,
@@ -378,6 +403,7 @@ const NoctisCto = {
   description,
   claimBond,
   sweepBond,
+  readOnlyGovernance,
 };
 
 declare global {
