@@ -14,6 +14,10 @@ Notable changes to the Noctis Zone, by release. Internal development history pre
   give the same roots, balance and coins, or the full state is banked as before. On Preprod a dust snapshot
   went from about 6.4 MB to 163 KB and its restore from about 80 seconds to 2; a wallet restored from it
   synced and paid for five transactions. The approach is from ODATANO's NIGHTGATE (Apache-2.0).
+- **More of a Midnight rejection named.** The submission classifier recognises the node pool's
+  "already imported" and "priority too low" replies as a transaction already on its way, which calls for a
+  chain read rather than another send; treats ledger code 138 as missing DUST; and names the sequencing
+  codes (188, 219 to 224) with their fix, splitting the batch, rather than calling them unrecognised.
 - **Collecting the platform's venue share from the command line.** `venue-action` gains `read-collection`,
   which reports the pools a collection round would go to and why the rest wait, without a key, and
   `collect`, which runs one round signed and paid by the treasury script's authority key. The authority is

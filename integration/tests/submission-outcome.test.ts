@@ -6,6 +6,7 @@ import {
   LEDGER_CODES,
   ledgerCodesIn,
   nodeReplyUnreadableIn,
+  poolAlreadyHoldsIn,
   retryDelayMs,
 } from '../submission-outcome.js';
 
@@ -220,6 +221,43 @@ describe('the two failures that carry no code', () => {
     expect(retryDelayMs(outcome, 1)).toBeLessThan(
       retryDelayMs(classifySubmission({ stderr: 'Custom error: 173', exitCode: 1 }), 1),
     );
+  });
+});
+
+describe('pool replies and the codes taken from NIGHTGATE', () => {
+  // Shapes as the polkadot RPC client prints them. 1013/1014 come from the
+  // node's transaction pool, not the ledger, so they carry no `Custom error`.
+  const POOL_1013 = 'RpcError: 1013: Transaction Already Imported';
+  const POOL_1014 = 'RpcError: 1014: Priority is too low: (2 vs 2)';
+
+  it('recognises an already-queued transaction, and not a ledger refusal or the routine warning', () => {
+    expect(poolAlreadyHoldsIn(POOL_1013)).toBe(true);
+    expect(poolAlreadyHoldsIn(POOL_1014)).toBe(true);
+    expect(poolAlreadyHoldsIn(REAL_196)).toBe(false);
+    expect(poolAlreadyHoldsIn(ROUTINE_WARNING)).toBe(false);
+  });
+
+  it('re-plans on either pool reply, because a send after it is a duplicate', () => {
+    for (const stderr of [POOL_1013, POOL_1014]) {
+      const outcome = classifySubmission({ stderr, exitCode: 1 });
+      expect(outcome.disposition).toBe('replan');
+      expect(outcome.reason).toMatch(/read the chain/i);
+    }
+  });
+
+  it('treats an overspend (138) as missing DUST, like 173', () => {
+    const outcome = classifySubmission({ stderr: '1010: Invalid Transaction: Custom error: 138', exitCode: 1 });
+    expect(outcome.disposition).toBe('insufficient-dust');
+    expect(outcome.decidedBy).toBe(138);
+  });
+
+  it('stops on a sequencing refusal and says how to fix it, rather than calling it unrecognised', () => {
+    for (const code of [188, 219, 224]) {
+      const outcome = classifySubmission({ stderr: `1010: Invalid Transaction: Custom error: ${code}`, exitCode: 1 });
+      expect(outcome.disposition).toBe('operator');
+      expect(outcome.decidedBy).toBe(code);
+      expect(outcome.reason).toMatch(/split the batch/);
+    }
   });
 });
 

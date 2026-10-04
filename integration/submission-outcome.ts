@@ -29,11 +29,13 @@
 // again. Taking the first or the last match would make the verdict depend on
 // print order.
 //
-// TWO FAILURES CARRY NO CODE AND STILL MEAN SOMETHING. A node reply the SDK
-// could not decode arrives only once the node has reported the transaction in
-// a block, so the "failure" is a landed transaction whose receipt was lost —
-// resubmitting it is the wrong move and stopping for a human is unnecessary;
-// what is owed is a read of the chain. And an indexer outage kills a step
+// THREE FAILURES CARRY NO LEDGER CODE AND STILL MEAN SOMETHING. A node reply
+// the SDK could not decode arrives only once the node has reported the
+// transaction in a block, so the "failure" is a landed transaction whose
+// receipt was lost — resubmitting it is the wrong move and stopping for a human
+// is unnecessary; what is owed is a read of the chain. A pool reply of 1013 or
+// 1014 says the same from the other side: the transaction, or an earlier one of
+// ours spending the same thing, is already queued. And an indexer outage kills a step
 // after the node has accepted it just as easily as before, so it too is a
 // "read the chain once the indexer is back", never a resubmit. Both were read
 // as "no ledger code, needs an operator" during a rehearsal and each cost an
@@ -102,6 +104,14 @@ export const LEDGER_CODES: readonly LedgerCodeMeaning[] = [
       'delivery retried after a lost receipt finds. Nothing is owed; read the chain to confirm and move on.',
   },
   {
+    code: 138,
+    disposition: 'insufficient-dust',
+    because:
+      'BalanceCheckOverspend — the transaction spends more than its inputs cover, which for a fee-paying ' +
+      'wallet means the DUST is not there. Same remedy as 173. (Not yet seen on our runs; classified from ' +
+      'ODATANO NIGHTGATE, which runs this ledger version and treats 138 and 173 as one funds class.)',
+  },
+  {
     code: 117,
     disposition: 'operator',
     because:
@@ -141,6 +151,20 @@ export const LEDGER_CODES: readonly LedgerCodeMeaning[] = [
       'UnknownMerkleRoot — the transaction references a root the node no longer keeps. Its documented ' +
       'fix is to resync against the current head and rebuild, so the same bytes are never valid again.',
   },
+  // The sequencing family. Each contract call is split into a guaranteed and a
+  // fallible part, and a transaction whose calls land in an order the ledger
+  // will not accept is refused whatever the timing — so these are listed only
+  // to name the fix for whoever is fetched, never to retry. From ODATANO
+  // NIGHTGATE's classifier (188 on older nodes, 219–224 on current ones).
+  ...[188, 219, 220, 221, 222, 223, 224].map(
+    (code): LedgerCodeMeaning => ({
+      code,
+      disposition: 'operator',
+      because:
+        'Sequencing — the calls in this transaction cannot be ordered the way the ledger requires. Resending ' +
+        'reproduces it; the fix is to split the batch into single-call transactions.',
+    }),
+  ),
 ];
 
 const BY_CODE = new Map(LEDGER_CODES.map((m) => [m.code, m]));
@@ -172,6 +196,24 @@ export function ledgerCodesIn(stderr: string): number[] {
  */
 export function nodeReplyUnreadableIn(output: string): boolean {
   return /Failed to parse result provided by node/.test(output);
+}
+
+/**
+ * Whether the node's transaction POOL already holds this transaction, or one
+ * spending the same thing.
+ *
+ * Two Substrate pool replies, neither carrying a ledger code: `1013` (already
+ * imported — the very bytes are in the pool, which is what a resend after a lost
+ * reply finds) and `1014` (priority too low — the pool kept an earlier
+ * transaction that conflicts with this one, normally our own previous attempt).
+ * Either way something of ours is already on its way into a block, so the
+ * answer is a chain read, never another send. From ODATANO NIGHTGATE's
+ * submission classifier, which runs this node version.
+ */
+export function poolAlreadyHoldsIn(output: string): boolean {
+  return /\b1013\b[^\n]*already imported|Transaction Already Imported|\b1014\b[^\n]*priority is too low|Priority is too low/i.test(
+    output,
+  );
 }
 
 /**
@@ -238,16 +280,25 @@ export function classifySubmission(result: BankedJobResult): SubmissionOutcome {
   }
 
   if (codes.length === 0) {
-    // Two codeless failures are recognised by their text, and only these two:
-    // each has a mechanism that says what happened to the transaction, which
-    // is what a disposition is. Anything else without a code stays with an
-    // operator — a stream that names no reason gives no basis to act.
+    // Three codeless failures are recognised by their text, and only these
+    // three: each has a mechanism that says what happened to the transaction,
+    // which is what a disposition is. Anything else without a code stays with
+    // an operator — a stream that names no reason gives no basis to act.
     //
-    // The node's reply is checked first. Both texts can appear together when
-    // an outage follows a landed submission, and the reply is the stronger
-    // evidence: it says the transaction is in a block, where the outage only
-    // says the indexer went away.
+    // The pool and the node's reply are checked before the indexer. Those texts
+    // can appear together when an outage follows a landed submission, and
+    // "queued" or "in a block" is the stronger evidence: the outage only says
+    // the indexer went away.
     const stdout = String(result.stdout ?? '');
+    if (poolAlreadyHoldsIn(stderr) || poolAlreadyHoldsIn(stdout)) {
+      return {
+        disposition: 'replan',
+        codes,
+        reason:
+          'The node’s pool already holds this transaction, or an earlier one of ours spending the same thing ' +
+          '(1013 already imported / 1014 priority too low). Read the chain once it lands; another send is a duplicate.',
+      };
+    }
     if (nodeReplyUnreadableIn(stderr) || nodeReplyUnreadableIn(stdout)) {
       return {
         disposition: 'replan',
