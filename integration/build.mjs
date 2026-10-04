@@ -11,7 +11,7 @@
 
 import { createHash } from "node:crypto";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import * as esbuild from "esbuild";
 
@@ -27,6 +27,26 @@ const watch = process.argv.includes("--watch");
 // outweigh the code they describe several times over and every byte of that
 // is deployed to a host that charges for the space and reads it on backup.
 const sourcemap = watch || process.env.NOCTIS_SOURCEMAPS === "1";
+
+// A build for a launch still running on scripts this repository has since
+// replaced: NOCTIS_CLI_CONTRACTS names that set's contracts/ directory and
+// NOCTIS_CLI_OUTDIR names <that tree>/integration/cli/dist. A CLI reads its
+// blueprint from three levels above its own folder, so a bundle built this way
+// carries the fingerprint of, and reads, that tree's blueprint. Both or neither:
+// one without the other would stamp bundles with a blueprint they never read.
+const CLI_DIST = join(__dirname, "cli", "dist");
+const CLI_CONTRACTS_DIR = process.env.NOCTIS_CLI_CONTRACTS
+	? resolve(process.env.NOCTIS_CLI_CONTRACTS)
+	: join(__dirname, "..", "contracts");
+const CLI_OUTDIR = process.env.NOCTIS_CLI_OUTDIR ? resolve(process.env.NOCTIS_CLI_OUTDIR) : undefined;
+if (Boolean(process.env.NOCTIS_CLI_CONTRACTS) !== Boolean(CLI_OUTDIR)) {
+	throw new Error("NOCTIS_CLI_CONTRACTS and NOCTIS_CLI_OUTDIR are set together or not at all.");
+}
+if (CLI_OUTDIR && (CLI_OUTDIR === CLI_DIST || resolve(CLI_OUTDIR, "..", "..", "..", "contracts") !== CLI_CONTRACTS_DIR)) {
+	throw new Error("NOCTIS_CLI_OUTDIR must be <tree>/integration/cli/dist for the tree NOCTIS_CLI_CONTRACTS names.");
+}
+/** Where a CLI bundle or its WASM lands: the repository's own dist, or NOCTIS_CLI_OUTDIR. */
+const retarget = (path) => (CLI_OUTDIR && dirname(path) === CLI_DIST ? join(CLI_OUTDIR, basename(path)) : path);
 
 const cliConfig = {
 	entryPoints: [join(__dirname, "cli/check-night-balance.ts")],
@@ -447,6 +467,19 @@ const registerVenueScriptsCliConfig = {
 const ctoTakeoverCliConfig = {
 	entryPoints: [join(__dirname, "cli/cto-takeover.ts")],
 	outfile: join(__dirname, "cli/dist/cto-takeover.cjs"),
+	bundle: true,
+	platform: "node",
+	// CJS for the same reason as the other Cardano CLIs: a bundled transitive
+	// dependency reads a bare `__dirname` to find its own WASM.
+	format: "cjs",
+	target: "node20",
+	sourcemap,
+	logLevel: "info",
+};
+
+const ctoVoteStepCliConfig = {
+	entryPoints: [join(__dirname, "cli/cto-vote-step.ts")],
+	outfile: join(__dirname, "cli/dist/cto-vote-step.cjs"),
 	bundle: true,
 	platform: "node",
 	// CJS for the same reason as the other Cardano CLIs: a bundled transitive
@@ -935,7 +968,7 @@ async function copyWasmFiles() {
 		dirname(voidCtoProposalCliConfig.outfile),
 		dirname(reclaimCtoRelayerBondCliConfig.outfile),
 	]);
-	for (const destDir of destDirs) {
+	for (const destDir of [...destDirs].map((d) => (CLI_OUTDIR && d === CLI_DIST ? CLI_OUTDIR : d))) {
 		mkdirSync(destDir, { recursive: true });
 		for (const { pkg, file } of WASM_FILES) {
 			let src;
@@ -969,7 +1002,7 @@ async function copyWasmFiles() {
  * and a Linux server by line endings alone.
  */
 function blueprintFingerprint() {
-	const path = join(__dirname, "..", "contracts", "cardano", "plutus.json");
+	const path = join(CLI_CONTRACTS_DIR, "cardano", "plutus.json");
 	const blueprint = JSON.parse(readFileSync(path, "utf8"));
 	const lines = blueprint.validators
 		.map((v) => `${v.title}:${v.hash ?? ""}`)
@@ -1112,6 +1145,7 @@ async function run() {
 		publishReferenceScriptCliConfig,
 		registerVenueScriptsCliConfig,
 		ctoTakeoverCliConfig,
+		ctoVoteStepCliConfig,
 		orderActionCliConfig,
 		batchActionCliConfig,
 		reclaimReferenceScriptsCliConfig,
@@ -1123,6 +1157,7 @@ async function run() {
 		// accident.
 		.map((c) => ({
 			...c,
+			outfile: retarget(c.outfile),
 			define: {
 				...c.define,
 				__BLUEPRINT_FINGERPRINT__: JSON.stringify(fingerprint),

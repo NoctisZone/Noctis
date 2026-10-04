@@ -212,6 +212,19 @@ export interface RecordResultOptions {
   relayerKeyHash: string;
   /** Defaults to the validator's floor. */
   bondLovelace?: bigint;
+  /**
+   * For a record on the governance script launches were minted with before
+   * 2026-09-30, whose recording step writes `last_ballot_end_timestamp` itself
+   * rather than leaving it to the step that settles the result.
+   */
+  anchorWritesCooldown?: boolean;
+  /**
+   * Record the window as ending when the ballot ended and starting the record's
+   * stored width before that. Records written before 2026-09-30 store that width
+   * in seconds, so they accept no window as long as a ballot really runs; the
+   * ballot itself is unchanged on Midnight.
+   */
+  windowFromStoredWidth?: boolean;
 }
 
 /**
@@ -222,7 +235,7 @@ export interface RecordResultOptions {
 export function planRecordResult(
   state: VoteRecordState,
   proposalIdHex: string,
-  ballot: AnchoredBallot,
+  ranBallot: AnchoredBallot,
   opts: RecordResultOptions,
 ): TakeoverTxPlan {
   const bond = opts.bondLovelace ?? MIN_RELAYER_BOND_LOVELACE;
@@ -230,9 +243,14 @@ export function planRecordResult(
   if (!/^[0-9a-f]{56}$/i.test(opts.relayerKeyHash)) {
     throw new Error('The bond has to return to a payment key hash, 28 bytes of hex.');
   }
+  const g = state.record.datum;
+  // Everything below, the derived reference included, reads the window the
+  // record will carry.
+  const ballot = opts.windowFromStoredWidth
+    ? { ...ranBallot, startTimestamp: ranBallot.endTimestamp - g.ballot_duration }
+    : ranBallot;
   refuseUnrecordable(state, ballot, opts.nowMs);
 
-  const g = state.record.datum;
   const anchorTimestamp = opts.nowMs;
   const proposal: ProposalAnchorData = {
     proposal_type: ballot.proposalType,
@@ -259,13 +277,15 @@ export function planRecordResult(
     relayer_credential_hash: opts.relayerKeyHash,
   };
   // Recording moves the slot, the ordinal and the bond. The cooldown starts
-  // when the result settles, so last_ballot_end_timestamp is carried as it is.
+  // when the result settles, so last_ballot_end_timestamp is carried as it is,
+  // except on the earlier script, whose recording step writes it.
   const recorded: CtoGovernanceDatumData = {
     ...g,
     active_proposal: proposal,
     proposal_count: g.proposal_count + 1n,
     pending_relayer_bond: bond,
     pending_relayer_key_hash: opts.relayerKeyHash,
+    ...(opts.anchorWritesCooldown ? { last_ballot_end_timestamp: proposal.end_timestamp } : {}),
   };
   const redeemer: AnchorVoteResultRedeemerData = {
     proposal_type: proposal.proposal_type,
@@ -422,8 +442,13 @@ export function planReclaimBond(record: GovernanceRecord, payoutAddress: string)
   };
 }
 
-/** Step 6: clears a settled result whose bond is paid out, freeing the slot for the next. */
-export function planClearResult(record: GovernanceRecord): TakeoverTxPlan {
+/**
+ * Step 6: clears a settled result whose bond is paid out, freeing the slot for
+ * the next. `governorSigns` is for the governance script launches were minted
+ * with before 2026-09-30, which takes a clear only with the governor's
+ * signature.
+ */
+export function planClearResult(record: GovernanceRecord, opts: { governorSigns?: boolean } = {}): TakeoverTxPlan {
   const stage = voteStage(record.datum, 0n);
   if (stage.kind !== 'settled') throw new Error(notYet(stage));
   if (stage.next !== 'clear') throw new Error('The bond has to be reclaimed before the result is cleared.');
@@ -432,7 +457,7 @@ export function planClearResult(record: GovernanceRecord): TakeoverTxPlan {
     spends: [governanceSpend(record, Data.to(new Constr(CTO_GOVERNANCE_REDEEMER.ClearProposal, [])))],
     referenceInputs: [],
     outputs: [continuing(record, { ...record.datum, active_proposal: null })],
-    requiredSignerHashes: [],
+    requiredSignerHashes: opts.governorSigns ? [record.datum.governor_credential_hash] : [],
     fundingLovelace: 0n,
   };
 }

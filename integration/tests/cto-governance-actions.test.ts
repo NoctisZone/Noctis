@@ -36,6 +36,7 @@ describe('action roles', () => {
     expect(identityFor('execute')).toBe('none');
     expect(identityFor('sweep-bond')).toBe('none');
     expect(identityFor('read')).toBe('none');
+    expect(identityFor('ballot')).toBe('none');
   });
 
   it('recognises an action name and nothing else', () => {

@@ -8,6 +8,8 @@
 // ./support/takeover-chain.ts). Each rejection is a passing transaction with
 // one value changed.
 
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { credentialToAddress, Data } from '@lucid-evolution/lucid';
 import { describe, expect, it } from 'vitest';
 import { ProposalState, ProposalType } from '../../contracts/midnight/compiled/cto_governance/contract/index.js';
@@ -16,6 +18,8 @@ import {
   CtoGovernanceDatumSchema,
   type ProposalAnchorData,
 } from '../cardano-cto-anchor-submitter.js';
+import { jsonSafe } from '../cli/cli-io.js';
+import { anchoredBallotFromJson } from '../cto-anchor-reference.js';
 import type { DatumUtxo, TakeoverTxPlan } from '../cto-takeover-tx.js';
 import { anchoredBallotOf, type MidnightProposalLike } from '../cto-vote-relayer.js';
 import {
@@ -324,5 +328,109 @@ describe('closing out a settled result', () => {
       ],
     };
     await expect(buildEvaluated(forced, known(r), SCRIPTS)).rejects.toThrow(/evaluation failed/i);
+  });
+});
+
+// -- the governance script launches were minted with before 2026-09-30 --------
+//
+// Its recording step writes the cooldown base itself, and its records store the
+// ballot width in seconds, so the only window such a record accepts is that
+// many milliseconds wide. The script is the one those launches carry on chain.
+
+describe('recording on the governance script from before 2026-09-30', () => {
+  const EARLIER = JSON.parse(
+    readFileSync(join(import.meta.dirname, 'support', 'cto-governance-before-2026-09-30.json'), 'utf8'),
+  ) as { compiledCode: string };
+  const OLD = EARLIER.compiledCode;
+  const OLD_SCRIPTS = { governance: { compiledScriptCbor: OLD } };
+  const SECONDS_WIDTH = 259_200n;
+
+  const oldRecord = (overrides: Partial<CtoGovernanceDatumData> = {}, lovelace = 5_000_000n): GovernanceRecord =>
+    utxo(at(OLD), lovelace, thread('ctoGovernance'), { ...BASE, ballot_duration: SECONDS_WIDTH, ...overrides });
+  const knownOld = (r: GovernanceRecord) => [
+    onChain(r, Data.to<CtoGovernanceDatumData>(r.datum, CtoGovernanceDatumSchema)),
+    onChain(LP_SEALED, Data.to<LpEscrowDatumData>(LP_SEALED.datum, LpEscrowDatumSchema)),
+  ];
+  const legacyPlan = (r: GovernanceRecord, opts: { anchorWritesCooldown?: boolean; windowFromStoredWidth?: boolean }) =>
+    planRecordResult(
+      { record: r, lpEscrow: LP_SEALED },
+      PROPOSAL_ID,
+      anchoredBallotOf(ballotOnMidnight(), PROPOSAL_ID),
+      {
+        nowMs: RECORDED_MS,
+        relayerKeyHash: PAYER,
+        bondLovelace: BOND,
+        ...opts,
+      },
+    );
+
+  it('records the real 72-hour ballot as ending when it ended, one stored width after its recorded start', async () => {
+    const r = oldRecord();
+    const tx = await buildEvaluated(
+      legacyPlan(r, { anchorWritesCooldown: true, windowFromStoredWidth: true }),
+      knownOld(r),
+      OLD_SCRIPTS,
+    );
+    const after = decoded(tx);
+    expect(after.active_proposal?.end_timestamp).toBe(END_S * 1000n);
+    expect(after.active_proposal?.start_timestamp).toBe(END_S * 1000n - SECONDS_WIDTH);
+    expect(after.last_ballot_end_timestamp).toBe(END_S * 1000n);
+    expect(after.pending_relayer_bond).toBe(BOND);
+  });
+
+  it('refuses the ballot as it ran, which no window on such a record can hold', () => {
+    expect(() => legacyPlan(oldRecord(), { anchorWritesCooldown: true })).toThrow(/ballots run 259200 ms/);
+  });
+
+  it('is refused by that script when the record leaves the cooldown base for later', async () => {
+    const r = oldRecord();
+    await expect(
+      buildEvaluated(legacyPlan(r, { windowFromStoredWidth: true }), knownOld(r), OLD_SCRIPTS),
+    ).rejects.toThrow(/evaluation failed/i);
+  });
+
+  it('is executed by that script once the challenge window has passed', async () => {
+    const plan = legacyPlan(oldRecord(), { anchorWritesCooldown: true, windowFromStoredWidth: true });
+    const txDatum = decodedPlan(plan);
+    const r = oldRecord(txDatum, 5_000_000n + BOND);
+    const tx = await buildEvaluated(
+      planExecuteResult(r, RECORDED_MS + CHALLENGE_WINDOW_MS + 300_000n),
+      knownOld(r),
+      OLD_SCRIPTS,
+    );
+    expect(decoded(tx).cto_state).toBe('CTOTriggered');
+    expect(decoded(tx).community_wallet_hash).toBe(COMMUNITY);
+  });
+
+  it("clears a settled result there only with the governor's signature", async () => {
+    const txDatum = decodedPlan(legacyPlan(oldRecord(), { anchorWritesCooldown: true, windowFromStoredWidth: true }));
+    const executed = { ...(txDatum.active_proposal as ProposalAnchorData), execution_status: 'Executed' as const };
+    const r = oldRecord({
+      ...txDatum,
+      active_proposal: executed,
+      pending_relayer_bond: 0n,
+      pending_relayer_key_hash: '',
+    });
+    const signed = planClearResult(r, { governorSigns: true });
+    expect(signed.requiredSignerHashes).toEqual([BASE.governor_credential_hash]);
+    await buildEvaluated(signed, knownOld(r), OLD_SCRIPTS);
+    await expect(buildEvaluated(planClearResult(r), knownOld(r), OLD_SCRIPTS)).rejects.toThrow(/evaluation failed/i);
+  });
+});
+
+// -- the ballot a CLI reads from the Midnight tool's output -------------------
+
+describe('a ballot carried as JSON', () => {
+  it('reads back exactly what the Midnight tool writes for it', () => {
+    const ballot = anchoredBallotOf(ballotOnMidnight(), PROPOSAL_ID);
+    const carried = JSON.parse(JSON.stringify(jsonSafe(ballot)));
+    expect(anchoredBallotFromJson(carried)).toEqual(ballot);
+  });
+
+  it('refuses an integer that is not a decimal string, and a missing ballot', () => {
+    const carried = JSON.parse(JSON.stringify(jsonSafe(anchoredBallotOf(ballotOnMidnight(), PROPOSAL_ID))));
+    expect(() => anchoredBallotFromJson({ ...carried, voterCount: 20 })).toThrow(/ballot.voterCount must be/);
+    expect(() => anchoredBallotFromJson({ ...carried, yesVotes: '-1' })).toThrow(/ballot.yesVotes must be/);
+    expect(() => anchoredBallotFromJson(undefined)).toThrow(/missing/);
   });
 });

@@ -8,6 +8,14 @@ Notable changes to the Noctis Zone, by release. Internal development history pre
 
 ### Added
 
+- **Carrying a takeover vote through on Cardano from the command line.** `cto-vote-step` records a
+  finalized ballot's result, posting the bond from the payer, and then takes whichever step the record waits
+  for: execute, expire, pay the bond back, clear. `cto-governance-action`'s new `ballot` action prints a
+  finalized proposal the way the Cardano record takes it, which is the recorder's input. For a launch minted
+  before 2026-09-30, whose governance script takes a result its own way, `earlierScript` records it the way
+  that script accepts and clears with the governor's signature; its tests run that script as those launches
+  carry it on chain. The CLI build can stamp and write its bundles for another contracts tree
+  (`NOCTIS_CLI_CONTRACTS` with `NOCTIS_CLI_OUTDIR`), for a launch still running on scripts since replaced.
 - **Proving through the buyer's own wallet when it can.** The DarkVeil and governance widgets ask a
   connected Midnight wallet for its prover through the DApp connector's `getProvingProvider`, and prove
   with it when the wallet offers one, so a proof is made wherever that wallet's user chose. A wallet

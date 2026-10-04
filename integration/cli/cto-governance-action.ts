@@ -6,6 +6,8 @@
 // secrets travel by pipe), JSON on stdout, progress on stderr.
 //
 //   read              publish what the contract holds; no wallet, no proof
+//   ballot            print a finalized proposal as the Cardano governance
+//                     record takes it (cto-vote-step's record input); no wallet
 //   derive-keys       print the keys a secret or seed derives to; no chain
 //   publish-snapshot  attestor: approve a balance-snapshot root (2-of-3 or 3-of-3)
 //   update-activity   attestor: attest the creator's last activity / claimable balance
@@ -38,6 +40,7 @@ import { setNetworkId } from '@midnight-ntwrk/midnight-js-network-id';
 import { NodeZkConfigProvider } from '@midnight-ntwrk/midnight-js-node-zk-config-provider';
 import type { MerkleProofEntry } from '../../contracts/midnight/witnesses.js';
 import { deriveGovernorKey, deriveUserPublicKey } from '../../packages/zk-proofs/src/cto-governance.js';
+import { anchoredBallotOf } from '../cto-ballot.js';
 import {
   type CtoAction,
   identityFor,
@@ -49,7 +52,11 @@ import { type ProposalInput, resolveProposalArgs } from '../cto-proposal-args.js
 import { fromHex32 } from '../eligibility-gate-deploy-args.js';
 import { describeError } from '../error-detail.js';
 import { NoctisLaunchManager, NoctisMidnightClient } from '../midnight-client.js';
-import { type CtoGovernanceSnapshot, readCtoGovernanceSnapshot } from '../midnight-public-state.js';
+import {
+  type CtoGovernanceSnapshot,
+  readCtoGovernanceLedger,
+  readCtoGovernanceSnapshot,
+} from '../midnight-public-state.js';
 import {
   assertProofServerReachable,
   buildServerWallet,
@@ -213,6 +220,20 @@ async function main() {
     const publicDataProvider = indexerPublicDataProvider(indexerHttpUrl, indexerWsUrl);
     const state = await readCtoGovernanceSnapshot(publicDataProvider, contractAddress);
     process.stdout.write(JSON.stringify(jsonSafe({ ok: true, action: input.action, state })));
+    return;
+  }
+
+  if (input.action === 'ballot') {
+    const proposalIdHex = toHex(requireHex32(input.proposalIdHex, 'proposalIdHex'));
+    const { indexerHttpUrl, indexerWsUrl } = networkUrls(input, input.proofServerUrl ?? 'http://unused');
+    const ledger = await readCtoGovernanceLedger(
+      indexerPublicDataProvider(indexerHttpUrl, indexerWsUrl),
+      contractAddress,
+    );
+    const proposal = [...ledger.proposals].find(([id]) => toHex(id) === proposalIdHex)?.[1];
+    if (!proposal) throw new Error(`No proposal ${proposalIdHex} on this contract.`);
+    const ballot = anchoredBallotOf(proposal, proposalIdHex);
+    process.stdout.write(JSON.stringify(jsonSafe({ ok: true, action: input.action, proposalIdHex, ballot })));
     return;
   }
 

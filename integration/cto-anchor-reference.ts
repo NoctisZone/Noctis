@@ -88,6 +88,36 @@ export interface AnchoredBallot {
   allocationRecipientHashHex: string;
 }
 
+/** A ballot as JSON carries it (`jsonSafe`): every integer a decimal string. */
+export type AnchoredBallotJson = {
+  [K in keyof AnchoredBallot]: AnchoredBallot[K] extends bigint ? string : AnchoredBallot[K];
+};
+
+const BALLOT_INTEGERS = [
+  'yesVotes',
+  'noVotes',
+  'voterCount',
+  'creatorYesVotes',
+  'creatorNoVotes',
+  'startTimestamp',
+  'endTimestamp',
+  'allocationAmount',
+] as const;
+
+/** A ballot read back from JSON, refusing any integer field that is not a non-negative decimal string. */
+export function anchoredBallotFromJson(raw: AnchoredBallotJson | undefined): AnchoredBallot {
+  if (!raw || typeof raw !== 'object') throw new Error('The ballot is missing.');
+  const ballot = { ...raw } as unknown as Record<string, unknown>;
+  for (const field of BALLOT_INTEGERS) {
+    const value = raw[field];
+    if (typeof value !== 'string' || !/^\d+$/.test(value)) {
+      throw new Error(`ballot.${field} must be a non-negative integer string, got ${JSON.stringify(value)}.`);
+    }
+    ballot[field] = BigInt(value);
+  }
+  return ballot as unknown as AnchoredBallot;
+}
+
 export interface AnchorReferenceInput {
   /** From the governance UTXO's own datum — not the relayer's to choose. */
   launchIdHex: string;

@@ -14,6 +14,7 @@
 
 export type CtoAction =
   | 'read'
+  | 'ballot'
   | 'derive-keys'
   | 'publish-snapshot'
   | 'update-activity'
@@ -27,6 +28,7 @@ export type CtoAction =
 
 export const CTO_ACTIONS: readonly CtoAction[] = [
   'read',
+  'ballot',
   'derive-keys',
   'publish-snapshot',
   'update-activity',
@@ -52,7 +54,7 @@ export const IDENTITY_ACTIONS: ReadonlySet<CtoAction> = new Set(['heartbeat', 'c
 export const OPEN_ACTIONS: ReadonlySet<CtoAction> = new Set(['finalize', 'execute', 'sweep-bond']);
 
 /** Needs no wallet and submits nothing. */
-export const OFFLINE_ACTIONS: ReadonlySet<CtoAction> = new Set(['read', 'derive-keys']);
+export const OFFLINE_ACTIONS: ReadonlySet<CtoAction> = new Set(['read', 'ballot', 'derive-keys']);
 
 export type IdentityRequirement = 'attestor' | 'identity' | 'none';
 
