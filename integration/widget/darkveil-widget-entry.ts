@@ -61,6 +61,7 @@ import {
   type NotIncluded,
   parseSavedClaimBundle,
 } from './claim-bundle.js';
+import { walletFirstProofProvider } from './midnight-proof-provider.js';
 import { buildMidnightWalletBridge } from './midnight-wallet-bridge.js';
 import {
   type AllowlistStatus,
@@ -166,7 +167,11 @@ async function requireMidnightProviders(): Promise<ContractProviders> {
   // one implies) — built here, inside the bundle, so the WP theme's
   // vanilla JS caller only ever deals in plain URLs.
   const zkConfigProvider = new FetchZkConfigProvider<string>(cfg.midnightZk.zkBaseUrl);
-  const proofProvider = httpClientProofProvider(cfg.midnightZk.proofServerUrl, zkConfigProvider);
+  const proofProvider = walletFirstProofProvider(
+    s.midnight.api,
+    zkConfigProvider,
+    httpClientProofProvider(cfg.midnightZk.proofServerUrl, zkConfigProvider),
+  );
   cachedProviders = createNoctisContractProviders({
     privateStore: s.privateStore,
     publicDataProvider: bridge.publicDataProvider,

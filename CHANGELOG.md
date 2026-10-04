@@ -8,6 +8,11 @@ Notable changes to the Noctis Zone, by release. Internal development history pre
 
 ### Added
 
+- **Proving through the buyer's own wallet when it can.** The DarkVeil and governance widgets ask a
+  connected Midnight wallet for its prover through the DApp connector's `getProvingProvider`, and prove
+  with it when the wallet offers one, so a proof is made wherever that wallet's user chose. A wallet
+  without one, or a proof its prover cannot make, goes through the platform's proof server as before. Both
+  paths prove the same way, with the initial cost model, so the transaction is the same shape either way.
 - **Property tests for the curve and fee arithmetic**, over generated curves and amounts: a range costs the
   same however it is split, rounding favours the curve, a round trip never profits, and the fee slices and
   the raise's share never exceed the value they divide. The Midnight contracts' getters that had no test

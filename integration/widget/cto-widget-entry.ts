@@ -57,6 +57,7 @@ import {
   registerVoter,
   sweepProposalBondFromBrowser,
 } from './cto-vote-flow.js';
+import { walletFirstProofProvider } from './midnight-proof-provider.js';
 import { buildMidnightWalletBridge } from './midnight-wallet-bridge.js';
 
 export interface CtoWidgetConfig {
@@ -98,7 +99,11 @@ async function requireMidnightProviders(): Promise<ContractProviders> {
     shieldedEncryptionPublicKey: midnight.shieldedEncryptionPublicKey,
   });
   const zkConfigProvider = new FetchZkConfigProvider<string>(cfg.midnightZk.zkBaseUrl);
-  const proofProvider = httpClientProofProvider(cfg.midnightZk.proofServerUrl, zkConfigProvider);
+  const proofProvider = walletFirstProofProvider(
+    midnight.api,
+    zkConfigProvider,
+    httpClientProofProvider(cfg.midnightZk.proofServerUrl, zkConfigProvider),
+  );
   // The CTO private store carries the identity only (no buy nonce), so the
   // providers are assembled here rather than through the DarkVeil helper.
   cachedProviders = {
