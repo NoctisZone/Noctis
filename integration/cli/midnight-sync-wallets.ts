@@ -34,7 +34,7 @@
 //          "snapshotDir":"…","passphrase":"…",
 //          "wallets":[{"role":"buyer_2","seedHex":"<64 hex>"}, …],
 //          "attemptSeconds":600,"maxAttempts":8,"heapMb":4096,
-//          "dustColdStart":false,
+//          "dustColdStart":false,"compactDust":true,
 //          "indexerHttpUrl":"…","indexerWsUrl":"…","relayUrl":"…"}   (URLs optional)
 // Output: {"results":{"<role>":{"status":"synced","dustAtomic":"…",
 //                               "appliedIndex":"…","attempts":n}
@@ -48,6 +48,7 @@
 
 import { spawn } from 'node:child_process';
 import type { FacadeState } from '@midnight-ntwrk/wallet-sdk-facade';
+import { compactingDustSerializer, type DustStateSource } from '../dust-snapshot-collapse.js';
 import {
   buildServerWallet,
   type MidnightNetwork,
@@ -86,6 +87,14 @@ interface Input extends NetworkEndpointOverrides {
   heapMb?: number;
   /** Replay dust from chain instead of from its snapshot. See ServerWalletSnapshotOptions. */
   dustColdStart?: boolean;
+  /**
+   * Bank the dust snapshot compacted (dust-snapshot-collapse.ts): the chain's
+   * generation-tree leaves that back none of this wallet's own NIGHT are
+   * collapsed to their hashes. On Preprod that took a ~6.5 MB dust state to
+   * ~160 KB and its restore from about two minutes to under a second. Default
+   * on; any refusal banks the full blob, so `false` only exists to compare.
+   */
+  compactDust?: boolean;
 }
 
 interface AttemptResult {
@@ -266,7 +275,27 @@ async function runWorker(): Promise<never> {
     return progress.appliedIndex ?? progress.appliedId;
   };
 
-  const saver = startPeriodicSave(wallet.facade, store, role, wallet.snapshotGuards, readCursor, {
+  // The dust arm banks its compacted form unless asked not to. Only the
+  // serializer is swapped: the saver's cursor-either-side rule runs around it
+  // exactly as before, and a refused compaction banks the full blob.
+  let compactNoted = false;
+  const dustSerializer =
+    input.compactDust === false
+      ? wallet.facade.dust
+      : compactingDustSerializer(wallet.facade.dust as unknown as DustStateSource, (result, ms) => {
+          if (!result.collapsed) {
+            log(`${role}: dust banked uncompacted — ${result.reason}`);
+          } else if (!compactNoted) {
+            compactNoted = true;
+            log(
+              `${role}: dust compacted ${(result.fullBytes / 1024).toFixed(0)}KB → ${(result.bytes / 1024).toFixed(0)}KB ` +
+                `(${result.ranges} foreign ranges, ${result.ownLeaves} own leaves kept) in ${ms}ms`,
+            );
+          }
+        });
+  const savedFacade = { shielded: wallet.facade.shielded, unshielded: wallet.facade.unshielded, dust: dustSerializer };
+
+  const saver = startPeriodicSave(savedFacade, store, role, wallet.snapshotGuards, readCursor, {
     onSave: (_saved, sizes) => {
       const parts = Object.entries(sizes).map(([kind, size]) => `${kind} ${(size / 1024).toFixed(0)}KB`);
       log(`${role}: banked ${parts.join(', ')}`);

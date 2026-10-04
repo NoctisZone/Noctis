@@ -8,6 +8,12 @@ Notable changes to the Noctis Zone, by release. Internal development history pre
 
 ### Added
 
+- **Compacted Midnight wallet snapshots.** The sync supervisor banks a wallet's dust state with the
+  generation-tree leaves that back none of its own NIGHT collapsed to their hashes, which leaves the roots
+  and every spend path it can build unchanged. The compacted state is read back before it is banked and must
+  give the same roots, balance and coins, or the full state is banked as before. On Preprod a dust snapshot
+  went from about 6.4 MB to 163 KB and its restore from about 80 seconds to 2; a wallet restored from it
+  synced and paid for five transactions. The approach is from ODATANO's NIGHTGATE (Apache-2.0).
 - **Collecting the platform's venue share from the command line.** `venue-action` gains `read-collection`,
   which reports the pools a collection round would go to and why the rest wait, without a key, and
   `collect`, which runs one round signed and paid by the treasury script's authority key. The authority is

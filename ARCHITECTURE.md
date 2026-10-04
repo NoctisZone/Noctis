@@ -260,6 +260,13 @@ Platform operator (a CLI — no browser wallet is involved on this path)
 │ killed mid-write leaves either the previous complete snapshot or the     │
 │ new one — never a torn file that would discard the whole history.        │
 │                                                                          │
+│ The dust state is banked COMPACTED: generation-tree leaves backing none  │
+│ of the wallet's own NIGHT are collapsed to their hashes, which leaves    │
+│ the roots and every spend path unchanged. The result must read back to   │
+│ the same roots, balance and coins, or the full state is banked. On       │
+│ Preprod a dust snapshot went from ~6.4 MB to 163 KB and its restore from │
+│ ~80 s to 2 s.                                                            │
+│                                                                          │
 │ Restored only when SDK version, network and seed fingerprint all         │
 │ match; any mismatch replays from chain instead. Snapshots live           │
 │ outside the repository: they describe real holdings.                     │
