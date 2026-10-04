@@ -34,7 +34,8 @@
 //          "snapshotDir":"…","passphrase":"…",
 //          "wallets":[{"role":"buyer_2","seedHex":"<64 hex>"}, …],
 //          "attemptSeconds":600,"maxAttempts":8,"heapMb":4096,
-//          "dustColdStart":false}
+//          "dustColdStart":false,
+//          "indexerHttpUrl":"…","indexerWsUrl":"…","relayUrl":"…"}   (URLs optional)
 // Output: {"results":{"<role>":{"status":"synced","dustAtomic":"…",
 //                               "appliedIndex":"…","attempts":n}
 //                     | {"status":"incomplete","attempts":n,"progress":[…]}
@@ -49,8 +50,9 @@ import { spawn } from 'node:child_process';
 import type { FacadeState } from '@midnight-ntwrk/wallet-sdk-facade';
 import {
   buildServerWallet,
-  defaultNetworkConfig,
   type MidnightNetwork,
+  type NetworkEndpointOverrides,
+  resolveNetworkConfig,
   waitForWalletState,
 } from '../midnight-server-wallet.js';
 import {
@@ -67,10 +69,13 @@ interface WalletInput {
   seedHex: string;
 }
 
-interface Input {
+interface Input extends NetworkEndpointOverrides {
   network: MidnightNetwork;
   proofServerUrl: string;
-  /** Where snapshots live. Must be outside the repository — these describe real holdings. */
+  /**
+   * Where snapshots live. Must be outside the repository — these describe real holdings. A snapshot is
+   * only good for the indexer that synced it, so give each indexer its own directory.
+   */
   snapshotDir: string;
   passphrase: string;
   wallets: WalletInput[];
@@ -229,7 +234,7 @@ async function runWorker(): Promise<never> {
   const attemptMs = (input.attemptSeconds ?? DEFAULTS.attemptSeconds) * 1000;
 
   const store = new WalletStateStore(input.snapshotDir, input.passphrase);
-  const config = defaultNetworkConfig(input.network, input.proofServerUrl);
+  const config = resolveNetworkConfig(input.network, input.proofServerUrl, input);
 
   const wallet = await buildServerWallet(Buffer.from(seedHex, 'hex'), config, {
     store,

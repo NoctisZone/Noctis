@@ -85,6 +85,7 @@ import {
   assertProofServerReachable,
   buildServerWallet,
   defaultNetworkConfig,
+  resolveNetworkConfig,
   type ServerWalletNetworkConfig,
   snapshotOptionsFrom,
   submitWithReconnect,
@@ -134,6 +135,51 @@ describe('defaultNetworkConfig', () => {
 
   it('mainnet throws rather than guessing an unconfirmed hostname', () => {
     expect(() => defaultNetworkConfig('mainnet', 'https://prover.example')).toThrow(/No confirmed mainnet/);
+  });
+});
+
+// ============================================================================
+// resolveNetworkConfig
+// ============================================================================
+
+describe('resolveNetworkConfig', () => {
+  const bf = {
+    indexerHttpUrl: 'https://midnight-preprod.blockfrost.io/api/v0?project_id=k',
+    indexerWsUrl: 'wss://midnight-preprod.blockfrost.io/api/v0/ws?project_id=k',
+  };
+
+  it("is the network's defaults when nothing is named", () => {
+    expect(resolveNetworkConfig('preprod', 'https://p')).toEqual(defaultNetworkConfig('preprod', 'https://p'));
+    expect(resolveNetworkConfig('preprod', 'https://p', {})).toEqual(defaultNetworkConfig('preprod', 'https://p'));
+  });
+
+  it('takes a named indexer and keeps the default relay', () => {
+    expect(resolveNetworkConfig('preprod', 'https://p', bf)).toEqual({
+      network: 'preprod',
+      relayUrl: 'wss://rpc.preprod.midnight.network',
+      provingServerUrl: 'https://p',
+      indexerHttpUrl: bf.indexerHttpUrl,
+      indexerWsUrl: bf.indexerWsUrl,
+    });
+  });
+
+  it('treats an empty string as not named, so a blank payload field cannot blank an endpoint', () => {
+    expect(resolveNetworkConfig('preprod', 'https://p', { indexerHttpUrl: '', relayUrl: '' }).indexerHttpUrl).toBe(
+      'https://indexer.preprod.midnight.network/api/v3/graphql',
+    );
+  });
+
+  it('carries no fields beyond the config itself, whatever else the input holds', () => {
+    const input = { ...bf, network: 'preprod', walletSeedHex: 'ab'.repeat(32) };
+    expect(Object.keys(resolveNetworkConfig('preprod', 'https://p', input)).sort()).toEqual(
+      ['indexerHttpUrl', 'indexerWsUrl', 'network', 'provingServerUrl', 'relayUrl'].sort(),
+    );
+  });
+
+  it('on mainnet needs all three named, and works once they are', () => {
+    expect(() => resolveNetworkConfig('mainnet', 'https://p', bf)).toThrow(/must be supplied explicitly/);
+    const all = { ...bf, relayUrl: 'wss://rpc.example' };
+    expect(resolveNetworkConfig('mainnet', 'https://p', all).relayUrl).toBe('wss://rpc.example');
   });
 });
 

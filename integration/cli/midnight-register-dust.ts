@@ -25,7 +25,8 @@
 //
 // Input:  {"network":"preprod","proofServerUrl":"http://127.0.0.1:6310",
 //          "wallets":[{"role":"buyer_1","seedHex":"<64 hex>"}, …],
-//          "waitForDustSeconds":0, "dryRun":false}
+//          "waitForDustSeconds":0, "dryRun":false,
+//          "indexerHttpUrl":"…","indexerWsUrl":"…","relayUrl":"…"}   (URLs optional)
 // Output: {"results":{"<role>":{"status":"registered","txId":…,
 //                               "utxosRegistered":n,"dustAtomic":…}
 //                     | {"status":"alreadyRegistered", …}
@@ -42,9 +43,10 @@ import { PublicKey } from '@midnight-ntwrk/wallet-sdk-unshielded-wallet';
 import { getUnshieldedRegistrationState } from '../indexer-client.js';
 import {
   buildServerWallet,
-  defaultNetworkConfig,
   hasUnshieldedNight,
   type MidnightNetwork,
+  type NetworkEndpointOverrides,
+  resolveNetworkConfig,
   type SnapshotCliInput,
   snapshotOptionsFrom,
   waitForWalletState,
@@ -56,7 +58,7 @@ interface WalletInput {
   seedHex: string;
 }
 
-interface Input extends SnapshotCliInput {
+interface Input extends SnapshotCliInput, NetworkEndpointOverrides {
   network: MidnightNetwork;
   proofServerUrl: string;
   wallets: WalletInput[];
@@ -135,7 +137,7 @@ function isNodeRejection(err: unknown): boolean {
 }
 
 async function registerOne(input: Input, wallet: WalletInput): Promise<Record<string, unknown>> {
-  const config = defaultNetworkConfig(input.network, input.proofServerUrl);
+  const config = resolveNetworkConfig(input.network, input.proofServerUrl, input);
   log(wallet.role, 'building wallet');
   // Registration pays its fee in DUST — the node reports 173,
   // InsufficientDustForRegistrationFee, when it cannot. So this wallet has to

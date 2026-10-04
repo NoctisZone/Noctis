@@ -149,6 +149,37 @@ export function defaultNetworkConfig(network: MidnightNetwork, provingServerUrl:
   }
 }
 
+/** Endpoints a CLI input may name in place of its network's defaults. */
+export interface NetworkEndpointOverrides {
+  relayUrl?: string;
+  indexerHttpUrl?: string;
+  indexerWsUrl?: string;
+}
+
+/**
+ * The network's defaults with any endpoint the input names put in their place.
+ *
+ * An indexer is the usual reason to name one: a wallet's sync cursor is
+ * numbered by the indexer that served it, so a wallet synced through one
+ * provider has to replay from genesis through another, and the CLI that
+ * resumes it must reach the same one. Mainnet has no defaults here, so all
+ * three must be named there.
+ */
+export function resolveNetworkConfig(
+  network: MidnightNetwork,
+  provingServerUrl: string,
+  overrides: NetworkEndpointOverrides = {},
+): ServerWalletNetworkConfig {
+  const defaults = network === 'mainnet' ? undefined : defaultNetworkConfig(network, provingServerUrl);
+  const relayUrl = overrides.relayUrl || defaults?.relayUrl;
+  const indexerHttpUrl = overrides.indexerHttpUrl || defaults?.indexerHttpUrl;
+  const indexerWsUrl = overrides.indexerWsUrl || defaults?.indexerWsUrl;
+  if (!relayUrl || !indexerHttpUrl || !indexerWsUrl) {
+    throw new Error(`relayUrl/indexerHttpUrl/indexerWsUrl must be supplied explicitly for network "${network}".`);
+  }
+  return { network, relayUrl, provingServerUrl, indexerHttpUrl, indexerWsUrl };
+}
+
 /**
  * WalletProvider + MidnightProvider adapter wrapping a real WalletFacade.
  * Verified against midnight-wallet:wallet-sdk's transactions.md and the

@@ -26,6 +26,11 @@ Notable changes to the Noctis Zone, by release. Internal development history pre
 
 ### Changed
 
+- **Every Midnight tool can name its indexer.** The wallet sync, the DUST registration and the launch
+  conductor take the relay and indexer addresses from their input, as the other Midnight tools already did,
+  and the conductor hands them to each action it starts. A wallet's sync position is numbered by the indexer
+  that served it, so a wallet resumed through another provider has to reach the same one. Unnamed, each
+  keeps its network's default.
 - **A DarkVeil claim from the browser names the published curve script.** A buyer's connected wallet now
   funds, signs and submits the claim Mesh builds against the curve validator's published reference, as the
   creator's fee claim does, so the claim fits a transaction. It lives in its own widget bundle, which the

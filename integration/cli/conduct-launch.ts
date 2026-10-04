@@ -63,7 +63,11 @@ import { describeError } from '../error-detail.js';
 import { waitForIndexer } from '../indexer-availability.js';
 import { nextAction } from '../launch-conductor.js';
 import { readEligibilityGateLedger, summarizeDarkVeil } from '../midnight-public-state.js';
-import { defaultNetworkConfig, type MidnightNetwork } from '../midnight-server-wallet.js';
+import {
+  type MidnightNetwork,
+  type NetworkEndpointOverrides,
+  resolveNetworkConfig,
+} from '../midnight-server-wallet.js';
 import { fileRehearsalLog } from '../rehearsal-log.js';
 import { SubmissionGate } from '../submission-gate.js';
 import type { BankedJobResult } from '../submission-outcome.js';
@@ -89,7 +93,8 @@ const DEFAULT_INDEXER_WAIT_MS = 4 * 60 * 60 * 1000;
  */
 const DEFAULT_ACTION_TIMEOUT_MS = 2_400_000;
 
-interface Input {
+/** Named endpoints are read by the conductor and handed to every action it starts. */
+interface Input extends NetworkEndpointOverrides {
   /** A name for this launch in every reported line. */
   launchId: string;
   network: MidnightNetwork;
@@ -215,7 +220,7 @@ async function main() {
     );
   }
 
-  const { indexerHttpUrl, indexerWsUrl } = defaultNetworkConfig(input.network, input.proofServerUrl);
+  const { indexerHttpUrl, indexerWsUrl } = resolveNetworkConfig(input.network, input.proofServerUrl, input);
   const publicDataProvider = indexerPublicDataProvider(indexerHttpUrl, indexerWsUrl);
   // Resolved beside this bundle rather than from the working directory, so a
   // run started from anywhere reaches the action it was built with.
@@ -278,6 +283,11 @@ async function main() {
     snapshotPassphrase: input.snapshotPassphrase,
     snapshotAccountId: input.snapshotAccountId,
     syncTimeoutMs: input.syncTimeoutMs,
+    // The action's wallet resumes from a snapshot synced through one indexer,
+    // so it must reach the same one the conductor reads.
+    relayUrl: input.relayUrl,
+    indexerHttpUrl: input.indexerHttpUrl,
+    indexerWsUrl: input.indexerWsUrl,
   };
 
   const turns: Array<{ line: string; tick: ConductorTickResult }> = [];
