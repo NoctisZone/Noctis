@@ -9,6 +9,10 @@
 //                named so a page can tell a contract from a person
 //   batch        run ONE round of fills and stop
 //   serve        run rounds on an interval until stopped
+//   read-collection  which pools a collection round of the platform's share
+//                would go to, and why the rest wait; no key
+//   collect      run ONE collection round, signed by the treasury script's
+//                authority key, which also pays (venue-fee-collector.ts)
 //
 // The first two touch no key and move nothing, which makes `read-round` the
 // honest thing to run first: it reports the same decision `batch` acts on, so
@@ -52,12 +56,14 @@ import {
   type VenueWithdrawOutcome,
 } from '../venue-batcher.js';
 import { readVenueFillRound, readVenuePools, type VenueChainProvider } from '../venue-chain-reader.js';
+import { type VenueCollectionMode, VenueFeeCollector, venueCollectionSchedule } from '../venue-fee-collector.js';
 import { VENUE_FILL_EXECUTION_UNITS, VenueFiller, type VenueScriptSource } from '../venue-fill-submitter.js';
 import { VENUE_DEPOSIT_ORDER_TITLE, VENUE_REDEEM_ORDER_TITLE } from '../venue-liquidity.js';
 import { readVenueMarket } from '../venue-market-reader.js';
 import { VENUE_FACTORY_TITLE } from '../venue-pool.js';
 import { VENUE_ROYALTY_WITHDRAW_TITLE, VENUE_WITHDRAW_ORDER_TITLE } from '../venue-royalty-shapes.js';
 import { venueUnitOf } from '../venue-swap.js';
+import { VenueTreasuryWithdrawer } from '../venue-treasury-withdrawal.js';
 import {
   CARDANO_NETWORK_MAP,
   jsonSafe,
@@ -71,12 +77,14 @@ import {
 
 declare const __dirname: string;
 
-type Action = 'read-pools' | 'read-round' | 'read-market' | 'batch' | 'serve';
+type Action = 'read-pools' | 'read-round' | 'read-market' | 'batch' | 'serve' | 'read-collection' | 'collect';
 
 /** The pool validator, applied with its `royalty_withdraw_vh` parameter. */
 const VENUE_POOL_TITLE = 'royalty_pool/pool.pool.spend';
 /** The swap order. Takes no parameter, so the blueprint's bytes are the real ones. */
 const VENUE_SWAP_ORDER_TITLE = 'royalty_pool/swap_order.swap_order.spend';
+/** The platform-share withdraw script, applied with its authority, ceiling and pool hash. */
+const VENUE_TREASURY_TITLE = 'royalty_pool/treasury.treasury.withdraw';
 
 /**
  * Least lovelace an output may hold.
@@ -169,6 +177,20 @@ interface Input {
   maxEvents?: number;
   /** `read-market` only: how many of a token's largest holders to return. */
   holdersLimit?: number;
+
+  /**
+   * `collect`: the treasury script's authority key, which signs every
+   * collection and pays for it. Same two ways in as the executor's.
+   */
+  collectorSkeyExtendedHex?: string;
+  collectorAddress?: string;
+  collectorMnemonic?: string;
+  /** `read-collection` and `collect`: threshold (default) or sweep; see venue-fee-collector.ts. */
+  collectionMode?: VenueCollectionMode;
+  /** threshold mode: the least ADA a pool must owe before it is worth going to. */
+  collectionThresholdLovelace?: string;
+  /** The most pools one round collects from. */
+  maxCollectionsPerRound?: number;
 }
 
 /**
@@ -268,6 +290,25 @@ async function executorWallet(input: Input): Promise<CurveSpendWallet> {
     });
   }
   const mnemonic = requireField(input, 'executorMnemonic', input.action);
+  return new MeshWallet({
+    networkId: MESH_NETWORK_ID[input.network],
+    fetcher: provider,
+    submitter: provider,
+    key: { type: 'mnemonic', words: mnemonic.trim().split(/\s+/) },
+  }) as unknown as CurveSpendWallet;
+}
+
+/** The wallet a collection is signed and paid from: the treasury script's authority. */
+async function collectorWallet(input: Input): Promise<CurveSpendWallet> {
+  const provider = new BlockfrostProvider(input.blockfrostProjectId);
+  if (input.collectorSkeyExtendedHex || input.collectorAddress) {
+    return KeyCurveSpendWallet.forAddress({
+      address: requireField(input, 'collectorAddress', input.action),
+      privateKeyExtendedHex: requireField(input, 'collectorSkeyExtendedHex', input.action),
+      provider,
+    });
+  }
+  const mnemonic = requireField(input, 'collectorMnemonic', input.action);
   return new MeshWallet({
     networkId: MESH_NETWORK_ID[input.network],
     fetcher: provider,
@@ -604,6 +645,69 @@ async function main() {
         failed: rounds.reduce((n, r) => n + r.failed, 0),
         errors,
       };
+      break;
+    }
+
+    case 'read-collection':
+    case 'collect': {
+      const policy = {
+        mode: input.collectionMode ?? 'threshold',
+        ...(input.collectionThresholdLovelace ? { thresholdLovelace: BigInt(input.collectionThresholdLovelace) } : {}),
+        ...(input.maxCollectionsPerRound ? { maxPerRound: input.maxCollectionsPerRound } : {}),
+      };
+      if (input.action === 'read-collection') {
+        const read = await readVenuePools(provider, { poolAddress, factoryPolicyId });
+        const schedule = venueCollectionSchedule({ pools: read.pools, policy });
+        result = {
+          ...where,
+          mode: schedule.mode,
+          decisions: schedule.decisions.map((d) => ({
+            poolNft: d.poolNft,
+            collect: d.collect,
+            reason: d.reason,
+            valueLovelace: d.valueLovelace,
+          })),
+          ledger: schedule.ledger,
+          skipped: read.skipped,
+        };
+        break;
+      }
+      // The applied record names the authority the treasury script checks. A
+      // key authority is declared as a required signer; the collector must be
+      // that key, which the wallet's own address shows.
+      const treasury = loadAppliedVenueValidator(__dirname, VENUE_TREASURY_TITLE);
+      const authority = treasury.parameters.find((p) => p.title === 'authority')?.value ?? '';
+      const wallet = await collectorWallet(input);
+      const collector = new VenueFeeCollector({
+        provider,
+        withdrawer: new VenueTreasuryWithdrawer({
+          network: input.network,
+          poolScript: scriptSource(pool.compiledCode, input.poolReferenceScript),
+          treasuryScript: { embeddedScriptCbor: treasury.compiledCode },
+          provider: new BlockfrostProvider(input.blockfrostProjectId),
+          ...(/^[0-9a-f]{56}$/.test(authority) ? { authorityKeyHash: authority } : {}),
+        }),
+        wallet,
+        poolAddress,
+        factoryPolicyId,
+        network: input.network,
+        policy,
+      });
+      const round = await collector.runRound();
+      result = {
+        ...where,
+        mode: round.schedule.mode,
+        submitted: round.submitted,
+        failed: round.failed,
+        deferred: round.deferred,
+        expectedNetLovelace: round.expectedNetLovelace,
+        outcomes: round.outcomes.map((o) =>
+          o.kind === 'submitted'
+            ? { kind: o.kind, poolNft: o.poolNft, txHash: o.txHash, expected: o.expected }
+            : { kind: o.kind, poolNft: o.poolNft, reason: o.reason },
+        ),
+      };
+      if (round.failed > 0) process.exitCode = 1;
       break;
     }
 

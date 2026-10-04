@@ -8,6 +8,10 @@ Notable changes to the Noctis Zone, by release. Internal development history pre
 
 ### Added
 
+- **Collecting the platform's venue share from the command line.** `venue-action` gains `read-collection`,
+  which reports the pools a collection round would go to and why the rest wait, without a key, and
+  `collect`, which runs one round signed and paid by the treasury script's authority key. The authority is
+  read from the venue's applied record and declared as a required signer.
 - **Reading takeover votes through the site when its indexer needs a key.** The CTO Governance page reads
   each contract from the site's public Midnight indexer when there is one a browser may call. When the
   site's indexer needs a key, as Blockfrost's does, the page now reads through the plugin's
