@@ -42,7 +42,8 @@
 // Input: single JSON object on stdin. Output: single JSON object on stdout.
 // ============================================================================
 
-import { BlockfrostProvider, MeshWallet } from '@meshsdk/core';
+import { MeshWallet } from '@meshsdk/core';
+import { meshCardanoProvider } from '../mesh-cardano-provider.js';
 import type { CurveNetwork } from '../mesh-curve-spend.js';
 import { MESH_NETWORK_ID } from '../reference-script.js';
 import { publishReferenceScript } from '../reference-script-publisher.js';
@@ -85,7 +86,7 @@ async function main() {
   const compiledScriptCbor = supplied ?? loadValidatorCbor(loadPlutusBlueprint(__dirname), validatorTitle);
   const expectedScriptHash = supplied ? requireField(input, 'expectedScriptHash') : undefined;
 
-  const provider = new BlockfrostProvider(blockfrostProjectId);
+  const provider = meshCardanoProvider(blockfrostProjectId);
   const wallet = new MeshWallet({
     networkId: MESH_NETWORK_ID[network],
     fetcher: provider,

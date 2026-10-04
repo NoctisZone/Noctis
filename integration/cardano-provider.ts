@@ -34,7 +34,19 @@
 // ============================================================================
 
 import { Blockfrost, CML, Koios, type Provider } from '@lucid-evolution/lucid';
+import {
+  AmbiguousSubmissionError,
+  errorText,
+  FALLBACK_KOIOS_TOKEN_ENV,
+  FALLBACK_KOIOS_URL_ENV,
+  isAlreadySubmitted,
+} from './cardano-failover-rules.js';
 import { CircuitBreakerManager } from './chain-provider-router.js';
+
+// Declared once, in a module free of any chain library, so the Mesh provider
+// shares them without importing Lucid. Re-exported so this stays the place
+// Lucid submitters and their tests take them from.
+export { AmbiguousSubmissionError, FALLBACK_KOIOS_TOKEN_ENV, FALLBACK_KOIOS_URL_ENV, isAlreadySubmitted };
 
 export interface CardanoProviderConfig {
   blockfrostUrl: string;
@@ -46,10 +58,6 @@ export interface NamedProvider {
   name: string;
   provider: Provider;
 }
-
-/** The environment that names the second backend. */
-export const FALLBACK_KOIOS_URL_ENV = 'NP_CARDANO_FALLBACK_KOIOS_URL';
-export const FALLBACK_KOIOS_TOKEN_ENV = 'NP_CARDANO_FALLBACK_KOIOS_TOKEN';
 
 /**
  * The provider a server-side submitter should hand to `Lucid(...)`.
@@ -74,8 +82,6 @@ export function cardanoProvider(
   ]);
 }
 
-const message = (err: unknown) => (err instanceof Error ? err.message : String(err));
-
 /**
  * Whether a failed submission says nothing about the transaction itself —
  * the backend, its quota or the network failed, not the ledger.
@@ -85,7 +91,7 @@ const message = (err: unknown) => (err instanceof Error ? err.message : String(e
  * this decidable from the message alone.
  */
 export function isTransitFailure(err: unknown): boolean {
-  const text = message(err);
+  const text = errorText(err);
   // Blockfrost's bare sentence is matched EXACTLY: a ledger refusal is free
   // text that may contain any word or number, so nothing looser is safe here.
   // Koios wraps EVERY failure, refusals included, in one `KoiosError`, so a
@@ -97,30 +103,9 @@ export function isTransitFailure(err: unknown): boolean {
   );
 }
 
-/** Whether a refusal only says the transaction is already queued or known. */
-export function isAlreadySubmitted(err: unknown): boolean {
-  return /already (?:been )?(?:submitted|in (?:the )?mempool|exists in (?:the )?mempool)|AlreadyInMempool|transaction already known/i.test(
-    message(err),
-  );
-}
-
 /** The hash of a signed transaction's body, from its CBOR. */
 export function txHashOf(txCbor: string): string {
   return CML.hash_transaction(CML.Transaction.from_cbor_hex(txCbor).body()).to_hex();
-}
-
-export class AmbiguousSubmissionError extends Error {
-  constructor(
-    readonly transitError: unknown,
-    readonly refusal: unknown,
-  ) {
-    super(
-      `The first backend failed in transit (${message(transitError)}) and the second refused the transaction ` +
-        `(${message(refusal)}). The first may have accepted it before its connection dropped — read the chain ` +
-        'before resubmitting.',
-    );
-    this.name = 'AmbiguousSubmissionError';
-  }
 }
 
 type ReadMethod = Exclude<keyof Provider, 'submitTx'>;

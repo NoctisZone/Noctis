@@ -43,9 +43,10 @@
 // ============================================================================
 
 import { validatorToAddress } from '@lucid-evolution/lucid';
-import { BlockfrostProvider, MeshWallet } from '@meshsdk/core';
+import { MeshWallet } from '@meshsdk/core';
 import { BlockfrostClient } from '../blockfrost-client.js';
 import { KeyCurveSpendWallet } from '../key-curve-spend-wallet.js';
+import { meshCardanoProvider } from '../mesh-cardano-provider.js';
 import type { CurveNetwork, CurveSpendWallet } from '../mesh-curve-spend.js';
 import { MESH_NETWORK_ID, type ReferenceScriptPointer } from '../reference-script.js';
 import {
@@ -281,7 +282,7 @@ function scriptSource(cbor: string, pointer: ReferenceScriptPointer | undefined)
  * a secret it keeps.
  */
 async function executorWallet(input: Input): Promise<CurveSpendWallet> {
-  const provider = new BlockfrostProvider(input.blockfrostProjectId);
+  const provider = meshCardanoProvider(input.blockfrostProjectId);
   if (input.executorSkeyExtendedHex || input.executorAddress) {
     return KeyCurveSpendWallet.forAddress({
       address: requireField(input, 'executorAddress', input.action),
@@ -300,7 +301,7 @@ async function executorWallet(input: Input): Promise<CurveSpendWallet> {
 
 /** The wallet a collection is signed and paid from: the treasury script's authority. */
 async function collectorWallet(input: Input): Promise<CurveSpendWallet> {
-  const provider = new BlockfrostProvider(input.blockfrostProjectId);
+  const provider = meshCardanoProvider(input.blockfrostProjectId);
   if (input.collectorSkeyExtendedHex || input.collectorAddress) {
     return KeyCurveSpendWallet.forAddress({
       address: requireField(input, 'collectorAddress', input.action),
@@ -567,7 +568,7 @@ async function main() {
         redeemScript: scriptSource(redeemCbor, input.redeemReferenceScript),
         withdrawScript: scriptSource(withdrawCbor, input.withdrawReferenceScript),
         royaltyWithdrawScript: scriptSource(royaltyWithdraw.compiledCode, input.royaltyWithdrawReferenceScript),
-        provider: new BlockfrostProvider(input.blockfrostProjectId),
+        provider: meshCardanoProvider(input.blockfrostProjectId),
         // Declared, not measured. A round chains its fills: each spends the
         // pool output the fill before it made, which is not on chain yet, and
         // a remote evaluator refuses a transaction whose input it cannot find.
@@ -684,7 +685,7 @@ async function main() {
           network: input.network,
           poolScript: scriptSource(pool.compiledCode, input.poolReferenceScript),
           treasuryScript: { embeddedScriptCbor: treasury.compiledCode },
-          provider: new BlockfrostProvider(input.blockfrostProjectId),
+          provider: meshCardanoProvider(input.blockfrostProjectId),
           ...(/^[0-9a-f]{56}$/.test(authority) ? { authorityKeyHash: authority } : {}),
         }),
         wallet,

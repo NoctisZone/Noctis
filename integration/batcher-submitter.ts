@@ -35,12 +35,13 @@
 
 import type { Assets, LucidEvolution, Network as LucidNetwork, UTxO } from '@lucid-evolution/lucid';
 import { Constr, Data, getAddressDetails, Lucid, toUnit, validatorToAddress } from '@lucid-evolution/lucid';
-import { BlockfrostProvider, MeshWallet } from '@meshsdk/core';
+import { MeshWallet } from '@meshsdk/core';
 import type { BatchPlan, PlannedFill } from './batch-planner.js';
 import { cardanoProvider } from './cardano-provider.js';
 import { KeyCurveSpendWallet } from './key-curve-spend-wallet.js';
 import type { BondingCurveTierBDatumData } from './launch-schemas.js';
 import { BondingCurveTierBDatumSchema, batchOrderToPlutus, settlementDatum } from './launch-schemas.js';
+import { meshCardanoProvider } from './mesh-cardano-provider.js';
 import { type CurveBatchPlan, type CurveNetwork, type CurveSpendWallet, MeshCurveSpender } from './mesh-curve-spend.js';
 import { ownerAddressFrom } from './order-submitter.js';
 import { BONDING_CURVE_TIER_B_REDEEMER, CURVE_ORDER_REDEEMER } from './redeemer-indices.js';
@@ -188,7 +189,7 @@ export class BatcherSubmitter {
       network,
       compiledScriptCbor: config.curveScriptCbor,
       referenceScript: config.curveReferenceScript,
-      provider: new BlockfrostProvider(config.blockfrostProjectId),
+      provider: meshCardanoProvider(config.blockfrostProjectId),
     });
   }
 
@@ -225,7 +226,7 @@ export class BatcherSubmitter {
     const wallet = await KeyCurveSpendWallet.forAddress({
       address: batcherAddress,
       privateKeyExtendedHex: batcherPrivateKeyExtendedHex,
-      provider: new BlockfrostProvider(this.config.blockfrostProjectId),
+      provider: meshCardanoProvider(this.config.blockfrostProjectId),
     });
     return this.submitBatchCore(batcherAddress, wallet, params);
   }
@@ -258,7 +259,7 @@ export class BatcherSubmitter {
           'known ones, and guessing it would silently widen every transaction validity range.',
       );
     }
-    const provider = new BlockfrostProvider(this.config.blockfrostProjectId);
+    const provider = meshCardanoProvider(this.config.blockfrostProjectId);
     return new MeshWallet({
       networkId: MESH_NETWORK_ID[network],
       fetcher: provider,

@@ -67,7 +67,6 @@
 
 import type { Assets, LucidEvolution, Network as LucidNetwork, SpendingValidator, UTxO } from '@lucid-evolution/lucid';
 import { CML, Constr, credentialToAddress, Data, Lucid, validatorToAddress } from '@lucid-evolution/lucid';
-import { BlockfrostProvider } from '@meshsdk/core';
 import { cardanoProvider } from './cardano-provider.js';
 import { KeyCurveSpendWallet } from './key-curve-spend-wallet.js';
 import {
@@ -83,6 +82,7 @@ import {
   VestingDatumSchema,
 } from './launch-schemas.js';
 import { selectLaunchUtxo, selectStakingPoolUtxo } from './launch-utxo-lookup.js';
+import { meshCardanoProvider } from './mesh-cardano-provider.js';
 import {
   type CompanionScriptInput,
   type CurveNetwork,
@@ -669,7 +669,7 @@ export class TierBGraduationSubmitter {
           'supports Preprod, Preview and Mainnet.',
       );
     }
-    const provider = new BlockfrostProvider(this.config.blockfrostProjectId);
+    const provider = meshCardanoProvider(this.config.blockfrostProjectId);
     const spender = new MeshCurveSpender({
       network,
       compiledScriptCbor: this.config.bondingCurveTierBScriptCbor,

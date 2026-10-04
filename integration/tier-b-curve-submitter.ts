@@ -61,7 +61,7 @@ import { CML, Constr, Data, getAddressDetails, Lucid, toUnit, validatorToAddress
 // the Node stand-ins the creator-fee widget's build supplies (see
 // webpack.widgets.config.cjs). The pages load those bundles only when the
 // action is taken.
-import { BlockfrostProvider, getOutputMinLovelace, MeshWallet } from '@meshsdk/core';
+import { getOutputMinLovelace, MeshWallet } from '@meshsdk/core';
 import { buildCapTradeFields, type CapAccumulator } from './cap-accumulator-tree.js';
 import { cardanoProvider } from './cardano-provider.js';
 import { type Cip30Api, Cip30CurveSpendWallet } from './cip30-curve-spend-wallet.js';
@@ -84,6 +84,7 @@ import {
   settlementDatum,
 } from './launch-schemas.js';
 import { selectLaunchUtxo } from './launch-utxo-lookup.js';
+import { type MeshChainProvider, meshCardanoProvider } from './mesh-cardano-provider.js';
 import { type CurveNetwork, type CurveSpendWallet, MeshCurveSpender } from './mesh-curve-spend.js';
 import { BONDING_CURVE_TIER_B_REDEEMER } from './redeemer-indices.js';
 import { MESH_NETWORK_ID, type ReferenceScriptPointer } from './reference-script.js';
@@ -229,15 +230,16 @@ const MESH_NETWORK_FOR_LUCID: Record<string, CurveNetwork> = {
  * A real project id names its network in its first seven characters, and Mesh
  * derives Blockfrost's URL from it. A page in the browser carries no project
  * id: its `blockfrostUrl` is the site's own proxy, which adds the key on the
- * way out, so Mesh is pointed at that instead.
+ * way out, so Mesh is pointed at that instead. On a server that names a
+ * fallback, Koios backs it — see mesh-cardano-provider.ts.
  */
 export function meshBlockfrostProvider(config: {
   blockfrostProjectId: string;
   blockfrostUrl: string;
-}): BlockfrostProvider {
-  return /^(mainnet|preprod|preview)/.test(config.blockfrostProjectId)
-    ? new BlockfrostProvider(config.blockfrostProjectId)
-    : new BlockfrostProvider(config.blockfrostUrl);
+}): MeshChainProvider {
+  return meshCardanoProvider(
+    /^(mainnet|preprod|preview)/.test(config.blockfrostProjectId) ? config.blockfrostProjectId : config.blockfrostUrl,
+  );
 }
 
 export interface LucidTierBCurveSubmitterConfig {
@@ -406,7 +408,7 @@ export class LucidTierBCurveSubmitter {
    * The spender and provider referenced mode needs, or nothing if this
    * submitter was built without a reference pointer.
    */
-  private referencedParts(): { spender: MeshCurveSpender; provider: BlockfrostProvider; network: CurveNetwork } | null {
+  private referencedParts(): { spender: MeshCurveSpender; provider: MeshChainProvider; network: CurveNetwork } | null {
     const pointer = this.config.referenceScript;
     if (!pointer) return null;
     const network = MESH_NETWORK_FOR_LUCID[this.config.network];

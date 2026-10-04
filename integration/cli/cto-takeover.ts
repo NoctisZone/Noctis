@@ -41,7 +41,7 @@
 // Output, one JSON object on stdout.
 // ============================================================================
 
-import { BlockfrostProvider, deserializeAddress, MeshWallet } from '@meshsdk/core';
+import { deserializeAddress, MeshWallet } from '@meshsdk/core';
 import { buildEnterpriseAddress, deserializeTx } from '@meshsdk/core-cst';
 import { planDisposition, readVestingTakeoverState, type VestingTakeoverPlan } from '../cto-disposition.js';
 import { planTakeoverEffects, readTakeoverEffectsState, type TakeoverEffectPlan } from '../cto-takeover-effects.js';
@@ -53,6 +53,7 @@ import {
   type TakeoverTxPlan,
 } from '../cto-takeover-tx.js';
 import { KeyCurveSpendWallet } from '../key-curve-spend-wallet.js';
+import { type MeshChainProvider, meshCardanoProvider } from '../mesh-cardano-provider.js';
 import type { CurveNetwork, CurveSpendWallet, TxCoSigner } from '../mesh-curve-spend.js';
 import { MESH_NETWORK_ID, type ReferenceScriptPointer, scriptAddressOf, scriptHashOf } from '../reference-script.js';
 import { scriptRewardAddress } from '../venue-stake-registration.js';
@@ -89,7 +90,7 @@ const BLOCKFROST_BASE: Record<CurveNetwork, string> = {
   mainnet: 'https://cardano-mainnet.blockfrost.io/api/v0',
 };
 
-async function payerWallet(input: Input, provider: BlockfrostProvider): Promise<CurveSpendWallet> {
+async function payerWallet(input: Input, provider: MeshChainProvider): Promise<CurveSpendWallet> {
   if (input.payerSkeyExtendedHex || input.payerAddress) {
     return KeyCurveSpendWallet.forAddress({
       address: requireField(input, 'payerAddress'),
@@ -191,7 +192,7 @@ async function main() {
     ];
   }
 
-  const provider = new BlockfrostProvider(projectId);
+  const provider = meshCardanoProvider(projectId);
   const wallet = await payerWallet(input, provider);
   const payerHash = deserializeAddress(await wallet.getChangeAddress()).pubKeyHash;
 
