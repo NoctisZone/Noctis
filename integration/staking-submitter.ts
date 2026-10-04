@@ -41,7 +41,6 @@ import type {
   WalletApi,
 } from '@lucid-evolution/lucid';
 import {
-  Blockfrost,
   CML,
   Constr,
   credentialToAddress,
@@ -52,6 +51,7 @@ import {
   validatorToAddress,
 } from '@lucid-evolution/lucid';
 import { bytesToHex, type CapProofStep, hexToBytes, recomputeCapRoot } from './cap-accumulator-tree.js';
+import { cardanoProvider } from './cardano-provider.js';
 import { type StakingPoolDatumData, StakingPoolDatumSchema, settlementDatum } from './launch-schemas.js';
 import { selectStakingPoolUtxo } from './launch-utxo-lookup.js';
 import { STAKING_POOL_REDEEMER } from './redeemer-indices.js';
@@ -191,7 +191,7 @@ export class StakingSubmitter {
   constructor(private config: StakingConfig) {
     this.validator = { type: 'PlutusV3', script: config.stakingPoolScriptCbor };
     this.address = validatorToAddress(config.network, this.validator);
-    this.lucidPromise = Lucid(new Blockfrost(config.blockfrostUrl, config.blockfrostProjectId), config.network);
+    this.lucidPromise = Lucid(cardanoProvider(config), config.network);
     // Marks the rejection handled WITHOUT swallowing it: a later await still
     // rejects with the same error. Without this, a caller that constructs the
     // submitter and fails before using it leaves Node printing a stack trace

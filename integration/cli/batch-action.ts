@@ -14,7 +14,7 @@
 // Input: single JSON object on stdin. Output: single JSON object on stdout.
 // ============================================================================
 
-import { Blockfrost, Lucid } from '@lucid-evolution/lucid';
+import { Lucid } from '@lucid-evolution/lucid';
 import {
   type BatchPlan,
   type CandidateOrder,
@@ -26,6 +26,7 @@ import {
 } from '../batch-planner.js';
 import { BatcherSubmitter } from '../batcher-submitter.js';
 import { capAccumulatorFromHex } from '../cap-accumulator-tree.js';
+import { cardanoProvider } from '../cardano-provider.js';
 import type { BondingCurveTierBDatumData } from '../launch-schemas.js';
 import { BondingCurveTierBDatumSchema } from '../launch-schemas.js';
 import { selectLaunchUtxo } from '../launch-utxo-lookup.js';
@@ -137,7 +138,7 @@ async function main() {
 
   // The curve, through the same authenticated lookup every submitter uses:
   // the launch's thread NFT is what makes the UTXO the real one.
-  const lucid = await Lucid(new Blockfrost(input.blockfrostUrl, input.blockfrostProjectId), network);
+  const lucid = await Lucid(cardanoProvider(input), network);
   const schema = BondingCurveTierBDatumSchema;
   const found = selectLaunchUtxo<BondingCurveTierBDatumData>(
     await lucid.utxosAt(batcher.curveAddress),

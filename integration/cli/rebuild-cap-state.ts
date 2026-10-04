@@ -21,9 +21,10 @@
 // Input: single JSON object on stdin. Output: single JSON object on stdout.
 // ============================================================================
 
-import { Blockfrost, Data, Lucid, validatorToAddress } from '@lucid-evolution/lucid';
+import { Data, Lucid, validatorToAddress } from '@lucid-evolution/lucid';
 import { rebuildCapAccumulatorFrom } from '../cap-accumulator-from-history.js';
 import { bytesToHex } from '../cap-accumulator-tree.js';
+import { cardanoProvider } from '../cardano-provider.js';
 import { BondingCurveTierBDatumSchema } from '../launch-schemas.js';
 import { selectLaunchUtxo } from '../launch-utxo-lookup.js';
 import { TradeHistoryReader } from '../trade-history-reader.js';
@@ -82,7 +83,7 @@ async function main() {
   // The root to check against comes from the launch's own authenticated UTXO,
   // not from any argument — the point of the check is lost if the caller can
   // supply what it is checked against.
-  const lucid = await Lucid(new Blockfrost(input.blockfrostUrl, input.blockfrostProjectId), network);
+  const lucid = await Lucid(cardanoProvider(input), network);
   const schema = BondingCurveTierBDatumSchema;
   const found = selectLaunchUtxo<{ cap_root: string; launch_id: string; thread_nft_policy: string }>(
     await lucid.utxosAt(curveAddress),

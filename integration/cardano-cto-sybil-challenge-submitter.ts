@@ -59,7 +59,6 @@ import type {
 import {
   applyDoubleCborEncoding,
   applyParamsToScript,
-  Blockfrost,
   Constr,
   credentialToAddress,
   Data,
@@ -69,6 +68,7 @@ import {
   validatorToScriptHash,
 } from '@lucid-evolution/lucid';
 import { blake2b } from '@noble/hashes/blake2.js';
+import { cardanoProvider } from './cardano-provider.js';
 import { CTO_SYBIL_MINT_REDEEMER } from './redeemer-indices.js';
 
 // ============================================================================
@@ -218,7 +218,7 @@ export class CardanoCtoSybilChallengeSubmitter {
     this.mintingPolicy = { type: 'PlutusV3', script: applied };
     this.scriptAddress = validatorToAddress(config.network, this.validator);
     this.challengeUnit = validatorToScriptHash(this.validator) + CHALLENGE_ASSET_NAME_HEX;
-    this.lucidPromise = Lucid(new Blockfrost(config.blockfrostUrl, config.blockfrostProjectId), config.network);
+    this.lucidPromise = Lucid(cardanoProvider(config), config.network);
     // Nothing awaits this until a method runs, so a caller that constructs the
     // submitter and then fails before calling one leaves the rejection with no
     // handler — and Node prints it to stderr after the real answer has already

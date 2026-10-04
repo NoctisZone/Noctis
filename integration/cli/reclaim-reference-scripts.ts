@@ -24,7 +24,8 @@
 // Input: single JSON object on stdin. Output: single JSON object on stdout.
 // ============================================================================
 
-import { Blockfrost, Lucid } from '@lucid-evolution/lucid';
+import { Lucid } from '@lucid-evolution/lucid';
+import { cardanoProvider } from '../cardano-provider.js';
 import {
   findReferenceScripts,
   reclaimable,
@@ -62,7 +63,10 @@ async function main() {
   const network = CARDANO_NETWORK_MAP[requireField(input, 'network')];
 
   const lucid = await Lucid(
-    new Blockfrost(requireField(input, 'blockfrostUrl'), requireField(input, 'blockfrostProjectId')),
+    cardanoProvider({
+      blockfrostUrl: requireField(input, 'blockfrostUrl'),
+      blockfrostProjectId: requireField(input, 'blockfrostProjectId'),
+    }),
     network,
   );
   lucid.selectWallet.fromSeed(requireField(input, 'publisherMnemonic'));

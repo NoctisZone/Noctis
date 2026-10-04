@@ -36,7 +36,6 @@
 
 import type { Assets, LucidEvolution, Network as LucidNetwork, UTxO, WalletApi } from '@lucid-evolution/lucid';
 import {
-  Blockfrost,
   Constr,
   credentialToAddress,
   Data,
@@ -45,6 +44,7 @@ import {
   toUnit,
   validatorToAddress,
 } from '@lucid-evolution/lucid';
+import { cardanoProvider } from './cardano-provider.js';
 import type { OrderDatumData } from './launch-schemas.js';
 import { OrderDatumSchema, settlementDatum } from './launch-schemas.js';
 import { CURVE_ORDER_REDEEMER } from './redeemer-indices.js';
@@ -154,7 +154,7 @@ export class OrderSubmitter {
     const curveHash = getAddressDetails(this.curveAddress).paymentCredential?.hash;
     if (!curveHash) throw new Error('Could not derive the curve script hash from its address.');
     this.curveScriptHash = curveHash;
-    this.lucidPromise = Lucid(new Blockfrost(config.blockfrostUrl, config.blockfrostProjectId), config.network);
+    this.lucidPromise = Lucid(cardanoProvider(config), config.network);
     // Nothing awaits this until a method runs, so a caller that constructs the
     // submitter and then fails before calling one leaves the rejection with no
     // handler — and Node prints it to stderr after the real answer has already

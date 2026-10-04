@@ -35,7 +35,8 @@ import type {
   UTxO,
   WalletApi,
 } from '@lucid-evolution/lucid';
-import { Blockfrost, CML, Constr, Data, Lucid, validatorToAddress } from '@lucid-evolution/lucid';
+import { CML, Constr, Data, Lucid, validatorToAddress } from '@lucid-evolution/lucid';
+import { cardanoProvider } from './cardano-provider.js';
 import { settlementDatum, type ThreadNftRole, type VestingDatumData, VestingDatumSchema } from './launch-schemas.js';
 import { type LaunchScopedDatum, selectLaunchUtxo } from './launch-utxo-lookup.js';
 import { VESTING_REDEEMER } from './redeemer-indices.js';
@@ -90,7 +91,7 @@ export class VestingClaimsSubmitter {
       script: config.vestingScriptCbor,
     };
     this.vestingAddress = validatorToAddress(config.network, this.vestingValidator);
-    this.lucidPromise = Lucid(new Blockfrost(config.blockfrostUrl, config.blockfrostProjectId), config.network);
+    this.lucidPromise = Lucid(cardanoProvider(config), config.network);
     // Nothing awaits this until a method runs, so a caller that constructs the
     // submitter and then fails before calling one leaves the rejection with no
     // handler — and Node prints it to stderr after the real answer has already

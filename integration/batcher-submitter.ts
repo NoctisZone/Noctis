@@ -34,9 +34,10 @@
 // that says so.
 
 import type { Assets, LucidEvolution, Network as LucidNetwork, UTxO } from '@lucid-evolution/lucid';
-import { Blockfrost, Constr, Data, getAddressDetails, Lucid, toUnit, validatorToAddress } from '@lucid-evolution/lucid';
+import { Constr, Data, getAddressDetails, Lucid, toUnit, validatorToAddress } from '@lucid-evolution/lucid';
 import { BlockfrostProvider, MeshWallet } from '@meshsdk/core';
 import type { BatchPlan, PlannedFill } from './batch-planner.js';
+import { cardanoProvider } from './cardano-provider.js';
 import { KeyCurveSpendWallet } from './key-curve-spend-wallet.js';
 import type { BondingCurveTierBDatumData } from './launch-schemas.js';
 import { BondingCurveTierBDatumSchema, batchOrderToPlutus, settlementDatum } from './launch-schemas.js';
@@ -165,7 +166,7 @@ export class BatcherSubmitter {
     // Reading stays on Lucid: the authenticated launch lookup already lives
     // there and a second answer to "which UTXO is this launch's" is not worth
     // having.
-    this.lucidPromise = Lucid(new Blockfrost(config.blockfrostUrl, config.blockfrostProjectId), config.network);
+    this.lucidPromise = Lucid(cardanoProvider(config), config.network);
     // Nothing awaits this until a method runs, so a caller that constructs the
     // submitter and then fails before calling one leaves the rejection with no
     // handler — and Node prints it to stderr after the real answer has already

@@ -37,7 +37,8 @@
 // ============================================================================
 
 import type { LucidEvolution, Network as LucidNetwork, SpendingValidator, UTxO } from '@lucid-evolution/lucid';
-import { Blockfrost, CML, Constr, Data, Lucid, validatorToAddress } from '@lucid-evolution/lucid';
+import { CML, Constr, Data, Lucid, validatorToAddress } from '@lucid-evolution/lucid';
+import { cardanoProvider } from './cardano-provider.js';
 import { type LpEscrowDatumData, LpEscrowDatumSchema } from './launch-schemas.js';
 import { selectLaunchUtxo } from './launch-utxo-lookup.js';
 import { LP_ESCROW_REDEEMER } from './redeemer-indices.js';
@@ -84,7 +85,7 @@ export class DexChangeSubmitter {
       script: config.lpEscrowScriptCbor,
     };
     this.lpEscrowAddress = validatorToAddress(config.network, this.lpEscrowValidator);
-    this.lucidPromise = Lucid(new Blockfrost(config.blockfrostUrl, config.blockfrostProjectId), config.network);
+    this.lucidPromise = Lucid(cardanoProvider(config), config.network);
     // Nothing awaits this until a method runs, so a caller that constructs the
     // submitter and then fails before calling one leaves the rejection with no
     // handler — and Node prints it to stderr after the real answer has already

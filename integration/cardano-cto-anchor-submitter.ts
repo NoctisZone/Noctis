@@ -37,7 +37,8 @@
 // ============================================================================
 
 import type { LucidEvolution, Network as LucidNetwork, SpendingValidator, UTxO } from '@lucid-evolution/lucid';
-import { Blockfrost, CredentialSchema, Data, Lucid, validatorToAddress } from '@lucid-evolution/lucid';
+import { CredentialSchema, Data, Lucid, validatorToAddress } from '@lucid-evolution/lucid';
+import { cardanoProvider } from './cardano-provider.js';
 import { deriveAnchorReferenceHex, type TargetDexCredential } from './cto-anchor-reference.js';
 import { LpEscrowDatumSchema } from './launch-schemas.js';
 import { selectLaunchUtxo } from './launch-utxo-lookup.js';
@@ -338,19 +339,17 @@ export class CardanoCtoAnchorSubmitter {
       type: 'PlutusV3',
       script: config.lpEscrowScriptCbor,
     });
-    this.lucidPromise = Lucid(new Blockfrost(config.blockfrostUrl, config.blockfrostProjectId), config.network).then(
-      (lucid) => {
-        lucid.selectWallet.fromPrivateKey(config.relayerPrivateKey);
-        // Nothing awaits this until a method runs, so a caller that constructs the
-        // submitter and then fails before calling one leaves the rejection with no
-        // handler — and Node prints it to stderr after the real answer has already
-        // been written to stdout. Attaching a no-op handler marks it handled
-        // WITHOUT swallowing it: a later `await this.lucidPromise` still rejects
-        // with the same error, which is the whole point (verified, not assumed).
-        this.lucidPromise.catch(() => {});
-        return lucid;
-      },
-    );
+    this.lucidPromise = Lucid(cardanoProvider(config), config.network).then((lucid) => {
+      lucid.selectWallet.fromPrivateKey(config.relayerPrivateKey);
+      // Nothing awaits this until a method runs, so a caller that constructs the
+      // submitter and then fails before calling one leaves the rejection with no
+      // handler — and Node prints it to stderr after the real answer has already
+      // been written to stdout. Attaching a no-op handler marks it handled
+      // WITHOUT swallowing it: a later `await this.lucidPromise` still rejects
+      // with the same error, which is the whole point (verified, not assumed).
+      this.lucidPromise.catch(() => {});
+      return lucid;
+    });
   }
 
   private requireDatum(utxo: UTxO): string {

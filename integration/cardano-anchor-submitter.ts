@@ -31,7 +31,8 @@
 // ============================================================================
 
 import type { LucidEvolution, Network as LucidNetwork, SpendingValidator, UTxO } from '@lucid-evolution/lucid';
-import { Blockfrost, Data, Lucid, validatorToAddress } from '@lucid-evolution/lucid';
+import { Data, Lucid, validatorToAddress } from '@lucid-evolution/lucid';
+import { cardanoProvider } from './cardano-provider.js';
 import { CertificateTypeSchema, type ZkAnchorDatumData, ZkAnchorDatumSchema } from './launch-schemas.js';
 import { selectLaunchUtxo } from './launch-utxo-lookup.js';
 import type { AnchorCertificateParams, CardanoTxSubmitter } from './zk-cert-relayer.js';
@@ -126,19 +127,17 @@ export class LucidAnchorSubmitter implements CardanoTxSubmitter {
   constructor(private config: LucidAnchorSubmitterConfig) {
     this.validator = { type: 'PlutusV3', script: config.compiledScriptCbor };
     this.scriptAddress = validatorToAddress(config.network, this.validator);
-    this.lucidPromise = Lucid(new Blockfrost(config.blockfrostUrl, config.blockfrostProjectId), config.network).then(
-      (lucid) => {
-        lucid.selectWallet.fromPrivateKey(config.relayerPrivateKey);
-        // Nothing awaits this until a method runs, so a caller that constructs the
-        // submitter and then fails before calling one leaves the rejection with no
-        // handler — and Node prints it to stderr after the real answer has already
-        // been written to stdout. Attaching a no-op handler marks it handled
-        // WITHOUT swallowing it: a later `await this.lucidPromise` still rejects
-        // with the same error, which is the whole point (verified, not assumed).
-        this.lucidPromise.catch(() => {});
-        return lucid;
-      },
-    );
+    this.lucidPromise = Lucid(cardanoProvider(config), config.network).then((lucid) => {
+      lucid.selectWallet.fromPrivateKey(config.relayerPrivateKey);
+      // Nothing awaits this until a method runs, so a caller that constructs the
+      // submitter and then fails before calling one leaves the rejection with no
+      // handler — and Node prints it to stderr after the real answer has already
+      // been written to stdout. Attaching a no-op handler marks it handled
+      // WITHOUT swallowing it: a later `await this.lucidPromise` still rejects
+      // with the same error, which is the whole point (verified, not assumed).
+      this.lucidPromise.catch(() => {});
+      return lucid;
+    });
   }
 
   /**

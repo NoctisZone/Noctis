@@ -48,16 +48,7 @@ import type {
   UTxO,
   WalletApi,
 } from '@lucid-evolution/lucid';
-import {
-  Blockfrost,
-  CML,
-  Constr,
-  Data,
-  getAddressDetails,
-  Lucid,
-  toUnit,
-  validatorToAddress,
-} from '@lucid-evolution/lucid';
+import { CML, Constr, Data, getAddressDetails, Lucid, toUnit, validatorToAddress } from '@lucid-evolution/lucid';
 // Mesh, and the modules below that build on it, belong to referenced mode,
 // which is taken only when a `referenceScript` pointer is configured. Most of
 // it signs with a mnemonic or a stored private key, server-side. The browser
@@ -72,6 +63,7 @@ import {
 // action is taken.
 import { BlockfrostProvider, getOutputMinLovelace, MeshWallet } from '@meshsdk/core';
 import { buildCapTradeFields, type CapAccumulator } from './cap-accumulator-tree.js';
+import { cardanoProvider } from './cardano-provider.js';
 import { type Cip30Api, Cip30CurveSpendWallet } from './cip30-curve-spend-wallet.js';
 import { setBit, testBit } from './claim-bitmap.js';
 import {
@@ -344,7 +336,7 @@ export class LucidTierBCurveSubmitter {
   constructor(private config: LucidTierBCurveSubmitterConfig) {
     this.validator = { type: 'PlutusV3', script: config.compiledScriptCbor };
     this.scriptAddress = validatorToAddress(config.network, this.validator);
-    this.lucidPromise = Lucid(new Blockfrost(config.blockfrostUrl, config.blockfrostProjectId), config.network);
+    this.lucidPromise = Lucid(cardanoProvider(config), config.network);
     // Nothing awaits this until a method runs, so a caller that constructs the
     // submitter and then fails before calling one leaves the rejection with no
     // handler — and Node prints it to stderr after the real answer has already

@@ -20,7 +20,7 @@
 // ============================================================================
 
 import type { LucidEvolution, Network as LucidNetwork, SpendingValidator } from '@lucid-evolution/lucid';
-import { Blockfrost, Constr, credentialToAddress, Data, Lucid, validatorToAddress } from '@lucid-evolution/lucid';
+import { Constr, credentialToAddress, Data, Lucid, validatorToAddress } from '@lucid-evolution/lucid';
 import {
   type CtoGovernanceDatumData,
   CtoGovernanceDatumSchema,
@@ -28,6 +28,7 @@ import {
   requireCtoDatum,
   toHex,
 } from './cardano-cto-anchor-submitter.js';
+import { cardanoProvider } from './cardano-provider.js';
 import { settlementDatum } from './launch-schemas.js';
 import { CTO_GOVERNANCE_REDEEMER } from './redeemer-indices.js';
 
@@ -66,19 +67,17 @@ export class CardanoCtoReclaimBondSubmitter {
   constructor(private config: CardanoCtoReclaimBondSubmitterConfig) {
     this.validator = { type: 'PlutusV3', script: config.compiledScriptCbor };
     this.scriptAddress = validatorToAddress(config.network, this.validator);
-    this.lucidPromise = Lucid(new Blockfrost(config.blockfrostUrl, config.blockfrostProjectId), config.network).then(
-      (lucid) => {
-        lucid.selectWallet.fromPrivateKey(config.callerPrivateKey);
-        // Nothing awaits this until a method runs, so a caller that constructs the
-        // submitter and then fails before calling one leaves the rejection with no
-        // handler — and Node prints it to stderr after the real answer has already
-        // been written to stdout. Attaching a no-op handler marks it handled
-        // WITHOUT swallowing it: a later `await this.lucidPromise` still rejects
-        // with the same error, which is the whole point (verified, not assumed).
-        this.lucidPromise.catch(() => {});
-        return lucid;
-      },
-    );
+    this.lucidPromise = Lucid(cardanoProvider(config), config.network).then((lucid) => {
+      lucid.selectWallet.fromPrivateKey(config.callerPrivateKey);
+      // Nothing awaits this until a method runs, so a caller that constructs the
+      // submitter and then fails before calling one leaves the rejection with no
+      // handler — and Node prints it to stderr after the real answer has already
+      // been written to stdout. Attaching a no-op handler marks it handled
+      // WITHOUT swallowing it: a later `await this.lucidPromise` still rejects
+      // with the same error, which is the whole point (verified, not assumed).
+      this.lucidPromise.catch(() => {});
+      return lucid;
+    });
   }
 
   /** Pays the launch's currently-pending relayer bond to its recorded pending_relayer_key_hash — only callable once the anchored proposal has been legitimately Executed or Expired (never reachable if the governor voided it, since VoidPendingProposal already zeroes the bond). */

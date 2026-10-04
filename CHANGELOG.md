@@ -14,6 +14,12 @@ Notable changes to the Noctis Zone, by release. Internal development history pre
   give the same roots, balance and coins, or the full state is banked as before. On Preprod a dust snapshot
   went from about 6.4 MB to 163 KB and its restore from about 80 seconds to 2; a wallet restored from it
   synced and paid for five transactions. The approach is from ODATANO's NIGHTGATE (Apache-2.0).
+- **A second Cardano backend for every server-side Lucid submitter.** Submitters build their provider
+  through one function, which is the same Blockfrost provider as before unless
+  `NP_CARDANO_FALLBACK_KOIOS_URL` names a Koios endpoint. With one named, reads and submission try
+  Blockfrost and then Koios behind the read router's circuit breaker. A submission the ledger refuses is
+  final; one that fails in transit or on a rate limit moves on; "already in the mempool" counts as
+  submitted; and a refusal from Koios after Blockfrost failed in transit is reported as possibly landed.
 - **More of a Midnight rejection named.** The submission classifier recognises the node pool's
   "already imported" and "priority too low" replies as a transaction already on its way, which calls for a
   chain read rather than another send; treats ledger code 138 as missing DUST; and names the sequencing

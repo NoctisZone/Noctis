@@ -46,13 +46,13 @@
 
 import type { Assets, LucidEvolution, Network as LucidNetwork, UTxO, WalletApi } from '@lucid-evolution/lucid';
 import {
-  Blockfrost,
   calculateMinLovelaceFromUTxO,
   Data,
   getAddressDetails,
   Lucid,
   validatorToAddress,
 } from '@lucid-evolution/lucid';
+import { cardanoProvider } from './cardano-provider.js';
 import {
   type ProviderTxPosition,
   type ProviderUtxo,
@@ -261,7 +261,7 @@ export class VenueBrowserSubmitter {
     this.redeemAddress = config.redeemScriptCbor
       ? validatorToAddress(config.network, { type: 'PlutusV3', script: config.redeemScriptCbor })
       : null;
-    this.lucidPromise = Lucid(new Blockfrost(config.blockfrostUrl, config.blockfrostProjectId), config.network);
+    this.lucidPromise = Lucid(cardanoProvider(config), config.network);
     // Nothing awaits this until a method runs; a later await still sees the
     // rejection. Same note the curve's own submitter carries.
     this.lucidPromise.catch(() => {});

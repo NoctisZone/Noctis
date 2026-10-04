@@ -51,12 +51,12 @@ import type {
 } from '@lucid-evolution/lucid';
 import {
   applyDoubleCborEncoding,
-  Blockfrost,
   Data,
   Lucid,
   validatorToAddress,
   validatorToScriptHash,
 } from '@lucid-evolution/lucid';
+import { cardanoProvider } from './cardano-provider.js';
 import {
   type BondingCurveTierBDatumData,
   BondingCurveTierBDatumSchema,
@@ -177,7 +177,7 @@ export class TokenMetadataSubmitter {
       script: applyDoubleCborEncoding(config.spendScriptCbor),
     };
     this.spendAddress = validatorToAddress(config.network, this.spendValidator);
-    this.lucidPromise = Lucid(new Blockfrost(config.blockfrostUrl, config.blockfrostProjectId), config.network);
+    this.lucidPromise = Lucid(cardanoProvider(config), config.network);
     // Nothing awaits this until a method runs, so a caller that constructs the
     // submitter and then fails before calling one leaves the rejection with no
     // handler — and Node prints it to stderr after the real answer has already

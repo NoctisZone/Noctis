@@ -36,7 +36,8 @@
 // hasn't seeded them), which is exactly this phase's own checkpoint.
 // ============================================================================
 
-import { Blockfrost, Data, Lucid, validatorToAddress } from '@lucid-evolution/lucid';
+import { Data, Lucid, validatorToAddress } from '@lucid-evolution/lucid';
+import { cardanoProvider } from '../cardano-provider.js';
 import {
   BondingCurveTierBDatumSchema,
   LpEscrowDatumSchema,
@@ -111,7 +112,7 @@ async function main() {
   const vestingAddress = validatorToAddress(network, vestingValidator);
   const lpEscrowAddress = validatorToAddress(network, lpEscrowValidator);
 
-  const lucid = await Lucid(new Blockfrost(input.blockfrostUrl, input.blockfrostProjectId), network);
+  const lucid = await Lucid(cardanoProvider(input), network);
 
   async function findLaunchUtxo<T>(
     address: string,

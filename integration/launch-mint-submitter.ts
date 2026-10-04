@@ -34,13 +34,13 @@ import type { Address, LucidEvolution, Network as LucidNetwork, Native, UTxO } f
 import {
   applyDoubleCborEncoding,
   applyParamsToScript,
-  Blockfrost,
   Constr,
   Data,
   Lucid,
   mintingPolicyToId,
   scriptFromNative,
 } from '@lucid-evolution/lucid';
+import { cardanoProvider } from './cardano-provider.js';
 import {
   assertValidCip68BaseName,
   cip68FungibleAssetName,
@@ -96,7 +96,7 @@ export class LaunchMintSubmitter {
   private lucidPromise: Promise<LucidEvolution>;
 
   constructor(private config: LaunchMintSubmitterConfig) {
-    this.lucidPromise = Lucid(new Blockfrost(config.blockfrostUrl, config.blockfrostProjectId), config.network);
+    this.lucidPromise = Lucid(cardanoProvider(config), config.network);
     // Nothing awaits this until a method runs, so a caller that constructs the
     // submitter and then fails before calling one leaves the rejection with no
     // handler — and Node prints it to stderr after the real answer has already

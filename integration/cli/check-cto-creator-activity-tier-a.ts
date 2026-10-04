@@ -38,7 +38,8 @@
 // zero with {"error": "..."} on any failure the caller couldn't complete.
 // ============================================================================
 
-import { Blockfrost, Data, Lucid, validatorToAddress } from '@lucid-evolution/lucid';
+import { Data, Lucid, validatorToAddress } from '@lucid-evolution/lucid';
+import { cardanoProvider } from '../cardano-provider.js';
 import { BondingCurveTierBDatumSchema, loadValidator } from '../launch-schemas.js';
 import { TradeHistoryReader } from '../trade-history-reader.js';
 import { CARDANO_NETWORK_MAP, loadPlutusBlueprint, parseJsonStdin, readStdin, requireFieldsFalsy } from './cli-io.js';
@@ -71,7 +72,7 @@ async function main() {
 
   const network = CARDANO_NETWORK_MAP[input.network];
 
-  const lucid = await Lucid(new Blockfrost(input.blockfrostUrl, input.blockfrostProjectId), network);
+  const lucid = await Lucid(cardanoProvider(input), network);
   const bondingCurveAddress = validatorToAddress(network, bondingCurveValidator);
 
   // --- Current balance: live datum read, same pattern as

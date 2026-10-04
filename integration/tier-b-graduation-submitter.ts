@@ -66,8 +66,9 @@
 // ============================================================================
 
 import type { Assets, LucidEvolution, Network as LucidNetwork, SpendingValidator, UTxO } from '@lucid-evolution/lucid';
-import { Blockfrost, CML, Constr, credentialToAddress, Data, Lucid, validatorToAddress } from '@lucid-evolution/lucid';
+import { CML, Constr, credentialToAddress, Data, Lucid, validatorToAddress } from '@lucid-evolution/lucid';
 import { BlockfrostProvider } from '@meshsdk/core';
+import { cardanoProvider } from './cardano-provider.js';
 import { KeyCurveSpendWallet } from './key-curve-spend-wallet.js';
 import {
   type BondingCurveTierBDatumData,
@@ -234,7 +235,7 @@ export class TierBGraduationSubmitter {
     this.lpEscrowAddress = validatorToAddress(config.network, this.lpEscrowValidator);
     this.vestingAddress = validatorToAddress(config.network, this.vestingValidator);
     this.stakingPoolAddress = validatorToAddress(config.network, this.stakingPoolValidator);
-    this.lucidPromise = Lucid(new Blockfrost(config.blockfrostUrl, config.blockfrostProjectId), config.network);
+    this.lucidPromise = Lucid(cardanoProvider(config), config.network);
     // Nothing awaits this until a method runs, so a caller that constructs the
     // submitter and then fails before calling one leaves the rejection with no
     // handler — and Node prints it to stderr after the real answer has already
