@@ -27,6 +27,11 @@ Notable changes to the Noctis Zone, by release. Internal development history pre
   it: no bearer header without a token, cost models read from Koios, and a withdrawal's budget tagged the
   way the builder reads it. On Preprod, with Blockfrost given a bad key, Koios answered with the same
   UTxOs, cost models and protocol parameters.
+- **A manifest of the shipped ZK artifacts, rebuilt in CI.** `contracts/midnight/zk-manifest.json` records
+  the sha256 and size of every file of each contract's real-key build, prover keys included, with the
+  source and toolchain that produced them. Key generation on the pinned toolchain is reproducible, so a
+  new workflow recompiles each contract and requires the result to match the manifest byte for byte. A
+  script holds any copy to it: the local tree, a server's, or the keys a site serves to browsers.
 - **More of a Midnight rejection named.** The submission classifier recognises the node pool's
   "already imported" and "priority too low" replies as a transaction already on its way, which calls for a
   chain read rather than another send; treats ledger code 138 as missing DUST; and names the sequencing

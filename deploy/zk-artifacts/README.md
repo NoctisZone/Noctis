@@ -32,6 +32,31 @@ Run once per `.compact` file — there is no single `compile-all` entry point
 today; `package.json`'s `compile` script loops the 8 files with `--skip-zk`
 for the fast dev-time typecheck path, not this one.
 
+## The manifest: what every copy must hold
+
+`contracts/midnight/zk-manifest.json` is the tracked record of the artifacts
+the platform ships: for each contract in `compiled_realzk/`, the source it was
+compiled from, the toolchain, and the sha256 and size of every file — prover
+keys hashed in full, verifier keys, both zkir forms, the contract module. The
+source map is left out because it records the directory it was built in.
+
+Key generation on the pinned toolchain is reproducible: recompiling the same
+source gives the same prover and verifier keys byte for byte (checked against
+a build from four days earlier, all 99 files). That is what the **ZK
+artifacts** workflow relies on — it recompiles each contract with real keys
+and fails unless the result reproduces the manifest, so the keys served can
+be traced to the public source. While a contract's source is ahead of its
+deployed instance, the shipped keys belong to the deployed one and the
+workflow warns instead of failing.
+
+```bash
+cd contracts/midnight
+node scripts/zk-manifest.mjs write        # after a real-key compile; refuses if compiled_realzk/ is behind the source
+node scripts/zk-manifest.mjs check        # hold compiled_realzk/ to the manifest
+node scripts/zk-manifest.mjs check --tree <dir> --manifest <file>   # any copy, e.g. on a server, with node alone
+node scripts/zk-manifest.mjs check-url <zkBaseUrl> --contract <name> # the copy a site serves to browsers
+```
+
 ## Real measured sizes (2026-07-22, this session — all 8 PSMs, complete)
 
 | Contract | Circuits | Total size |

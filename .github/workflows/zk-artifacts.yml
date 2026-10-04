@@ -1,0 +1,73 @@
+name: ZK artifacts
+
+# The Compact ZK artifacts the platform proves with (compiled_realzk/) are too
+# large for git and are copied to servers by hand. contracts/midnight/
+# zk-manifest.json is the tracked record of what every copy must hold. This
+# workflow recompiles each contract in it from the source in this commit, with
+# real keys, on the pinned toolchain, and requires the result to reproduce the
+# manifest byte for byte — so anyone can confirm the keys we serve come from
+# the public source.
+#
+# When a contract's source has changed since the manifest was written, the
+# shipped keys still belong to the deployed contract, which is correct until
+# it is redeployed. The check then warns instead of failing.
+#
+# Runs on any branch, for the reason test.yml gives, but only when something it
+# checks has changed: a real-key compile takes minutes.
+on:
+  push:
+    branches: ['**']
+    paths:
+      - 'contracts/midnight/*.compact'
+      - 'contracts/midnight/zk-manifest.json'
+      - 'contracts/midnight/scripts/zk-manifest.mjs'
+      - 'contracts/midnight/compact-toolchain.txt'
+      - '.github/workflows/zk-artifacts.yml'
+  workflow_dispatch:
+
+jobs:
+  reproduce:
+    name: Rebuild the shipped ZK artifacts from source
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install the Compact CLI
+        run: |
+          curl --proto '=https' --tlsv1.2 -LsSf https://github.com/midnightntwrk/compact/releases/latest/download/compact-installer.sh | sh
+          echo "$HOME/.compact/bin" >> "$GITHUB_PATH"
+      - name: Install the pinned Compact compiler
+        run: |
+          export PATH="$HOME/.compact/bin:$PATH"
+          version="$(grep -vE '^[[:space:]]*(#|$)' contracts/midnight/compact-toolchain.txt | tail -1 | tr -d '[:space:]')"
+          if [ -z "$version" ]; then
+            echo "Could not read the compiler pin from contracts/midnight/compact-toolchain.txt" >&2
+            exit 1
+          fi
+          compact update "$version"
+          got="$(compact compile --version | tr -d '[:space:]')"
+          echo "pinned: $version / installed: $got"
+          if [ "$version" != "$got" ]; then
+            echo "Compact compiler is $got but this project pins $version." >&2
+            exit 1
+          fi
+      - name: The manifest names the pinned toolchain
+        run: |
+          want="$(grep -vE '^[[:space:]]*(#|$)' contracts/midnight/compact-toolchain.txt | tail -1 | tr -d '[:space:]')"
+          got="$(node -p "require('./contracts/midnight/zk-manifest.json').toolchain")"
+          if [ "$want" != "$got" ]; then
+            echo "zk-manifest.json was written with $got; the pin is $want. Recompile and rewrite the manifest." >&2
+            exit 1
+          fi
+      - name: Recompile each contract with real keys and hold it to the manifest
+        run: |
+          export PATH="$HOME/.compact/bin:$PATH"
+          mkdir -p .zkbuild
+          for c in $(node -p "Object.keys(require('./contracts/midnight/zk-manifest.json').contracts).join(' ')"); do
+            echo "::group::$c"
+            (cd contracts/midnight && compact compile "$c.compact" "../../.zkbuild/$c")
+            node contracts/midnight/scripts/zk-manifest.mjs rebuilt --tree .zkbuild --contract "$c"
+            echo "::endgroup::"
+          done

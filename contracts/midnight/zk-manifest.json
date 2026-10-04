@@ -1,0 +1,800 @@
+{
+  "version": 1,
+  "toolchain": "0.31.1",
+  "contracts": {
+    "cto_governance": {
+      "source": {
+        "path": "cto_governance.compact",
+        "sha256": "5e75fc4847bb5ea370a68a8dbf7fd13c3b54db5e67b3a417cfbc9b36e1a6c8cc",
+        "bytes": 93355
+      },
+      "files": {
+        "compiler/contract-info.json": {
+          "sha256": "4dca699cdf72aa9271ef6f95fdb50cbb79bc5ff731c7d5094316419553c9775e",
+          "bytes": 32512
+        },
+        "contract/index.d.ts": {
+          "sha256": "87982e9d51dc621641fd4aa785c3a95e486f17d2343fe28d3fd94998884ce21f",
+          "bytes": 18892
+        },
+        "contract/index.js": {
+          "sha256": "4d3399e8f4f73241b6e792ed2d57753a5bfefba6ace185f83abe60262c5e5bc9",
+          "bytes": 738010
+        },
+        "keys/bondedSilenceChallenge.prover": {
+          "sha256": "2e650b2f712d08518699f53d06bed2145047700e2fdaa995c3ffbcf68253c262",
+          "bytes": 2821412
+        },
+        "keys/bondedSilenceChallenge.verifier": {
+          "sha256": "0af3508afac91b434bfd34a3cb0dfe3ff82e9cb104add7b7649cceced8ec7522",
+          "bytes": 2119
+        },
+        "keys/cancelPendingCommunityWalletChange.prover": {
+          "sha256": "80a3b52309a2d429bfdafaa0d7a5b609362d7a9270f4cc8db0c7ac72f5fe7cc7",
+          "bytes": 2820280
+        },
+        "keys/cancelPendingCommunityWalletChange.verifier": {
+          "sha256": "3d211ce6d07ec42649eece26e3add116145d48bafce860e591704d6186f413e4",
+          "bytes": 2119
+        },
+        "keys/castVote.prover": {
+          "sha256": "7a80efa6e44a53515ae1bcc7b9b5117b8da7c4c221a1b83cabd40253b1e36fe4",
+          "bytes": 38530679
+        },
+        "keys/castVote.verifier": {
+          "sha256": "179836b1d617d1e792bced782206b804caba9c074dc4ef60801beb36169c1f72",
+          "bytes": 2119
+        },
+        "keys/checkSilenceLock.prover": {
+          "sha256": "d6e59e6fbc10b7ca92f0069dab15a37dc9754a23915d59d6c4d6316215d2cbaa",
+          "bytes": 149037
+        },
+        "keys/checkSilenceLock.verifier": {
+          "sha256": "db7d04af680a1963f7c7406c1f8acd9c1b86547a7d721cc92a962d81ea6bcdae",
+          "bytes": 1351
+        },
+        "keys/claimBreakGlassBondRefund.prover": {
+          "sha256": "9747ef43bbb6845cd239cf59e7f7a926ddecd05302bc8ecf068b534665340184",
+          "bytes": 2821315
+        },
+        "keys/claimBreakGlassBondRefund.verifier": {
+          "sha256": "4e50afae645059758f5f416aaf09f51739d2924a0b43f860979fc407ec5320e6",
+          "bytes": 2119
+        },
+        "keys/claimProposalBond.prover": {
+          "sha256": "a4d06c4591249cab1b114b5ee7d738b7132cf2d55b23f3a58a9b52323cd1878f",
+          "bytes": 2825326
+        },
+        "keys/claimProposalBond.verifier": {
+          "sha256": "42981552db26e60b51094337d1f4b7103600d92bfd2df5b95a7fb0467757e7c0",
+          "bytes": 2119
+        },
+        "keys/createProposal.prover": {
+          "sha256": "cdee0b9f70abfa69b3d85d53aec3cd32743504d0dc2a7d580216d57a1b04f74b",
+          "bytes": 5216162
+        },
+        "keys/createProposal.verifier": {
+          "sha256": "34bcb0400f3bb104d4a028dccee86a9952277f708ce3dbc7311b08d6b4e0c8af",
+          "bytes": 2119
+        },
+        "keys/executeCommunityWalletChange.prover": {
+          "sha256": "082aafc6534b50d86f65ebcce98285bbd8236509db0f53bb3fe2f7822efd2377",
+          "bytes": 149035
+        },
+        "keys/executeCommunityWalletChange.verifier": {
+          "sha256": "39643646819d3b256beb9dfe1d68137feb0884108cc82968a9127bc434c9951e",
+          "bytes": 1351
+        },
+        "keys/executeProposal.prover": {
+          "sha256": "92659df37ff1f888e268e516da42979e6afd745d4b8cf4fb19c329c6e9c173c5",
+          "bytes": 280526
+        },
+        "keys/executeProposal.verifier": {
+          "sha256": "6fdd85af14c6d4ff77f6e58f721a154bf03755c823c3d4d269d65d35b7bbc0ec",
+          "bytes": 1351
+        },
+        "keys/finalizeProposal.prover": {
+          "sha256": "fd4d2871ac7c0f6f98274bce358acf7afe1166aadf7fecb94878f0916840bccc",
+          "bytes": 552455
+        },
+        "keys/finalizeProposal.verifier": {
+          "sha256": "1e34be222c6721c559bf5a9eff373ac8c108bc983226b6e55f9659db74b84131",
+          "bytes": 1351
+        },
+        "keys/getBreakGlassChallenge.prover": {
+          "sha256": "4afc66fee97b3a862051261eabfec5c708a6027e8772d8bb82b8f4af8cf389bc",
+          "bytes": 39335
+        },
+        "keys/getBreakGlassChallenge.verifier": {
+          "sha256": "d36834c8164fa6095fbb3a96c982f8a2f6f2720c22e2002bb6b9c737300b4508",
+          "bytes": 1351
+        },
+        "keys/getCommunityWallet.prover": {
+          "sha256": "0d0ca7ae594bf4f7439f725fb9941f28232a91d18993deff1f951d191f10689b",
+          "bytes": 22532
+        },
+        "keys/getCommunityWallet.verifier": {
+          "sha256": "1a3f1cf66f198b1a7f1c3c41bff5a3f541b20833e297137ace0362721a8bcfd8",
+          "bytes": 1351
+        },
+        "keys/getCtoState.prover": {
+          "sha256": "6981bf16a078018d2cc19059bdd453052894d93d7c6de9fa35183eb19cfd212b",
+          "bytes": 22409
+        },
+        "keys/getCtoState.verifier": {
+          "sha256": "47ec5c1c1e8d8e7018612fbb616e9647fe5c5a47b9b9df6eca7d626e643bb690",
+          "bytes": 1351
+        },
+        "keys/getHasClaimableBalance.prover": {
+          "sha256": "8a3dfcbe32671595af84a7f4a432a0d277447899ad7e0ed89cde817dc2d84748",
+          "bytes": 22442
+        },
+        "keys/getHasClaimableBalance.verifier": {
+          "sha256": "04d4f2301015e24fa5441ef44bf48ed48dc3739e6a4780372b17aa282c054db1",
+          "bytes": 1351
+        },
+        "keys/getLastCreatorActivity.prover": {
+          "sha256": "a96c4e5caf6e8dfe049d06e686b37529ef402c4cb7337b5ac3addb739b49c5b6",
+          "bytes": 22471
+        },
+        "keys/getLastCreatorActivity.verifier": {
+          "sha256": "04dcf5ac6fe7367a55f0799d22b589633fb839dccd5885c8a258e8bf2af66f43",
+          "bytes": 1351
+        },
+        "keys/getProposal.prover": {
+          "sha256": "67ab78cccc342a4b492f6e64a14be9c877a21f172a88dc4c2161626f66bbb6d2",
+          "bytes": 279720
+        },
+        "keys/getProposal.verifier": {
+          "sha256": "c1210972acb0c7ae317d4daafc171bc70cc67acef0b236fc41b6190a683c03df",
+          "bytes": 1351
+        },
+        "keys/getProposalCount.prover": {
+          "sha256": "a0f23f731b34b3ddafff6100e6c42f0ad39dbae0d1cc1b4534afc6218b59e2dc",
+          "bytes": 22439
+        },
+        "keys/getProposalCount.verifier": {
+          "sha256": "0db86ae2e835069d5bfc8cb54f7e1bf87396f6f9cca0c776121163023f037aaf",
+          "bytes": 1351
+        },
+        "keys/hasCallerVoted.prover": {
+          "sha256": "ca9e476b716a1bb4d160810556f1fb8563c2ed0e795e5d6beac7351d25576eb2",
+          "bytes": 2823048
+        },
+        "keys/hasCallerVoted.verifier": {
+          "sha256": "100a6068531c55da44200f43f14a8494cadcaada66d11d19dbe134a790b15bfd",
+          "bytes": 2119
+        },
+        "keys/proposeCommunityWalletChange.prover": {
+          "sha256": "2bc8205e47cf800fa14020be801f98f1b6b93f0568d680874adc0c6d3144efb1",
+          "bytes": 2820627
+        },
+        "keys/proposeCommunityWalletChange.verifier": {
+          "sha256": "6e5756ab113c86f3a6d242bb96717fe0420a307e271170da6838d672a03b6734",
+          "bytes": 2119
+        },
+        "keys/recordCreatorHeartbeat.prover": {
+          "sha256": "11b4816556247380d05826d6b457c03add33579782855d25c51693e1585680de",
+          "bytes": 2821550
+        },
+        "keys/recordCreatorHeartbeat.verifier": {
+          "sha256": "a0df69bfdeeef3a2801b1913af9167b542907fa5285689e9d01a45914321aacf",
+          "bytes": 2119
+        },
+        "keys/resolveBreakGlassChallenge.prover": {
+          "sha256": "6190bbbda425b4669bec62bff7aadb2aec4feb7c6b1f3e5cc48d3e814b1cbbdb",
+          "bytes": 149832
+        },
+        "keys/resolveBreakGlassChallenge.verifier": {
+          "sha256": "a4736d009a1d0233651bf998769c3def81f9dc5efad865c6031fdba0d7365361",
+          "bytes": 1351
+        },
+        "keys/sweepForfeitedProposalBond.prover": {
+          "sha256": "49696a0cc95805f0e72d4e93d9c393983f89a9651f6c7befd789f7b2f632a3f0",
+          "bytes": 288260
+        },
+        "keys/sweepForfeitedProposalBond.verifier": {
+          "sha256": "d43c707641d5c8e65b61c751a2152367a5e5f523517fa118afbbffc9a8dc4851",
+          "bytes": 1351
+        },
+        "keys/updateBalanceSnapshot.prover": {
+          "sha256": "3c4b2ba7601c947f54810d9fbff379b3fa56a3e1a172484390f74b636bc99b7b",
+          "bytes": 2823971
+        },
+        "keys/updateBalanceSnapshot.verifier": {
+          "sha256": "e4f6cf7997ddd4f290407f28be2442708f55e1bd3ae192782a2886a62e1512d8",
+          "bytes": 2119
+        },
+        "keys/updateCreatorActivity.prover": {
+          "sha256": "efdf7c04404b0930a906d5223d92a758967404d6404df5d26f13c6b0c62733ea",
+          "bytes": 2823986
+        },
+        "keys/updateCreatorActivity.verifier": {
+          "sha256": "e6f5f323365a04a954c66577e8fef908aa5f86a9e005ee31c1a405ce0eb14cae",
+          "bytes": 2119
+        },
+        "zkir/bondedSilenceChallenge.bzkir": {
+          "sha256": "df72a6c565cfcc4722aa67398f78390beb3b7fa1a74799a1085f747be0750e81",
+          "bytes": 954
+        },
+        "zkir/bondedSilenceChallenge.zkir": {
+          "sha256": "48737e6b57068869f6aaf66f4e71df5a7c667457878f40c70a67b72a6bfe7031",
+          "bytes": 15979
+        },
+        "zkir/cancelPendingCommunityWalletChange.bzkir": {
+          "sha256": "d654dc10c19caae64657559863eab68f26e64d24436f1725db6133182cd4e7e1",
+          "bytes": 319
+        },
+        "zkir/cancelPendingCommunityWalletChange.zkir": {
+          "sha256": "643efe75981a6b15eacc58eb62a932d64d1fbd431245b0f91a67f7812ccc6a18",
+          "bytes": 5099
+        },
+        "zkir/castVote.bzkir": {
+          "sha256": "03f98aee7ae2044eaaa221e7573de94c3aad269dbdc1cec2efbb60d745d5564d",
+          "bytes": 3158
+        },
+        "zkir/castVote.zkir": {
+          "sha256": "b416510bf5c3871870dd6f019063267bc94eb1651492a5c3737980e8e2cb3d84",
+          "bytes": 39134
+        },
+        "zkir/checkSilenceLock.bzkir": {
+          "sha256": "e3180e3231b9c30b4b2fdc420c96902aa9c256213d683d1b46a8ba579b1ad858",
+          "bytes": 288
+        },
+        "zkir/checkSilenceLock.zkir": {
+          "sha256": "b3f212f69739773af57004160ede45281fd5d41458d03f42b0e6ffc754611022",
+          "bytes": 4775
+        },
+        "zkir/claimBreakGlassBondRefund.bzkir": {
+          "sha256": "f3c58c81853a45654df647b4c02c26403186f3fb54536d8006e183070cb27314",
+          "bytes": 1159
+        },
+        "zkir/claimBreakGlassBondRefund.zkir": {
+          "sha256": "f4ccb8da3a3a2e7f5e95087d8f7b20d953ef1d8a9595204d12fc452887538f4a",
+          "bytes": 19359
+        },
+        "zkir/claimProposalBond.bzkir": {
+          "sha256": "40aa2a0ac110a318106eb7afd71f75ecedb1c9c97486baae3a3f72be3200e00d",
+          "bytes": 1177
+        },
+        "zkir/claimProposalBond.zkir": {
+          "sha256": "82d7189d56a2ea0fec39b60199593bb7d2e7ee5fc91e206075af9afce5800362",
+          "bytes": 19617
+        },
+        "zkir/createProposal.bzkir": {
+          "sha256": "ba6f9c6f7135a4b72b22d8af5fac9530ed99481117e1ad0a92d8cd2fa398f9aa",
+          "bytes": 2802
+        },
+        "zkir/createProposal.zkir": {
+          "sha256": "fd746239614eb0de6ce7245705e7c9ad023ff822ee590988d9ad17fe93bed81d",
+          "bytes": 42129
+        },
+        "zkir/executeCommunityWalletChange.bzkir": {
+          "sha256": "5cdc1263a2b650e78d6d4398993321344e6600cc7670ef10c2fa034a61a4864b",
+          "bytes": 453
+        },
+        "zkir/executeCommunityWalletChange.zkir": {
+          "sha256": "dfe0302d9b7dda991e1ea8a8a2b41ca55029a6d5f0c43b593f8efab923f03c87",
+          "bytes": 8021
+        },
+        "zkir/executeProposal.bzkir": {
+          "sha256": "c367342650ca2091608c15a9f3904ba0cb0046fd1662a72cc629ed6d26abb7a2",
+          "bytes": 1180
+        },
+        "zkir/executeProposal.zkir": {
+          "sha256": "fb9a8e3eebbcf8547a6a7d20179490e3fb8666bb001caeb117406d0b4a45d4ba",
+          "bytes": 18939
+        },
+        "zkir/finalizeProposal.bzkir": {
+          "sha256": "bc0994e6e42ef8526268bd69a6942224b471902ce6d14dcea59a2e639c09fb07",
+          "bytes": 931
+        },
+        "zkir/finalizeProposal.zkir": {
+          "sha256": "d43b765802aa27e0a0ed5d63303c45495c4ad58640176c276b25d8625a0aa600",
+          "bytes": 16405
+        },
+        "zkir/getBreakGlassChallenge.bzkir": {
+          "sha256": "fdc66e5fd01464f6b42767b276619c76228b36e9f8dd87c65508f926255fe901",
+          "bytes": 117
+        },
+        "zkir/getBreakGlassChallenge.zkir": {
+          "sha256": "47697c935a8279ac27ac6ea19f45145a34c689c0c12f4b3d9cab749e1371d9b0",
+          "bytes": 1920
+        },
+        "zkir/getCommunityWallet.bzkir": {
+          "sha256": "278836e83ffbb55edf2e036f55de0178ce57e92aa93f5c227997d07d7f90e366",
+          "bytes": 87
+        },
+        "zkir/getCommunityWallet.zkir": {
+          "sha256": "5842db1ab13f5b8be36c7f95fc6ac9f936a06e238c0df97cb6e12f011e5e8c59",
+          "bytes": 1290
+        },
+        "zkir/getCtoState.bzkir": {
+          "sha256": "6744578f3e1e437ed324dacdd982e7a43013f6d82ac6215599f5492e7ef641d4",
+          "bytes": 77
+        },
+        "zkir/getCtoState.zkir": {
+          "sha256": "1cc02fb220aec16f74c04aab6c211c79464af99f8752e14021d9c72c9e0c7b83",
+          "bytes": 1088
+        },
+        "zkir/getHasClaimableBalance.bzkir": {
+          "sha256": "35ed7183e991b7471900f255b4ab794482e229bd78d95c2df03c35bb4342e591",
+          "bytes": 79
+        },
+        "zkir/getHasClaimableBalance.zkir": {
+          "sha256": "5b85c58304018d5280651499548686a52dac3bc56ec78a6b95403bc58cf4fc9c",
+          "bytes": 1127
+        },
+        "zkir/getLastCreatorActivity.bzkir": {
+          "sha256": "1b01653a6bf78c41254b2eafb0f9ac1a9aea28bb6f2171bd40bc7ad5b4dbdd8e",
+          "bytes": 81
+        },
+        "zkir/getLastCreatorActivity.zkir": {
+          "sha256": "d811906d79e2168f3a1e5b59488c8b54dce931916db565f07e17044694dfd6dd",
+          "bytes": 1166
+        },
+        "zkir/getProposal.bzkir": {
+          "sha256": "155fb166e156b4b6b78f354b9619e2f832ea50d015cac0e3dd6c6b2e7966f515",
+          "bytes": 330
+        },
+        "zkir/getProposal.zkir": {
+          "sha256": "765e97b374b55f4bd996246eb195fdc9db4b96cc7ec49f1581dcd1ea1f7097a3",
+          "bytes": 6214
+        },
+        "zkir/getProposalCount.bzkir": {
+          "sha256": "9258226e840b75bff1c7f47322437f362516aa106ed63a43c64e92aeefad1d71",
+          "bytes": 77
+        },
+        "zkir/getProposalCount.zkir": {
+          "sha256": "142148d34766e69cf7d123c678ca1f1427a96abdd527fa659cb9e4f9c93399a8",
+          "bytes": 1088
+        },
+        "zkir/hasCallerVoted.bzkir": {
+          "sha256": "85accdc3869c62167e3c69dfacf4cbe1e8ce2b2f333c942412367e598ec5725e",
+          "bytes": 216
+        },
+        "zkir/hasCallerVoted.zkir": {
+          "sha256": "efaae53a9cb706a728426ec450610869959e133bb355df9dbbe0f3bdfe84d490",
+          "bytes": 3224
+        },
+        "zkir/proposeCommunityWalletChange.bzkir": {
+          "sha256": "e9e55c567faac524e3407849a0fd03b15aa4299fe52fcb51dfb058496e4102a9",
+          "bytes": 385
+        },
+        "zkir/proposeCommunityWalletChange.zkir": {
+          "sha256": "eceda92b892feb3168b9fd2274f655d53a52a6cddb62f9a94f33b9e6851c1f68",
+          "bytes": 6255
+        },
+        "zkir/recordCreatorHeartbeat.bzkir": {
+          "sha256": "406d08b6a735fbf83e49c942652b9d64cfab408598cd2b66d07fafaedac56b50",
+          "bytes": 444
+        },
+        "zkir/recordCreatorHeartbeat.zkir": {
+          "sha256": "fbc976230a4e8e44db3ce19ec6ffe5d064b85c602e1ac9be046ebb064718054a",
+          "bytes": 7374
+        },
+        "zkir/resolveBreakGlassChallenge.bzkir": {
+          "sha256": "b0b2dcb07bb3269e5438d38ff47fd40c6543f74d4560266e0bed00b43c44d5cb",
+          "bytes": 976
+        },
+        "zkir/resolveBreakGlassChallenge.zkir": {
+          "sha256": "b9a7dd622611f727faf8cab42a533ec604220133a9acd8422e6d706eccbe3534",
+          "bytes": 16787
+        },
+        "zkir/sweepForfeitedProposalBond.bzkir": {
+          "sha256": "00db9caf7087ced68914f6a80854ef5b2e57c64a6f651ab65783d804ffd3c23d",
+          "bytes": 1083
+        },
+        "zkir/sweepForfeitedProposalBond.zkir": {
+          "sha256": "3024bf74858164c12b04db8b4e044aa43a1157928e13a540858f9dc87af51d38",
+          "bytes": 18595
+        },
+        "zkir/updateBalanceSnapshot.bzkir": {
+          "sha256": "156b7211b79c77c840cdbcc0305b59e774e01b657d9270d9a3e48a4464617f06",
+          "bytes": 2452
+        },
+        "zkir/updateBalanceSnapshot.zkir": {
+          "sha256": "d99985b2ecf01b444682cd0f7b08184eecb9968e95dbdc572afb26974b40204d",
+          "bytes": 37025
+        },
+        "zkir/updateCreatorActivity.bzkir": {
+          "sha256": "be439c9e3bf4943fef33d83fd3eb596c06c36aeb521bb0126a41b4573283cb17",
+          "bytes": 2670
+        },
+        "zkir/updateCreatorActivity.zkir": {
+          "sha256": "89d385f30a80d59f59ead13514d619b116d6d8f9e4ec6d8e27ccc9d8f08d55a3",
+          "bytes": 39754
+        }
+      }
+    },
+    "eligibility_gate": {
+      "source": {
+        "path": "eligibility_gate.compact",
+        "sha256": "81c7eef4a65b8d009b2195a66cfee8147a253e2324b88e746cb4a5009b939e31",
+        "bytes": 121113
+      },
+      "files": {
+        "compiler/contract-info.json": {
+          "sha256": "27306504ba18c63c2153bc863d7d55a4541e8f497474afab8a7edd9994cdd84b",
+          "bytes": 26582
+        },
+        "contract/index.d.ts": {
+          "sha256": "f512589b03fa314220e61dba6aeebfdda051ec913b7d39f0baf00a351472d631",
+          "bytes": 18115
+        },
+        "contract/index.js": {
+          "sha256": "cbc5cc764a947cd6e3bacc3a7981ee7e50fafa05be59bba296529edf1ad12d7c",
+          "bytes": 890353
+        },
+        "keys/advancePhase.prover": {
+          "sha256": "7eeec256bcfc2c6c8fe1c2d0bfaec1f3d78c2a2593a22e617ef6fcdf23af273c",
+          "bytes": 2820712
+        },
+        "keys/advancePhase.verifier": {
+          "sha256": "94ce044323cb856d9d830c163ca2809e77e9ee9feecc46c89469a8f4e054f692",
+          "bytes": 2119
+        },
+        "keys/cancelBuyCommit.prover": {
+          "sha256": "8dddaa5e7f910f9b7606b41f31bf2f03419c2ac7aa46bb6a00988d2059515ba0",
+          "bytes": 2820740
+        },
+        "keys/cancelBuyCommit.verifier": {
+          "sha256": "2abfde9ec67123b748757f2a7a8049a0aaf80629c2cc70571796eb92ad6f46d2",
+          "bytes": 2119
+        },
+        "keys/cancelDarkVeil.prover": {
+          "sha256": "bd44579b1e241f2298440f1b00fbe1d4ffb2309f1f2f7e2cc2a7c70b4812411b",
+          "bytes": 2820244
+        },
+        "keys/cancelDarkVeil.verifier": {
+          "sha256": "5921d01f186d2e05c5a321453882342d8138eb24f8d3d764a55bc51cb76606fc",
+          "bytes": 2119
+        },
+        "keys/challengeRegistrantInclusion.prover": {
+          "sha256": "7301250dca971eeb316f63b74c71d63175b57182c7986b207ac0d2ef5e40604f",
+          "bytes": 38504123
+        },
+        "keys/challengeRegistrantInclusion.verifier": {
+          "sha256": "3a59e1f074971bf6b24df35011d4b6e1b796ba36bdaf2e77ee37f068711b3837",
+          "bytes": 2119
+        },
+        "keys/claimBondRefund.prover": {
+          "sha256": "e182e4c791d8baf307a2a5e0ff1c46faf438954abec285889887b2173453735c",
+          "bytes": 2821256
+        },
+        "keys/claimBondRefund.verifier": {
+          "sha256": "ef61e99328459bf2918e4bd69984934988f140b7588e638546103b05aa8db419",
+          "bytes": 2119
+        },
+        "keys/claimDisputedBond.prover": {
+          "sha256": "cf122cd972f6174546c18cfba5274d5880254d4ddc3de1cdd87fe1ad6f958701",
+          "bytes": 2821644
+        },
+        "keys/claimDisputedBond.verifier": {
+          "sha256": "f5e1b177326e3f7c1b8f83ca759bf57c55e28ec63eb432f82d3631a62b3f5273",
+          "bytes": 2119
+        },
+        "keys/claimRatioBondRefund.prover": {
+          "sha256": "14866011a6c50eb9c14101b36b0b8d6aa6b1689c4f0ee06aeea065a791f34564",
+          "bytes": 2825195
+        },
+        "keys/claimRatioBondRefund.verifier": {
+          "sha256": "7785cffde358041cf23997e65226b34ff299eeeca393f4aa26ac9861dbddb9fa",
+          "bytes": 2119
+        },
+        "keys/closeDarkVeil.prover": {
+          "sha256": "dd6ada9ff041fe919666823a82e53b6b750dee54d38cbfc5b5eaaf0fd0db2920",
+          "bytes": 283836
+        },
+        "keys/closeDarkVeil.verifier": {
+          "sha256": "2ccf51fa60578f699ed8b7bf6d7429be61e38965eec8a69a1d15e14203a7eb6d",
+          "bytes": 1351
+        },
+        "keys/disputeRegistrantExclusion.prover": {
+          "sha256": "f8ac3d93d629c8a2ff22ad4330f2209d8eda152f15c48eef26a3402966b42785",
+          "bytes": 2822271
+        },
+        "keys/disputeRegistrantExclusion.verifier": {
+          "sha256": "5e50e6e70e5c623fb8f2ba89f69f3c14546076c7b9a16eec1c897d5968805a92",
+          "bytes": 2119
+        },
+        "keys/expireDarkVeil.prover": {
+          "sha256": "28c40b3cfe38ceb56a94613d5cb43f1a26c764bbc0c5fba56494ccd21425e58e",
+          "bytes": 75169
+        },
+        "keys/expireDarkVeil.verifier": {
+          "sha256": "a3e0d53d5c1febeddbf709b47490f78560c0ae758b5d8598f57f23cc5f03066b",
+          "bytes": 1351
+        },
+        "keys/expireDvSettlement.prover": {
+          "sha256": "ef5c4ec9b2a2c1ba7215d423660cf941362c6662bf3c14f3ae0631667df6ed96",
+          "bytes": 75367
+        },
+        "keys/expireDvSettlement.verifier": {
+          "sha256": "7bc2a6a5387381cbd909e30c6e55b370bebe0522860b3603a5c6475f5f3958ce",
+          "bytes": 1351
+        },
+        "keys/finalizeDvSettlement.prover": {
+          "sha256": "8810ecf059a43ce6b1a80ebd48e182032a9b73aadad903b0b1d8151df22f9f65",
+          "bytes": 5205271
+        },
+        "keys/finalizeDvSettlement.verifier": {
+          "sha256": "84be07552176ea459a09c3bb7d44b8e239543e8d306871c45f27798f8a9e4aaa",
+          "bytes": 2119
+        },
+        "keys/markDarkVeilFailed.prover": {
+          "sha256": "89b75fc71f7d6bd1598b69bda71731a434ba8696c53989cb60ec70f3b1930ce3",
+          "bytes": 2820245
+        },
+        "keys/markDarkVeilFailed.verifier": {
+          "sha256": "c4928c49c070c36ee4cd87c49ce0c32175726eaf2d8fc3aa16c9740a94095b4c",
+          "bytes": 2119
+        },
+        "keys/openBuying.prover": {
+          "sha256": "8e23530042fe1f7dccbe31e6cfda393cba12212701efef45653dc2131d840256",
+          "bytes": 147349
+        },
+        "keys/openBuying.verifier": {
+          "sha256": "137a867f2ab1366f3c231266ff23306fa1b76d93c8f8dfecacd10dd73bb80bef",
+          "bytes": 1351
+        },
+        "keys/publishRegistrantRoot.prover": {
+          "sha256": "19dbc28f16865772cf01fbbd947d8b26f4bd5720ccfef363406851cc7a993fdd",
+          "bytes": 2820616
+        },
+        "keys/publishRegistrantRoot.verifier": {
+          "sha256": "e147e26deaac545aea08223a55f2c6d967bac25f83052a1983476120d24be05b",
+          "bytes": 2119
+        },
+        "keys/rebutRegistrantExclusion.prover": {
+          "sha256": "1e23ae26b233c817d6645b1a9454f8f3f99ef90d5e23c02f18ea784e13ccaa0f",
+          "bytes": 38503629
+        },
+        "keys/rebutRegistrantExclusion.verifier": {
+          "sha256": "ec0db33645579b4f4c5e70cc235ea83d0f1103a060bf2a2fd6aebd1927f8a5c4",
+          "bytes": 2119
+        },
+        "keys/recordDarkVeilSettlement.prover": {
+          "sha256": "9fecf921022101b4dcb88aca6478a2ddfc9d07be8a79fcc6f183bac741900735",
+          "bytes": 2824457
+        },
+        "keys/recordDarkVeilSettlement.verifier": {
+          "sha256": "77c500fc19f0cb1c64cb5e4e12fc8484404ce0adc93e9673706e39caf9d77a70",
+          "bytes": 2119
+        },
+        "keys/registerForDarkVeil.prover": {
+          "sha256": "af7d19648bb9cd98df6485b502f5458bb6f7a03adf0137fc893c19ed2496a767",
+          "bytes": 38518627
+        },
+        "keys/registerForDarkVeil.verifier": {
+          "sha256": "d1a51bdf680e247af5fcbfdac46966df53817463c608f1ef71bb927614bfdc68",
+          "bytes": 2119
+        },
+        "keys/revealBuyCommit.prover": {
+          "sha256": "f2c59f66e6a74a7ba2ef328f4aa8501cf43541e9e1538c483b0f74c33708182e",
+          "bytes": 5217152
+        },
+        "keys/revealBuyCommit.verifier": {
+          "sha256": "3ec4ea31cc9f62ef91c787a8e8ffc4d98e7962f883c2aa0e82eec80a7845c2d3",
+          "bytes": 2119
+        },
+        "keys/startRegistration.prover": {
+          "sha256": "6196d06f1c80354db041f85fdfa91fb1975be4e4252c6381f6c4edde1715f8d5",
+          "bytes": 22949
+        },
+        "keys/startRegistration.verifier": {
+          "sha256": "425226a03029d8fc611e32acc68a283ea84b0f4fea10a7c8e71dc5862345d211",
+          "bytes": 1351
+        },
+        "keys/submitBuyCommit.prover": {
+          "sha256": "362d3833c82afa1114eb5d92c9de4bc1fbc6877d37c99b9d5981c2ab23690f3a",
+          "bytes": 38518118
+        },
+        "keys/submitBuyCommit.verifier": {
+          "sha256": "e6a1a13c5e61f050a19e0a7458dc785c0e9b2d31b20d6af3a118280f55117ea1",
+          "bytes": 2119
+        },
+        "keys/sweepForfeitedBond.prover": {
+          "sha256": "e311edb51eb169b05cd0c157a5c5324b007844a5bb63439eaf7f99355c09a608",
+          "bytes": 38505364
+        },
+        "keys/sweepForfeitedBond.verifier": {
+          "sha256": "d32b7df4bdffaa1ff9f7fb504328bb2c3d36b5f6bf10fc0d442a47a75c697cc2",
+          "bytes": 2119
+        },
+        "keys/updateAllowlistRoot.prover": {
+          "sha256": "d3324dafd1575a72bc0bdd35e0baaa5176df65eba6535a05ff06c02f32b979b8",
+          "bytes": 2824190
+        },
+        "keys/updateAllowlistRoot.verifier": {
+          "sha256": "a083009e7611926bf230cea9f22fe90215b8ba4788d06b860627f7a651edf670",
+          "bytes": 2119
+        },
+        "zkir/advancePhase.bzkir": {
+          "sha256": "dfd56cdcfd72e366f342f2fab08b5fec79f034716a5b924f29df222373a753f4",
+          "bytes": 517
+        },
+        "zkir/advancePhase.zkir": {
+          "sha256": "afeed9afec57567e4b2d0663fd9b53e2f441003d55ea572c6d19e56f083f88f0",
+          "bytes": 8271
+        },
+        "zkir/cancelBuyCommit.bzkir": {
+          "sha256": "bdca039e403520ee8bb19e509b2f6fb10e0c07708d973e3d74705510281ff26c",
+          "bytes": 531
+        },
+        "zkir/cancelBuyCommit.zkir": {
+          "sha256": "d171af55c1094e58f31018d67d9cf171cca6a53dc33eb84f1b1d40bae7bddbc3",
+          "bytes": 9300
+        },
+        "zkir/cancelDarkVeil.bzkir": {
+          "sha256": "f58b9ba09bff2cfb63ceb51bef9cf04dc8f7ea76d9649f5a1544cd08cff68d77",
+          "bytes": 356
+        },
+        "zkir/cancelDarkVeil.zkir": {
+          "sha256": "01492b14ca6b436991d89f680db6ec355d7c734aa2062c57f5b9cec8ef7e714e",
+          "bytes": 5834
+        },
+        "zkir/challengeRegistrantInclusion.bzkir": {
+          "sha256": "1c7b28e783f83ad1c2a115826c6f290d7b8ea7027a64c21012a76e8a89126cd5",
+          "bytes": 2314
+        },
+        "zkir/challengeRegistrantInclusion.zkir": {
+          "sha256": "473864285d458a2ec6a53f240a1d1b61912df3f67ee102de3b465ccb76948f41",
+          "bytes": 26999
+        },
+        "zkir/claimBondRefund.bzkir": {
+          "sha256": "3fd493048dd08e079c7ff13c28b0074f41d54e140bc615051ee655e929050b64",
+          "bytes": 874
+        },
+        "zkir/claimBondRefund.zkir": {
+          "sha256": "73b37ff5b64c55ba3b785e54506af50b1bdbb1113647730a019a596145a8d882",
+          "bytes": 14648
+        },
+        "zkir/claimDisputedBond.bzkir": {
+          "sha256": "1d6087cbdb4570fbdfa89fdb933acf5a0cb7e0f89d697604dbc3be9431b939f0",
+          "bytes": 1335
+        },
+        "zkir/claimDisputedBond.zkir": {
+          "sha256": "41ede2218456cdd08b47d5b73830590cd4c8c968f33216fc4b07d3660c8e9cd7",
+          "bytes": 22377
+        },
+        "zkir/claimRatioBondRefund.bzkir": {
+          "sha256": "a998b25838a05f554aa704265bd9444dd219875d2e897a1ad221ceb36e00c294",
+          "bytes": 1837
+        },
+        "zkir/claimRatioBondRefund.zkir": {
+          "sha256": "35712c66185199313e1ab2d6587021c3a932a8eb3377bdb59fa65e5ad637a384",
+          "bytes": 29131
+        },
+        "zkir/closeDarkVeil.bzkir": {
+          "sha256": "cfbf80ad7fc864f2fa3e4fc710de0ca7c345a6d6d6f2f4d020ebf31e336fab88",
+          "bytes": 489
+        },
+        "zkir/closeDarkVeil.zkir": {
+          "sha256": "f4920ddbb9aceb1b3ff609e47869ce53a3da184ef958add3aed51d05b0df1fe5",
+          "bytes": 8421
+        },
+        "zkir/disputeRegistrantExclusion.bzkir": {
+          "sha256": "f921f5f56237a1e533f08712c2246d10979fc8184727e0645b7ff59c1978418f",
+          "bytes": 867
+        },
+        "zkir/disputeRegistrantExclusion.zkir": {
+          "sha256": "502c5dd56f6476b6c240dd3539b682a9ccf515a3b7a3000f9d6b4d595aa111f8",
+          "bytes": 14960
+        },
+        "zkir/expireDarkVeil.bzkir": {
+          "sha256": "c38b1d33d368128752284a3374d8b7718aec4891bee5faa5beea6d1631e9abf0",
+          "bytes": 480
+        },
+        "zkir/expireDarkVeil.zkir": {
+          "sha256": "eae273dc9191436f290787cab892170e9030af3cc4a5010b42742ee2b9981486",
+          "bytes": 8358
+        },
+        "zkir/expireDvSettlement.bzkir": {
+          "sha256": "80538485a8ffb64c7b9218c1c8805abd1473baba31da6dbf827576325ba85011",
+          "bytes": 543
+        },
+        "zkir/expireDvSettlement.zkir": {
+          "sha256": "84c2a5e5d79ebeaf124e0d93d5ff926fe1e16c3ab76ecb72b86f084eaeb18001",
+          "bytes": 9436
+        },
+        "zkir/finalizeDvSettlement.bzkir": {
+          "sha256": "5c51bf8f79dcf29556dfef305246c6af6bc5da95ff0237e886fba9f78e49cd34",
+          "bytes": 1129
+        },
+        "zkir/finalizeDvSettlement.zkir": {
+          "sha256": "5b7d9a3a17e02e0a028fbad585f02a2c8ccec467256638c9daef93e5b9fb47ae",
+          "bytes": 19399
+        },
+        "zkir/markDarkVeilFailed.bzkir": {
+          "sha256": "4ca672cdf1f684d601d0144a9a482f483e82650c0b039f51a76bce44d57a007e",
+          "bytes": 299
+        },
+        "zkir/markDarkVeilFailed.zkir": {
+          "sha256": "8c09cc16c737c202ea2bf7f8e83b842e4374a8d44eb1af3c519c333567158989",
+          "bytes": 4778
+        },
+        "zkir/openBuying.bzkir": {
+          "sha256": "d67ec4d7d3a83c37bde9fa707a990243505c6ecfd9ae525c73a962a287175462",
+          "bytes": 500
+        },
+        "zkir/openBuying.zkir": {
+          "sha256": "53a065d49f560f24104301e73767b913ed274426ca9c6265397ecaac7558c093",
+          "bytes": 8951
+        },
+        "zkir/publishRegistrantRoot.bzkir": {
+          "sha256": "c830d3f6edbe4448ea76be205cda07a4d8de94191a2a9bb437f41497c06ed59b",
+          "bytes": 379
+        },
+        "zkir/publishRegistrantRoot.zkir": {
+          "sha256": "193ed0bb1a87550d52cffac3137eb5bea20cd963044767ade49773a61fae3605",
+          "bytes": 6226
+        },
+        "zkir/rebutRegistrantExclusion.bzkir": {
+          "sha256": "79d6b0bafd64c8add2f69e94a9f8004895d3bdd044add3779fac1cf05837aa77",
+          "bytes": 2041
+        },
+        "zkir/rebutRegistrantExclusion.zkir": {
+          "sha256": "4472acafc8bb63703b038e57f347c4b5e37f3f44ff48775748c794d2415ac56e",
+          "bytes": 23391
+        },
+        "zkir/recordDarkVeilSettlement.bzkir": {
+          "sha256": "540bf5d8aa648fc5fed7d5d4c72ef7b001979dc065e87672d8594e2eb3009656",
+          "bytes": 729
+        },
+        "zkir/recordDarkVeilSettlement.zkir": {
+          "sha256": "889c26530d8a2f37374550099cfb31a3d1600beca6ae9adf5fb80303282ccf2a",
+          "bytes": 12267
+        },
+        "zkir/registerForDarkVeil.bzkir": {
+          "sha256": "10258a9e06e4f939919e1806c038f7b7d1610d9bd9ee031856c4723bb2627fa9",
+          "bytes": 2836
+        },
+        "zkir/registerForDarkVeil.zkir": {
+          "sha256": "fe85f1330d0fdb1d0f82dc0ae2d4b2eee57e5b18d4c75b161c14184c008748b6",
+          "bytes": 35488
+        },
+        "zkir/revealBuyCommit.bzkir": {
+          "sha256": "1032f712a232aece08a9d8d6648c87e068f929af18772f66493fa54df5470269",
+          "bytes": 1836
+        },
+        "zkir/revealBuyCommit.zkir": {
+          "sha256": "d86a1ccec11f3cacac4de7f9f0fd2024df80c9bc80a1b6cf5a5bdb0741ce0053",
+          "bytes": 30348
+        },
+        "zkir/startRegistration.bzkir": {
+          "sha256": "4192126ba9b6c7baeb7160b4e9e432ab75868dd9b9d57e2b4ef5904c3acd5d4a",
+          "bytes": 251
+        },
+        "zkir/startRegistration.zkir": {
+          "sha256": "9b5f48f8f7d1741ae4c32c501033f0e103c5935855dbcf86c459df2d89ce803d",
+          "bytes": 4269
+        },
+        "zkir/submitBuyCommit.bzkir": {
+          "sha256": "1c2e3df12945c6eb730c7ac86624a14e7519188366911c3f44d411575d2ff337",
+          "bytes": 2436
+        },
+        "zkir/submitBuyCommit.zkir": {
+          "sha256": "b6c351a44e457d858c66893e7b8506b243e710458fff0ffb6147125df894fd78",
+          "bytes": 29245
+        },
+        "zkir/sweepForfeitedBond.bzkir": {
+          "sha256": "abeb784ae867b42e4e7767f1dba91800713524b07c03bcfe06efd5521d5e69ea",
+          "bytes": 3070
+        },
+        "zkir/sweepForfeitedBond.zkir": {
+          "sha256": "580fbdb42e4077659aa5f503637e9ea3275aeaec817cee77e9c75c2ca37af069",
+          "bytes": 37920
+        },
+        "zkir/updateAllowlistRoot.bzkir": {
+          "sha256": "ef7258f80a30cde7ce597fa8f416bfbfb6170068b45e473b7ae7b2cdcaee1734",
+          "bytes": 2676
+        },
+        "zkir/updateAllowlistRoot.zkir": {
+          "sha256": "357a75c614b75008194c76c5802c3ce5a343e5d05d4565bdb00eee1a91355f98",
+          "bytes": 39427
+        }
+      }
+    }
+  }
+}

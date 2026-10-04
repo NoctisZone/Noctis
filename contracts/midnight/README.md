@@ -47,6 +47,10 @@ compact compile bonding_curve.compact compiled_realzk/bonding_curve
 # couple of minutes per contract, output in the tens-to-hundreds of MB
 # (see the deploy/zk-artifacts/README.md at the repo root for real,
 # measured per-contract sizes).
+# compiled_realzk/ is the tree that SHIPS: `node scripts/zk-manifest.mjs
+# write` records every contract in it into zk-manifest.json, and CI then
+# rebuilds each one and holds it to that record. Compile a contract there
+# only when it is meant to ship; measure sizes in a scratch directory.
 ```
 
 ### Simulation-first development
