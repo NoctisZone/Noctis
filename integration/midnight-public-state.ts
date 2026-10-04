@@ -36,7 +36,7 @@ import {
 export type { CtoGovernanceLedger, EligibilityGateLedger };
 
 export async function readCtoGovernanceLedger(
-  publicDataProvider: PublicDataProvider,
+  publicDataProvider: Pick<PublicDataProvider, 'queryContractState'>,
   contractAddress: string,
 ): Promise<CtoGovernanceLedger> {
   const contractState = await publicDataProvider.queryContractState(contractAddress);
@@ -151,7 +151,7 @@ export function summarizeCtoGovernance(ledger: CtoGovernanceLedger): CtoGovernan
 }
 
 export async function readCtoGovernanceSnapshot(
-  publicDataProvider: PublicDataProvider,
+  publicDataProvider: Pick<PublicDataProvider, 'queryContractState'>,
   contractAddress: string,
 ): Promise<CtoGovernanceSnapshot> {
   return summarizeCtoGovernance(await readCtoGovernanceLedger(publicDataProvider, contractAddress));

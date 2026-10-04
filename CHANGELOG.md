@@ -8,6 +8,13 @@ Notable changes to the Noctis Zone, by release. Internal development history pre
 
 ### Added
 
+- **Reading takeover votes through the site when its indexer needs a key.** The CTO Governance page reads
+  each contract from the site's public Midnight indexer when there is one a browser may call. When the
+  site's indexer needs a key, as Blockfrost's does, the page now reads through the plugin's
+  `np/v1/midnight/contract-state` route, which asks the indexer the same question Midnight.js asks, with
+  the key held on the server, and returns the state for the page to decode as before. The route takes only
+  a contract address, answers the same address from a 30-second cache, and limits each visitor's uncached
+  reads.
 - **Carrying a takeover vote through on Cardano from the command line.** `cto-vote-step` records a
   finalized ballot's result, posting the bond from the payer, and then takes whichever step the record waits
   for: execute, expire, pay the bond back, clear. `cto-governance-action`'s new `ballot` action prints a

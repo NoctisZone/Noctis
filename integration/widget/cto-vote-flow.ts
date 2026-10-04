@@ -389,7 +389,7 @@ export async function readBallotForCardano(
 // ---------------------------------------------------------------------------
 
 export async function readGovernance(
-  publicDataProvider: ContractProviders['publicDataProvider'],
+  publicDataProvider: Pick<ContractProviders['publicDataProvider'], 'queryContractState'>,
   contractAddress: string,
 ): Promise<CtoGovernanceSnapshot> {
   return summarizeCtoGovernance(await readCtoGovernanceLedger(publicDataProvider, contractAddress));

@@ -59,6 +59,7 @@ import {
 } from './cto-vote-flow.js';
 import { walletFirstProofProvider } from './midnight-proof-provider.js';
 import { buildMidnightWalletBridge } from './midnight-wallet-bridge.js';
+import { type ContractStateReader, siteContractStateReader } from './site-contract-state.js';
 
 export interface CtoWidgetConfig {
   /** WordPress REST base, e.g. "https://noctis.example/wp-json/np/v1". */
@@ -373,13 +374,20 @@ async function sweepBond(contractAddress: string, proposalIdHex: string): Promis
  * launch stands. A contract that cannot be read is reported as such and does
  * not stop the rest.
  */
+/**
+ * Each listed contract's governance state, read without a wallet: from the
+ * indexer directly when the site names one a browser may call, otherwise
+ * through the site's own route (`stateUrl`), which reaches an indexer that
+ * needs a key the browser never sees.
+ */
 async function readOnlyGovernance(
   contractAddresses: readonly string[],
-  indexer: { httpUrl: string; wsUrl: string },
+  indexer: { httpUrl: string; wsUrl: string; stateUrl?: string },
 ): Promise<Array<{ contractAddress: string; governance?: CtoGovernanceSnapshot; error?: string }>> {
-  if (!indexer.httpUrl || !indexer.wsUrl)
-    throw new Error('The site has not configured a Midnight indexer to read from.');
-  const provider = indexerPublicDataProvider(indexer.httpUrl, indexer.wsUrl);
+  let provider: ContractStateReader;
+  if (indexer.httpUrl && indexer.wsUrl) provider = indexerPublicDataProvider(indexer.httpUrl, indexer.wsUrl);
+  else if (indexer.stateUrl) provider = siteContractStateReader(indexer.stateUrl);
+  else throw new Error('The site has not configured a Midnight indexer to read from.');
   const out: Array<{ contractAddress: string; governance?: CtoGovernanceSnapshot; error?: string }> = [];
   for (const contractAddress of contractAddresses) {
     try {
