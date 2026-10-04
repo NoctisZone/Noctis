@@ -357,7 +357,10 @@ transaction opens (see above). Nobody trades against the pool directly. Every ac
 is a request that rests at its own script address until the batcher fills it, and
 each fill is checked by both the pool's validator and the request's. The venue's
 contracts are their own Aiken package, `contracts/cardano-dex`, whose README is the
-full reference.
+full reference. The package changes in the NoctisSwap repository
+(`NoctisZone/NoctisSwap`); this repository carries a byte-identical copy at the
+same path, pinned to a NoctisSwap commit in `contracts/cardano-dex.pin.json`, and CI
+fails if the copy and the pinned tree differ.
 
 ```
   PLACER: a browser wallet, on the launch page's trading panel

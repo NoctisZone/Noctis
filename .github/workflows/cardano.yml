@@ -143,3 +143,42 @@ jobs:
           name: plutus-json-${{ matrix.package }}
           path: contracts/${{ matrix.package }}/plutus.json
           if-no-files-found: warn
+
+  # The venue package changes in the NoctisSwap repository. This repository keeps
+  # a byte-identical copy at contracts/cardano-dex, pinned to one NoctisSwap
+  # commit, so a venue change made here alone, or a pin moved without bringing
+  # the files across, fails here rather than drifting unnoticed.
+  vendored-venue:
+    name: contracts/cardano-dex matches the pinned NoctisSwap commit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read the pin
+        id: pin
+        run: |
+          repo="$(jq -r .repository contracts/cardano-dex.pin.json)"
+          commit="$(jq -r .commit contracts/cardano-dex.pin.json)"
+          if ! printf '%s' "$commit" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo "::error file=contracts/cardano-dex.pin.json::commit must be a full 40-character commit hash" >&2
+            exit 1
+          fi
+          echo "repository=$repo" >> "$GITHUB_OUTPUT"
+          echo "commit=$commit" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ steps.pin.outputs.repository }}
+          ref: ${{ steps.pin.outputs.commit }}
+          path: _noctisswap
+
+      - name: The copy is the pinned tree
+        run: |
+          # Files only NoctisSwap carries: its own hooks, CI, line-ending rules and licence.
+          if ! diff -r -x .git -x .github -x .githooks -x .gitattributes -x LICENSE _noctisswap contracts/cardano-dex; then
+            echo ""
+            echo "::error file=contracts/cardano-dex.pin.json::contracts/cardano-dex differs from ${{ steps.pin.outputs.repository }}@${{ steps.pin.outputs.commit }}."
+            echo "Make venue changes in NoctisSwap, then copy its tree here and move the pin to that commit."
+            exit 1
+          fi
+          echo "contracts/cardano-dex is byte-identical to the pinned NoctisSwap tree."

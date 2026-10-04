@@ -9,6 +9,11 @@ This is a separate Aiken package from `contracts/cardano` on purpose. The launch
 validators there are deployed and their blueprint is fingerprint-guarded; nothing
 here changes their hashes.
 
+This package changes in the NoctisSwap repository (`NoctisZone/NoctisSwap`). The
+Noctis launchpad repository carries a byte-identical copy at
+`contracts/cardano-dex`, pinned to a NoctisSwap commit and checked by its CI, so a
+change lands here first and is then brought across with the pin.
+
 ## Where the code comes from
 
 Splash's royalty pool is the base. Its datum already carries the two slots we

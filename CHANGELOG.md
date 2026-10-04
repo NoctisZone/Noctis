@@ -26,6 +26,11 @@ Notable changes to the Noctis Zone, by release. Internal development history pre
 
 ### Changed
 
+- **The venue contracts have their own repository.** NoctisSwap's Aiken package, with its full history,
+  now lives in `NoctisZone/NoctisSwap` and changes there. This repository keeps a byte-identical copy at
+  `contracts/cardano-dex`, pinned to a NoctisSwap commit in `contracts/cardano-dex.pin.json`, and CI fails
+  if the two differ. Nothing that builds, deploys or reads the venue moved: the path, the blueprint and the
+  applied parameters are the same bytes.
 - **Every Midnight tool can name its indexer.** The wallet sync, the DUST registration and the launch
   conductor take the relay and indexer addresses from their input, as the other Midnight tools already did,
   and the conductor hands them to each action it starts. A wallet's sync position is numbered by the indexer
