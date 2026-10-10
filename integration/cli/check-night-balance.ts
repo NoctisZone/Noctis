@@ -38,7 +38,7 @@
 // ============================================================================
 
 import { checkBondAssetBalance } from '../eligibility-checker.js';
-import { parseJsonStdin, readStdin, requireFieldsStrict } from './cli-io.js';
+import { parseJsonStdin, readStdin, redactProjectIds, redactStderr, requireFieldsStrict } from './cli-io.js';
 
 interface CheckNightBalanceInput {
   registrantAddress: string;
@@ -57,6 +57,7 @@ interface CheckNightBalanceInput {
 }
 
 async function main() {
+  redactStderr();
   const raw = await readStdin();
   const input = parseJsonStdin<CheckNightBalanceInput>(raw);
 
@@ -84,7 +85,8 @@ async function main() {
 }
 
 main().catch((err) => {
-  process.stdout.write(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }));
+  // The site reads this message, so it must not carry the indexer URL's project id.
+  process.stdout.write(JSON.stringify({ error: redactProjectIds(err instanceof Error ? err.message : String(err)) }));
   // Not process.exit(1): a forced immediate exit can race the WS
   // subscription's own libuv handle teardown (getUnshieldedNightBalance's
   // Effect.scoped cleanup) when the OTHER half of checkBondAssetBalance's

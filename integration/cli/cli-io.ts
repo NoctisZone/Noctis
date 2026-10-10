@@ -55,6 +55,36 @@ export function parseJsonStdin<T>(raw: string): T {
 }
 
 /**
+ * Text with any Blockfrost project id taken out. The id travels in a URL as
+ * `project_id=`, and those URLs reach diagnostics through code we do not
+ * own: polkadot's RPC-CORE logger inside the wallet SDK prints the relay URL
+ * whenever its socket closes.
+ */
+export function redactProjectIds(text: string): string {
+  return text.replace(/([?&]project_id=)[^&#\s"'<>]+/g, '$1…');
+}
+
+let stderrRedacted = false;
+
+/**
+ * Pass every write to stderr through `redactProjectIds`, whichever library
+ * made it, so a captured log never holds a project id. A chunk that names no
+ * id goes through byte for byte. Safe to call more than once.
+ */
+export function redactStderr(): void {
+  if (stderrRedacted) return;
+  stderrRedacted = true;
+  const write = process.stderr.write.bind(process.stderr) as (...args: unknown[]) => boolean;
+  process.stderr.write = ((chunk: string | Uint8Array, ...rest: unknown[]) => {
+    if (typeof chunk === 'string') {
+      return write(chunk.includes('project_id=') ? redactProjectIds(chunk) : chunk, ...rest);
+    }
+    const text = Buffer.from(chunk).toString('utf8');
+    return write(text.includes('project_id=') ? Buffer.from(redactProjectIds(text), 'utf8') : chunk, ...rest);
+  }) as typeof process.stderr.write;
+}
+
+/**
  * Keep stdout for the result and nothing else.
  *
  * Every CLI here writes one JSON object to stdout and everything else to
@@ -67,9 +97,11 @@ export function parseJsonStdin<T>(raw: string): T {
  * looking for a failure that had not happened.
  *
  * Called once, first thing, by a CLI that builds a wallet. `console.error`
- * is left alone: it already goes where the rest of the diagnostics go.
+ * already goes where the rest of the diagnostics go, and like everything
+ * else on stderr it leaves with any Blockfrost project id removed.
  */
 export function claimStdoutForResult(): void {
+  redactStderr();
   const toStderr = (...args: unknown[]) => {
     console.error(...args);
   };

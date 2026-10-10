@@ -111,6 +111,72 @@ describe('claimStdoutForResult', () => {
   });
 });
 
+describe('keeping a Blockfrost project id off stderr', () => {
+  const ID = 'placeholder-id-42';
+  // The line polkadot's RPC-CORE logger wrote on a websocket close, measured through the wallet SDK.
+  const CLOSE_LINE = `2026-10-10 22:42:16        RPC-CORE: subscribeRuntimeVersion(): RuntimeVersion:: disconnected from wss://rpc.midnight-preprod.blockfrost.io/?project_id=${ID} 1000:: Normal Closure`;
+
+  it('redactProjectIds takes the id out of a log line and leaves the rest of it', async () => {
+    const { redactProjectIds } = await import('../cli/cli-io.js');
+    expect(redactProjectIds(CLOSE_LINE)).toBe(
+      '2026-10-10 22:42:16        RPC-CORE: subscribeRuntimeVersion(): RuntimeVersion:: disconnected from wss://rpc.midnight-preprod.blockfrost.io/?project_id=… 1000:: Normal Closure',
+    );
+    expect(redactProjectIds(`{"url":"https://h/api?a=1&project_id=${ID}&b=2"} and wss://h/ws?project_id=${ID}`)).toBe(
+      '{"url":"https://h/api?a=1&project_id=…&b=2"} and wss://h/ws?project_id=…',
+    );
+    expect(redactProjectIds('nothing to see at https://h/api?a=1')).toBe('nothing to see at https://h/api?a=1');
+  });
+
+  /** A fresh copy of cli-io, installed over a spy, so what reaches the real stream can be read. */
+  async function withSpiedStderr(run: (io: typeof import('../cli/cli-io.js'), spy: ReturnType<typeof vi.fn>) => void) {
+    const original = process.stderr.write;
+    const spy = vi.fn(() => true);
+    process.stderr.write = spy as never;
+    try {
+      vi.resetModules();
+      run(await import('../cli/cli-io.js'), spy);
+    } finally {
+      process.stderr.write = original;
+      vi.resetModules();
+    }
+  }
+
+  it('redactStderr filters string and Buffer writes, and passes a write without an id through untouched', async () => {
+    await withSpiedStderr((io, spy) => {
+      io.redactStderr();
+      io.redactStderr(); // a second call must not wrap twice
+      const done = () => {};
+      process.stderr.write(`${CLOSE_LINE}\n`, done as never);
+      process.stderr.write(Buffer.from(`${CLOSE_LINE}\n`, 'utf8'));
+      const plain = Buffer.from('no id here\n', 'utf8');
+      process.stderr.write(plain);
+
+      expect(spy).toHaveBeenCalledTimes(3);
+      const [first, firstCb] = spy.mock.calls[0] as unknown[];
+      expect(first).not.toContain(ID);
+      expect(first).toContain('?project_id=… 1000:: Normal Closure');
+      expect(firstCb).toBe(done);
+      const second = (spy.mock.calls[1] as unknown[])[0] as Buffer;
+      expect(Buffer.isBuffer(second)).toBe(true);
+      expect(second.toString('utf8')).not.toContain(ID);
+      expect((spy.mock.calls[2] as unknown[])[0]).toBe(plain);
+    });
+  });
+
+  it('claimStdoutForResult installs the filter, so every CLI that calls it is covered', async () => {
+    await withSpiedStderr((io, spy) => {
+      const saved = { log: console.log, info: console.info, warn: console.warn, debug: console.debug };
+      try {
+        io.claimStdoutForResult();
+        process.stderr.write(CLOSE_LINE);
+        expect((spy.mock.calls[0] as unknown[])[0]).not.toContain(ID);
+      } finally {
+        Object.assign(console, saved);
+      }
+    });
+  });
+});
+
 describe('readStdin', () => {
   it('concatenates every chunk into one UTF-8 string', async () => {
     fakeStdin(['{"a":', '1}']);
