@@ -62,8 +62,8 @@ import { NoctisLaunchManager, NoctisMidnightClient } from '../midnight-client.js
 import {
   assertProofServerReachable,
   buildServerWallet,
-  defaultNetworkConfig,
   type MidnightNetwork,
+  resolveNetworkConfig,
   type SnapshotCliInput,
   snapshotOptionsFrom,
   waitForWalletState,
@@ -239,16 +239,7 @@ async function main() {
 
   setNetworkId(input.network);
 
-  const netDefaults =
-    input.network === 'mainnet' ? undefined : defaultNetworkConfig(input.network, input.proofServerUrl);
-  const relayUrl = input.relayUrl ?? netDefaults?.relayUrl;
-  const indexerHttpUrl = input.indexerHttpUrl ?? netDefaults?.indexerHttpUrl;
-  const indexerWsUrl = input.indexerWsUrl ?? netDefaults?.indexerWsUrl;
-  if (!relayUrl || !indexerHttpUrl || !indexerWsUrl) {
-    throw new Error(
-      'relayUrl/indexerHttpUrl/indexerWsUrl must be supplied explicitly for network "mainnet" (no confirmed defaults exist yet).',
-    );
-  }
+  const { relayUrl, indexerHttpUrl, indexerWsUrl } = resolveNetworkConfig(input.network, input.proofServerUrl, input);
   // Every action, the read included, goes through the indexer. A dead one is
   // otherwise discovered minutes in, as a sync failure that names neither the
   // indexer nor the reason. Refused now, in a message the driver's classifier

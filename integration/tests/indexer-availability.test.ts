@@ -1,5 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
-import { assertIndexerReachable, indexerUsable, probeIndexer, waitForIndexer } from '../indexer-availability.js';
+import {
+  assertIndexerReachable,
+  indexerUsable,
+  probeIndexer,
+  redactIndexerUrl,
+  waitForIndexer,
+} from '../indexer-availability.js';
 import { indexerOutageIn } from '../submission-outcome.js';
 
 const URL = 'https://indexer.example/api/v3/graphql';
@@ -153,5 +159,42 @@ describe('refusing to start against a dead indexer', () => {
     });
     expect(behind).toMatch(/is not caught up/);
     expect(indexerOutageIn(behind)).toBe(true);
+  });
+});
+
+describe('keeping a Blockfrost project id out of what is printed', () => {
+  const KEY = 'placeholder-id-42';
+  const KEYED = `https://midnight-preprod.blockfrost.io/api/v0?project_id=${KEY}`;
+
+  it('redacts the id wherever it sits in the query, and leaves everything else alone', () => {
+    expect(redactIndexerUrl(KEYED)).toBe('https://midnight-preprod.blockfrost.io/api/v0?project_id=…');
+    expect(redactIndexerUrl(`https://h/api?a=1&project_id=${KEY}&b=2#f`)).toBe('https://h/api?a=1&project_id=…&b=2#f');
+    expect(redactIndexerUrl(URL)).toBe(URL);
+  });
+
+  it('never puts the id in a refusal or a wait message', async () => {
+    const said: string[] = [];
+    await assertIndexerReachable(KEYED, { fetchImpl: outage(), now: clock }).catch((err: Error) =>
+      said.push(err.message),
+    );
+    await assertIndexerReachable(KEYED, { fetchImpl: healthy(NOW_MS - 3_600_000), now: clock }).catch((err: Error) =>
+      said.push(err.message),
+    );
+    let t = NOW_MS;
+    await waitForIndexer(KEYED, {
+      fetchImpl: outage(),
+      now: () => t,
+      sleep: async (ms: number) => {
+        t += ms;
+      },
+      pollMs: 1_000,
+      maxWaitMs: 3_000,
+      log: (m) => said.push(m),
+    }).catch((err: Error) => said.push(err.message));
+    expect(said.length).toBeGreaterThanOrEqual(4);
+    for (const line of said) {
+      expect(line).not.toContain(KEY);
+      expect(line).toContain('project_id=…');
+    }
   });
 });

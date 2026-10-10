@@ -43,7 +43,7 @@ import { indexerPublicDataProvider } from '@midnight-ntwrk/midnight-js-indexer-p
 import { setNetworkId } from '@midnight-ntwrk/midnight-js-network-id';
 import { buildRegistrantTree, hashRegistrantLeaf } from '../../packages/zk-proofs/src/eligibility-gate.js';
 import { readEligibilityGateLedger } from '../midnight-public-state.js';
-import { defaultNetworkConfig, type MidnightNetwork } from '../midnight-server-wallet.js';
+import { type MidnightNetwork, resolveIndexerUrls } from '../midnight-server-wallet.js';
 import { claimStdoutForResult, jsonSafe, parseJsonStdin, readStdin, requireFieldsFalsy } from './cli-io.js';
 
 interface Input {
@@ -63,12 +63,7 @@ async function main() {
 
   setNetworkId(input.network);
 
-  const netDefaults = input.network === 'mainnet' ? undefined : defaultNetworkConfig(input.network, 'http://unused');
-  const indexerHttpUrl = input.indexerHttpUrl ?? netDefaults?.indexerHttpUrl;
-  const indexerWsUrl = input.indexerWsUrl ?? netDefaults?.indexerWsUrl;
-  if (!indexerHttpUrl || !indexerWsUrl) {
-    throw new Error('indexerHttpUrl/indexerWsUrl must be supplied explicitly for network "mainnet".');
-  }
+  const { indexerHttpUrl, indexerWsUrl } = resolveIndexerUrls(input.network, input);
 
   const publicDataProvider = indexerPublicDataProvider(indexerHttpUrl, indexerWsUrl);
   const ledger = await readEligibilityGateLedger(publicDataProvider, input.contractAddress);

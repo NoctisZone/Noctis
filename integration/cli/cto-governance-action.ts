@@ -60,9 +60,9 @@ import {
 import {
   assertProofServerReachable,
   buildServerWallet,
-  defaultNetworkConfig,
   hasUnshieldedNight,
   type MidnightNetwork,
+  resolveNetworkConfig,
   type SnapshotCliInput,
   snapshotOptionsFrom,
   waitForWalletState,
@@ -150,15 +150,7 @@ function proofFrom(entries: Input['balanceProof'], field: string): MerkleProofEn
 }
 
 function networkUrls(input: Input, proofServerUrl: string) {
-  const netDefaults = input.network === 'mainnet' ? undefined : defaultNetworkConfig(input.network, proofServerUrl);
-  const relayUrl = input.relayUrl ?? netDefaults?.relayUrl;
-  const indexerHttpUrl = input.indexerHttpUrl ?? netDefaults?.indexerHttpUrl;
-  const indexerWsUrl = input.indexerWsUrl ?? netDefaults?.indexerWsUrl;
-  if (!relayUrl || !indexerHttpUrl || !indexerWsUrl) {
-    throw new Error(
-      'relayUrl/indexerHttpUrl/indexerWsUrl must be supplied explicitly for network "mainnet" (no confirmed defaults exist yet).',
-    );
-  }
+  const { relayUrl, indexerHttpUrl, indexerWsUrl } = resolveNetworkConfig(input.network, proofServerUrl, input);
   return { relayUrl, indexerHttpUrl, indexerWsUrl };
 }
 

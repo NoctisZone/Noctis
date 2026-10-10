@@ -109,51 +109,81 @@ export interface ServerWalletNetworkConfig {
 }
 
 /**
- * Real per-network endpoint defaults, verified against
- * midnight-wallet:managing-test-wallets' network-config.md. `mainnet`'s
- * real hostnames are not yet independently confirmed by this codebase (no
- * mainnet deployment exists yet) — callers targeting mainnet should
- * override relayUrl/indexerHttpUrl/indexerWsUrl explicitly rather than
- * trust a guessed hostname.
+ * The environment variable holding a network's Blockfrost Midnight project id.
+ * Blockfrost runs one project per network, and its endpoints refuse a request
+ * without the id (403), so a default pointing there is only usable with it.
  */
-export function defaultNetworkConfig(network: MidnightNetwork, provingServerUrl: string): ServerWalletNetworkConfig {
+export const MIDNIGHT_BLOCKFROST_PROJECT_ID_ENV = {
+  preprod: 'MIDNIGHT_BLOCKFROST_PREPROD_PROJECT_ID',
+} as const;
+
+/** The three endpoints a network's defaults name. */
+type NetworkEndpoints = Pick<ServerWalletNetworkConfig, 'relayUrl' | 'indexerHttpUrl' | 'indexerWsUrl'>;
+
+function blockfrostProjectId(network: keyof typeof MIDNIGHT_BLOCKFROST_PROJECT_ID_ENV): string {
+  const envName = MIDNIGHT_BLOCKFROST_PROJECT_ID_ENV[network];
+  const projectId = process.env[envName]?.trim();
+  if (!projectId) {
+    throw new Error(
+      `The default ${network} Midnight endpoints are Blockfrost's, which need a project id: set ${envName}, ` +
+        'or pass relayUrl/indexerHttpUrl/indexerWsUrl explicitly.',
+    );
+  }
+  return projectId;
+}
+
+function withProjectId(url: string, projectId: string): string {
+  return `${url}${url.includes('?') ? '&' : '?'}project_id=${encodeURIComponent(projectId)}`;
+}
+
+/**
+ * Per-network endpoint defaults.
+ *
+ * Preprod's are Blockfrost's: Midnight retired its own Preprod and Mainnet
+ * indexer on 2026-10-09 and named Blockfrost as the provider of both the
+ * indexer and the RPC. The relay is the RPC's websocket form, because the
+ * wallet SDK submits through a websocket provider. Preview still runs on
+ * Midnight's own endpoints. Mainnet has no defaults, by choice: nothing here
+ * reaches mainnet unless its caller names the endpoints.
+ */
+function defaultEndpoints(network: MidnightNetwork): NetworkEndpoints {
   switch (network) {
     case 'undeployed':
       return {
-        network,
         relayUrl: 'ws://localhost:9944',
-        provingServerUrl,
         indexerHttpUrl: 'http://localhost:8088/api/v3/graphql',
         indexerWsUrl: 'ws://localhost:8088/api/v3/graphql/ws',
       };
-    case 'preprod':
+    case 'preprod': {
+      const projectId = blockfrostProjectId('preprod');
       return {
-        network,
-        relayUrl: 'wss://rpc.preprod.midnight.network',
-        provingServerUrl,
-        indexerHttpUrl: 'https://indexer.preprod.midnight.network/api/v3/graphql',
-        indexerWsUrl: 'wss://indexer.preprod.midnight.network/api/v3/graphql/ws',
+        relayUrl: withProjectId('wss://rpc.midnight-preprod.blockfrost.io/', projectId),
+        indexerHttpUrl: withProjectId('https://midnight-preprod.blockfrost.io/api/v0', projectId),
+        indexerWsUrl: withProjectId('wss://midnight-preprod.blockfrost.io/api/v0/ws', projectId),
       };
+    }
     case 'preview':
       return {
-        network,
         relayUrl: 'wss://rpc.preview.midnight.network',
-        provingServerUrl,
         indexerHttpUrl: 'https://indexer.preview.midnight.network/api/v3/graphql',
         indexerWsUrl: 'wss://indexer.preview.midnight.network/api/v3/graphql/ws',
       };
     case 'mainnet':
       throw new Error(
-        'No confirmed mainnet Midnight endpoint hostnames exist in this codebase yet — pass an explicit ServerWalletNetworkConfig rather than relying on this default.',
+        'Mainnet has no default Midnight endpoints here — pass relayUrl/indexerHttpUrl/indexerWsUrl explicitly.',
       );
   }
 }
 
+export function defaultNetworkConfig(network: MidnightNetwork, provingServerUrl: string): ServerWalletNetworkConfig {
+  return { network, provingServerUrl, ...defaultEndpoints(network) };
+}
+
 /** Endpoints a CLI input may name in place of its network's defaults. */
 export interface NetworkEndpointOverrides {
-  relayUrl?: string;
-  indexerHttpUrl?: string;
-  indexerWsUrl?: string;
+  relayUrl?: string | null;
+  indexerHttpUrl?: string | null;
+  indexerWsUrl?: string | null;
 }
 
 /**
@@ -162,22 +192,47 @@ export interface NetworkEndpointOverrides {
  * An indexer is the usual reason to name one: a wallet's sync cursor is
  * numbered by the indexer that served it, so a wallet synced through one
  * provider has to replay from genesis through another, and the CLI that
- * resumes it must reach the same one. Mainnet has no defaults here, so all
- * three must be named there.
+ * resumes it must reach the same one. The defaults are only consulted for an
+ * endpoint the input leaves out, so a caller naming all three needs no
+ * project id in its environment. Mainnet has no defaults, so all three must be
+ * named there.
  */
 export function resolveNetworkConfig(
   network: MidnightNetwork,
   provingServerUrl: string,
   overrides: NetworkEndpointOverrides = {},
 ): ServerWalletNetworkConfig {
-  const defaults = network === 'mainnet' ? undefined : defaultNetworkConfig(network, provingServerUrl);
-  const relayUrl = overrides.relayUrl || defaults?.relayUrl;
-  const indexerHttpUrl = overrides.indexerHttpUrl || defaults?.indexerHttpUrl;
-  const indexerWsUrl = overrides.indexerWsUrl || defaults?.indexerWsUrl;
+  let relayUrl = overrides.relayUrl || undefined;
+  let indexerHttpUrl = overrides.indexerHttpUrl || undefined;
+  let indexerWsUrl = overrides.indexerWsUrl || undefined;
   if (!relayUrl || !indexerHttpUrl || !indexerWsUrl) {
-    throw new Error(`relayUrl/indexerHttpUrl/indexerWsUrl must be supplied explicitly for network "${network}".`);
+    if (network === 'mainnet') {
+      throw new Error('relayUrl/indexerHttpUrl/indexerWsUrl must be supplied explicitly for network "mainnet".');
+    }
+    const defaults = defaultEndpoints(network);
+    relayUrl ??= defaults.relayUrl;
+    indexerHttpUrl ??= defaults.indexerHttpUrl;
+    indexerWsUrl ??= defaults.indexerWsUrl;
   }
   return { network, relayUrl, provingServerUrl, indexerHttpUrl, indexerWsUrl };
+}
+
+/** The same resolution for a reader that needs only the indexer, so a missing relay never sends it to the defaults. */
+export function resolveIndexerUrls(
+  network: MidnightNetwork,
+  overrides: Pick<NetworkEndpointOverrides, 'indexerHttpUrl' | 'indexerWsUrl'> = {},
+): { indexerHttpUrl: string; indexerWsUrl: string } {
+  let indexerHttpUrl = overrides.indexerHttpUrl || undefined;
+  let indexerWsUrl = overrides.indexerWsUrl || undefined;
+  if (!indexerHttpUrl || !indexerWsUrl) {
+    if (network === 'mainnet') {
+      throw new Error('indexerHttpUrl/indexerWsUrl must be supplied explicitly for network "mainnet".');
+    }
+    const defaults = defaultEndpoints(network);
+    indexerHttpUrl ??= defaults.indexerHttpUrl;
+    indexerWsUrl ??= defaults.indexerWsUrl;
+  }
+  return { indexerHttpUrl, indexerWsUrl };
 }
 
 /**

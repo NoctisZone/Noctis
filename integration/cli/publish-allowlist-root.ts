@@ -56,8 +56,8 @@ import { NoctisLaunchManager, NoctisMidnightClient } from '../midnight-client.js
 import {
   assertProofServerReachable,
   buildServerWallet,
-  defaultNetworkConfig,
   type MidnightNetwork,
+  resolveNetworkConfig,
   type SnapshotCliInput,
   snapshotOptionsFrom,
   waitForWalletState,
@@ -141,20 +141,7 @@ async function main() {
   const newRoot = fromHex(input.newRootHex, 'newRootHex');
   const evidenceRef = fromHex(input.evidenceRefHex, 'evidenceRefHex');
 
-  const netDefaults =
-    input.network === 'mainnet' ? undefined : defaultNetworkConfig(input.network, input.proofServerUrl);
-  const networkConfig = {
-    network: input.network,
-    relayUrl: input.relayUrl ?? netDefaults?.relayUrl,
-    provingServerUrl: input.proofServerUrl,
-    indexerHttpUrl: input.indexerHttpUrl ?? netDefaults?.indexerHttpUrl,
-    indexerWsUrl: input.indexerWsUrl ?? netDefaults?.indexerWsUrl,
-  };
-  if (!networkConfig.relayUrl || !networkConfig.indexerHttpUrl || !networkConfig.indexerWsUrl) {
-    throw new Error(
-      'relayUrl/indexerHttpUrl/indexerWsUrl must be supplied explicitly for network "mainnet" (no confirmed defaults exist yet).',
-    );
-  }
+  const networkConfig = resolveNetworkConfig(input.network, input.proofServerUrl, input);
 
   // Resuming from a snapshot turns this from a full chain replay into a short
   // catch-up. Without one the wait below is the whole history.

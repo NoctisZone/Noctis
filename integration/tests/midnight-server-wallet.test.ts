@@ -85,17 +85,25 @@ import {
   assertProofServerReachable,
   buildServerWallet,
   defaultNetworkConfig,
+  MIDNIGHT_BLOCKFROST_PROJECT_ID_ENV,
+  resolveIndexerUrls,
   resolveNetworkConfig,
   type ServerWalletNetworkConfig,
   snapshotOptionsFrom,
   submitWithReconnect,
 } from '../midnight-server-wallet.js';
 
+const PREPROD_ID_ENV = MIDNIGHT_BLOCKFROST_PROJECT_ID_ENV.preprod;
+
 // ============================================================================
 // defaultNetworkConfig
 // ============================================================================
 
 describe('defaultNetworkConfig', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
   it('undeployed: local devnet ws:// relay + http indexer on port 8088', () => {
     expect(defaultNetworkConfig('undeployed', 'http://localhost:6300')).toEqual({
       network: 'undeployed',
@@ -106,17 +114,25 @@ describe('defaultNetworkConfig', () => {
     });
   });
 
-  it('preprod: real hosted wss:// relay + https indexer', () => {
+  it("preprod: Blockfrost's wss:// relay and indexer, each carrying the project id, encoded", () => {
+    vi.stubEnv('MIDNIGHT_BLOCKFROST_PREPROD_PROJECT_ID', ' pid/+= ');
     expect(defaultNetworkConfig('preprod', 'https://prover.example')).toEqual({
       network: 'preprod',
-      relayUrl: 'wss://rpc.preprod.midnight.network',
+      relayUrl: 'wss://rpc.midnight-preprod.blockfrost.io/?project_id=pid%2F%2B%3D',
       provingServerUrl: 'https://prover.example',
-      indexerHttpUrl: 'https://indexer.preprod.midnight.network/api/v3/graphql',
-      indexerWsUrl: 'wss://indexer.preprod.midnight.network/api/v3/graphql/ws',
+      indexerHttpUrl: 'https://midnight-preprod.blockfrost.io/api/v0?project_id=pid%2F%2B%3D',
+      indexerWsUrl: 'wss://midnight-preprod.blockfrost.io/api/v0/ws?project_id=pid%2F%2B%3D',
     });
   });
 
-  it('preview: real hosted wss:// relay + https indexer', () => {
+  it('preprod without a project id throws, naming the variable to set', () => {
+    vi.stubEnv(PREPROD_ID_ENV, '');
+    expect(() => defaultNetworkConfig('preprod', 'https://p')).toThrow(/MIDNIGHT_BLOCKFROST_PREPROD_PROJECT_ID/);
+    vi.stubEnv(PREPROD_ID_ENV, '   ');
+    expect(() => defaultNetworkConfig('preprod', 'https://p')).toThrow(/MIDNIGHT_BLOCKFROST_PREPROD_PROJECT_ID/);
+  });
+
+  it("preview: Midnight's own wss:// relay + https indexer", () => {
     expect(defaultNetworkConfig('preview', 'https://prover.example')).toEqual({
       network: 'preview',
       relayUrl: 'wss://rpc.preview.midnight.network',
@@ -127,14 +143,15 @@ describe('defaultNetworkConfig', () => {
   });
 
   it('preprod and preview do not share the same hostnames (regression guard against a copy-paste mixup)', () => {
+    vi.stubEnv(PREPROD_ID_ENV, 'k');
     const preprod = defaultNetworkConfig('preprod', 'https://p');
     const preview = defaultNetworkConfig('preview', 'https://p');
     expect(preprod.relayUrl).not.toBe(preview.relayUrl);
     expect(preprod.indexerHttpUrl).not.toBe(preview.indexerHttpUrl);
   });
 
-  it('mainnet throws rather than guessing an unconfirmed hostname', () => {
-    expect(() => defaultNetworkConfig('mainnet', 'https://prover.example')).toThrow(/No confirmed mainnet/);
+  it('mainnet throws rather than reaching mainnet by default', () => {
+    expect(() => defaultNetworkConfig('mainnet', 'https://prover.example')).toThrow(/no default Midnight endpoints/);
   });
 });
 
@@ -148,6 +165,14 @@ describe('resolveNetworkConfig', () => {
     indexerWsUrl: 'wss://midnight-preprod.blockfrost.io/api/v0/ws?project_id=k',
   };
 
+  beforeEach(() => {
+    vi.stubEnv(PREPROD_ID_ENV, 'k2');
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
   it("is the network's defaults when nothing is named", () => {
     expect(resolveNetworkConfig('preprod', 'https://p')).toEqual(defaultNetworkConfig('preprod', 'https://p'));
     expect(resolveNetworkConfig('preprod', 'https://p', {})).toEqual(defaultNetworkConfig('preprod', 'https://p'));
@@ -156,17 +181,32 @@ describe('resolveNetworkConfig', () => {
   it('takes a named indexer and keeps the default relay', () => {
     expect(resolveNetworkConfig('preprod', 'https://p', bf)).toEqual({
       network: 'preprod',
-      relayUrl: 'wss://rpc.preprod.midnight.network',
+      relayUrl: 'wss://rpc.midnight-preprod.blockfrost.io/?project_id=k2',
       provingServerUrl: 'https://p',
       indexerHttpUrl: bf.indexerHttpUrl,
       indexerWsUrl: bf.indexerWsUrl,
     });
   });
 
-  it('treats an empty string as not named, so a blank payload field cannot blank an endpoint', () => {
-    expect(resolveNetworkConfig('preprod', 'https://p', { indexerHttpUrl: '', relayUrl: '' }).indexerHttpUrl).toBe(
-      'https://indexer.preprod.midnight.network/api/v3/graphql',
-    );
+  it('treats an empty string or null as not named, so a blank payload field cannot blank an endpoint', () => {
+    const config = resolveNetworkConfig('preprod', 'https://p', { indexerHttpUrl: '', relayUrl: null });
+    expect(config.indexerHttpUrl).toBe('https://midnight-preprod.blockfrost.io/api/v0?project_id=k2');
+    expect(config.relayUrl).toBe('wss://rpc.midnight-preprod.blockfrost.io/?project_id=k2');
+  });
+
+  it('needs no project id when all three are named', () => {
+    vi.stubEnv(PREPROD_ID_ENV, '');
+    const all = { ...bf, relayUrl: 'wss://rpc.example' };
+    expect(resolveNetworkConfig('preprod', 'https://p', all)).toEqual({
+      network: 'preprod',
+      provingServerUrl: 'https://p',
+      ...all,
+    });
+  });
+
+  it('asks for the project id when an endpoint is left to the defaults', () => {
+    vi.stubEnv(PREPROD_ID_ENV, '');
+    expect(() => resolveNetworkConfig('preprod', 'https://p', bf)).toThrow(/MIDNIGHT_BLOCKFROST_PREPROD_PROJECT_ID/);
   });
 
   it('carries no fields beyond the config itself, whatever else the input holds', () => {
@@ -180,6 +220,36 @@ describe('resolveNetworkConfig', () => {
     expect(() => resolveNetworkConfig('mainnet', 'https://p', bf)).toThrow(/must be supplied explicitly/);
     const all = { ...bf, relayUrl: 'wss://rpc.example' };
     expect(resolveNetworkConfig('mainnet', 'https://p', all).relayUrl).toBe('wss://rpc.example');
+  });
+});
+
+// ============================================================================
+// resolveIndexerUrls
+// ============================================================================
+
+describe('resolveIndexerUrls', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('takes a named pair without a project id, because no relay is wanted', () => {
+    vi.stubEnv(PREPROD_ID_ENV, '');
+    const named = { indexerHttpUrl: 'https://idx.example/api', indexerWsUrl: 'wss://idx.example/api/ws' };
+    expect(resolveIndexerUrls('preprod', named)).toEqual(named);
+  });
+
+  it("is the network's default indexer when none is named", () => {
+    vi.stubEnv(PREPROD_ID_ENV, 'k3');
+    expect(resolveIndexerUrls('preprod')).toEqual({
+      indexerHttpUrl: 'https://midnight-preprod.blockfrost.io/api/v0?project_id=k3',
+      indexerWsUrl: 'wss://midnight-preprod.blockfrost.io/api/v0/ws?project_id=k3',
+    });
+  });
+
+  it('on mainnet needs both named', () => {
+    expect(() => resolveIndexerUrls('mainnet', { indexerHttpUrl: 'https://idx.example' })).toThrow(
+      /must be supplied explicitly/,
+    );
   });
 });
 
@@ -559,7 +629,9 @@ describe('submitWithReconnect', () => {
     // the first submission after a long proof meets a closed socket.
     const submit = vi
       .fn()
-      .mockRejectedValueOnce(new Error('disconnected from wss://rpc.preprod.midnight.network/: 1000:: Normal Closure'))
+      .mockRejectedValueOnce(
+        new Error('disconnected from wss://rpc.midnight-preprod.blockfrost.io/: 1000:: Normal Closure'),
+      )
       .mockResolvedValue('0xdef');
     await expect(submitWithReconnect(submit, 'tx', { sleep: noSleep })).resolves.toBe('0xdef');
     expect(submit).toHaveBeenCalledTimes(2);

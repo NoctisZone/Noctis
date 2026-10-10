@@ -59,8 +59,8 @@ import { deliverCircuits, planCircuitDelivery, verifyDeliveredCircuits } from '.
 import {
   assertProofServerReachable,
   buildServerWallet,
-  defaultNetworkConfig,
   type MidnightNetwork,
+  resolveNetworkConfig,
   type SnapshotCliInput,
   snapshotOptionsFrom,
   waitForWalletState,
@@ -206,16 +206,7 @@ async function main() {
   }
   const launchId = input.launchIdHex ? fromHex32(input.launchIdHex, 'launchIdHex') : undefined;
 
-  const netDefaults =
-    input.network === 'mainnet' ? undefined : defaultNetworkConfig(input.network, input.proofServerUrl);
-  const relayUrl = input.relayUrl ?? netDefaults?.relayUrl;
-  const indexerHttpUrl = input.indexerHttpUrl ?? netDefaults?.indexerHttpUrl;
-  const indexerWsUrl = input.indexerWsUrl ?? netDefaults?.indexerWsUrl;
-  if (!relayUrl || !indexerHttpUrl || !indexerWsUrl) {
-    throw new Error(
-      'relayUrl/indexerHttpUrl/indexerWsUrl must be supplied explicitly for network "mainnet" (no confirmed defaults exist yet).',
-    );
-  }
+  const { relayUrl, indexerHttpUrl, indexerWsUrl } = resolveNetworkConfig(input.network, input.proofServerUrl, input);
   // The wallet below syncs through the indexer, and a dead one costs minutes
   // to discover as a websocket failure that names neither. Refused here, in a
   // message the caller's classifier reads as an outage to wait out.

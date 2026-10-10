@@ -63,11 +63,7 @@ import { describeError } from '../error-detail.js';
 import { waitForIndexer } from '../indexer-availability.js';
 import { nextAction } from '../launch-conductor.js';
 import { readEligibilityGateLedger, summarizeDarkVeil } from '../midnight-public-state.js';
-import {
-  type MidnightNetwork,
-  type NetworkEndpointOverrides,
-  resolveNetworkConfig,
-} from '../midnight-server-wallet.js';
+import { type MidnightNetwork, type NetworkEndpointOverrides, resolveIndexerUrls } from '../midnight-server-wallet.js';
 import { fileRehearsalLog } from '../rehearsal-log.js';
 import { SubmissionGate } from '../submission-gate.js';
 import type { BankedJobResult } from '../submission-outcome.js';
@@ -220,7 +216,8 @@ async function main() {
     );
   }
 
-  const { indexerHttpUrl, indexerWsUrl } = resolveNetworkConfig(input.network, input.proofServerUrl, input);
+  // Only the indexer is read here; each action resolves its own relay.
+  const { indexerHttpUrl, indexerWsUrl } = resolveIndexerUrls(input.network, input);
   const publicDataProvider = indexerPublicDataProvider(indexerHttpUrl, indexerWsUrl);
   // Resolved beside this bundle rather than from the working directory, so a
   // run started from anywhere reaches the action it was built with.

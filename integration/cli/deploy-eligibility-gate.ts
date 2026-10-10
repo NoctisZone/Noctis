@@ -45,8 +45,8 @@ import { NoctisMidnightClient } from '../midnight-client.js';
 import {
   assertProofServerReachable,
   buildServerWallet,
-  defaultNetworkConfig,
   type MidnightNetwork,
+  resolveNetworkConfig,
   type SnapshotCliInput,
   snapshotOptionsFrom,
   waitForWalletState,
@@ -309,17 +309,7 @@ async function main() {
   const governorSecret = governorSecretBytes;
   const walletSeed = fromHex32(input.walletSeedHex, 'walletSeedHex');
 
-  const netDefaults = defaultNetworkConfig(input.network, input.proofServerUrl);
-  const networkConfig = {
-    network: input.network,
-    provingServerUrl: input.proofServerUrl,
-    relayUrl: input.relayUrl ?? netDefaults?.relayUrl,
-    indexerHttpUrl: input.indexerHttpUrl ?? netDefaults?.indexerHttpUrl,
-    indexerWsUrl: input.indexerWsUrl ?? netDefaults?.indexerWsUrl,
-  };
-  if (!networkConfig.relayUrl || !networkConfig.indexerHttpUrl || !networkConfig.indexerWsUrl) {
-    throw new Error(`relayUrl/indexerHttpUrl/indexerWsUrl must be supplied explicitly for network "${input.network}".`);
-  }
+  const networkConfig = resolveNetworkConfig(input.network, input.proofServerUrl, input);
 
   // A deployment is paid for in DUST, and a wallet only sees its DUST once it
   // has replayed far enough to find it. Resuming from a snapshot is what makes

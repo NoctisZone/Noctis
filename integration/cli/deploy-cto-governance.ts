@@ -32,8 +32,8 @@ import { NoctisMidnightClient } from '../midnight-client.js';
 import {
   assertProofServerReachable,
   buildServerWallet,
-  defaultNetworkConfig,
   type MidnightNetwork,
+  resolveNetworkConfig,
   type SnapshotCliInput,
   snapshotOptionsFrom,
   waitForWalletState,
@@ -87,14 +87,7 @@ async function main() {
   const governorSecret = fromHex32(input.governorSecretHex, 'governorSecretHex');
   const walletSeed = fromHex32(input.walletSeedHex, 'walletSeedHex');
 
-  const netDefaults =
-    input.network === 'mainnet' ? undefined : defaultNetworkConfig(input.network, input.proofServerUrl);
-  const relayUrl = input.relayUrl ?? netDefaults?.relayUrl;
-  const indexerHttpUrl = input.indexerHttpUrl ?? netDefaults?.indexerHttpUrl;
-  const indexerWsUrl = input.indexerWsUrl ?? netDefaults?.indexerWsUrl;
-  if (!relayUrl || !indexerHttpUrl || !indexerWsUrl) {
-    throw new Error(`relayUrl/indexerHttpUrl/indexerWsUrl must be supplied explicitly for network "${input.network}".`);
-  }
+  const { relayUrl, indexerHttpUrl, indexerWsUrl } = resolveNetworkConfig(input.network, input.proofServerUrl, input);
 
   const serverWallet = await buildServerWallet(
     walletSeed,

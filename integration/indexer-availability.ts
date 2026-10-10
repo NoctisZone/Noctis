@@ -139,6 +139,14 @@ const DEFAULT_MAX_WAIT_MS = 4 * 60 * 60 * 1000;
 const DEFAULT_POLL_MS = 30_000;
 const DEFAULT_MAX_BLOCK_AGE_SECONDS = 600;
 
+/**
+ * An indexer URL fit to print. A Blockfrost URL carries its project id as a
+ * query parameter, and a message naming the indexer ends up in logs.
+ */
+export function redactIndexerUrl(url: string): string {
+  return url.replace(/([?&]project_id=)[^&#]*/g, '$1…');
+}
+
 /** Whether one probe counts as "up and caught up". */
 export function indexerUsable(probe: IndexerProbe, maxBlockAgeSeconds = DEFAULT_MAX_BLOCK_AGE_SECONDS): boolean {
   return probe.ok && probe.blockAgeSeconds <= maxBlockAgeSeconds;
@@ -162,6 +170,7 @@ export async function waitForIndexer(
   const sleep = options.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
   const now = options.now ?? Date.now;
   const started = now();
+  const shown = redactIndexerUrl(indexerHttpUrl);
   let polls = 0;
   for (;;) {
     const probe = await probeIndexer(indexerHttpUrl, options);
@@ -172,11 +181,11 @@ export async function waitForIndexer(
     }
     const why = probe.ok ? `is not caught up (its latest block is ${probe.blockAgeSeconds}s old)` : probe.why;
     if (polls === 0 || polls % 10 === 0) {
-      options.log?.(`indexer at ${indexerHttpUrl} ${why}; waiting (${Math.round((now() - started) / 1000)}s so far)`);
+      options.log?.(`indexer at ${shown} ${why}; waiting (${Math.round((now() - started) / 1000)}s so far)`);
     }
     if (now() - started + pollMs > maxWaitMs) {
       throw new Error(
-        `The indexer at ${indexerHttpUrl} ${why} and did not become usable within ${Math.round(maxWaitMs / 1000)}s. ` +
+        `The indexer at ${shown} ${why} and did not become usable within ${Math.round(maxWaitMs / 1000)}s. ` +
           'Nothing was submitted while waiting. Read the chain before retrying anything that failed earlier.',
       );
     }
@@ -199,17 +208,18 @@ export async function assertIndexerReachable(
   options: ProbeOptions & { maxBlockAgeSeconds?: number } = {},
 ): Promise<void> {
   const probe = await probeIndexer(indexerHttpUrl, options);
+  const shown = redactIndexerUrl(indexerHttpUrl);
   if (!probe.ok) {
     throw new Error(
       probe.status === undefined
-        ? `The indexer at ${indexerHttpUrl} is not reachable (${probe.why}), so nothing built against it would land.`
-        : `The indexer at ${indexerHttpUrl} answered ${probe.status}${probe.why.startsWith('answered') ? '' : ` (${probe.why})`}, so nothing built against it would land.`,
+        ? `The indexer at ${shown} is not reachable (${probe.why}), so nothing built against it would land.`
+        : `The indexer at ${shown} answered ${probe.status}${probe.why.startsWith('answered') ? '' : ` (${probe.why})`}, so nothing built against it would land.`,
     );
   }
   const maxAge = options.maxBlockAgeSeconds ?? DEFAULT_MAX_BLOCK_AGE_SECONDS;
   if (probe.blockAgeSeconds > maxAge) {
     throw new Error(
-      `The indexer at ${indexerHttpUrl} is not caught up (its latest block is ${probe.blockAgeSeconds}s old), ` +
+      `The indexer at ${shown} is not caught up (its latest block is ${probe.blockAgeSeconds}s old), ` +
         'so a wallet synced through it would build against a state the chain has left.',
     );
   }
